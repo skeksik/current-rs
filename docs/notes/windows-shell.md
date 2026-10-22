@@ -15,8 +15,13 @@ apps/windows/
     ViewModels/           SettingsViewModel (version, capabilities, diagnostics)
     DispatcherQueueUi.cs  IUiDispatcher over DispatcherQueue (ADR 0004)
     SmokeRun.cs           Current.exe --smoke
-  build.ps1               dotnet publish -c Release -r win-x64 -p:Platform=x64 into apps/windows/out/app
+  build.ps1               dotnet publish -c Release -r win-x64 -p:Platform=x64 into apps/windows/out/app, plus licences\ and
+                          out/files.txt (every shipped file)
   smoke.ps1               runs Current.exe --smoke and checks its result
+  installer/
+    Current.iss           the Inno Setup script (ADR 0009)
+    build-installer.ps1   ISCC into apps/windows/out/installer/Current-<version>-x64-setup.exe
+    test-install.ps1      install, upgrade, uninstall test
 ```
 Build: `pwsh bindings/csharp/build.ps1` (core, generated C#, bindings), then `pwsh apps/windows/build.ps1`, then
 `pwsh apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe`. CI runs the same three in the job "App (Windows)".
@@ -55,7 +60,9 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
 - `Skeksik.Current` (owner's choice, 2026-10-22). "Application User Model IDs" (learn.microsoft.com/windows/win32/shell/appids, updated
   2025-04-15, read 2026-10-22): the form is `CompanyName.ProductName.SubProduct.VersionInformation`, "no more than 128 characters and
   cannot contain spaces"; `VersionInformation` "should be omitted so that an upgraded version can use the same AppUserModelID".
-- The process sets it first thing in `Main` with `SetCurrentProcessExplicitAppUserModelID`, which "must" be called "before the
+- Only without package identity (`GetCurrentPackageFullName` fails with `APPMODEL_ERROR_NO_PACKAGE`; with identity it reports
+  `ERROR_INSUFFICIENT_BUFFER` for an empty buffer, learn.microsoft.com, read 2026-10-22): a packaged build gets its identity from the
+  package. The process sets it first thing in `Main` with `SetCurrentProcessExplicitAppUserModelID`, which "must" be called "before the
   application presents any UI" (same page). The same page says an app with an explicit ID "must also assign the same AppUserModelID to
   all running windows or processes, shortcuts, and file associations": the installer writes it into the Start menu shortcut's
   `System.AppUserModel.ID` (installer section).
@@ -77,8 +84,29 @@ handler restores its window if minimised and activates it. `--smoke` skips the k
 
 - The program folder is never the data folder, and the installer never names the data folder, so uninstall and upgrade cannot delete
   it. The install test checks this with a marker file.
-- The data folder is a C# constant (`AppIdentity.DataFolder`) for now; nothing writes there yet. When storage arrives (M1), the
+- The data folder is resolved in C# (`AppIdentity.DataFolder`) for now: `Environment.SpecialFolder.LocalApplicationData` (the
+  known-folder API) plus `Current` when unpackaged, `ApplicationData.Current.LocalFolder` with package identity. Nothing writes there
+  yet. When storage arrives (M1), the
   platform UI resolves its native data folder and passes it to the core when it creates `App` (manager, 2026-10-22).
+
+## Installer (ADR 0009)
+- Inno Setup 6.7.3, installed in CI from its official installer (`github.com/jrsoftware/issrc` release `is-6_7_3`), checked against a
+  pinned SHA-256 (computed on 2026-10-22; jrsoftware.org publishes no checksums), installed per user into the runner's temp folder.
+- `Current.iss`: fixed `AppId`, `PrivilegesRequired=lowest`, `DefaultDirName={autopf}\Current`, x64 only, one shortcut
+  `{autoprograms}\Current` with `AppUserModelID: "Skeksik.Current"` (Inno's `[Icons]` parameter: "Specifies the Windows 7 (or later)
+  Application User Model ID for the shortcut", ishelp, read 2026-10-22), and an "Open Current" check box at the end (not in silent
+  installs). It ships the published app, Inno's `license.txt` in `licences\`, and its own `unins000.exe`/`unins000.dat`.
+- Upgrade: the same `AppId` installs over the old version into the same folder; files of the old version that the new one no longer
+  has stay until uninstall (Inno's uninstall log covers every file it ever installed there). No `[InstallDelete]` wildcard: a user may
+  have chosen a folder that holds other files.
+- Running app: Inno's default `CloseApplications=yes` uses the Restart Manager to close Current before replacing its files (not tested
+  in CI).
+- `test-install.ps1` (CI, job "App (Windows)"): installs 0.0.1, checks `Current.exe`, the Apps entry's version, the shortcut and its
+  `System.AppUserModel.ID`, runs the smoke run from the install; writes `%LOCALAPPDATA%\Current\install-test-marker.txt`; installs
+  the workspace version over it and checks again plus the marker; uninstalls silently, waits for the uninstaller (it runs from a temp
+  copy) and checks that the program folder, shortcut and Apps entry are gone and the marker remains.
+- Not done: code signing (needed for public releases: SmartScreen, the Store's installer route), a licence page (see Licences), the
+  MSIX build (ADR 0009 lists what it would change).
 
 ## Smoke run: `Current.exe --smoke`
 Starts XAML and the core without showing a window, prints one line per check and exits 0 only if all pass. These are the bridge
