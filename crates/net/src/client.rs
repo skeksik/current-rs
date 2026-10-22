@@ -1,34 +1,19 @@
 //! One HTTP client per configured server.
 
 use std::sync::{Arc, Once};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use current_model::ServerRef;
 use reqwest::header::HeaderMap;
 use reqwest::{Method, redirect};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use tokio::time::Instant;
 use url::Url;
 
+use crate::address::{AddressOutcome, AddressProvider, Selected};
 use crate::error::{Location, NetError};
 use crate::log::{LogEntry, Outcome, RequestLog, redact_query};
-
-/// Where a server is right now. The seam for roaming between a server's addresses (M1): the client asks before every request, so a
-/// provider can switch addresses between requests. [`FixedAddress`] is the only provider until then.
-pub trait AddressProvider: Send + Sync {
-    /// The server's base address, including any path prefix it is served under.
-    fn current(&self) -> Url;
-}
-
-/// A server with one address.
-#[derive(Clone, Debug)]
-pub struct FixedAddress(pub Url);
-
-impl AddressProvider for FixedAddress {
-    fn current(&self) -> Url {
-        self.0.clone()
-    }
-}
 
 /// Adds credentials to a request; implemented by the service crates. It runs after the request log entry is built, so nothing it adds
 /// can reach the log.
@@ -189,29 +174,93 @@ impl ServerClient {
     }
 
     /// Sends a request. A status outside 2xx is an error carrying the server's message.
+    ///
+    /// When the address in use fails (unreachable, a timeout or TLS) the provider is told, and if it picks another address within the
+    /// request's deadline the request is sent there once more: any method if nothing was sent, only idempotent methods (RFC 9110
+    /// §9.2.2) if it may have been (ADR 0014). Each attempt is logged.
     pub async fn send(&self, request: Request) -> Result<Response, NetError> {
-        let started = Instant::now();
-        let mut entry = LogEntry {
-            at: SystemTime::now(),
-            server: self.server.clone(),
-            method: request.method.to_string(),
-            path: request.path.clone(),
-            query: redact_query(&request.query),
-            outcome: Outcome::Error(NetError::InvalidRequest.kind()),
-            duration: Duration::ZERO,
+        let deadline = Instant::now() + request.timeout.unwrap_or(self.timeout);
+        let selected = match self.address.current() {
+            Some(selected) => Some(selected),
+            None => self.address.wait(deadline).await,
         };
-        let result = self.execute(request).await;
-        entry.duration = started.elapsed();
-        entry.outcome = match &result {
+        let Some(selected) = selected else {
+            self.log(
+                &request,
+                None,
+                Outcome::Error(NetError::Unreachable.kind()),
+                Instant::now(),
+            );
+            return Err(NetError::Unreachable);
+        };
+        let (result, sent) = self.attempt(&request, &selected, deadline).await;
+        let Err(error) = &result else {
+            return result;
+        };
+        if outcome_of(error) == AddressOutcome::Ok || (sent && !is_idempotent(&request.method)) {
+            return result;
+        }
+        match self.address.wait(deadline).await {
+            Some(next) if next.url() != selected.url() => {
+                self.attempt(&request, &next, deadline).await.0
+            }
+            _ => result,
+        }
+    }
+
+    /// Sends `request` to `selected` once, logs it and reports the outcome to the provider. The flag says whether the request may
+    /// have reached a server: false only when it failed while connecting.
+    async fn attempt(
+        &self,
+        request: &Request,
+        selected: &Selected,
+        deadline: Instant,
+    ) -> (Result<Response, NetError>, bool) {
+        let started = Instant::now();
+        let (result, sent) = match self
+            .execute(request.clone(), selected.url(), deadline)
+            .await
+        {
+            Ok(response) => (Ok(response), true),
+            Err(failure) => (Err(failure.error), failure.sent),
+        };
+        let outcome = match &result {
             Ok(response) => Outcome::Status(response.status),
             Err(NetError::Auth { status, .. } | NetError::Status { status, .. }) => {
                 Outcome::Status(*status)
             }
             Err(error) => Outcome::Error(error.kind()),
         };
+        self.log(request, selected.position(), outcome, started);
+        self.address.report(
+            selected,
+            match &result {
+                Ok(_) => AddressOutcome::Ok,
+                Err(error) => outcome_of(error),
+            },
+        );
+        (result, sent)
+    }
+
+    /// Adds an entry for `request` to the log, built from the request as the caller made it: no address, no credentials.
+    fn log(&self, request: &Request, address: Option<u8>, outcome: Outcome, started: Instant) {
+        let entry = LogEntry {
+            at: SystemTime::now(),
+            server: self.server.clone(),
+            address,
+            method: request.method.to_string(),
+            path: request.path.clone(),
+            query: redact_query(&request.query),
+            outcome,
+            duration: started.elapsed(),
+        };
         tracing::debug!(target: "current_net", "{}", entry.to_line());
         self.log.push(entry);
-        result
+    }
+
+    /// The address the client would use now, if one is selected. For identity probes, which need to know which address they check.
+    pub fn current_address(&self) -> Option<Selected> {
+        self.address.current()
     }
 
     /// Sends a request and decodes its JSON body.
@@ -233,25 +282,33 @@ impl ServerClient {
         (url, headers)
     }
 
-    async fn execute(&self, request: Request) -> Result<Response, NetError> {
+    /// Sends `request` to `base`, following redirects on the same host, until `deadline` (one deadline for the whole request,
+    /// redirects included).
+    async fn execute(
+        &self,
+        request: Request,
+        base: &Url,
+        deadline: Instant,
+    ) -> Result<Response, Failure> {
         let Request {
             mut method,
             path,
             query,
             mut headers,
             mut body,
-            timeout,
+            timeout: _,
         } = request;
-        // One deadline for the whole request, redirects included.
-        let deadline = Instant::now() + timeout.unwrap_or(self.timeout);
-        let original = join(&self.address.current(), &path, &query)?;
+        let original = join(base, &path, &query).map_err(Failure::unsent)?;
         let mut url = original.clone();
         let mut hops = 0;
         loop {
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .filter(|remaining| !remaining.is_zero())
-                .ok_or(NetError::Timeout)?;
+                .ok_or(Failure {
+                    error: NetError::Timeout,
+                    sent: hops > 0,
+                })?;
             let (authorized_url, authorized_headers) = self.authorize(&url, &headers);
             let mut builder = self
                 .http
@@ -261,15 +318,24 @@ impl ServerClient {
             if let Some(body) = &body {
                 builder = builder.body(body.clone());
             }
-            let response = builder.send().await.map_err(NetError::from_reqwest)?;
+            // reqwest reports a failure in its connector (DNS, TCP and the TLS handshake) as a connect error: hyper-util 0.1.21
+            // `client/legacy/client.rs` wraps the connector's error as `Connect`, which `is_connect()` looks for, and reqwest 0.13.5
+            // `connect.rs` does the rustls handshake inside that connector. Nothing was sent then, unless an earlier hop was.
+            let response = builder.send().await.map_err(|error| Failure {
+                sent: hops > 0 || !error.is_connect(),
+                error: NetError::from_reqwest(error),
+            })?;
             let status = response.status().as_u16();
             let response_headers = response.headers().clone();
 
             if let Some(next) = redirect_target(status, &response_headers, &url) {
                 if hops >= MAX_REDIRECTS || !may_follow(&original, &next) {
-                    return Err(NetError::Redirected {
-                        status,
-                        location: Some(Location(next)),
+                    return Err(Failure {
+                        error: NetError::Redirected {
+                            status,
+                            location: Some(Location(next)),
+                        },
+                        sent: true,
                     });
                 }
                 // As browsers do: 303 always becomes GET, and so do 301 and 302 for anything but GET and HEAD; 307 and 308 keep the
@@ -291,10 +357,16 @@ impl ServerClient {
             let body = response
                 .bytes()
                 .await
-                .map_err(NetError::from_reqwest)?
+                .map_err(|error| Failure {
+                    error: NetError::from_reqwest(error),
+                    sent: true,
+                })?
                 .to_vec();
             if !(200..300).contains(&status) {
-                return Err(NetError::from_status(status, &body));
+                return Err(Failure {
+                    error: NetError::from_status(status, &body),
+                    sent: true,
+                });
             }
             return Ok(Response {
                 status,
@@ -304,6 +376,41 @@ impl ServerClient {
             });
         }
     }
+}
+
+/// A failed attempt, and whether the request may have reached a server.
+struct Failure {
+    error: NetError,
+    sent: bool,
+}
+
+impl Failure {
+    fn unsent(error: NetError) -> Self {
+        Self { error, sent: false }
+    }
+}
+
+/// What a request's error says about the address it went to.
+fn outcome_of(error: &NetError) -> AddressOutcome {
+    match error {
+        NetError::Unreachable => AddressOutcome::Unreachable,
+        NetError::Timeout => AddressOutcome::Timeout,
+        NetError::Tls => AddressOutcome::Tls,
+        _ => AddressOutcome::Ok,
+    }
+}
+
+/// Methods that may be repeated after a failure once the request may have been sent (RFC 9110 §9.2.2, as listed in ADR 0014). Never
+/// POST or PATCH.
+fn is_idempotent(method: &Method) -> bool {
+    [
+        Method::GET,
+        Method::HEAD,
+        Method::PUT,
+        Method::DELETE,
+        Method::OPTIONS,
+    ]
+    .contains(method)
 }
 
 /// Where a redirect response points, resolved against the request's URL. `None` for any other response, including a 3xx without a

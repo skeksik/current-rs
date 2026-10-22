@@ -217,6 +217,7 @@ mod tests {
         app.request_log().push(LogEntry {
             at: SystemTime::UNIX_EPOCH,
             server: jellyfin(),
+            address: None,
             method: "GET".into(),
             path: "/System/Info".into(),
             query: Vec::new(),
