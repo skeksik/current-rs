@@ -15,6 +15,8 @@ export MACOSX_DEPLOYMENT_TARGET=14.0
 cd "$root"
 rustup target add "$target"
 cargo build --release --locked -p current-ffi --target "$target"
+# The Jellyfin stand-in the flow tests run against (tools/jellyfin-stand-in), for the host: target/release. Test code only.
+cargo build --release --locked -p jellyfin-stand-in
 # The system libraries the static library needs; Package.swift links them.
 cargo rustc --release --locked -p current-ffi --target "$target" --crate-type staticlib -- --print native-static-libs 2>&1 \
     | grep 'native-static-libs' || true

@@ -28,6 +28,24 @@ extension ValueForwarder: CapabilitiesListener where Value == CapabilitiesSnapsh
     }
 }
 
+extension ValueForwarder: AddServerStateListener where Value == AddServerState {
+    public func onValue(value: AddServerState) {
+        forward(value)
+    }
+}
+
+extension ValueForwarder: DiscoveryStateListener where Value == DiscoveryState {
+    public func onValue(value: DiscoveryState) {
+        forward(value)
+    }
+}
+
+extension ValueForwarder: SignInStateListener where Value == SignInState {
+    public func onValue(value: SignInState) {
+        forward(value)
+    }
+}
+
 /// A value the core owns, mirrored on the main actor. The owner (a view or its model) calls `cancel()` when it goes away; `deinit` is
 /// only the backstop.
 @MainActor
