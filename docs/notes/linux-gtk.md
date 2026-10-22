@@ -72,6 +72,9 @@ workspace, its lockfile, cargo-deny and CI never saw it.
 - Full screen works under weston (sidebar and header bar hidden, controls over the video). Under Xvfb, `fullscreen()` does nothing,
   because there is no window manager.
 - Under weston, `set_default_size` on a mapped window does not resize it, so the "narrow" case was only seen under Xvfb.
+- Under weston the sidebar came out 126 px wide, so its title shows as "Curr…" in the Wayland screenshots. That happened even after
+  the prototype set `min-sidebar-width` to 200 (`AdwOverlaySplitView`'s default minimum is 180). Under Xvfb it is 268 px. Not
+  understood; case 3 below checks it in WSLg.
 
 ![Preferences (Xvfb, light)](linux-gtk/preferences-x11.png)
 
@@ -125,10 +128,10 @@ Other observations:
 | GTK | 4.14 | gtk4-rs feature `v4_14`; `GtkGraphicsOffload` (for a later HDR path) is "Since: 4.14" |
 | libadwaita | 1.5 | libadwaita-rs feature `v1_5`: `AdwOverlaySplitView`, `AdwToolbarView`, `AdwBreakpoint` (1.4), `AdwPreferencesDialog`, `AdwAboutDialog` (1.5) |
 | libmpv | soname 2, mpv 0.35 or later | Client API 2.0 came with mpv 0.35.0 ("remove headers/functions of the obsolete opengl_cb API"). The render calls used here are unchanged up to 0.41 (below) |
-| glibc | 2.34 for this build | Highest symbol version the debug binary built on Ubuntu 24.04 needs (`objdump -T`: GLIBC_2.34). A release binary must be built on the oldest glibc it supports and checked again |
+| glibc | 2.34 for this build | Highest symbol version the debug binary built on Ubuntu 24.04 needs (`objdump -T target/debug/current-linux-spike | grep -o 'GLIBC_[0-9.]*' \| sort -uV \| tail -1` gives GLIBC_2.34). A release binary must be built on the oldest glibc it supports and checked again |
 | OpenGL | GL 3.x or GLES 3.x through EGL | What mpv's OpenGL renderer and GTK's GLArea use |
 
-Development packages per distribution:
+Development packages per distribution (the libraries the prototype links; the setup lines further down add the tools):
 - Ubuntu 24.04: `libgtk-4-dev libadwaita-1-dev libmpv-dev` (installed and built here).
 - Fedora: `gtk4-devel libadwaita-devel mpv-devel`. packages.fedoraproject.org, read 2026-10-22: Fedora 43 ships GTK 4.20.4,
   libadwaita 1.8.8 and mpv 0.40.0; Fedora 44 ships 4.22.5, 1.9.4 and 0.41.0. Not verified by running.
@@ -301,11 +304,21 @@ cd apps/linux && ./make-test-clip.sh && cargo run --release
 ```
 (`rust-toolchain.toml` makes rustup install the pinned 1.99.1 on the first `cargo` call.)
 
+On other distributions, replace the `apt` lines. The GTK, libadwaita and mpv package names are from packages.fedoraproject.org and
+archlinux.org, read 2026-10-22 (versions above). The tool package names (compiler, pkg-config, ffmpeg, glxinfo) were not checked
+against an index. Neither line has been run:
+```
+# Fedora (not verified by running)
+sudo dnf install -y gcc git pkgconf-pkg-config gtk4-devel libadwaita-devel mpv-devel ffmpeg-free mesa-demos
+# Arch (not verified by running)
+sudo pacman -S --needed base-devel git gtk4 libadwaita mpv ffmpeg mesa-utils
+```
+
 | # | Case | What to look at |
 |---|---|---|
 | 1 | Build | `cargo run --release` builds without errors or warnings |
 | 2 | GL driver | `glxinfo -B` and the player's info line: the renderer should name D3D12 and the GPU, not llvmpipe; note GL vs GLES and the version |
-| 3 | Look and feel | The window looks like a GNOME app: header bars, sidebar, rounded corners, shadows. Primary menu: Preferences (Ctrl+,) and About |
+| 3 | Look and feel | The window looks like a GNOME app: header bars, sidebar, rounded corners, shadows. Primary menu: Preferences (Ctrl+,) and About. The sidebar title reads "Current" in full (it was cut to "Curr…" under weston) |
 | 4 | Core state | Preferences > Prototype > Add: a "jellyfin" server appears within a second in Preferences and on Home; Clear removes it |
 | 5 | Keyboard | Tab and arrows move through the sidebar and controls with a visible focus ring; Ctrl+, opens Preferences; Escape closes dialogs; Ctrl+W and Ctrl+Q close |
 | 6 | Light/dark | Does the app follow Windows' dark mode on its own? (Probably not: WSLg has no settings portal; note what happens.) Then `ADW_DEBUG_COLOR_SCHEME=prefer-dark cargo run --release`: everything turns dark, the video area stays black |

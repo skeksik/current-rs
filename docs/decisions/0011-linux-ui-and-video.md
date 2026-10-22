@@ -17,7 +17,7 @@ headless). The owner's WSL2 (WSLg) run and native Linux checks are still to come
 - **Minimum system versions** (stated as versions, not distro packages):
   - GTK 4.14 and libadwaita 1.5 (both in Ubuntu 24.04 LTS).
   - libmpv soname 2 (mpv 0.35 or later), reached through EGL with GL 3.x or GLES 3.x.
-  - The glibc of the oldest build host we support; the spike's binary built on Ubuntu 24.04 needs 2.34.
+  - The glibc of the oldest build host we support; the spike's binary built on Ubuntu 24.04 needs 2.34 (the highest `GLIBC_` symbol version in `objdump -T <binary>`).
   - A Flatpak build would use the runtime's newer GTK instead.
 - **Layout:**
   - `AdwApplicationWindow` with an `AdwOverlaySplitView`: a sidebar of sections, a header bar per pane, and a breakpoint that folds
