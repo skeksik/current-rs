@@ -12,7 +12,7 @@ mod wire;
 
 pub use address::{AddressError, DEFAULT_HTTP_PORT, DEFAULT_HTTPS_PORT, parse_address};
 pub use discovery::{
-    Candidate, DISCOVERY_PORT, DiscoveryConfig, DiscoveryError, MAX_REPLY_BYTES, MAX_SERVERS,
-    discover,
+    Candidate, DISCOVERY_PORT, DiscoveryConfig, DiscoveryError, MAX_ADDRESSES_PER_SERVER,
+    MAX_REPLY_BYTES, MAX_SERVERS, discover,
 };
 pub use probe::{FoundServer, MINIMUM_VERSION, ProbeError, Prober, same_server};

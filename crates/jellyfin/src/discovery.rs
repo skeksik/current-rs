@@ -47,6 +47,9 @@ const MAX_ID_CHARS: usize = 64;
 /// The longest server name kept, in characters; longer names are cut.
 const MAX_NAME_CHARS: usize = 256;
 
+/// The most addresses kept per server id, from all replies claiming it.
+pub const MAX_ADDRESSES_PER_SERVER: usize = 4;
+
 /// Where and how long to search.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiscoveryConfig {
@@ -81,9 +84,9 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// The base URLs to probe, in order: when the reply's address is an IP other than the one the reply came from, an address at
-    /// the reply's source comes first (a server in a container may name an address this device cannot reach), then the reply's
-    /// own. Never empty.
+    /// The base URLs to probe, in order, from every reply claiming this id (at most [`MAX_ADDRESSES_PER_SERVER`]). For each reply:
+    /// when its address is an IP other than the one the reply came from, an address at the reply's source comes first (a server in
+    /// a container may name an address this device cannot reach), then the reply's own. Never empty.
     pub fn addresses(&self) -> &[Url] {
         &self.addresses
     }
@@ -132,8 +135,9 @@ impl From<io::Error> for DiscoveryError {
 }
 
 /// Sends the discovery request to every target and collects the replies until the window ends, [`MAX_SERVERS`] servers answered
-/// or too many datagrams came. Replies are merged by server id (the first one wins); malformed, oversized and invalid replies are
-/// skipped.
+/// or too many datagrams came. Replies claiming the same server id are merged: the first one's name is kept and every reply's
+/// addresses are added in arrival order (deduplicated, at most [`MAX_ADDRESSES_PER_SERVER`]), so a spoofed reply that arrives first
+/// cannot hide the real server's. Malformed, oversized and invalid replies are skipped.
 ///
 /// # Errors
 /// [`DiscoveryError`] when the socket cannot be opened or the request could be sent to no target.
@@ -168,15 +172,29 @@ pub async fn discover(config: &DiscoveryConfig) -> Result<Vec<Candidate>, Discov
                 if len > MAX_REPLY_BYTES {
                     continue;
                 }
-                if let Some(candidate) = parse_reply(&buffer[..len], source.ip())
-                    && !found.iter().any(|known| known.id == candidate.id)
-                {
-                    found.push(candidate);
+                if let Some(candidate) = parse_reply(&buffer[..len], source.ip()) {
+                    merge(&mut found, candidate);
                 }
             }
         }
     }
     Ok(found)
+}
+
+/// Adds `candidate` to `found`, or its new addresses to the known candidate with the same id.
+fn merge(found: &mut Vec<Candidate>, candidate: Candidate) {
+    let Some(known) = found.iter_mut().find(|known| known.id == candidate.id) else {
+        found.push(candidate);
+        return;
+    };
+    for address in candidate.addresses {
+        if known.addresses.len() >= MAX_ADDRESSES_PER_SERVER {
+            break;
+        }
+        if !known.addresses.contains(&address) {
+            known.addresses.push(address);
+        }
+    }
 }
 
 /// Sends the request to every target. Succeeds if one send did; otherwise fails with the first error.
@@ -328,6 +346,32 @@ mod tests {
         assert_eq!(
             found.iter().filter(|c| c.id == ServerId::new(ID)).count(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_spoofed_reply_first_does_not_hide_the_real_address() {
+        let replies = vec![
+            // A name, so no address at the reply's source is added for it.
+            reply("https://media.example.com", ID, "Spoof"),
+            reply("http://127.0.0.1:8096", ID, "Real"),
+            reply("http://127.0.0.1:8096", ID, "Real again"),
+        ]
+        .into_iter()
+        .chain((0..8).map(|n| reply(&format!("http://127.0.0.1:{}", 9000 + n), ID, "More")))
+        .collect();
+        let (target, _) = stand_in(replies, 0).await;
+        let found = discover(&config(vec![target])).await.unwrap();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].name, "Spoof");
+        assert_eq!(
+            addresses(&found[0]),
+            [
+                "https://media.example.com/",
+                "http://127.0.0.1:8096/",
+                "http://127.0.0.1:9000/",
+                "http://127.0.0.1:9001/",
+            ]
         );
     }
 

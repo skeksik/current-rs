@@ -39,7 +39,9 @@ were read on 2026-10-22 from the sources at the end. "Jellyfin" means the server
   - `Address` must pass ADR 0012's `parse_address` (http or https only, no credentials, a host), and its first candidate is used;
   - unknown fields are ignored, so a newer server's additions pass;
   - `Name` loses control characters and is cut to 256 characters.
-  Replies are merged by `Id`, and the first one wins.
+  Replies claiming the same `Id` are merged. The first reply's name is kept, and every reply's addresses are added in arrival
+  order, deduplicated, at most 4 per `Id`. So a spoofed reply that arrives first cannot hide the real server's address: the
+  addresses are probed in order until one answers with the claimed `Id`. This does not make the `Id` a proof (see below).
 - **The reply's source:** when `Address` names an IP other than the one the reply came from, an address with the source IP (same
   scheme, port and base path) is probed first, then the claimed one. A reply that names a host (a published URL) is probed as
   given.

@@ -320,6 +320,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_spoofed_reply_first_does_not_hide_the_real_server() {
+        let port = http_stand_in().await;
+        let target = udp_stand_in(vec![
+            ("http://127.0.0.1:1".into(), ID.into()),
+            (format!("http://127.0.0.1:{port}"), ID.into()),
+        ])
+        .await;
+        let discovery = discovery(Arc::new(RequestLog::default()), target);
+        discovery.search().await;
+        let found = done(&discovery);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            found[0].server().address.url,
+            format!("http://127.0.0.1:{port}")
+        );
+    }
+
+    #[tokio::test]
     async fn the_reply_source_is_probed_before_the_claimed_ip() {
         let port = http_stand_in().await;
         let target = udp_stand_in(vec![(format!("http://192.168.1.10:{port}"), ID.into())]).await;
