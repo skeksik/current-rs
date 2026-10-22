@@ -1037,3 +1037,24 @@ async fn a_restore_while_signing_out_does_not_sign_back_in() {
     assert!(stored(&secrets, USER_ID).is_none());
     assert_eq!(app.settings().unwrap().get().servers[0].active_user, None);
 }
+
+#[tokio::test]
+async fn the_saved_servers_are_published_on_every_change() {
+    let (_server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    let mut saved = app.saved_servers();
+    assert!(saved.borrow_and_update().is_empty());
+
+    signed_in_with_password(&app, &address).await;
+    assert!(saved.has_changed().unwrap());
+    let list = saved.borrow_and_update().clone();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].active_user, Some(UserId::new(USER_ID)));
+
+    app.sign_out(&jellyfin("1")).await.unwrap();
+    assert!(saved.has_changed().unwrap());
+    assert_eq!(saved.borrow_and_update()[0].active_user, None);
+    assert_eq!(*saved.borrow(), app.servers());
+}

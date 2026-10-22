@@ -44,9 +44,9 @@ pub(crate) struct Shared {
     pub(crate) capabilities: watch::Sender<Capabilities>,
     pub(crate) storage: Option<Storage>,
     pub(crate) identity: ClientIdentity,
-    /// The saved servers. The settings file mirrors this list: [`Shared::commit`] changes both. Held only to read or swap the
-    /// list, never during file I/O, so async code may read it.
-    servers: Mutex<Vec<SavedServer>>,
+    /// The saved servers, published to subscribers on every change. The settings file mirrors this list: [`Shared::commit`]
+    /// changes both. Borrowed only to read or swap the list, never during file I/O, so async code may read it.
+    pub(crate) servers: watch::Sender<Vec<SavedServer>>,
     /// Serializes [`Shared::commit`]: held during the settings write, on the blocking pool only.
     write: Mutex<()>,
     /// One live session per server.
@@ -88,7 +88,7 @@ impl Shared {
             capabilities: watch::Sender::new(capabilities),
             storage,
             identity,
-            servers: Mutex::new(servers),
+            servers: watch::Sender::new(servers),
             write: Mutex::new(()),
             sessions: Mutex::new(HashMap::new()),
             next_session: AtomicU64::new(1),
@@ -97,11 +97,12 @@ impl Shared {
     }
 
     pub(crate) fn servers(&self) -> Vec<SavedServer> {
-        lock(&self.servers).clone()
+        self.servers.borrow().clone()
     }
 
     pub(crate) fn saved(&self, server: &ServerRef) -> Option<SavedServer> {
-        lock(&self.servers)
+        self.servers
+            .borrow()
             .iter()
             .find(|saved| &saved.server == server)
             .cloned()
@@ -145,7 +146,11 @@ impl Shared {
                 .settings
                 .update(|settings| settings.servers = next.clone())?;
         }
-        *lock(&self.servers) = next;
+        self.servers.send_if_modified(|servers| {
+            let changed = *servers != next;
+            *servers = next;
+            changed
+        });
         Ok(result)
     }
 
