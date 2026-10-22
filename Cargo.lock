@@ -265,7 +265,12 @@ name = "current-ffi"
 version = "0.1.0"
 dependencies = [
  "current-app",
+ "current-jellyfin",
  "current-model",
+ "current-net",
+ "current-store",
+ "jellyfin-stand-in",
+ "tempfile",
  "thiserror",
  "tokio",
  "uniffi",

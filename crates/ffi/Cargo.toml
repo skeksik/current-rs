@@ -12,10 +12,17 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 current-app.workspace = true
+current-jellyfin.workspace = true
 current-model.workspace = true
+current-net.workspace = true
+current-store.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 uniffi.workspace = true
+
+[dev-dependencies]
+jellyfin-stand-in.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

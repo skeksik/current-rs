@@ -30,6 +30,8 @@ pub(crate) fn handle() -> Result<Handle, CoreError> {
     let runtime = Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name(WORKER_THREAD_NAME)
+        // I/O for the HTTP clients and discovery's UDP socket, time for timeouts and polling.
+        .enable_io()
         .enable_time()
         .build()
         .map_err(|error| CoreError::Runtime {
