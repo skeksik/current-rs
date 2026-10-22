@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The C# side of the bridge (ADR 0004): the generated bindings (Generated/, not checked in; build.ps1 makes them) and the public
+    adapters the WinUI app uses. Generated types stay internal.
+    Pass -p:CoreLibDir=<directory of current_ffi.dll>; build.ps1 does.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- The generated code uses unsafe blocks. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Current.Bindings</RootNamespace>
+    <!-- A property passed with -p: is read-only, so the path with its trailing slash gets its own name. -->
+    <CoreLib>$([MSBuild]::EnsureTrailingSlash('$(CoreLibDir)'))</CoreLib>
+  </PropertyGroup>
+
+  <!-- Generated/current_ffi.cs is picked up by the default glob (an explicit Compile item would duplicate it). Warnings are not made
+       errors here because the generated file's are not ours to fix. -->
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Current.Bindings.Tests" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(CoreLibDir)' != ''">
+    <None Include="$(CoreLib)current_ffi.dll" Link="current_ffi.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="RequireGeneratedBindings" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('Generated/current_ffi.cs')" Text="Generated/current_ffi.cs is missing: run bindings/csharp/build.ps1." />
+  </Target>
+</Project>
