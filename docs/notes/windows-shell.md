@@ -26,6 +26,20 @@ apps/windows/
 Build: `pwsh bindings/csharp/build.ps1` (core, generated C#, bindings), then `pwsh apps/windows/build.ps1`, then
 `pwsh apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe`. CI runs the same three in the job "App (Windows)".
 
+Project settings that matter, each found the hard way in CI:
+- **Component packages, not the metapackage.** `Microsoft.WindowsAppSDK.WinUI` 2.3.9 and `Microsoft.WindowsAppSDK.InteractiveExperiences`
+  2.1.9, the versions the Windows App SDK 2.5.1 metapackage pins. The metapackage also put the AI, ML (onnxruntime, 21.7 MB), Widgets
+  and Search runtimes into the self-contained app, which uses none of them. The Windows App SDK 1.8 release notes, "NuGet
+  Metapackage" (learn.microsoft.com, ms.date 2026-09-24, read 2026-10-22): "This allows developers to choose either the metapackage
+  or select specific component packages for their applications." WinUI 2.3.9 asks for InteractiveExperiences 2.1.8, which nuget.org
+  does not have, so 2.1.9 is named directly and NuGet's NU1603 notice stays a warning. Foundation 2.3.12 (AppLifecycle, which the
+  single instance uses) and Base 2.0.4 come with WinUI; Base also brings `Microsoft.Windows.SDK.BuildTools.MSIX`, so no reference to
+  it is needed.
+- **`EnableMsixTooling=true`** although the app is unpackaged. Without it the publish folder had no `Current.pri` and loading
+  `MainWindow.xaml` failed with "Cannot locate resource from 'ms-appx:///MainWindow.xaml'". The typical WinUI project in "Project
+  properties and auto-initializers" (learn.microsoft.com, ms.date 2026-10-02, read 2026-10-22) sets it. `build.ps1` fails if the
+  publish folder has no app PRI.
+
 The app references `Current.Bindings` by project; `-p:CoreLibDir` (set by `build.ps1`) flows to it, and its `current_ffi.dll` item is
 copied into the app's output and publish folder. The pitfalls in `docs/notes/uniffi-bridge.md` apply: `-p:Platform=x64` with
 `-r win-x64`, `ImplicitUsings`, and `x:DataType` only on public types (the settings page binds `Current.Bindings.ServerStatus`).
@@ -47,7 +61,8 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   ms.date 2025-04-10, read 2026-10-22) does: "Alt+Left arrow, VirtualKey.GoBack" and "VirtualKey.XButton1 (Such as the back button
   found on some mice.)", and "We recommend that you support accelerator keys for both forward and back navigation because users who
   rely on these will expect both", with Alt+Right and `IsXButton2Pressed` for forward. Its `CoreDispatcher` and `CoreWindow` events do
-  not exist in WinUI 3 desktop, so the window root has `KeyboardAccelerator`s (Left with Menu, GoBack, Right with Menu) and a
+  not exist in WinUI 3 desktop, so the window root has `KeyboardAccelerator`s (Left with Menu and Right with Menu in XAML; GoBack added in code, because XAML
+  fails with "Failed to create a 'Windows.System.VirtualKey' from the text 'GoBack'", seen in CI) and a
   `PointerPressed` handler registered with handledEventsToo that checks `IsXButton1Pressed` and `IsXButton2Pressed`. The forward stack
   is the Frame's own: it drops it on a new navigation; nothing custom is added (manager, 2026-10-22). There is no forward button, as in
   the NavigationView's design. Windows+Backspace and the gamepad B button come through `SystemNavigationManager`, which a desktop
@@ -113,7 +128,7 @@ handler restores its window if minimised and activates it. `--smoke` skips the k
   `System.AppUserModel.ID`, runs the smoke run from the install; writes `%LOCALAPPDATA%\Current\install-test-marker.txt`; installs
   the workspace version over it and checks again plus the marker; uninstalls silently, waits for the uninstaller (it runs from a temp
   copy) and checks that the program folder, shortcut and Apps entry are gone and the marker remains.
-- Not done: code signing (needed for public releases: SmartScreen, the Store's installer route), a licence page (see Licences), the
+- Not done: code signing (needed for public releases: SmartScreen, the Store's installer route), a licence page (see "Open before first distribution"), the
   MSIX build (ADR 0009 lists what it would change).
 
 ## Smoke run: `Current.exe --smoke`
