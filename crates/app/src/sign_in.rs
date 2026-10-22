@@ -6,9 +6,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use current_jellyfin::{
-    AuthError, JellyfinClient, QUICK_CONNECT_INTERVAL, QUICK_CONNECT_LIFETIME, SignedIn,
+    AuthError, JellyfinClient, ProbeError, Prober, QUICK_CONNECT_INTERVAL, QUICK_CONNECT_LIFETIME,
+    SignedIn,
 };
-use current_model::{ServerRef, User};
+use current_model::{ServerId, ServerRef, User};
+use current_net::Url;
 use current_store::StoreError;
 use tokio::sync::watch;
 
@@ -20,9 +22,17 @@ pub enum SignInError {
     /// The server refused or could not be reached.
     #[error(transparent)]
     Auth(#[from] AuthError),
-    /// Signed in, but the server could not be saved in the settings.
+    /// The saved server's address did not answer as that server before credentials were sent, or the sign-in reported another
+    /// server's id ([`ProbeError::DifferentServer`]). Nothing was saved.
+    #[error(transparent)]
+    Probe(#[from] ProbeError),
+    /// The server could not be saved in the settings, or the settings belong to a newer version of Current and cannot be saved
+    /// ([`StoreError::NewerVersion`], checked before anything is sent).
     #[error(transparent)]
     Save(#[from] StoreError),
+    /// The saved server was removed while signing in.
+    #[error("the server was removed")]
+    ServerRemoved,
 }
 
 /// Where the flow is. The UI renders one screen state per variant. No variant holds a password, token or Quick Connect secret.
@@ -55,6 +65,10 @@ pub struct SignIn {
     shared: Arc<Shared>,
     target: Target,
     client: JellyfinClient,
+    /// The server's id: the sign-in must report this one.
+    expected: ServerId,
+    /// For a saved server, the address to check before any credential is sent (ADR 0014). Setup has just checked a new one.
+    verify: Option<Url>,
     state: watch::Sender<SignInState>,
     generation: watch::Sender<u64>,
     quick_connect: Mutex<Option<bool>>,
@@ -71,11 +85,19 @@ impl std::fmt::Debug for SignIn {
 }
 
 impl SignIn {
-    pub(crate) fn new(shared: Arc<Shared>, target: Target, client: JellyfinClient) -> Self {
+    pub(crate) fn new(
+        shared: Arc<Shared>,
+        target: Target,
+        client: JellyfinClient,
+        expected: ServerId,
+        verify: Option<Url>,
+    ) -> Self {
         Self {
             shared,
             target,
             client,
+            expected,
+            verify,
             state: watch::Sender::new(SignInState::Ready {
                 quick_connect: None,
             }),
@@ -119,6 +141,9 @@ impl SignIn {
     /// Signs in with a user name and password. The password is used for this one request and not kept.
     pub async fn with_password(&self, username: &str, password: &str) {
         let generation = self.begin();
+        if !self.prepare(generation).await {
+            return;
+        }
         let result = self
             .unless_cancelled(generation, self.client.sign_in_by_name(username, password))
             .await;
@@ -131,6 +156,9 @@ impl SignIn {
     /// most 10 minutes), then signs in.
     pub async fn with_quick_connect(&self) {
         let generation = self.begin();
+        if !self.prepare(generation).await {
+            return;
+        }
         let Some(code) = self
             .unless_cancelled(generation, self.client.quick_connect_initiate())
             .await
@@ -189,6 +217,43 @@ impl SignIn {
         current
     }
 
+    /// Checks before anything is sent that the result can be saved and, for a saved server, that its address answers as that
+    /// server. Returns whether to go on; on a failure the state says why.
+    async fn prepare(&self, generation: u64) -> bool {
+        if let Err(error) = self.shared.check_writable() {
+            self.set_if_current(
+                generation,
+                SignInState::Failed {
+                    error: error.into(),
+                },
+            );
+            return false;
+        }
+        let Some(url) = &self.verify else {
+            return true;
+        };
+        let prober = Prober::new(
+            self.client.server().clone(),
+            self.shared.request_log.clone(),
+        );
+        match self
+            .unless_cancelled(generation, prober.probe_expecting(url, &self.expected))
+            .await
+        {
+            Some(Ok(_)) => true,
+            Some(Err(error)) => {
+                self.set_if_current(
+                    generation,
+                    SignInState::Failed {
+                        error: error.into(),
+                    },
+                );
+                false
+            }
+            None => false,
+        }
+    }
+
     /// Runs `work` until it ends or the attempt is superseded (`None`).
     async fn unless_cancelled<T>(
         &self,
@@ -226,10 +291,25 @@ impl SignIn {
                 return;
             }
         };
+        // A sign-in that reports another server's id is not saved (and its token not kept).
+        if signed_in
+            .server_id
+            .as_ref()
+            .is_some_and(|id| *id != self.expected)
+        {
+            self.set_if_current(
+                generation,
+                SignInState::Failed {
+                    error: ProbeError::DifferentServer.into(),
+                },
+            );
+            return;
+        }
         if *self.generation.borrow() != generation {
             return;
         }
         let user = signed_in.user.clone();
+        // Saved in full even if this future is dropped or the attempt cancelled meanwhile: the server already made the session.
         let next = match self
             .shared
             .save_sign_in(self.target.clone(), signed_in)
@@ -243,11 +323,8 @@ impl SignIn {
                 server,
                 remembered,
             },
-            Err(error) => SignInState::Failed {
-                error: error.into(),
-            },
+            Err(error) => SignInState::Failed { error },
         };
-        // Saved even if cancelled meanwhile: the server already made the session.
-        self.state.send_replace(next);
+        self.set_if_current(generation, next);
     }
 }

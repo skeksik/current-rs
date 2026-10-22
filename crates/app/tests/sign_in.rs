@@ -1,23 +1,28 @@
 //! Sign-in, restore, the 401 rule and sign out, end to end through `App`, against a hand-written Jellyfin stand-in on 127.0.0.1
 //! (ADR 0015). Settings go to a temporary folder, secrets to memory.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use current_app::{AddServerState, App, NewServer, SignIn, SignInError, SignInState};
 use current_jellyfin::AuthError;
+use current_jellyfin::ProbeError;
 use current_model::{Permission, Reachability, ServerKey, ServerRef, ServiceType, UserId};
-use current_store::{MemorySecrets, Secret, SecretKey, Secrets, SecretsError, SettingsStore};
+use current_store::{
+    MemorySecrets, Secret, SecretKey, Secrets, SecretsError, SettingsStore, StoreError,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 const SERVER_ID: &str = "0123456789abcdef0123456789abcdef";
 const OTHER_ID: &str = "fedcba9876543210fedcba9876543210";
 const USER_ID: &str = "5d1c0000000000000000000000000001";
+const OTHER_USER_ID: &str = "5d1c0000000000000000000000000002";
 const PASSWORD: &str = "pa55-word-value";
+const WRONG_PASSWORD: &str = "wr0ng-pa55-value";
 const QC_SECRET: &str = "5ecre7000000000000000000000000000000000000000000000000000000beef";
 
 /// One request as the stand-in received it.
@@ -32,8 +37,15 @@ struct Received {
 #[derive(Default)]
 struct Server {
     id: String,
-    tokens: Mutex<HashSet<String>>,
+    /// Live tokens and their user's id.
+    tokens: Mutex<HashMap<String, String>>,
     issued: AtomicUsize,
+    /// `/Users/Me` answers 403 (the token is valid, the request refused).
+    refuse: AtomicBool,
+    /// Sign-ins report this server id instead of the server's own.
+    report_id: Mutex<Option<String>>,
+    /// `/Sessions/Logout` waits for this before it answers.
+    hold_logout: Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// Quick Connect state checks answered "not yet" before the approval.
     polls_before_approval: AtomicUsize,
     received: Mutex<Vec<Received>>,
@@ -47,20 +59,42 @@ impl Server {
         )
     }
 
-    fn user() -> String {
+    fn user(id: &str) -> String {
+        let name = if id == USER_ID {
+            "Example User"
+        } else {
+            "Another User"
+        };
         format!(
-            r#"{{"Name":"Example User","Id":"{USER_ID}","Policy":{{"IsAdministrator":true,"EnableMediaPlayback":true}}}}"#
+            r#"{{"Name":"{name}","Id":"{id}","Policy":{{"IsAdministrator":true,"EnableMediaPlayback":true}}}}"#
         )
     }
 
-    fn issue(&self) -> String {
+    /// A new token for `user`. As Jellyfin does for one device id, the user's earlier tokens are logged out.
+    fn issue(&self, user: &str) -> String {
         let token = format!("t0ken{:027}", self.issued.fetch_add(1, Ordering::SeqCst));
-        self.tokens.lock().unwrap().insert(token.clone());
+        let mut tokens = self.tokens.lock().unwrap();
+        tokens.retain(|_, owner| owner != user);
+        tokens.insert(token.clone(), user.to_owned());
+        let id = self
+            .report_id
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or(self.id.clone());
         format!(
-            r#"{{"User":{},"SessionInfo":{{}},"AccessToken":"{token}","ServerId":"{}"}}"#,
-            Self::user(),
-            self.id
+            r#"{{"User":{},"SessionInfo":{{}},"AccessToken":"{token}","ServerId":"{id}"}}"#,
+            Self::user(user)
         )
+    }
+
+    fn token_user(&self, received: &Received) -> Option<String> {
+        let token = Self::token(received)?;
+        self.tokens.lock().unwrap().get(&token).cloned()
+    }
+
+    fn revoke_user(&self, user: &str) {
+        self.tokens.lock().unwrap().retain(|_, owner| owner != user);
     }
 
     fn token(received: &Received) -> Option<String> {
@@ -69,17 +103,20 @@ impl Server {
     }
 
     fn authorized(&self, received: &Received) -> bool {
-        Self::token(received).is_some_and(|token| self.tokens.lock().unwrap().contains(&token))
-    }
-
-    fn revoke_all(&self) {
-        self.tokens.lock().unwrap().clear();
+        Self::token(received).is_some_and(|token| self.tokens.lock().unwrap().contains_key(&token))
     }
 
     fn answer(&self, received: &Received) -> (u16, String) {
         match received.path.as_str() {
             "/System/Info/Public" => (200, self.info()),
-            "/Users/AuthenticateByName" if received.body.contains(PASSWORD) => (200, self.issue()),
+            "/Users/AuthenticateByName" if received.body.contains(PASSWORD) => {
+                let user = if received.body.contains("Another User") {
+                    OTHER_USER_ID
+                } else {
+                    USER_ID
+                };
+                (200, self.issue(user))
+            }
             "/Users/AuthenticateByName" => (401, "Error processing request.".into()),
             "/QuickConnect/Enabled" => (200, "true".into()),
             "/QuickConnect/Initiate" => (200, quick_connect(false)),
@@ -91,9 +128,15 @@ impl Server {
                 (200, quick_connect(left == 0))
             }
             "/Users/AuthenticateWithQuickConnect" if received.body.contains(QC_SECRET) => {
-                (200, self.issue())
+                (200, self.issue(USER_ID))
             }
-            "/Users/Me" if self.authorized(received) => (200, Self::user()),
+            "/Users/Me" if self.authorized(received) && self.refuse.load(Ordering::SeqCst) => {
+                (403, String::new())
+            }
+            "/Users/Me" if self.authorized(received) => (
+                200,
+                Self::user(&self.token_user(received).unwrap_or_default()),
+            ),
             "/Sessions/Logout" if self.authorized(received) => {
                 if let Some(token) = Self::token(received) {
                     self.tokens.lock().unwrap().remove(&token);
@@ -147,6 +190,12 @@ async fn start(id: &str) -> (Arc<Server>, String) {
                     return;
                 };
                 state.received.lock().unwrap().push(received.clone());
+                if received.path == "/Sessions/Logout" {
+                    let hold = state.hold_logout.lock().unwrap().clone();
+                    if let Some(hold) = hold {
+                        hold.notified().await;
+                    }
+                }
                 let (status, body) = state.answer(&received);
                 let response = format!(
                     "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -240,9 +289,14 @@ fn assert_nothing_secret(app: &App, dir: &Path, extra: &str, server: &Server) {
         app.diagnostics_text(),
         *app.capabilities().borrow()
     );
-    let mut secrets: Vec<String> = server.tokens.lock().unwrap().iter().cloned().collect();
-    secrets.extend((0..server.issued.load(Ordering::SeqCst)).map(|n| format!("t0ken{n:027}")));
-    secrets.extend([PASSWORD.to_owned(), QC_SECRET.to_owned()]);
+    let mut secrets: Vec<String> = (0..server.issued.load(Ordering::SeqCst))
+        .map(|n| format!("t0ken{n:027}"))
+        .collect();
+    secrets.extend([
+        PASSWORD.to_owned(),
+        WRONG_PASSWORD.to_owned(),
+        QC_SECRET.to_owned(),
+    ]);
     for secret in secrets {
         assert!(!text.contains(&secret), "{secret} in {text}");
     }
@@ -298,7 +352,7 @@ async fn a_password_sign_in_saves_the_server_the_user_and_the_token() {
     assert_eq!(record.users[0].name, "Example User");
     assert_eq!(record.active_user, Some(UserId::new(USER_ID)));
     let token = secrets.get(&secret_key()).unwrap().unwrap();
-    assert!(server.tokens.lock().unwrap().contains(token.expose()));
+    assert!(server.tokens.lock().unwrap().contains_key(token.expose()));
 
     // The capabilities state shows the server signed in, and its client works.
     let capabilities = app.capabilities().borrow().clone();
@@ -326,7 +380,7 @@ async fn a_wrong_password_fails_and_saves_nothing() {
     let secrets = Arc::new(MemorySecrets::new());
     let app = open(temp.path(), &secrets);
     let flow = app.sign_in(found(&app, &address).await).unwrap();
-    flow.with_password("Example User", "wrong").await;
+    flow.with_password("Example User", WRONG_PASSWORD).await;
     assert_eq!(
         *flow.state().borrow(),
         SignInState::Failed {
@@ -336,10 +390,11 @@ async fn a_wrong_password_fails_and_saves_nothing() {
     assert!(app.settings().unwrap().get().servers.is_empty());
     assert!(app.capabilities().borrow().servers.is_empty());
     assert_nothing_secret(&app, temp.path(), &format!("{flow:?}"), &server);
+    // The wrong password did reach the server, in the request body only.
     assert!(
-        !std::fs::read_to_string(temp.path().join("settings.json"))
-            .unwrap()
-            .contains("wrong")
+        server.received.lock().unwrap()[1]
+            .body
+            .contains(WRONG_PASSWORD)
     );
 }
 
@@ -533,7 +588,7 @@ async fn a_revoked_session_is_signed_out_at_restore() {
     let app = open(temp.path(), &secrets);
     signed_in_with_password(&app, &address).await;
     drop(app);
-    server.revoke_all();
+    server.revoke_user(USER_ID);
 
     let app = open(temp.path(), &secrets);
     app.restore_sessions().await;
@@ -611,7 +666,7 @@ async fn a_401_mid_session_signs_out_and_deletes_the_token() {
     let mut capabilities = app.capabilities();
     capabilities.borrow_and_update();
 
-    server.revoke_all();
+    server.revoke_user(USER_ID);
     assert_eq!(client.current_user().await, Err(AuthError::SessionRevoked));
     capabilities.changed().await.unwrap();
     let status = capabilities.borrow().servers[0].clone();
@@ -739,6 +794,217 @@ async fn without_a_keyring_the_sign_in_lasts_for_the_run() {
     let (app, _) = App::open(temp.path(), Arc::new(NoKeyring), "").unwrap();
     app.restore_sessions().await;
     assert!(!app.capabilities().borrow().servers[0].signed_in);
+    assert!(
+        app.settings().unwrap().get().servers[0]
+            .active_user
+            .is_some()
+    );
+}
+
+/// The stored token for `user` on server 1.
+fn stored(secrets: &MemorySecrets, user: &str) -> Option<String> {
+    secrets
+        .get(&SecretKey::new(jellyfin("1"), UserId::new(user)))
+        .unwrap()
+        .map(|secret| secret.expose().to_owned())
+}
+
+/// Lets background work (the 401 hook's save) run.
+async fn settle() {
+    tokio::time::sleep(Duration::from_millis(100)).await;
+}
+
+#[tokio::test]
+async fn a_401_on_an_old_client_leaves_a_newer_session_alone() {
+    let (_server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &address).await;
+    let old = app.jellyfin(&jellyfin("1")).unwrap();
+
+    // Signing in again as the same user: the server logs out the old token, the app keeps the new one.
+    let flow = app.sign_in_again(&jellyfin("1")).unwrap().unwrap();
+    flow.with_password("Example User", PASSWORD).await;
+    assert!(matches!(
+        *flow.state().borrow(),
+        SignInState::SignedIn { .. }
+    ));
+    let token = stored(&secrets, USER_ID).unwrap();
+
+    assert_eq!(old.current_user().await, Err(AuthError::SessionRevoked));
+    settle().await;
+    assert!(app.capabilities().borrow().servers[0].signed_in);
+    assert_eq!(stored(&secrets, USER_ID), Some(token));
+    assert_eq!(
+        app.settings().unwrap().get().servers[0].active_user,
+        Some(UserId::new(USER_ID))
+    );
+    let current = app.jellyfin(&jellyfin("1")).unwrap();
+    assert!(!Arc::ptr_eq(&old, &current));
+    assert_eq!(current.current_user().await.unwrap().name, "Example User");
+}
+
+#[tokio::test]
+async fn a_401_on_another_users_old_client_leaves_the_new_user_alone() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &address).await;
+    let first = app.jellyfin(&jellyfin("1")).unwrap();
+
+    let flow = app.sign_in_again(&jellyfin("1")).unwrap().unwrap();
+    flow.with_password("Another User", PASSWORD).await;
+    assert!(matches!(
+        *flow.state().borrow(),
+        SignInState::SignedIn { .. }
+    ));
+
+    server.revoke_user(USER_ID);
+    assert_eq!(first.current_user().await, Err(AuthError::SessionRevoked));
+    settle().await;
+    let status = app.capabilities().borrow().servers[0].clone();
+    assert!(status.signed_in);
+    assert_eq!(status.user.unwrap().id, UserId::new(OTHER_USER_ID));
+    assert!(stored(&secrets, OTHER_USER_ID).is_some());
+    assert_eq!(
+        app.settings().unwrap().get().servers[0].active_user,
+        Some(UserId::new(OTHER_USER_ID))
+    );
+}
+
+#[tokio::test]
+async fn a_403_mid_session_changes_nothing() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &address).await;
+    let before = app.capabilities().borrow().clone();
+    let token = stored(&secrets, USER_ID);
+
+    server.refuse.store(true, Ordering::SeqCst);
+    let client = app.jellyfin(&jellyfin("1")).unwrap();
+    assert_eq!(client.current_user().await, Err(AuthError::Refused));
+    settle().await;
+    assert_eq!(*app.capabilities().borrow(), before);
+    assert_eq!(stored(&secrets, USER_ID), token);
+    assert!(app.jellyfin(&jellyfin("1")).is_some());
+    assert!(
+        app.settings().unwrap().get().servers[0]
+            .active_user
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn signing_in_again_checks_the_server_before_sending_the_password() {
+    let (server, address) = start(SERVER_ID).await;
+    let (other, other_address) = start(OTHER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &address).await;
+    app.sign_out(&jellyfin("1")).await.unwrap();
+    app.settings()
+        .unwrap()
+        .update(|settings| settings.servers[0].addresses[0].url = other_address.clone())
+        .unwrap();
+    drop(app);
+
+    let app = open(temp.path(), &secrets);
+    let flow = app.sign_in_again(&jellyfin("1")).unwrap().unwrap();
+    flow.with_password("Example User", PASSWORD).await;
+    assert_eq!(
+        *flow.state().borrow(),
+        SignInState::Failed {
+            error: SignInError::Probe(ProbeError::DifferentServer)
+        }
+    );
+    flow.with_quick_connect().await;
+    assert_eq!(
+        *flow.state().borrow(),
+        SignInState::Failed {
+            error: SignInError::Probe(ProbeError::DifferentServer)
+        }
+    );
+    assert_eq!(
+        other.paths(),
+        ["/System/Info/Public", "/System/Info/Public"]
+    );
+    assert!(stored(&secrets, USER_ID).is_none());
+    drop(server);
+}
+
+#[tokio::test]
+async fn a_sign_in_that_reports_another_server_is_not_saved() {
+    let (server, address) = start(SERVER_ID).await;
+    *server.report_id.lock().unwrap() = Some(OTHER_ID.to_owned());
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    let flow = signed_in_with_password(&app, &address).await;
+    assert_eq!(
+        *flow.state().borrow(),
+        SignInState::Failed {
+            error: SignInError::Probe(ProbeError::DifferentServer)
+        }
+    );
+    assert!(app.settings().unwrap().get().servers.is_empty());
+    assert!(stored(&secrets, USER_ID).is_none());
+}
+
+#[tokio::test]
+async fn settings_from_a_newer_version_refuse_a_sign_in_before_it_starts() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("settings.json"),
+        r#"{"version": 99, "device_id": "abc"}"#,
+    )
+    .unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    let flow = app.sign_in(found(&app, &address).await).unwrap();
+    flow.with_password("Example User", PASSWORD).await;
+    assert_eq!(
+        *flow.state().borrow(),
+        SignInState::Failed {
+            error: SignInError::Save(StoreError::NewerVersion { found: 99 })
+        }
+    );
+    assert_eq!(server.paths(), ["/System/Info/Public"]);
+}
+
+#[tokio::test]
+async fn a_sign_out_does_not_undo_a_sign_in_that_finished_meanwhile() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = Arc::new(open(temp.path(), &secrets));
+    signed_in_with_password(&app, &address).await;
+
+    // The sign-out waits for the server (held below) while a new sign-in completes.
+    *server.hold_logout.lock().unwrap() = Some(Arc::new(tokio::sync::Notify::new()));
+    let release = server.hold_logout.lock().unwrap().clone().unwrap();
+    let sign_out = tokio::spawn({
+        let app = app.clone();
+        async move { app.sign_out(&jellyfin("1")).await }
+    });
+    eventually(|| server.paths().last().map(String::as_str) == Some("/Sessions/Logout")).await;
+    let flow = app.sign_in_again(&jellyfin("1")).unwrap().unwrap();
+    flow.with_password("Example User", PASSWORD).await;
+    assert!(matches!(
+        *flow.state().borrow(),
+        SignInState::SignedIn { .. }
+    ));
+    release.notify_one();
+    let _ = sign_out.await.unwrap();
+
+    assert!(app.capabilities().borrow().servers[0].signed_in);
+    assert!(app.jellyfin(&jellyfin("1")).is_some());
+    assert!(stored(&secrets, USER_ID).is_some());
     assert!(
         app.settings().unwrap().get().servers[0]
             .active_user

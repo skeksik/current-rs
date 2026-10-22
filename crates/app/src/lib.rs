@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use current_jellyfin::{AuthError, ClientIdentity, JellyfinClient, platform_name};
 use current_model::{Capabilities, SavedServer, ServerRef};
-use current_net::{NetError, RequestLog};
+use current_net::{NetError, RequestLog, Url};
 use current_store::{DeviceId, LoadReport, Secrets, SettingsStore, StoreError};
 use tokio::sync::watch;
 
@@ -165,24 +165,39 @@ impl App {
             current_model::ServerKey::new("setup"),
         );
         let client = self.shared.client(setup, &server.address)?;
+        let expected = server.info.id.clone();
         let target = Target::New {
             id: server.info.id,
             name: server.info.name,
             address: server.address,
             version: server.info.version,
         };
-        Ok(SignIn::new(self.shared.clone(), target, client))
+        Ok(SignIn::new(
+            self.shared.clone(),
+            target,
+            client,
+            expected,
+            None,
+        ))
     }
 
-    /// A sign-in to a saved server, at its first address. `None` if no such server is saved.
+    /// A sign-in to a saved server, at its first address. Each attempt first checks that the address answers as the saved server
+    /// (ADR 0014) before any credential is sent. `None` if no such server is saved or it has no address.
     pub fn sign_in_again(&self, server: &ServerRef) -> Option<Result<SignIn, NetError>> {
         let saved = self.shared.saved(server)?;
         let address = saved.addresses.first()?;
-        Some(
-            self.shared.client(server.clone(), address).map(|client| {
-                SignIn::new(self.shared.clone(), Target::Saved(server.clone()), client)
-            }),
-        )
+        let Ok(verify) = Url::parse(&address.url) else {
+            return Some(Err(NetError::InvalidRequest));
+        };
+        Some(self.shared.client(server.clone(), address).map(|client| {
+            SignIn::new(
+                self.shared.clone(),
+                Target::Saved(server.clone()),
+                client,
+                saved.id.clone(),
+                Some(verify),
+            )
+        }))
     }
 
     /// Checks every saved session, all servers at once; the shell runs it in the background after [`App::open`], and may run it

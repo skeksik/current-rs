@@ -57,7 +57,9 @@ Facts below were read on 2026-10-22 from the sources listed at the end; "Jellyfi
   the request log redacts (ADR 0006), and in a JSON body.
 - `JellyfinClient` (one `ServerClient`, a token slot shared with the hook): `sign_in_by_name`, `quick_connect_enabled`,
   `quick_connect_initiate`, `quick_connect_approved`, `quick_connect_sign_in`, `quick_connect_wait` (polls every interval until
-  approved, 404 or the lifetime ends; dropping the future stops it), `current_user`, `sign_out`, `send_authenticated`.
+  approved, 404 or the lifetime ends; a poll that fails for a transient reason, no connection, a timeout or a 5xx while the server
+  restarts, is retried at the next interval; dropping the future stops it), `current_user`, `sign_out`, `send_authenticated`.
+- `ClientIdentity`'s `Debug` leaves out the device name.
 - The password is borrowed into the request body and nowhere else: no state, error or log holds it (tested).
 - `AuthError`, by what the UI does: `WrongCredentials` (401 at sign-in), `Refused` (403), `QuickConnectDisabled`,
   `QuickConnectExpired`, `SessionRevoked` (401 with a token), `NotSignedIn`, `Network(NetError)`.
@@ -75,7 +77,10 @@ Why: Jellyfin answers 401 to a token only when the token no longer exists (signe
 device id, removed by an administrator) or the user is disabled. In every case it can never work again: keeping it would retry a dead
 token at every start and show "signed in" when the user is not. A 403 means the token is valid and this one request was refused (an
 admin-only endpoint, remote access, a time limit), so the session stays. A client forgets only the token that failed, so a newer
-sign-in in between is kept.
+sign-in in between is kept. In `current-app` each live session has an id and its user; the hook acts only if its session is still
+the server's current one, and then clears the active user and deletes the token only if they are still that session's user. A late
+401 on an old client (the server logged its token out when the same user signed in again, or another user signed in since) changes
+nothing (tested).
 
 **Known risk:** a reverse proxy with its own authentication (HTTP Basic, say) in front of Jellyfin also answers 401, and would wipe
 the token. Jellyfin's own 401 carries no `WWW-Authenticate: Basic` (ASP.NET Core's default challenge; not verified against a live
@@ -85,7 +90,8 @@ built now (manager, 2026-10-22).
 ### Saved servers (`current-model`, `current-store`)
 - `SavedServer { server: ServerRef, id: ServerId, name, addresses: Vec<ServerAddress>, users: Vec<SavedUser { id, name }>,
   active_user: Option<UserId> }`, in `settings.json` as a defaulted `servers` field: format 1, no migration (ADR 0013). The file keeps
-  ids, names and addresses, never a token. Unknown fields inside a server record are not kept on save (only top-level ones are); a
+  ids, names and addresses, never a token. `server_id` is defaulted, since a service without one (Stash, ADR 0014) may store none.
+  Unknown fields inside a server record are not kept on save (only top-level ones are); a
   newer version that adds one must raise the format if an older one dropping it matters.
 - The token lives only in the keyring under `SecretKey { server, user }` (ADR 0013).
 - A sign-in to a server whose id is already saved reuses its key, adds the address if new and adds or updates the user. Otherwise
@@ -96,23 +102,34 @@ built now (manager, 2026-10-22).
 - **`SignIn`** flow, from `App::sign_in(NewServer)` (setup's `Ready`) or `App::sign_in_again(&ServerRef)`: `Ready { quick_connect }`,
   `SigningIn`, `QuickConnectWaiting { code }`, `Failed { error }`, `SignedIn { server, user, remembered }`. No state holds a password,
   token or secret (tested). A new attempt or `cancel()` supersedes a running one through a generation counter in a `watch` channel;
-  the running future returns at once (`tokio::select!`), so Quick Connect stops polling; dropping the future does the same. A sign-in
-  the server already completed is saved even if cancelled during the save. `remembered` is false without a keyring: the session lasts
-  for the run (ADR 0013).
+  the running future returns at once (`tokio::select!`), so Quick Connect stops polling; dropping the future does the same. Only the
+  current attempt writes the state. A sign-in the server already completed is saved in full (settings, keyring, session, status) on
+  a spawned task, even if the attempt is cancelled or its future dropped during the save. `remembered` is false without a keyring:
+  the session lasts for the run (ADR 0013).
+- **Before anything is sent:** an attempt fails at once with `Save(NewerVersion)` when the settings belong to a newer version (the
+  sign-in could not be saved, and it would log out this device's earlier token on the server). For a saved server, each attempt
+  first probes its address with `probe_expecting` (ADR 0012), so no password and no Quick Connect request goes to an address that
+  does not answer as that server (ADR 0014; setup has just probed a new one). A sign-in whose `ServerId` differs from the expected
+  server's is not saved (`Probe(DifferentServer)`).
 - **Restore:** `App::open` loads the saved servers into the capabilities state, signed in where a user is active, reachability
   unknown. The shell then runs `App::restore_sessions()` in the background; it checks every server at once (`JoinSet`): the token from
   the keyring (none: signed out and the active user cleared; keyring unavailable: signed out for this run, the user kept); then the
   identity probe on the first address (`probe_expecting`, ADR 0012), because the token goes only to an address that answers as the
   same server (ADR 0014); then `GET /Users/Me`. Results: signed in with user, permissions and version; signed out on 401 (the 401
   rule); unreachable but still signed in when the server does not answer or another server answers there (no token is sent then).
-  It may run again later for servers without a live session.
+  It may run again later for servers without a live session. Servers of other services are skipped.
 - **Sign out:** `App::sign_out` calls `POST /Sessions/Logout` (10 s timeout), then deletes the token and the active user whatever the
-  server answered, and returns the server's answer for the UI to mention. The user stays saved.
+  server answered, and returns the server's answer for the UI to mention. The user stays saved. It signs out the session current when
+  it started: a sign-in that completes while the server is being told is kept (tested).
+- **Ordering:** saving a sign-in, signing out, the 401 rule and restoring each change a server's session under one async lock and
+  check under it that the session or active user they act on is still current. Restore installs its client only if no sign-in or
+  sign-out happened during its probe, and writes the status only while its session is current.
 - **Address:** each server uses `FixedAddress` with its first address, built in one place (`Shared::client`), so roaming (ADR 0014)
   replaces it there.
 - **Blocking work:** the settings file and the keyring are blocking (ADR 0013). `current-app`'s async methods run them on tokio's
   blocking pool (`spawn_blocking`); `App::open` stays a sync call the shell makes off the runtime, as before. The saved-server list
-  and the settings file change together (`Shared::commit`, which writes first and keeps the old list if the write fails).
+  and the settings file change together (`Shared::commit`, serialized by its own lock, which writes first and keeps the old list if
+  the write fails). The list's lock is held only to read or swap it, never during the write, so async code may read it.
 
 ### Decided by the owner: the device name
 "Use the same names that Jellyfin uses" for the device, and `Current` with the core's version for the app (2026-10-22). What
@@ -150,9 +167,11 @@ server's dashboard to its administrators, as every Jellyfin client's does; it ne
   and suggests asking the administrator.
 - After a 401 the user signs in again; a disabled user who is enabled again must sign in again too.
 - The 403 cases keep the session, so a user outside a parental time limit stays signed in and sees requests refused.
-- Tests run against hand-written stand-ins only: password ok, wrong and refused; Quick Connect approved, off, expired, cancelled and
-  dropped; restore ok, revoked, unreachable and another server at the address; a 401 and a 403 mid-session; sign out with the server
-  up and gone; no keyring; settings round trip. None ran against a real Jellyfin server.
+- Tests run against hand-written stand-ins only: password ok, wrong and refused; Quick Connect approved, off, expired, cancelled,
+  dropped and riding out a 503; restore ok, revoked, unreachable and another server at the address; a 401 and a 403 mid-session; a
+  late 401 on an old client of the same or another user; signing in again to an address that answers as another server; a sign-in
+  reporting another server's id; settings from a newer version; sign out with the server up and gone, and racing a new sign-in; no
+  keyring; settings round trip. None ran against a real Jellyfin server.
 
 ## Sources (read 2026-10-22)
 - Jellyfin server, tag `v12.2` (commit ca0f16eb, 2026-10-05), https://github.com/jellyfin/jellyfin:
