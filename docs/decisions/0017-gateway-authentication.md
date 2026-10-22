@@ -1,6 +1,7 @@
 # 0017: Authentication gateways in front of a server
 
-Status: proposed (2026-10-22), from the gateway spike; accepted when its PR merges, with the open choices below decided by the owner.
+Status: proposed (2026-10-22), from the gateway spike; accepted when its PR merges. The owner decided the six open choices on 2026-10-22
+(see "Decided by the owner").
 Implementation comes after M1. Research, quotes and sources: `docs/notes/gateway-auth.md`.
 
 ## Context
@@ -158,8 +159,18 @@ reach Jellyfin, so a sign-in is retried once with the other header. A sign-in th
 `X-Emby-Authorization`: the error explains the two server-side fixes from the notes (legacy authorization on, and the gateway not
 passing its `Authorization` on; or a gateway rule that lets Jellyfin's API through).
 
-## Open choices for the owner
-Each needs a decision before the implementation task starts.
+## Decided by the owner (2026-10-22)
+1. Web sign-in: the **embedded sign-in window** by default; for Google-backed gateways, **extra headers** (a service token) as the
+   fallback.
+2. Pomerium's programmatic login: **later**, when a user needs it.
+3. Basic gateways in front of Jellyfin: **option A**, supported, with clear errors naming the server and proxy settings to change.
+4. Cookie updates: **option B**, our own small `Set-Cookie` reader in `current-net`, no new dependency.
+5. Gateway credentials over plain HTTP: **option A**, the same rule as the Jellyfin token (ADR 0012).
+6. The 401 rule amendment to ADR 0015: **approved**.
+
+The options as they were put to the owner follow.
+
+## Open choices (as proposed)
 
 1. **Web sign-in: embedded web view (recommended) or the system browser.** With the web view, the app gets the gateway's cookies and
    works with Authelia, authentik, oauth2-proxy, Pomerium and Cloudflare Access when they use their own login form, a one-time PIN or
