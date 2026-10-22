@@ -190,8 +190,17 @@ merge):
 - **While `Unreachable`, `wait` returns at once** instead of holding requests until the next retry: a request fails fast, and the
   backoff races go on.
 - **Connectivity `None` skips probing:** the provider goes to `Unreachable` with no retry timer until the next report.
-- **Facts before the first request only record the facts** (no race until something uses the server), and a report equal to the
-  last one is not a change.
+- **Facts before the first request only record the facts** (no race until something uses the server). A report is no change only
+  when it has the same network key (present) and the same connectivity as the last one: without a key nothing tells two networks
+  apart, so every report races again, and a change only in metered, constrained, VPN or interface does not.
+- **"Different server" marks are cleared on every network change** (decided by the manager, 2026-10-22; the owner is told at
+  merge), not kept until the user edits the address: a LAN address that answers as someone else's server on another network may
+  be the right one at home. The identity check still runs on every race, so no credentials reach a wrong server.
+- **Addresses with a user name or password are refused** (`RoamingError::InvalidAddress`): reqwest would send them as basic auth on
+  every probe.
+- **Which race runs is decided by the state alone.** Callers change the state when they start a race and then wake the driver;
+  after every event the driver drops a race for an older epoch and starts the one the state asks for, so commands arriving in
+  another order cannot leave a race unstarted.
 - **An address that needs the user's confirmation for plain HTTP (ADR 0012) and lacks it is never probed or used.** It keeps its
   position, so the log matches the user's list.
 - **Jellyfin's identity check** (`JellyfinIdentity`) runs ADR 0012's info request on the reused probe client and compares the `Id`.
@@ -202,6 +211,9 @@ merge):
   (`src/connect.rs`, `hyper_rustls::HttpsConnector`) does the TLS handshake inside that connector. So DNS, refused connections,
   connect timeouts and failed handshakes are "not sent"; a timeout from the request's own deadline is not (it counts as sent), and
   after a followed redirect everything counts as sent.
+- **A retry needs time left** in the request's deadline. An attempt that never started because the deadline had passed is not
+  reported, and neither is a retry's timeout (the retry has only what is left of the deadline), so a short request does not knock
+  out a healthy address.
 
 ## Consequences
 - A dead preferred address costs one stagger (250 ms) after a network change, not a timeout.

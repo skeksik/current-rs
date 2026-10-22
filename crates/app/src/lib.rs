@@ -138,7 +138,8 @@ impl App {
     }
 
     /// The platform's report of the network, on start and on every change (ADR 0014). Every server's address provider hears it, and
-    /// providers made later start from it.
+    /// providers made later start from it. Call it from one thread (the UI's network observer): the providers hear the facts after
+    /// the lock is released, so two concurrent reports could reach a provider in either order.
     pub fn network_changed(&self, facts: NetworkFacts) {
         let providers = {
             let mut roaming = self.lock_roaming();
@@ -183,6 +184,9 @@ impl App {
         )?;
         let facts = {
             let mut roaming = self.lock_roaming();
+            roaming
+                .providers
+                .retain(|provider| provider.strong_count() > 0);
             roaming.providers.push(Arc::downgrade(&provider));
             roaming.facts.clone()
         };

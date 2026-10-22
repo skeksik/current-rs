@@ -193,7 +193,7 @@ impl ServerClient {
             );
             return Err(NetError::Unreachable);
         };
-        let (result, sent) = self.attempt(&request, &selected, deadline).await;
+        let (result, sent) = self.attempt(&request, &selected, deadline, false).await;
         let Err(error) = &result else {
             return result;
         };
@@ -201,8 +201,9 @@ impl ServerClient {
             return result;
         }
         match self.address.wait(deadline).await {
-            Some(next) if next.url() != selected.url() => {
-                self.attempt(&request, &next, deadline).await.0
+            // Only with time left: an attempt that cannot start says nothing about the new address.
+            Some(next) if next.url() != selected.url() && Instant::now() < deadline => {
+                self.attempt(&request, &next, deadline, true).await.0
             }
             _ => result,
         }
@@ -210,19 +211,23 @@ impl ServerClient {
 
     /// Sends `request` to `selected` once, logs it and reports the outcome to the provider. The flag says whether the request may
     /// have reached a server: false only when it failed while connecting.
+    ///
+    /// An attempt that never started because the deadline had passed is not reported, and neither is a retry's timeout: the retry
+    /// has only what is left of the deadline, so a timeout there blames the request's budget rather than the address.
     async fn attempt(
         &self,
         request: &Request,
         selected: &Selected,
         deadline: Instant,
+        retry: bool,
     ) -> (Result<Response, NetError>, bool) {
         let started = Instant::now();
-        let (result, sent) = match self
+        let (result, sent, expired) = match self
             .execute(request.clone(), selected.url(), deadline)
             .await
         {
-            Ok(response) => (Ok(response), true),
-            Err(failure) => (Err(failure.error), failure.sent),
+            Ok(response) => (Ok(response), true, false),
+            Err(failure) => (Err(failure.error), failure.sent, failure.expired),
         };
         let outcome = match &result {
             Ok(response) => Outcome::Status(response.status),
@@ -232,13 +237,13 @@ impl ServerClient {
             Err(error) => Outcome::Error(error.kind()),
         };
         self.log(request, selected.position(), outcome, started);
-        self.address.report(
-            selected,
-            match &result {
-                Ok(_) => AddressOutcome::Ok,
-                Err(error) => outcome_of(error),
-            },
-        );
+        let reported = match &result {
+            Ok(_) => AddressOutcome::Ok,
+            Err(error) => outcome_of(error),
+        };
+        if !expired && !(retry && reported == AddressOutcome::Timeout) {
+            self.address.report(selected, reported);
+        }
         (result, sent)
     }
 
@@ -308,6 +313,7 @@ impl ServerClient {
                 .ok_or(Failure {
                     error: NetError::Timeout,
                     sent: hops > 0,
+                    expired: hops == 0,
                 })?;
             let (authorized_url, authorized_headers) = self.authorize(&url, &headers);
             let mut builder = self
@@ -324,6 +330,7 @@ impl ServerClient {
             let response = builder.send().await.map_err(|error| Failure {
                 sent: hops > 0 || !error.is_connect(),
                 error: NetError::from_reqwest(error),
+                expired: false,
             })?;
             let status = response.status().as_u16();
             let response_headers = response.headers().clone();
@@ -336,6 +343,7 @@ impl ServerClient {
                             location: Some(Location(next)),
                         },
                         sent: true,
+                        expired: false,
                     });
                 }
                 // As browsers do: 303 always becomes GET, and so do 301 and 302 for anything but GET and HEAD; 307 and 308 keep the
@@ -360,12 +368,14 @@ impl ServerClient {
                 .map_err(|error| Failure {
                     error: NetError::from_reqwest(error),
                     sent: true,
+                    expired: false,
                 })?
                 .to_vec();
             if !(200..300).contains(&status) {
                 return Err(Failure {
                     error: NetError::from_status(status, &body),
                     sent: true,
+                    expired: false,
                 });
             }
             return Ok(Response {
@@ -382,11 +392,17 @@ impl ServerClient {
 struct Failure {
     error: NetError,
     sent: bool,
+    /// The deadline had passed before the attempt started: nothing was tried.
+    expired: bool,
 }
 
 impl Failure {
     fn unsent(error: NetError) -> Self {
-        Self { error, sent: false }
+        Self {
+            error,
+            sent: false,
+            expired: false,
+        }
     }
 }
 
@@ -469,7 +485,114 @@ fn install_crypto_provider() {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use current_model::{ServerKey, ServiceType};
+    use tokio::net::TcpListener;
+
     use super::*;
+
+    /// Serves `first` until a request fails, then offers `second` (as a provider that just re-raced would), and records reports.
+    struct Switching {
+        first: Selected,
+        second: Selected,
+        reports: Mutex<Vec<(Option<u8>, AddressOutcome)>>,
+    }
+
+    impl AddressProvider for Switching {
+        fn current(&self) -> Option<Selected> {
+            Some(self.first.clone())
+        }
+
+        fn wait(
+            &self,
+            _deadline: Instant,
+        ) -> Pin<Box<dyn Future<Output = Option<Selected>> + Send + '_>> {
+            Box::pin(std::future::ready(Some(self.second.clone())))
+        }
+
+        fn report(&self, selected: &Selected, outcome: AddressOutcome) {
+            self.reports
+                .lock()
+                .unwrap()
+                .push((selected.position(), outcome));
+        }
+    }
+
+    /// A server that accepts connections, counts them and never answers.
+    async fn silent() -> (Url, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = accepted.clone();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
+                held.push(socket);
+            }
+        });
+        (url(&format!("http://127.0.0.1:{port}")), accepted)
+    }
+
+    fn switching_client(first: Url, second: Url) -> (ServerClient, Arc<Switching>) {
+        let provider = Arc::new(Switching {
+            first: Selected::new(first, Some(1), 1),
+            second: Selected::new(second, Some(2), 2),
+            reports: Mutex::new(Vec::new()),
+        });
+        let client = ServerClient::new(
+            ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+            provider.clone(),
+            None,
+            Arc::new(RequestLog::default()),
+            &ClientConfig::default(),
+        )
+        .unwrap();
+        (client, provider)
+    }
+
+    #[tokio::test]
+    async fn no_retry_once_the_deadline_is_gone() {
+        let (first, _) = silent().await;
+        let (second, second_accepted) = silent().await;
+        let (client, provider) = switching_client(first, second);
+        let request = Request::get("/Items").timeout(Duration::from_millis(300));
+        assert_eq!(
+            client.send(request).await.map(|_| ()),
+            Err(NetError::Timeout)
+        );
+        // The new address was neither contacted nor blamed.
+        assert_eq!(
+            *provider.reports.lock().unwrap(),
+            [(Some(1), AddressOutcome::Timeout)]
+        );
+        assert_eq!(second_accepted.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_retry_that_runs_out_of_time_does_not_blame_the_new_address() {
+        // Bound but not listening: connections are refused, and no other test can take the port meanwhile.
+        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+        reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let refused = reserved.local_addr().unwrap().port();
+        let (second, second_accepted) = silent().await;
+        let (client, provider) =
+            switching_client(url(&format!("http://127.0.0.1:{refused}")), second);
+        let request = Request::get("/Items").timeout(Duration::from_secs(5));
+        assert_eq!(
+            client.send(request).await.map(|_| ()),
+            Err(NetError::Timeout)
+        );
+        assert_eq!(second_accepted.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *provider.reports.lock().unwrap(),
+            [(Some(1), AddressOutcome::Unreachable)]
+        );
+    }
 
     fn url(text: &str) -> Url {
         match Url::parse(text) {

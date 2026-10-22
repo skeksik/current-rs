@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn debug_hides_the_network_key() {
         let facts = NetworkFacts {
-            network_key: Some(NetworkKey::new("wlan0 192.168.1.1")),
+            network_key: Some(NetworkKey::new("wlan0 192.168.1.10")),
             ..NetworkFacts::default()
         };
         let debug = format!("{facts:?}");

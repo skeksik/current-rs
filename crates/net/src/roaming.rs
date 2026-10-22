@@ -94,7 +94,7 @@ pub struct RoamingStatus {
 /// Why a list of addresses cannot be used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RoamingError {
-    /// The address at this 1-based position is not an http(s) URL.
+    /// The address at this 1-based position is not an http(s) URL, or holds a user name or password.
     #[error("address {0} is not a valid address")]
     InvalidAddress(u8),
     /// More addresses than positions in the log (255).
@@ -138,13 +138,10 @@ enum RaceKind {
 
 #[derive(Debug)]
 enum Command {
-    /// Run a race for this epoch, unless a newer one started.
-    Race { epoch: u64, kind: RaceKind },
-    /// The network changed; `epoch` is the race it started, if any.
-    Network {
-        facts: NetworkFacts,
-        epoch: Option<u64>,
-    },
+    /// The state changed: start the race it asks for.
+    Wake,
+    /// The network changed.
+    Network(NetworkFacts),
     /// The server is in use again after an idle stretch: the upgrade check resumes.
     Used,
 }
@@ -197,17 +194,14 @@ impl Shared {
         changed
     }
 
-    /// Starts a race from the caller's side: from now on nothing is served (unless `serving` is kept) and a newer race result wins.
-    /// Returns the race's epoch.
-    fn begin_race(&self, serving: Option<Selected>) -> u64 {
-        let mut epoch = 0;
+    /// Starts a race: from now on nothing is served (unless `serving` is kept), and only this race's result is published. The
+    /// driver runs it once it next looks at the state.
+    fn begin_race(&self, serving: Option<Selected>) {
         self.update(|published| {
             published.epoch += 1;
-            epoch = published.epoch;
             published.state = State::Racing { serving };
             true
         });
-        epoch
     }
 
     fn serving(&self) -> Option<Selected> {
@@ -264,7 +258,13 @@ impl RoamingAddresses {
             let position = u8::try_from(index + 1).map_err(|_| RoamingError::TooManyAddresses)?;
             let url = Url::parse(&address.url)
                 .ok()
-                .filter(|url| matches!(url.scheme(), "http" | "https") && url.has_host())
+                // A user name or password in the address would go to every probe as basic auth.
+                .filter(|url| {
+                    matches!(url.scheme(), "http" | "https")
+                        && url.has_host()
+                        && url.username().is_empty()
+                        && url.password().is_none()
+                })
                 .ok_or(RoamingError::InvalidAddress(position))?;
             let usable = !transport(&url).needs_confirmation() || address.plain_http_confirmed;
             let client = if usable {
@@ -335,29 +335,25 @@ impl RoamingAddresses {
                 .facts
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            if last.as_ref() == Some(facts) {
+            let same = last.as_ref().is_some_and(|last| same_network(last, facts));
+            *last = Some(facts.clone());
+            if same {
                 return;
             }
-            *last = Some(facts.clone());
         }
+        // Facts before the first request are only recorded.
         let idle = matches!(self.shared.state.borrow().state, State::Idle);
-        let epoch = if idle {
-            None
-        } else if facts.connectivity == Connectivity::None {
-            // No race: nothing can answer. The driver cancels what runs and waits for the next change.
+        if !idle && facts.connectivity == Connectivity::None {
+            // No race: nothing can answer. The driver drops what runs and waits for the next change.
             self.shared.update(|published| {
                 published.epoch += 1;
                 published.state = State::Unreachable;
                 true
             });
-            None
-        } else {
-            Some(self.shared.begin_race(None))
-        };
-        let _ = self.commands.send(Command::Network {
-            facts: facts.clone(),
-            epoch,
-        });
+        } else if !idle {
+            self.shared.begin_race(None);
+        }
+        let _ = self.commands.send(Command::Network(facts.clone()));
     }
 
     /// Races now if no address is selected (nothing tried yet, or the last race failed): for the app returning to the foreground.
@@ -371,30 +367,22 @@ impl RoamingAddresses {
     }
 
     fn start_full_race(&self) {
-        let epoch = self.shared.begin_race(None);
-        let _ = self.commands.send(Command::Race {
-            epoch,
-            kind: RaceKind::Full,
-        });
+        self.shared.begin_race(None);
+        let _ = self.commands.send(Command::Wake);
     }
 
     /// Starts the first race if nothing was tried yet.
     fn start_if_idle(&self) {
-        let mut epoch = None;
-        self.shared.update(|published| {
+        let started = self.shared.update(|published| {
             if published.state != State::Idle {
                 return false;
             }
             published.epoch += 1;
-            epoch = Some(published.epoch);
             published.state = State::Racing { serving: None };
             true
         });
-        if let Some(epoch) = epoch {
-            let _ = self.commands.send(Command::Race {
-                epoch,
-                kind: RaceKind::Full,
-            });
+        if started {
+            let _ = self.commands.send(Command::Wake);
         }
     }
 }
@@ -439,8 +427,7 @@ impl AddressProvider for RoamingAddresses {
             }
             return;
         }
-        let mut epoch = None;
-        self.shared.update(|published| {
+        let failed = self.shared.update(|published| {
             let failed = match &published.state {
                 State::Racing { serving: Some(s) } | State::Selected(s) => {
                     s.generation == selected.generation && s.url() == selected.url()
@@ -449,18 +436,23 @@ impl AddressProvider for RoamingAddresses {
             };
             if failed {
                 published.epoch += 1;
-                epoch = Some(published.epoch);
                 published.state = State::Racing { serving: None };
             }
             failed
         });
-        if let Some(epoch) = epoch {
-            let _ = self.commands.send(Command::Race {
-                epoch,
-                kind: RaceKind::Full,
-            });
+        if failed {
+            let _ = self.commands.send(Command::Wake);
         }
     }
+}
+
+/// Whether two reports describe the same network, so that the second is no change: the same network key, and the same
+/// connectivity. Without a key nothing tells two networks apart, so every report counts as a change. Metered, constrained, the VPN
+/// flag and the interface alone do not move the device to another network.
+fn same_network(last: &NetworkFacts, next: &NetworkFacts) -> bool {
+    next.network_key.is_some()
+        && last.network_key == next.network_key
+        && last.connectivity == next.connectivity
 }
 
 /// What a race reported.
@@ -588,6 +580,7 @@ impl Driver {
                 Event::Race(event) => self.on_race(event),
                 Event::Timer(kind) => self.on_timer(kind),
             }
+            self.reconcile();
         }
     }
 
@@ -612,28 +605,21 @@ impl Driver {
         Poll::Pending
     }
 
-    fn epoch(&self) -> u64 {
-        self.shared.state.borrow().epoch
-    }
-
     fn on_command(&mut self, command: Command) {
         match command {
-            Command::Race { epoch, kind } => {
-                if epoch == self.epoch() {
-                    self.start_race(epoch, kind);
-                }
-            }
-            Command::Network { facts, epoch } => {
+            // `reconcile`, after every event, starts the race the state asks for.
+            Command::Wake => {}
+            Command::Network(facts) => {
                 self.network = facts.network_key;
                 self.no_network = facts.connectivity == Connectivity::None;
                 self.backoff = None;
-                self.race = None;
-                self.timer = None;
-                if let Some(epoch) = epoch
-                    && epoch == self.epoch()
-                {
-                    self.start_race(epoch, RaceKind::Full);
+                if self.no_network {
+                    self.timer = None;
                 }
+                // An address that answered as another server on one network may be the right one on this one; every race
+                // checks identity again anyway.
+                self.different.clear();
+                self.publish_different();
             }
             Command::Used => {
                 if self.timer.is_none() && self.race.is_none() {
@@ -641,6 +627,47 @@ impl Driver {
                 }
             }
         }
+    }
+
+    /// Makes the running race match the state: a race for an older epoch is dropped (its result could not be published), and a
+    /// race is started when the state says one runs for the current epoch and none does. Callers change the state before they send
+    /// their command, and commands can arrive in another order than the state changed, so the state alone decides.
+    fn reconcile(&mut self) {
+        let (epoch, racing) = {
+            let published = self.shared.state.borrow();
+            let racing = match &published.state {
+                State::Racing { serving } => Some(serving.is_some()),
+                _ => None,
+            };
+            (published.epoch, racing)
+        };
+        if self.race.as_ref().is_some_and(|race| race.epoch != epoch) {
+            self.race = None;
+        }
+        if let Some(serving) = racing
+            && self.race.is_none()
+        {
+            let kind = if serving {
+                RaceKind::Upgrade
+            } else {
+                RaceKind::Full
+            };
+            self.start_race(epoch, kind);
+        }
+    }
+
+    /// Puts the positions of "different server" addresses in the status.
+    fn publish_different(&self) {
+        let positions: Vec<u8> = self
+            .different
+            .iter()
+            .map(|index| self.candidates[*index].position)
+            .collect();
+        self.shared.status.send_if_modified(|status| {
+            let changed = status.different_server != positions;
+            status.different_server = positions;
+            changed
+        });
     }
 
     /// Indexes of the candidates a race may probe, in the user's order.
@@ -706,16 +733,7 @@ impl Driver {
                 if !self.different.contains(&index) {
                     self.different.push(index);
                     self.different.sort_unstable();
-                    let positions: Vec<u8> = self
-                        .different
-                        .iter()
-                        .map(|index| self.candidates[*index].position)
-                        .collect();
-                    self.shared.status.send_if_modified(|status| {
-                        let changed = status.different_server != positions;
-                        status.different_server = positions;
-                        changed
-                    });
+                    self.publish_different();
                 }
             }
             RaceEvent::Won(index) => {
@@ -784,8 +802,7 @@ impl Driver {
         match kind {
             TimerKind::Retry => {
                 if self.shared.state.borrow().state == State::Unreachable {
-                    let epoch = self.shared.begin_race(None);
-                    self.start_race(epoch, RaceKind::Full);
+                    self.shared.begin_race(None);
                 }
             }
             TimerKind::Upgrade => {
@@ -794,8 +811,7 @@ impl Driver {
                     return;
                 };
                 if self.shared.used.swap(false, Ordering::Relaxed) {
-                    let epoch = self.shared.begin_race(Some(selected));
-                    self.start_race(epoch, RaceKind::Upgrade);
+                    self.shared.begin_race(Some(selected));
                 } else {
                     // Idle: no polling until the next request.
                     self.shared.upgrade_paused.store(true, Ordering::Relaxed);
@@ -1112,6 +1128,10 @@ mod tests {
         assert_eq!(new(&addresses), Err(RoamingError::InvalidAddress(2)));
         addresses[1].url = "not a url".into();
         assert_eq!(new(&addresses), Err(RoamingError::InvalidAddress(2)));
+        addresses[1].url = "http://someone:secret@127.0.0.1:2".into();
+        assert_eq!(new(&addresses), Err(RoamingError::InvalidAddress(2)));
+        addresses[1].url = "http://someone@127.0.0.1:2".into();
+        assert_eq!(new(&addresses), Err(RoamingError::InvalidAddress(2)));
         let many: Vec<ServerAddress> = (0..256).map(|_| local(1)[0].clone()).collect();
         assert_eq!(new(&many), Err(RoamingError::TooManyAddresses));
     }
@@ -1335,6 +1355,96 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn a_network_report_arriving_after_a_race_started_does_not_stop_it() {
+        // A request starts the first race while `network_changed` saw the provider idle: its report reaches the driver after.
+        let script = Script::new(&[Probe::Pass(5)]);
+        let roaming = roaming(&script);
+        roaming.start_if_idle();
+        let _ = roaming.commands.send(Command::Network(network("home")));
+        assert_eq!(position(&roaming).await, Some(1));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_state_alone_decides_which_race_runs() {
+        // Two races begun before the driver hears of either (a timer and a network change), and a report that wakes it late: the
+        // newest race runs.
+        let script = Script::new(&[Probe::Pass(5)]);
+        let roaming = roaming(&script);
+        roaming.shared.begin_race(None);
+        roaming.shared.begin_race(None);
+        let _ = roaming.commands.send(Command::Network(network("away")));
+        assert_eq!(position(&roaming).await, Some(1));
+        assert_eq!(script.probed(), [1]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_network_change_during_an_upgrade_check_stops_serving() {
+        let script = Script::new(&[Probe::Fail(1), Probe::Pass(1)]);
+        let roaming = roaming(&script);
+        let second = selected(&roaming).await.0.unwrap();
+        script.set(1, Probe::Hang);
+        roaming.report(&second, AddressOutcome::Ok);
+        tokio::time::sleep(Duration::from_secs(301)).await;
+        assert_eq!(script.probed(), [1, 2, 1]);
+        assert_eq!(roaming.current().and_then(|s| s.position()), Some(2));
+
+        roaming.network_changed(&network("away"));
+        assert_eq!(roaming.current(), None);
+        assert_eq!(position(&roaming).await, Some(2));
+    }
+
+    #[test]
+    fn only_a_known_network_key_makes_two_reports_the_same_network() {
+        let home = network("home");
+        let metered = NetworkFacts {
+            metered: Some(true),
+            vpn: Some(true),
+            ..network("home")
+        };
+        assert!(same_network(&home, &metered));
+        assert!(!same_network(&home, &network("away")));
+        let portal = NetworkFacts {
+            connectivity: Connectivity::CaptivePortal,
+            ..network("home")
+        };
+        assert!(!same_network(&portal, &home));
+        let unnamed = NetworkFacts {
+            network_key: None,
+            ..network("home")
+        };
+        assert!(!same_network(&unnamed, &unnamed.clone()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reports_without_a_network_key_always_race_again() {
+        let script = Script::new(&[Probe::Pass(5)]);
+        let roaming = roaming(&script);
+        let unnamed = NetworkFacts {
+            network_key: None,
+            ..network("home")
+        };
+        roaming.network_changed(&unnamed);
+        assert_eq!(position(&roaming).await, Some(1));
+        roaming.network_changed(&unnamed);
+        assert_eq!(roaming.current(), None);
+        assert_eq!(position(&roaming).await, Some(1));
+        assert_eq!(script.probed(), [1, 1]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_network_change_forgets_different_server_marks() {
+        let script = Script::new(&[Probe::Different(5), Probe::Pass(5)]);
+        let roaming = roaming(&script);
+        assert_eq!(position(&roaming).await, Some(2));
+        assert_eq!(roaming.status().borrow().different_server, [1]);
+
+        script.set(1, Probe::Pass(5));
+        roaming.network_changed(&network("home"));
+        assert_eq!(position(&roaming).await, Some(1));
+        assert!(roaming.status().borrow().different_server.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn debug_output_names_no_address() {
         let script = Script::new(&[Probe::Pass(1)]);
         let roaming = roaming(&script);
@@ -1345,6 +1455,6 @@ mod tests {
             assert!(!text.contains("127.0.0.1"), "{text}");
         }
         assert!(after.contains("position: Some(1)"), "{after}");
-        assert!(!format!("{:?}", network("wlan0 192.168.1.1")).contains("192.168"));
+        assert!(!format!("{:?}", network("wlan0 192.168.1.10")).contains("192.168"));
     }
 }

@@ -17,13 +17,13 @@ use current_net::{
     RequestLog, RoamingAddresses, RoamingConfig, RuntimeHandle, ServerClient,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpSocket};
 use tokio::task::JoinHandle;
 
 const SECRET: &str = "s3cret-token-value";
 const SERVER_ID: &str = "0123456789abcdef0123456789abcdef";
 const OTHER_ID: &str = "fedcba9876543210fedcba9876543210";
-const NETWORK_KEY: &str = "wlan0 gateway 192.168.1.99";
+const NETWORK_KEY: &str = "wlan0 gateway 192.168.1.10";
 
 /// What a stand-in does with a request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +36,8 @@ enum Mode {
     DropAll,
     /// Reads the request and never answers.
     Silent,
+    /// Answers `/info` with the right id, and this status to anything else.
+    Status(u16),
 }
 
 /// A server on its own port of 127.0.0.1 that keeps the raw requests it received.
@@ -63,6 +65,15 @@ impl StandIn {
                     let info = head.starts_with("GET /info ");
                     let id = match mode {
                         Mode::Serve(id) => Some(id),
+                        Mode::Status(status) if !info => {
+                            let response = format!(
+                                "HTTP/1.1 {status} X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                            );
+                            let _ = socket.write_all(response.as_bytes()).await;
+                            let _ = socket.shutdown().await;
+                            return;
+                        }
+                        Mode::Status(_) => Some(SERVER_ID),
                         Mode::DropRequests if info => Some(SERVER_ID),
                         Mode::DropRequests | Mode::DropAll => {
                             let _ = socket.shutdown().await;
@@ -95,10 +106,12 @@ impl StandIn {
         }
     }
 
-    /// A port where nothing listens: connections are refused.
-    async fn refused() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        listener.local_addr().unwrap().port()
+    /// A port where nothing listens, so connections are refused: a socket bound to it but never listening. The socket must be kept
+    /// while the port is in use, so that no other test can take the port.
+    fn refused() -> (u16, TcpSocket) {
+        let socket = TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        (socket.local_addr().unwrap().port(), socket)
     }
 
     fn set(&self, mode: Mode) {
@@ -224,7 +237,7 @@ fn position(roaming: &RoamingAddresses) -> Option<u8> {
 
 #[tokio::test]
 async fn the_race_skips_dead_and_wrong_addresses() {
-    let refused = StandIn::refused().await;
+    let (refused, _reserved) = StandIn::refused();
     let silent = StandIn::start(Mode::Silent).await;
     let other = StandIn::start(Mode::Serve(OTHER_ID)).await;
     let right = StandIn::start(Mode::Serve(SERVER_ID)).await;
@@ -346,7 +359,7 @@ async fn there_is_no_second_retry() {
 }
 
 #[tokio::test]
-async fn a_status_error_is_the_server_answering_not_a_reason_to_race() {
+async fn a_status_or_decode_error_is_the_server_answering_not_a_reason_to_race() {
     let first = StandIn::start(Mode::Serve(SERVER_ID)).await;
     let second = StandIn::start(Mode::Serve(SERVER_ID)).await;
     let (roaming, client, _) = setup(&[first.port, second.port]);
@@ -356,15 +369,38 @@ async fn a_status_error_is_the_server_answering_not_a_reason_to_race() {
     // The stand-in answers `{}`, which is not a string: the server answered, so the address is fine.
     let decoded = client.send_json::<String>(Request::get("/Items")).await;
     assert!(matches!(decoded, Err(NetError::Decode { .. })));
+    for status in [401, 500] {
+        first.set(Mode::Status(status));
+        let result = client.send(Request::get("/Items")).await;
+        match result {
+            Err(NetError::Auth { status: got, .. } | NetError::Status { status: got, .. }) => {
+                assert_eq!(got, status);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(position(&roaming), Some(1));
     assert_eq!(first.count("GET", "/info"), probes);
     assert_eq!(second.count("GET", "/info"), 0);
+    assert_eq!(second.count("GET", "/Items"), 0);
+}
+
+#[tokio::test]
+async fn no_retry_when_the_race_picks_the_same_address() {
+    let only = StandIn::start(Mode::DropRequests).await;
+    let (roaming, client, _) = setup(&[only.port]);
+    let result = client.send(Request::get("/Items")).await;
+    assert_eq!(result.map(|_| ()), Err(NetError::Unreachable));
+    // The race after the failure checked the address again and picked it: the request was not sent twice.
+    assert_eq!(only.count("GET", "/Items"), 1);
+    assert_eq!(only.count("GET", "/info"), 2);
+    assert_eq!(position(&roaming), Some(1));
 }
 
 #[tokio::test]
 async fn no_log_line_error_or_debug_output_names_an_address_or_the_network() {
-    let refused = StandIn::refused().await;
+    let (refused, _reserved) = StandIn::refused();
     let right = StandIn::start(Mode::Serve(SERVER_ID)).await;
     let (roaming, client, log) = setup(&[refused, right.port]);
     roaming.network_changed(&NetworkFacts {
