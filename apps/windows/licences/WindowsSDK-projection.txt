@@ -1,0 +1,8 @@
+Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll
+
+These two files come from the Microsoft.Windows.SDK.NET.Ref NuGet package, which carries no licence file. Its licence is the
+Microsoft Software License Terms for the Microsoft Windows Software Development Kit (SDK) for Windows 10:
+https://aka.ms/WinSDKLicenseURL
+
+They are distributed unmodified as part of this program under the "Microsoft.Windows.SDK.NET.Ref" entry of the Windows SDK redist
+lists: https://learn.microsoft.com/en-us/legal/windows-sdk/redist

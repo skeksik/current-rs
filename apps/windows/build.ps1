@@ -51,6 +51,8 @@ foreach ($library in $restored) {
 }
 $dotnet = Join-Path $packages "microsoft.netcore.app.runtime.win-x64/$($runtime.version)"
 Copy-Item (Join-Path $dotnet 'LICENSE.TXT') (Join-Path $licences "Microsoft.NETCore.App-$($runtime.version)-LICENSE.txt")
+# The Windows SDK projection's package has no licence file: ship our pointer to its terms.
+Copy-Item (Join-Path $PSScriptRoot 'licences/WindowsSDK-projection.txt') $licences
 Copy-Item (Join-Path $dotnet 'THIRD-PARTY-NOTICES.TXT') (Join-Path $licences "Microsoft.NETCore.App-$($runtime.version)-THIRD-PARTY-NOTICES.txt")
 Write-Host "Runtime packages: $($restored -join ', '); Microsoft.NETCore.App $($runtime.version)"
 

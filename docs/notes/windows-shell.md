@@ -53,7 +53,8 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   the NavigationView's design. Windows+Backspace and the gamepad B button come through `SystemNavigationManager`, which a desktop
   window does not have.
 - **Home:** the empty state before any server exists: "No servers yet". Server setup is M1.
-- **Settings:** the core's version (`CoreHost.AppInfo`), the capabilities state through `ObserveCapabilities` (empty: "No servers are
+- **Settings:** the core's version (`CoreHost.AppInfo`) with "© 2026 Skeksik" under it (plain text; the Windows SDK licence asks for a
+  copyright notice; no licences screen), the capabilities state through `ObserveCapabilities` (empty: "No servers are
   set up."), and "Copy diagnostics", which puts `DiagnosticsText()` on the clipboard (`Clipboard.SetContent`, then `Flush` so it
   stays after the app exits) and shows a success `InfoBar`. The subscription starts on the page's `Loaded` and is disposed on
   `Unloaded` (ADR 0004 lifetimes).
@@ -129,21 +130,23 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
 
 ## Open before first distribution
 Nothing built here goes to anyone else, testers included, until these are done (owner, 2026-10-22; ADR 0003, ADR 0009):
-1. End-user terms that protect Microsoft's code at least as much as the Windows App SDK licence does (its section 3(b)(ii)); the
-   owner provides them.
+1. End-user terms that protect Microsoft's code at least as much as the Windows App SDK licence (its section 3(b)(ii)) and the
+   Windows SDK licence (for the .NET projection) do; the owner provides them.
 2. An installer licence page showing those terms (Inno's `LicenseFile`).
-3. The indemnity in the Windows App SDK licence's 3(b)(iii): the owner's to accept.
+3. The indemnities in the Windows App SDK licence's 3(b)(iii) and in the Windows SDK licence: the owner's to accept.
 4. The Windows App SDK's telemetry (its licence's 2(a)): check what it sends and which options turn it off.
 5. Code signing of the app and the installer (SmartScreen; the Store's installer route).
 6. Inno Setup's commercial licence: its authors request (do not require) one from for-profit users with more than USD 5,000 annual
    revenue, for any version (jrsoftware.org/isorder.php, read 2026-10-22). The owner decides.
+7. A copyright notice shown in the app (the Windows SDK licence: "Display your valid copyright notice on your programs"): done in
+   this PR, "© 2026 Skeksik" under the version in Settings.
 
 ## What the owner checks by hand
 On the owner's PC, with the installer from CI (or `apps/windows/out/app/Current.exe`):
 1. The window has Mica, the title bar is part of the window, it drags and double-click maximises; the caption buttons and snap layouts
    (hover over maximise) work.
 2. Switch Windows between light and dark: the app follows at once.
-3. Home shows the empty state. Settings shows the version, "No servers are set up." and "Copy diagnostics"; paste the clipboard
+3. Home shows the empty state. Settings shows the version, "© 2026 Skeksik", "No servers are set up." and "Copy diagnostics"; paste the clipboard
    somewhere: the text is there, also after closing the app.
 4. Back and forward: go Home -> Settings, then back with the title bar's back button, Alt+Left, and a mouse Back button; each
    returns to Home, and at Home the back button is disabled. After going back, Alt+Right and a mouse Forward button return to
