@@ -37,7 +37,9 @@ directory-lookup crate could not cover Android or tvOS anyway.
   process has the file open for a moment; not verified as the cause) is retried 4 times, waiting 10 to 40 ms, at most 100 ms in all.
 - **A corrupt file** (not JSON, not an object, no valid version, a known field of the wrong type) is renamed to
   `settings.corrupt-<unix seconds>.json` and the settings start from defaults. `LoadReport::ResetCorrupt` lets the UI say so. If the
-  backup rename fails, opening fails: the file is never overwritten in place.
+  backup rename fails, opening fails: the file is never overwritten in place. Resetting also makes a new device id, even when only
+  another field was wrong, so each server sees a new device and the old one stays in its device list until an admin removes it.
+  That is acceptable for a corrupt file: it is rare, and picking fields out of a file we cannot trust is not worth the code.
 - **A newer file** (a downgrade) is read for the fields this version knows and never written. Saves fail with `NewerVersion`, so
   the newer version finds its file unchanged.
 - **One writer:** one `SettingsStore` per process (one `App`), with saves serialized by its lock. On Windows, ADR 0009's single
