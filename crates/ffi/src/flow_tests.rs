@@ -590,3 +590,20 @@ fn flow_listeners_are_counted_and_released() {
     servers.cancel();
     eventually("both are released", || core.live_listeners() == 0);
 }
+
+#[test]
+fn signing_out_of_a_server_that_is_gone_still_signs_out_here() {
+    let stand_in = stand_in();
+    let temp = tempfile::tempdir().unwrap();
+    let core = core_on(temp.path(), &Arc::new(MemorySecrets::new()));
+    signed_in(&core, &stand_in);
+    drop(stand_in);
+
+    // The server answers nothing (the app reports Network(Unreachable)): signed out on this device all the same.
+    let result = block_on(core.sign_out(first_server())).unwrap();
+    assert_eq!(result, SignOutResult { server_told: false });
+    assert!(!status(&core).signed_in);
+    eventually("the list shows no active user", || {
+        core.servers()[0].active_user.is_none()
+    });
+}
