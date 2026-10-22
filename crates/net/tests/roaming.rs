@@ -257,10 +257,8 @@ async fn the_race_skips_dead_and_wrong_addresses() {
         text.contains("jellyfin/1 address 3 GET /info -> 200"),
         "{text}"
     );
-    assert!(
-        text.contains("jellyfin/1 address 1 GET /info -> unreachable"),
-        "{text}"
-    );
+    // Probes still running when the race is won are cancelled and leave no line. On the Windows runner a refused connection to
+    // 127.0.0.1 took about 2 s (seen in CI, cause not verified), so address 1's probe may be one of them: no line is asserted for it.
     assert!(
         text.contains("jellyfin/1 address 4 GET /Items -> 200"),
         "{text}"
