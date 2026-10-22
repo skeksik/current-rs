@@ -1,0 +1,19 @@
+[package]
+name = "current-app"
+description = "The core's composition root and the state objects the app shells render."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+current-model.workspace = true
+current-net.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+
+[lints]
+workspace = true

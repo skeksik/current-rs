@@ -1,7 +1,8 @@
 # Architecture
 
-> Status (2026-10-22): the workspace holds `current-model` (ADR 0005) and `current-net` (ADR 0006). Everything else here is the target (ADR 0001, ADR 0002); details
-> are settled by the desktop spikes (docs/roadmap.md, phase D).
+> Status (2026-10-22): the workspace holds `current-model` (ADR 0005), `current-net` (ADR 0006), `current-app` and `current-ffi`
+> (ADR 0004), with the C# and Swift bindings in `bindings/`. Everything else here is the target (ADR 0001, ADR 0002); details are settled
+> by the desktop spikes (docs/roadmap.md, phase D).
 
 ## Overview
 ```
@@ -31,10 +32,23 @@ Any non-empty subset can be configured: every service is optional at runtime. Fe
 configured server offers, whether it is signed in and reachable) and hide what is unavailable. An unreachable server keeps its features,
 shown with an offline state.
 
-## State across the bridge (ADR 0002)
+## State across the bridge (ADR 0002, ADR 0004)
 Each screen or feature has a state object in `current-app`. A UI subscribes with a listener and gets a task handle it cancels when the
-screen goes away; lists arrive as diffs. Actions are methods on the state object; long work is async. The bridge spike (D1) fixes the
-exact shape.
+screen goes away; lists arrive as diffs. Actions are methods on the state object; long work is async.
+
+- **`current-app`** is the composition root. `App` is created once per process and owns the shared request log and the capabilities
+  state (a `watch` value, empty until server setup exists). `ObservableList` is the core-side list: changes and subscriptions under one
+  lock, `Reset` first and after lag. It has no runtime of its own.
+- **`current-ffi`** is the UniFFI surface. It owns the one tokio runtime (`core-worker` threads) and exports `Core`, `TaskHandle`
+  (cancel and abort on drop), `CancelToken` and one error enum, `CoreError`. Values are pumped from `watch` channels to listeners, lists
+  as diff batches (`list_diff!` declares the per-item diff enum). `Core::live_listeners` counts the listeners the core holds, for leak
+  checks.
+- **`bindings/csharp`** (`Current.Bindings`, net10.0-windows): the generated C# (internal) plus public adapters: `CoreHost`,
+  `ValueSubscription<T>` (weak listener, catch-all, hop through `IUiDispatcher`), `DiffObservableCollection<T>`, and cancellable calls
+  that take a `CancellationToken`. The WinUI app implements `IUiDispatcher` over `DispatcherQueue`.
+- **`bindings/swift`** (SwiftPM, Swift 6): the XCFramework and generated Swift plus adapters: `@MainActor @Observable`
+  `ObservedValue` and `ObservedList` pumped by one `AsyncStream` each, and `withCoreCancellation`.
+- Generated code is never checked in: `bindings/csharp/build.ps1` and `bindings/swift/build.sh` regenerate it from the built library.
 
 ## Playback
 ```

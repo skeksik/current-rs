@@ -1,0 +1,13 @@
+[package]
+name = "uniffi-bindgen"
+description = "UniFFI's bindings generator at the exact version current-ffi uses: generates the Swift bindings (ADR 0004)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+uniffi = { workspace = true, features = ["cli", "cargo-metadata"] }
+
+[lints]
+workspace = true
