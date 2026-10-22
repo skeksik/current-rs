@@ -61,45 +61,12 @@ internal static class SmokeRun
         catch (Exception error)
         {
             Check(false, $"unexpected exception: {error}");
-            if (error is Microsoft.UI.Xaml.Markup.XamlParseException)
-            {
-                ProbeMainWindowXaml();
-            }
         }
 
         Console.WriteLine(failures == 0 ? "smoke run passed" : $"smoke run failed: {failures} check(s)");
         Console.Out.Flush();
         Program.SetExitCode(failures == 0 ? 0 : 1);
         Application.Current.Exit();
-    }
-
-    // TEMPORARY (D5b CI diagnosis): loads the parts of MainWindow.xaml one by one to find the element that fails to parse.
-    private static void ProbeMainWindowXaml()
-    {
-        const string Ns = "xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"";
-        var probes = new (string Name, string Xaml)[]
-        {
-            ("mica", $"<MicaBackdrop {Ns} Kind=\"Base\" />"),
-            ("grid", $"<Grid {Ns} KeyboardAcceleratorPlacementMode=\"Hidden\" />"),
-            ("accelerators", $"<Grid {Ns}><Grid.KeyboardAccelerators><KeyboardAccelerator Key=\"Left\" Modifiers=\"Menu\" /><KeyboardAccelerator Key=\"GoBack\" /><KeyboardAccelerator Key=\"Right\" Modifiers=\"Menu\" /></Grid.KeyboardAccelerators></Grid>"),
-            ("titlebar", $"<TitleBar {Ns} Title=\"Current\" />"),
-            ("titlebar-buttons", $"<TitleBar {Ns} Title=\"Current\" IsBackButtonVisible=\"True\" IsBackButtonEnabled=\"False\" IsPaneToggleButtonVisible=\"True\" />"),
-            ("navview", $"<NavigationView {Ns} PaneDisplayMode=\"Left\" IsBackButtonVisible=\"Collapsed\" IsPaneToggleButtonVisible=\"False\" IsSettingsVisible=\"True\" />"),
-            ("navitem", $"<NavigationViewItem {Ns} Content=\"Home\" Tag=\"home\" Icon=\"Home\" />"),
-            ("frame", $"<Frame {Ns} IsTabStop=\"True\" />"),
-        };
-        foreach (var (name, xaml) in probes)
-        {
-            try
-            {
-                _ = Microsoft.UI.Xaml.Markup.XamlReader.Load(xaml);
-                Console.WriteLine($"     probe {name}: ok");
-            }
-            catch (Exception error)
-            {
-                Console.WriteLine($"     probe {name}: {error.GetType().Name}: {error.Message}");
-            }
-        }
     }
 
     private static async Task<bool> WaitUntilAsync(Func<bool> condition)

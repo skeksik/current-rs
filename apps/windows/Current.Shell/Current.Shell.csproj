@@ -16,6 +16,10 @@
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
+    <!-- The MSIX tooling also builds the app's PRI file (its compiled XAML and resources); without it the publish folder has none and
+         loading MainWindow.xaml fails with "Cannot locate resource". The typical WinUI project in "Project properties and
+         auto-initializers" (learn.microsoft.com, ms.date 2026-10-02, read 2026-10-22) sets it. -->
+    <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
     <Nullable>enable</Nullable>

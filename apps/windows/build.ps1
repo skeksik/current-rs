@@ -29,6 +29,9 @@ finally {
     Pop-Location
 }
 
+# The app's PRI file holds its compiled XAML; without it the main window cannot load.
+if (-not (Get-ChildItem $out -File | Where-Object Name -in 'Current.pri', 'resources.pri')) { throw "no app PRI file in $out" }
+
 # The licence and notice files of the runtimes in the app (docs/notes/windows-shell.md, ADR 0003), shipped next to it in licences\:
 # those of every Windows App SDK component and of WebView2 as restored, and of the .NET runtime pack.
 $packages = (dotnet nuget locals global-packages --list) -replace '^global-packages:\s*', ''
