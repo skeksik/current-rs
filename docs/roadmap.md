@@ -55,6 +55,9 @@ recorded with sources and dates, and a decision record where it decides somethin
       (core done 2026-10-22, ADR 0012: address parsing, probe, identity, plain-HTTP rule, the in-memory flow; the Windows screen and
       storing the server are still to do)
 - [ ] Several addresses per server with roaming (local and internet, the user's order)
+  - [x] Spike: research and design (2026-10-22, PR 17, ADR 0014, docs/notes/roaming.md; OS trust only for
+        TLS in M1)
+  - [ ] Implement `RoamingAddresses` in `current-net`, `NetworkFacts` from the Windows UI, and the request log's address position
 - [ ] Secrets in the OS keyring and a device identity per install
 - [ ] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out
 - [ ] Local server discovery
