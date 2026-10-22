@@ -1,0 +1,18 @@
+[package]
+name = "bridge-spike"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+# cdylib for C# (P/Invoke loads bridge_spike.dll), staticlib for Swift (linked into the executable), lib for the Rust tests.
+crate-type = ["lib", "cdylib", "staticlib"]
+name = "bridge_spike"
+
+[dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+uniffi.workspace = true
+
+[lints]
+workspace = true
