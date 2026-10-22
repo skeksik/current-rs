@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Current.Bindings;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
@@ -15,6 +16,13 @@ public partial class App : Application
     {
         _smoke = smoke;
         InitializeComponent();
+        // An exception escaping a UI event handler would end the process. Each handler catches what it expects; this is the backstop,
+        // which logs and keeps the app running (Application.UnhandledException, Handled).
+        UnhandledException += (_, args) =>
+        {
+            Trace.TraceError($"Current: unhandled exception on the UI thread: {args.Exception}");
+            args.Handled = true;
+        };
     }
 
     /// <summary>The core, one per process. Disposed when the main window closes.</summary>

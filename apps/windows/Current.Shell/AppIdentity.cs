@@ -19,6 +19,17 @@ internal static class AppIdentity
     /// <summary>The single-instance key for <c>AppInstance.FindOrRegisterForKey</c>.</summary>
     public const string InstanceKey = "main";
 
+    /// <summary>
+    /// A named mutex the app holds while it runs, so that the installer and uninstaller can see it (Inno Setup's AppMutex, set to the
+    /// same name in installer/Current.iss).
+    /// </summary>
+    public const string RunningMutexName = "Skeksik.Current.Running";
+
+    private static Mutex? _running;
+
+    /// <summary>Creates <see cref="RunningMutexName"/> and keeps it for the life of the process; Windows releases it on exit.</summary>
+    public static void MarkRunning() => _running ??= new Mutex(false, RunningMutexName);
+
     /// <summary>True when the process runs with package identity (an MSIX install).</summary>
     public static bool IsPackaged { get; } = HasPackageIdentity();
 

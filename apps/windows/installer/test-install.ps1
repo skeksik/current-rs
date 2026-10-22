@@ -1,7 +1,8 @@
 # Install, upgrade and uninstall test for the installer (docs/notes/windows-shell.md). Installs -Old, checks the app and its shortcut
 # and runs the smoke run; writes a marker file into the data folder; installs -New over it and checks again; uninstalls and checks that
 # the program folder and shortcut are gone and the marker is still there. Runs as the current user, silently. CI runs it on a clean
-# runner; on a PC with Current installed it would upgrade and then remove that install (the data folder stays).
+# runner; on a PC with Current installed it would upgrade and then remove that install (the data folder stays). Before the final
+# uninstall it starts the app and uninstalls once with it running, which must either stop with nothing removed or remove everything.
 param(
     [Parameter(Mandatory)] [string]$Old,
     [Parameter(Mandatory)] [string]$OldVersion,
@@ -58,7 +59,44 @@ Check-Installed $NewVersion
 Assert (Test-Path $marker) 'the upgrade kept the data folder'
 
 $uninstaller = (Get-ItemProperty $uninstallKey).UninstallString.Trim('"')
-Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+
+# Uninstall while the app runs. Either outcome is acceptable, a partial removal is not: Inno detects the app through its AppMutex
+# and stops with everything in place, or it closes the app and removes everything. Report which one it is.
+$before = (Get-ChildItem $programDir -Recurse -File).Count
+$app = Start-Process -FilePath $exe -PassThru
+Start-Sleep -Seconds 5
+Assert (-not $app.HasExited) 'the app is running'
+$log = Join-Path $env:RUNNER_TEMP 'uninstall-while-running.log'
+$u = Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"" -PassThru
+# A message box that /SUPPRESSMSGBOXES does not answer would hang here: fail instead.
+if (-not $u.WaitForExit(120000)) { $u.Kill(); throw 'FAIL: the uninstaller did not exit within 120 s with the app running' }
+# The uninstaller can hand over to a copy of itself and return early: wait until the folder stops changing.
+$last = -1; $stable = 0; $deadline = (Get-Date).AddSeconds(120)
+while ($stable -lt 10) {
+    if ((Get-Date) -gt $deadline) { throw 'FAIL: the uninstall with the app running did not settle within 120 s' }
+    $now = if (Test-Path $programDir) { (Get-ChildItem $programDir -Recurse -File).Count } else { 0 }
+    if ($now -eq $last) { $stable++ } else { $stable = 0; $last = $now }
+    Start-Sleep -Milliseconds 500
+}
+if (Test-Path $log) { Get-Content $log | Write-Host }
+$appRunning = -not $app.HasExited
+if ($last -eq $before -and (Test-Path $uninstallKey)) {
+    Assert $appRunning 'the app is still running'
+    Write-Host 'ok   with the app running, uninstall stopped and removed nothing (AppMutex)'
+    Stop-Process -Id $app.Id -Force
+    $app.WaitForExit()
+}
+elseif ($last -eq 0 -and -not (Test-Path $uninstallKey)) {
+    Assert (-not $appRunning) 'the app was closed'
+    Write-Host 'ok   with the app running, uninstall closed it and removed everything'
+}
+else {
+    throw "FAIL: partial removal with the app running: $last of $before files left, Apps entry present: $(Test-Path $uninstallKey)"
+}
+
+if (Test-Path $uninstallKey) {
+    Start-Process -FilePath $uninstaller -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+}
 # The uninstaller runs from a copy in the temp folder and can return before it has finished: wait for it.
 $deadline = (Get-Date).AddSeconds(120)
 while ((Test-Path $exe) -or (Test-Path $uninstallKey)) {

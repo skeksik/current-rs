@@ -1,6 +1,7 @@
 using Current.Bindings;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace Current.Shell;
 
@@ -51,7 +52,14 @@ internal static class SmokeRun
             var released = await WaitUntilAsync(() => core.LiveListeners == baseline);
             Check(released, $"disposing the subscription released the listener ({core.LiveListeners}, before {baseline})");
 
-            Check(core.DiagnosticsText() is not null, "diagnostics text");
+            var diagnostics = core.DiagnosticsText();
+            Check(diagnostics is not null, "diagnostics text");
+
+            // The same copy as "Copy diagnostics", read back.
+            var marker = $"Current smoke run {Guid.NewGuid()}";
+            var copied = await ClipboardText.TryCopyAsync(marker);
+            var pasted = copied ? await Clipboard.GetContent().GetTextAsync() : null;
+            Check(copied && pasted == marker, "the clipboard holds the copied text");
 
             // The window's XAML, Mica and title bar load without being shown.
             var window = new MainWindow();

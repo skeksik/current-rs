@@ -33,6 +33,10 @@ public static class Program
         {
             return 0;
         }
+        if (!smoke)
+        {
+            AppIdentity.MarkRunning();
+        }
 
         Application.Start(p =>
         {

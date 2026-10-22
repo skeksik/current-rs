@@ -14,6 +14,8 @@ Inno Setup, Velopack, WiX and a hand-built MSI (comparison below). A Microsoft S
   - `PrivilegesRequired=lowest`: no elevation, always a per-user install.
   - A fixed `AppId`: a newer setup upgrades in place.
   - One Start menu shortcut that carries the app's AppUserModelID `Skeksik.Current`.
+  - `AppMutex=Skeksik.Current.Running`, a mutex the app holds while it runs, so Setup and Uninstall detect a running Current;
+    `[UninstallDelete] Type: dirifempty` for the program folder.
   - It ships its uninstaller (`unins000.exe`, `unins000.dat`) into the program folder.
 - **Folders**:
   - Program: `%LOCALAPPDATA%\Programs\Current` (`FOLDERID_UserProgramFiles`, Inno's `{autopf}` in non-admin mode).

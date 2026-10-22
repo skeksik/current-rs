@@ -32,6 +32,9 @@ DisableProgramGroupPage=yes
 SetupArchitecture=x64
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+; Setup and Uninstall refuse to go on while Current runs: the app holds this mutex (Current.Shell/AppIdentity.cs). Inno's AppMutex
+; topic: "[Setup or Uninstall] has detected that [AppName] is currently running."
+AppMutex=Skeksik.Current.Running
 UninstallDisplayIcon={app}\Current.exe
 UninstallDisplayName=Current
 WizardStyle=modern
@@ -48,6 +51,10 @@ Source: "{#InnoLicense}"; DestDir: "{app}\licences"; DestName: "InnoSetup-licens
 [Icons]
 ; The same AppUserModelID as the process sets (Current.Shell/AppIdentity.cs), so the taskbar ties the window to this shortcut.
 Name: "{autoprograms}\Current"; Filename: "{app}\Current.exe"; AppUserModelID: "Skeksik.Current"
+
+[UninstallDelete]
+; The program folder itself, once its files are gone; never anything else, and never the data folder.
+Type: dirifempty; Name: "{app}"
 
 [Run]
 Filename: "{app}\Current.exe"; Description: "Open Current"; Flags: nowait postinstall skipifsilent

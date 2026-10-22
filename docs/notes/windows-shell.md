@@ -71,7 +71,14 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
 - **Settings:** the core's version (`CoreHost.AppInfo`) with "© 2026 Skeksik" under it (plain text; the Windows SDK licence asks for a
   copyright notice; no licences screen), the capabilities state through `ObserveCapabilities` (empty: "No servers are
   set up."), and "Copy diagnostics", which puts `DiagnosticsText()` on the clipboard (`Clipboard.SetContent`, then `Flush` so it
-  stays after the app exits) and shows a success `InfoBar`. The subscription starts on the page's `Loaded` and is disposed on
+  stays after the app exits) and shows a success `InfoBar`. The clipboard is shared, and Windows refuses it with
+  `CLIPBRD_E_CANT_OPEN` while another process has it open ("OpenClipboard fails if another window has the clipboard open",
+  OpenClipboard, learn.microsoft.com, read 2026-10-22); the owner's run hit that in `Flush` with clipboard history on, and the
+  unguarded call ended the app. `ClipboardText.TryCopyAsync` now retries `SetContent` and `Flush` up to 5 times, 100 ms apart (our
+  choice: Microsoft's `Clipboard.Flush` page gives no retry guidance), and the page shows an error `InfoBar` if the clipboard stays
+  busy. The handler is `async void` and catches everything itself; `Application.UnhandledException` logs and marks handled any
+  exception that still escapes a UI event handler, so none ends the process. The smoke run copies a marker and reads it back; the
+  refused-clipboard case itself cannot be produced in CI. The subscription starts on the page's `Loaded` and is disposed on
   `Unloaded` (ADR 0004 lifetimes).
 - **Core lifetime:** one `CoreHost` per process, created in `OnLaunched` and disposed when the main window closes.
 
@@ -122,12 +129,19 @@ handler restores its window if minimised and activates it. `--smoke` skips the k
 - Upgrade: the same `AppId` installs over the old version into the same folder; files of the old version that the new one no longer
   has stay until uninstall (Inno's uninstall log covers every file it ever installed there). No `[InstallDelete]` wildcard: a user may
   have chosen a folder that holds other files.
-- Running app: Inno's default `CloseApplications=yes` uses the Restart Manager to close Current before replacing its files (not tested
-  in CI).
+- Running app: the app holds a named mutex, `Skeksik.Current.Running`, from start to exit, and `AppMutex` names it, so Setup and
+  Uninstall see a running Current ("[Setup or Uninstall] has detected that [AppName] is currently running. Please close all
+  instances of it now, then click OK to continue, or Cancel to exit.", Inno's AppMutex topic, read 2026-10-22). Without it, the
+  owner's run found that uninstalling with the app open neither closed nor warned and left the 47 loaded files behind. The topic
+  does not say what happens in a silent run; the install test's running-app case shows which way Inno goes (below).
+  `[UninstallDelete] Type: dirifempty` removes the then empty program folder, which an uninstall after a reinstall over leftovers
+  had left.
 - `test-install.ps1` (CI, job "App (Windows)"): installs 0.0.1, checks `Current.exe`, the Apps entry's version, the shortcut and its
   `System.AppUserModel.ID`, runs the smoke run from the install; writes `%LOCALAPPDATA%\Current\install-test-marker.txt`; installs
   the workspace version over it and checks again plus the marker; uninstalls silently, waits for the uninstaller (it runs from a temp
-  copy) and checks that the program folder, shortcut and Apps entry are gone and the marker remains.
+  copy) and checks that the program folder, shortcut and Apps entry are gone and the marker remains. Before that final uninstall it
+  starts `Current.exe` and runs the silent uninstaller with the app open: it passes if the uninstaller removed nothing (the app
+  still running) or removed everything (the app closed), and fails on any partial removal or a hang.
 - Not done: code signing (needed for public releases: SmartScreen, the Store's installer route), a licence page (see "Open before first distribution"), the
   MSIX build (ADR 0009 lists what it would change).
 
@@ -152,7 +166,7 @@ matched by name against the contents of the restored packages. The installer add
 | Group | Package (version) | Files | Size | Licence | ADR 0003 |
 |---|---|---|---|---|---|
 | Current: `Current.exe`, `Current.dll`, `Current.pri`, `Current.deps.json`, `Current.runtimeconfig.json`, `Current.Bindings.dll`, two `.pdb`, `current_ffi.dll` | ours | 9 | 3.9 MB | Proprietary (ours). `current_ffi.dll` statically links the workspace's Rust crates, checked by `cargo deny` (`deny.toml`), with UniFFI under the MPL-2.0 exception | covered |
-| .NET runtime: `coreclr.dll`, `System.*.dll`, `hostfxr.dll`, `msquic.dll` and the rest | `Microsoft.NETCore.App.Runtime.win-x64` 10.0.12 | 187 | 80.4 MB | MIT, with `THIRD-PARTY-NOTICES.TXT` | allowed (MIT) |
+| .NET runtime: `coreclr.dll`, `System.*.dll`, `hostfxr.dll`, `msquic.dll` and the rest | `Microsoft.NETCore.App.Runtime.win-x64`, the runtime pack of the SDK that builds it (10.0.12 in that CI run; 10.0.13 in the owner's build). `build.ps1` prints the version and names the licence files after it | 187 | 80.4 MB | MIT, with `THIRD-PARTY-NOTICES.TXT` | allowed (MIT) |
 | WinUI: `Microsoft.ui.xaml.dll`, `Microsoft.UI.Xaml.Controls.dll`, `Microsoft.WinUI.dll`, `WinUIEdit.dll`, `*.mui` (86 languages x 2), `Microsoft.UI.Xaml\Assets` | `Microsoft.WindowsAppSDK.WinUI` 2.3.9 | 185 | 43.6 MB | Microsoft Software License Terms, Windows App SDK | platform runtime (owner) |
 | Composition, input and windowing: `Microsoft.UI*.dll`, `dcompi.dll`, `dwmcorei.dll`, `DwmSceneI.dll`, `CoreMessagingXP.dll`, `marshal.dll`, `wuceffectsi.dll`, `Microsoft.InteractiveExperiences.Projection.dll` | `Microsoft.WindowsAppSDK.InteractiveExperiences` 2.1.9 | 21 | 18.0 MB | same | platform runtime (owner) |
 | Runtime, lifecycle and resources: `Microsoft.WindowsAppRuntime*.dll`, `MRM.dll`, `RestartAgent.exe`, `Microsoft.Windows.*.winmd` and projections | `Microsoft.WindowsAppSDK.Foundation` 2.3.12 | 47 | 5.0 MB | same | platform runtime (owner) |
@@ -181,14 +195,16 @@ Nothing built here goes to anyone else, testers included, until these are done (
    this PR, "© 2026 Skeksik" under the version in Settings.
 
 ## What the owner checks by hand
-On the owner's PC, with the installer from CI (or `apps/windows/out/app/Current.exe`):
+On the owner's PC, with an installer built locally by the commands above (CI keeps no installer: there is no approved
+upload-artifact step in `ci.yml`), or `apps/windows/out/app/Current.exe`:
 1. The window has Mica, the title bar is part of the window, it drags and double-click maximises; the caption buttons and snap layouts
    (hover over maximise) work.
 2. Switch Windows between light and dark: the app follows at once.
 3. Home shows the empty state. Settings shows the version, "© 2026 Skeksik", "No servers are set up." and "Copy diagnostics"; paste the clipboard
    somewhere: the text is there, also after closing the app.
 4. Back and forward: go Home -> Settings, then back with the title bar's back button, Alt+Left, and a mouse Back button; each
-   returns to Home, and at Home the back button is disabled. After going back, Alt+Right and a mouse Forward button return to
+   returns to Home, and at Home with an empty back stack the back button is disabled (after Home -> Settings -> Home it stays
+   enabled, as in Windows Settings). After going back, Alt+Right and a mouse Forward button return to
    Settings. Narrow the window until the pane collapses: the pane toggle in the title bar opens it.
 5. Keyboard only: Tab reaches the back button, the pane and the settings controls; Narrator reads them by name.
 6. Start a second copy (from Start or the exe): no second window; the first one comes to the front, also when minimised.

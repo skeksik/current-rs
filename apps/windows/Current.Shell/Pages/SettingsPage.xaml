@@ -74,9 +74,7 @@
             <InfoBar
                 x:Name="CopiedInfo"
                 Margin="0,8,0,0"
-                Severity="Success"
-                IsOpen="False"
-                Message="Diagnostics copied to the clipboard." />
+                IsOpen="False" />
         </StackPanel>
     </ScrollViewer>
 </Page>
