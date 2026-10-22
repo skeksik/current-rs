@@ -7,7 +7,16 @@ Status: proposed (2026-10-22), from the D8 spike; accepted when its PR merges. E
 ADR 0001 and ADR 0002 give Linux a GTK4 + libadwaita app in Rust that uses the core directly, and docs/architecture.md picks libmpv in a
 `GtkGLArea` as its engine. D8 built a throwaway prototype on `current-app`, with libmpv 0.37 (Ubuntu 24.04) rendering a synthetic
 clip into a GLArea under GTK controls. It ran only headless in a cloud container on software GL (Mesa llvmpipe; Xvfb and weston
-headless). The owner's WSL2 (WSLg) run and native Linux checks are still to come.
+headless).
+
+The owner then ran it in WSL2 (WSLg, Ubuntu 24.04) on an NVIDIA RTX 5090:
+- **The GPU path had to be forced.** Mesa does not pick the GPU on its own there: it logs "ZINK: failed to choose pdev" and falls
+  back to llvmpipe. `GALLIUM_DRIVER=d3d12` with `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA` gives Mesa's d3d12 driver (GL 4.6) on the
+  NVIDIA GPU.
+- **On the GPU the picture was right:** correct colours and never green. Resizing and full screen passed on both GLES and desktop GL.
+- **Preferences and About in the primary menu** feel right for GNOME to the owner.
+
+Native Linux checks are still to come.
 
 ## Decision
 
@@ -116,6 +125,15 @@ Snap is left out (one more store, with its own sandbox and runtime).
   build job only if Flatpak is chosen.
 
 ## Consequences
+- **From the WSL2 run, for M5** (prototype bugs; M5 owns keyboard handling):
+  - Space must be play/pause at the player level, not activate the focused button.
+  - Left/Right seeked twice per press.
+  - Dragging the seek bar lagged.
+  - Ctrl shortcuts did nothing under `GDK_BACKEND=x11`.
+- **WSLg is not a performance or X11 reference.** WSLg only, not verified on native Linux:
+  - The d3d12 path was very slow: the player page took about 30 s to load.
+  - The X11 (XWayland) window was transparent, with DRI3 and x11 shm errors.
+  - Native Linux decides both.
 - Linux plays SDR only at first. HDR waits for GTK and mpv, and the roadmap carries it as a follow-up.
 - M2's `current-mpv` serves two render targets: D3D11 composition on Windows, and the OpenGL render API on Linux. Both share the
   display-facts mapping.

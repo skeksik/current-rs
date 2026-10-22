@@ -5,8 +5,9 @@ owner. Everything here ran **headless in a Linux cloud container with software O
 real display, GNOME or KDE yet.
 
 ## What was built
-A throwaway prototype, `apps/linux` (on the spike branch only; removed before merge). It is its own Cargo workspace, so the root
-workspace, its lockfile, cargo-deny and CI never saw it.
+A throwaway prototype, `apps/linux`, removed before merge. Its last version is in commit `6cbdfd8` of PR 15 (branch
+`spike/linux-gtk`; after the branch is gone, `git fetch origin pull/15/head` still fetches it). The prototype was added in `1db2759`.
+It is its own Cargo workspace, so the root workspace, its lockfile, cargo-deny and CI never saw it.
 
 - **Crates (approved for the prototype only, 2026-10-22):** `gtk4 =0.11.5` (feature `v4_14`), `libadwaita =0.9.2` (feature `v1_5`),
   both MIT, plus the already approved `tokio =1.54.1`. glib and gio come re-exported by gtk4. libmpv is called through about 20
@@ -299,7 +300,7 @@ Setup:
 sudo apt update
 sudo apt install -y build-essential curl git pkg-config libgtk-4-dev libadwaita-1-dev libmpv-dev ffmpeg mesa-utils
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none && . "$HOME/.cargo/env"
-git clone https://github.com/skeksik/current-rs.git && cd current-rs && git checkout spike/linux-gtk
+git clone https://github.com/skeksik/current-rs.git && cd current-rs && git fetch origin pull/15/head && git checkout 6cbdfd8
 cd apps/linux && ./make-test-clip.sh && cargo run --release
 ```
 (`rust-toolchain.toml` makes rustup install the pinned 1.99.1 on the first `cargo` call.)
