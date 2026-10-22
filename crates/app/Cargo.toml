@@ -10,10 +10,12 @@ publish.workspace = true
 current-jellyfin.workspace = true
 current-model.workspace = true
 current-net.workspace = true
+current-store.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "net", "io-util", "time"] }
 
 [lints]

@@ -1,0 +1,29 @@
+[package]
+name = "current-store"
+description = "Settings, secrets in the OS keyring and the device identity (ADR 0013)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+current-model.workspace = true
+getrandom.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+keyring-core.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,9 +1,9 @@
 # Architecture
 
-> Status (2026-10-22): the workspace holds `current-model` (ADR 0005), `current-net` (ADR 0006), `current-jellyfin` (server setup,
-> ADR 0012), `current-app` and `current-ffi` (ADR 0004), with the C# and Swift bindings in `bindings/` and the Windows app shell in
-> `apps/windows` (ADR 0009). Everything else here is the target (ADR 0001, ADR 0002); details are settled by the desktop spikes
-> (docs/roadmap.md, phase D).
+> Status (2026-10-22): the workspace holds `current-model` (ADR 0005), `current-net` (ADR 0006), `current-store` (ADR 0013),
+> `current-jellyfin` (server setup, ADR 0012), `current-app` and `current-ffi` (ADR 0004), with the C# and Swift bindings in `bindings/`
+> and the Windows app shell in `apps/windows` (ADR 0009). Everything else here is the target (ADR 0001, ADR 0002); details are settled
+> by the desktop spikes (docs/roadmap.md, phase D).
 
 ## Overview
 ```
@@ -38,8 +38,13 @@ Each screen or feature has a state object in `current-app`. A UI subscribes with
 screen goes away; lists arrive as diffs. Actions are methods on the state object; long work is async.
 
 - **`current-app`** is the composition root. `App` is created once per process and owns the shared request log and the capabilities
-  state (a `watch` value, empty until server setup exists). `ObservableList` is the core-side list: changes and subscriptions under one
+  state (a `watch` value, empty until server setup exists). `App::open` takes the data folder the UI passes in and a `Secrets`
+  implementation, and loads the settings and the device id (ADR 0013). `ObservableList` is the core-side list: changes and subscriptions under one
   lock, `Reset` first and after lag. It has no runtime of its own.
+- **`current-store`** keeps what lasts between runs (ADR 0013): `settings.json` (versioned, saved atomically, migrated step by step;
+  a corrupt file is kept aside, a newer one is read-only), the `Secrets` trait over the OS keyring (Windows Credential Manager, macOS
+  login keychain; elsewhere `Unavailable`, never a file fallback) and the random per-install `DeviceId`. Its API is sync and blocking;
+  async callers run it on a blocking thread.
 - **Server setup** (ADR 0012): `current-jellyfin` turns typed text into candidate base URLs, probes `/System/Info/Public` on each
   and identifies the server by its id; `current-net::transport` says whether plain HTTP to an address needs the user's confirmation
   (silent on loopback and the local network). `current-app`'s `AddServer` is the flow's state (`Idle`, `Probing`, `Failed`,
