@@ -1,0 +1,46 @@
+<Window
+    x:Class="Current.Shell.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Current">
+    <Window.SystemBackdrop>
+        <MicaBackdrop Kind="Base" />
+    </Window.SystemBackdrop>
+
+    <!-- Alt+Left, the GoBack key and the mouse Back button go back, Alt+Right and the mouse Forward button go forward, from anywhere
+         in the window (docs/notes/windows-shell.md). -->
+    <Grid x:Name="Root" KeyboardAcceleratorPlacementMode="Hidden">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Left" Modifiers="Menu" Invoked="OnBackAccelerator" />
+            <KeyboardAccelerator Key="Right" Modifiers="Menu" Invoked="OnForwardAccelerator" />
+        </Grid.KeyboardAccelerators>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- With a custom title bar, the navigation view's back and pane buttons move into it (the TitleBar control's page). -->
+        <TitleBar
+            x:Name="AppTitleBar"
+            Title="Current"
+            IsBackButtonVisible="True"
+            IsBackButtonEnabled="False"
+            BackRequested="OnTitleBarBackRequested"
+            IsPaneToggleButtonVisible="True"
+            PaneToggleRequested="OnTitleBarPaneToggleRequested" />
+
+        <NavigationView
+            x:Name="NavView"
+            Grid.Row="1"
+            PaneDisplayMode="Left"
+            IsBackButtonVisible="Collapsed"
+            IsPaneToggleButtonVisible="False"
+            IsSettingsVisible="True"
+            ItemInvoked="OnItemInvoked">
+            <NavigationView.MenuItems>
+                <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
+            </NavigationView.MenuItems>
+            <Frame x:Name="ContentFrame" IsTabStop="True" Navigated="OnNavigated" />
+        </NavigationView>
+    </Grid>
+</Window>

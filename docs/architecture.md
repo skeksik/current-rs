@@ -1,7 +1,7 @@
 # Architecture
 
 > Status (2026-10-22): the workspace holds `current-model` (ADR 0005), `current-net` (ADR 0006), `current-app` and `current-ffi`
-> (ADR 0004), with the C# and Swift bindings in `bindings/`. Everything else here is the target (ADR 0001, ADR 0002); details are settled
+> (ADR 0004), with the C# and Swift bindings in `bindings/` and the Windows app shell in `apps/windows` (ADR 0009). Everything else here is the target (ADR 0001, ADR 0002); details are settled
 > by the desktop spikes (docs/roadmap.md, phase D).
 
 ## Overview
@@ -48,6 +48,10 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
   that take a `CancellationToken`. The WinUI app implements `IUiDispatcher` over `DispatcherQueue`.
 - **`bindings/swift`** (SwiftPM, Swift 6): the XCFramework and generated Swift plus adapters: `@MainActor @Observable`
   `ObservedValue` and `ObservedList` pumped by one `AsyncStream` each, and `withCoreCancellation`.
+- **`apps/windows`** (`Current.Shell`, WinUI 3, unpackaged, self-contained x64): a Mica window with a TitleBar and a NavigationView
+  (Home, Settings), one `CoreHost` per process, `DispatcherQueueUi` as the `IUiDispatcher`, page-scoped subscriptions, an explicit
+  AppUserModelID when unpackaged and a single instance through `AppInstance`. Installed per user by Inno Setup into
+  `%LOCALAPPDATA%\Programs\Current`; data in `%LOCALAPPDATA%\Current` (ADR 0009, `docs/notes/windows-shell.md`).
 - Generated code is never checked in: `bindings/csharp/build.ps1` and `bindings/swift/build.sh` regenerate it from the built library.
 
 ## Playback
