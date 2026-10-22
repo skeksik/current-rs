@@ -143,6 +143,30 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
 7. the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes.
 `smoke.ps1` fails on a non-zero exit code, a missing "smoke run passed" line or a run longer than 120 s.
 
+## Licences of what ships
+Every file in `apps/windows/out/app`, from CI run 39815107217 (2026-10-22): 465 files, 179.8 MB. `build.ps1` prints each file with
+the package `Current.deps.json` names for it; the native Windows App SDK and WebView2 files that `deps.json` does not list were
+matched by name against the contents of the restored packages. The installer adds Inno Setup's `unins000.exe`, `unins000.dat` and
+`licences\InnoSetup-license.txt`. Licence and notice files ship in `licences\` (ADR 0003).
+
+| Group | Package (version) | Files | Size | Licence | ADR 0003 |
+|---|---|---|---|---|---|
+| Current: `Current.exe`, `Current.dll`, `Current.pri`, `Current.deps.json`, `Current.runtimeconfig.json`, `Current.Bindings.dll`, two `.pdb`, `current_ffi.dll` | ours | 9 | 3.9 MB | Proprietary (ours). `current_ffi.dll` statically links the workspace's Rust crates, checked by `cargo deny` (`deny.toml`), with UniFFI under the MPL-2.0 exception | covered |
+| .NET runtime: `coreclr.dll`, `System.*.dll`, `hostfxr.dll`, `msquic.dll` and the rest | `Microsoft.NETCore.App.Runtime.win-x64` 10.0.12 | 187 | 80.4 MB | MIT, with `THIRD-PARTY-NOTICES.TXT` | allowed (MIT) |
+| WinUI: `Microsoft.ui.xaml.dll`, `Microsoft.UI.Xaml.Controls.dll`, `Microsoft.WinUI.dll`, `WinUIEdit.dll`, `*.mui` (86 languages x 2), `Microsoft.UI.Xaml\Assets` | `Microsoft.WindowsAppSDK.WinUI` 2.3.9 | 185 | 43.6 MB | Microsoft Software License Terms, Windows App SDK | platform runtime (owner) |
+| Composition, input and windowing: `Microsoft.UI*.dll`, `dcompi.dll`, `dwmcorei.dll`, `DwmSceneI.dll`, `CoreMessagingXP.dll`, `marshal.dll`, `wuceffectsi.dll`, `Microsoft.InteractiveExperiences.Projection.dll` | `Microsoft.WindowsAppSDK.InteractiveExperiences` 2.1.9 | 21 | 18.0 MB | same | platform runtime (owner) |
+| Runtime, lifecycle and resources: `Microsoft.WindowsAppRuntime*.dll`, `MRM.dll`, `RestartAgent.exe`, `Microsoft.Windows.*.winmd` and projections | `Microsoft.WindowsAppSDK.Foundation` 2.3.12 | 47 | 5.0 MB | same | platform runtime (owner) |
+| Windows SDK projection: `Microsoft.Windows.SDK.NET.dll`, `WinRT.Runtime.dll` | `Microsoft.Windows.SDK.NET.Ref` 10.0.26100.57 | 2 | 26.9 MB | Microsoft Software License Terms, Windows SDK for Windows 10; on its redist list | platform runtime (owner) |
+| WebView2: `WebView2Loader.dll`, `Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.Core.Projection.dll` | `Microsoft.Web.WebView2` 1.0.3719.77 (a WinUI dependency) | 3 | 1.6 MB | BSD-3-Clause | allowed (BSD) |
+| Licence and notice files | (from the packages above, plus `apps/windows/licences/WindowsSDK-projection.txt`) | 11 | 0.5 MB | | |
+| Uninstaller: `unins000.exe`, `unins000.dat`, `InnoSetup-license.txt` | Inno Setup 7.1.0 | 3 | | Inno Setup License | allowed (owner, ADR 0009) |
+
+- No AI, ML (onnxruntime), Widgets or Search files ship (they came with the metapackage, see Layout).
+- No shipped file is LGPL or GPL as far as the notices show: the WinUI and WebView2 `NOTICE.txt` files list only MIT components
+  (Newtonsoft.Json); the Base package's `NOTICE.txt` lists onnxruntime's components (onnx, protobuf, Eigen and others), which belong
+  to the ML runtime we do not ship. Not checked binary by binary.
+- The `.pdb` files of our own two assemblies ship too (small; useful for crash reports). Removing them is a release-time choice.
+
 ## Open before first distribution
 Nothing built here goes to anyone else, testers included, until these are done (owner, 2026-10-22; ADR 0003, ADR 0009):
 1. End-user terms that protect Microsoft's code at least as much as the Windows App SDK licence (its section 3(b)(ii)) and the
