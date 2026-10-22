@@ -1,6 +1,6 @@
 # Architecture
 
-> Status (2026-10-22): the workspace holds `current-model` only. Everything else here is the target (ADR 0001, ADR 0002); details
+> Status (2026-10-22): the workspace holds `current-model` (ADR 0005) and `current-net` (ADR 0006). Everything else here is the target (ADR 0001, ADR 0002); details
 > are settled by the desktop spikes (docs/roadmap.md, phase D).
 
 ## Overview
