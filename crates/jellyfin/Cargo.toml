@@ -1,6 +1,6 @@
 [package]
 name = "current-jellyfin"
-description = "Jellyfin client: server setup (address parsing, probing, identity); wire types stay private."
+description = "Jellyfin client: server setup (address parsing, probing, identity) and local discovery; wire types stay private."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,9 @@ publish.workspace = true
 current-model.workspace = true
 current-net.workspace = true
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "time"] }
 url.workspace = true
 
 [dev-dependencies]

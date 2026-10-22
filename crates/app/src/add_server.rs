@@ -1,5 +1,6 @@
 //! The "add a server" flow: the user types an address, the core probes it and either reports why it cannot be used, asks the user to
-//! confirm plain HTTP, or hands back a server ready to add (ADR 0012).
+//! confirm plain HTTP, or hands back a server ready to add (ADR 0012). A server found on the local network can be picked instead of
+//! typing its address (ADR 0016).
 //!
 //! In memory only: storing the server is `current-store`'s, signing in is a later step.
 
@@ -11,6 +12,8 @@ use current_model::{PublicServerInfo, ServerAddress, ServerKey, ServerRef, Servi
 use current_net::RequestLog;
 use tokio::sync::watch;
 
+use crate::discovery::DiscoveredServer;
+
 /// A server the flow found, with the address it answered on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewServer {
@@ -19,6 +22,16 @@ pub struct NewServer {
     /// https was tried and failed its handshake before plain http answered: the server may offer https with a certificate this
     /// device does not trust. The UI says so.
     pub https_failed_tls: bool,
+}
+
+impl NewServer {
+    pub(crate) fn from_found(found: &FoundServer) -> Self {
+        Self {
+            address: found.server_address(false),
+            https_failed_tls: found.https_failed_tls,
+            info: found.info.clone(),
+        }
+    }
 }
 
 /// Where the flow is. The UI renders one screen state per variant.
@@ -89,6 +102,13 @@ impl AddServer {
         });
     }
 
+    /// Takes a server found on the local network: `Ready`, or `ConfirmPlainHttp` under the same rule as a typed address. It was
+    /// probed by the search, so it is not probed again; a probe still running is dropped.
+    pub fn pick(&self, server: &DiscoveredServer) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.state.send_replace(settle(server.found.clone()));
+    }
+
     /// The user agreed to plain HTTP: `ConfirmPlainHttp` becomes `Ready`, with the confirmation kept on the address. Returns whether
     /// there was anything to confirm.
     pub fn confirm_plain_http(&self) -> bool {
@@ -116,11 +136,7 @@ impl AddServer {
 
 /// The state a found server leads to.
 fn settle(found: FoundServer) -> AddServerState {
-    let server = NewServer {
-        address: found.server_address(false),
-        https_failed_tls: found.https_failed_tls,
-        info: found.info.clone(),
-    };
+    let server = NewServer::from_found(&found);
     if found.needs_confirmation() {
         AddServerState::ConfirmPlainHttp { server }
     } else {
