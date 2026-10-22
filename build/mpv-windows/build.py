@@ -219,7 +219,9 @@ class Build:
     def zlib(self):
         self.fetch("zlib")
         self.cmake("zlib", ["-DZLIB_BUILD_SHARED=OFF", "-DZLIB_BUILD_STATIC=ON", "-DZLIB_BUILD_TESTING=OFF"])
+        # zlib.pc says -lz (z.lib); FFmpeg's MSVC configure links zlib.lib.
         self.alias_lib("zs.lib", "z.lib")
+        self.alias_lib("zs.lib", "zlib.lib")
 
     def win_iconv(self):
         self.fetch("win-iconv")
