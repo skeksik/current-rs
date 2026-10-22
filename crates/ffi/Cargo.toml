@@ -1,0 +1,21 @@
+[package]
+name = "current-ffi"
+description = "The UniFFI surface over current-app: what the C# and Swift app shells call (ADR 0004)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+# lib for Rust tests, cdylib for C# (and the Swift generator), staticlib for the XCFramework.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+current-app.workspace = true
+current-model.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+uniffi.workspace = true
+
+[lints]
+workspace = true
