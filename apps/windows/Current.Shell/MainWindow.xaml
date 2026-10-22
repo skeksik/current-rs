@@ -12,7 +12,6 @@
     <Grid x:Name="Root" KeyboardAcceleratorPlacementMode="Hidden">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="Left" Modifiers="Menu" Invoked="OnBackAccelerator" />
-            <KeyboardAccelerator Key="GoBack" Invoked="OnBackAccelerator" />
             <KeyboardAccelerator Key="Right" Modifiers="Menu" Invoked="OnForwardAccelerator" />
         </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>

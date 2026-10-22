@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.System;
 
 namespace Current.Shell;
 
@@ -22,6 +23,11 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+
+        // XAML cannot parse "GoBack" as a VirtualKey (XamlParseException in CI), so this one is added here.
+        var goBack = new KeyboardAccelerator { Key = VirtualKey.GoBack };
+        goBack.Invoked += OnBackAccelerator;
+        Root.KeyboardAccelerators.Add(goBack);
 
         // handledEventsToo: a control under the pointer may already have handled the press.
         Root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(OnPointerPressed), true);
