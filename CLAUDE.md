@@ -31,11 +31,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                                       # licences and sources (deny.toml, ADR 0003); install: cargo install --locked cargo-deny
 ```
 CI (`.github/workflows/ci.yml`) runs the Rust checks on Linux, Windows and macOS, and cargo-deny on Linux. C# and Swift builds join CI
-with the bridge spike (D1). They cannot be built in a Linux cloud container: say so in the PR and let CI build them.
+with the first app shells (D5 on Windows; build steps in docs/notes/uniffi-bridge.md). They cannot be built in a Linux cloud container: say so in the PR and let CI build them.
 
 ## Conventions
 - Rust edition 2024, toolchain pinned in `rust-toolchain.toml`. `unsafe_code` is forbidden workspace-wide; a crate that must call C
-  (`current-mpv`, `current-ffi`) may allow it, with a comment saying why.
+  directly (`current-mpv`) may allow it, with a comment saying why. UniFFI's generated code needs no exception (ADR 0004).
 - Wire types (DTOs) stay private to their service crate; public APIs use `current-model` types.
 - Open values, not closed enums, for anything a server defines (services, media kinds, permissions): unknown values pass through.
 - No feature may assume a service exists: read the capabilities state and hide what is unavailable.

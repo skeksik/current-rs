@@ -43,8 +43,8 @@ Dependencies point down only. UI-facing crates never import a UI toolkit, except
 | `current-ffi` | The UniFFI surface over `current-app` and the engines; the only crate built as a library for C#, Swift and Kotlin |
 | `apps/linux` | The GTK4 app (Rust) |
 
-`unsafe_code` stays forbidden workspace-wide; only crates that must call C (`current-mpv`, `current-ffi`) may allow it, each with a
-comment saying why.
+`unsafe_code` stays forbidden workspace-wide; only crates that must call C (`current-mpv`) may allow it, each with a
+comment saying why. (Narrowed by ADR 0004: UniFFI's generated code compiles under `forbid`, so `current-ffi` needs no exception.)
 
 ### Core libraries (candidates; each added with the owner's approval when first needed)
 | Need | Library | Licence |
