@@ -9,15 +9,16 @@ Notes from the D1 spike. The decision is ADR 0004; this file has the evidence, c
 | Rust bridge crate, 17 unit tests (value, list diffs, lag recovery, cancellation, abandoned and dropped awaits, listener release) | Linux container and CI (Windows, macOS) | Pass |
 | `cargo fmt`, `cargo clippy -D warnings` on the spike workspace | Linux container, CI macOS | Pass |
 | C# bindings generated with uniffi-bindgen-cs | Linux container (inspected), CI Windows | Generated |
-| WinUI 3 app built and published (x64, self-contained, unpackaged) | CI `windows-latest` only | PROTOTYPE_WINDOWS_RESULT |
-| Swift bindings generated, XCFramework made, SwiftUI app built in Swift 6 mode | CI `macos-latest` only | PROTOTYPE_MACOS_RESULT |
+| WinUI 3 app built and published (x64, self-contained, unpackaged) | CI `windows-latest` only | Built (CI run 39724206770, after one fix: see below) |
+| Swift bindings generated, XCFramework made, SwiftUI app built in Swift 6 mode | CI `macos-latest` only | Built on the first try (Swift 6.3.3, no warnings, no extra linker flags) |
 | Either app **run** | Nobody | Not verified: the owner runs both by hand (below) |
 
 So the threading, ordering and release behaviour on the C# and Swift sides is shown in code and compiled, but nobody has watched it
 run yet. The Rust side of the same behaviour is tested.
 
-The prototype lived in `spikes/uniffi-bridge/` and was deleted before merge. Its last commit is PROTOTYPE_COMMIT on branch
-`spike/uniffi-bridge`. To get it back, run `git checkout PROTOTYPE_COMMIT -- spikes .github/workflows/ci.yml`.
+The prototype lived in `spikes/uniffi-bridge/` and was deleted before merge. The prototype as CI built it is commit
+`1df3660f1cb9189fe74c1a82b492664d40de693e` on branch `spike/uniffi-bridge` (CI run 39724206770, all jobs green). It is unchanged
+until the commit that deletes it. To get it back, run `git checkout 1df3660 -- spikes .github/workflows/ci.yml`.
 
 ## Versions and generators
 | Piece | Version | How it is pinned |
@@ -187,8 +188,9 @@ pub enum BridgeError { Cancelled, InvalidInput { reason: String }, Runtime { mes
 **Swift**
 - **Protocols.** The generated listener protocols are `AnyObject, Sendable`. Objects are `open class …: @unchecked Sendable`.
   Records, enums and errors get `extension …: Sendable {}`. The handle maps are `@unchecked Sendable` with a lock.
-- **Swift 6 friction.** None was found in the generated file while writing the prototype: it has no global `var`, only `let`. The
-  CI build compiles it in Swift 6 language mode (`swift-tools-version: 6.2`). See the status table for the result.
+- **Swift 6 friction.** None in the generated code: it has no global `var`, only `let`. It compiled with no warnings in Swift 6
+  language mode (`swift-tools-version: 6.2`, Swift 6.3.3 in CI). The only friction is on our side: listeners must be `Sendable`
+  (next point).
 - **Listeners.** A listener must be a `final class` whose stored properties are all `let` and `Sendable`. A `weak var` to the model
   is not allowed in a `Sendable` class. Hence the spike's listener holds only an `AsyncStream.Continuation`:
 ```swift
@@ -306,12 +308,24 @@ On ARM64, use `-Platform ARM64` (target `aarch64-pc-windows-msvc`, `win-arm64`).
 
 ## What did not work, or surprised
 - uniffi-bindgen-cs prints a backtrace when it cannot run its C# formatter. `--no-format` avoids it; the output is still valid.
-- PROTOTYPE_CI_NOTES
+- **The first WinUI build failed: `Task`, `IDisposable`, `CancellationToken` not found.** The hand-written project lacked
+  `<ImplicitUsings>enable</ImplicitUsings>`, which the WinUI templates set. Its knock-on XAML errors (`WMC0909: Cannot resolve
+  DataType vm:ItemRow`, `WMC1111`) went away with it. The first run also showed the XAML compiler warning
+  `WMC1509: No LocalAssembly parameter given during MarkupCompilePass2`; it did not stop the build.
+- **The Swift side needed nothing beyond the plan.**
+  - The generated Swift compiled in Swift 6 language mode with no warnings and no `nonisolated(unsafe)` or language-mode override.
+  - The Rust static library needed no extra linker flags.
+  - `swift --version` on `macos-latest` printed Apple Swift 6.3.3. The runner readme lists Xcode 26.6 as default; this reading is
+    from the build log, not cross-checked.
+- **CI cost.**
+  - The NuGet restore of the Windows App SDK took about 40 s (uncached).
+  - Building the `uniffi-bindgen` binary took about 2.5 min on macOS.
+  - Installing uniffi-bindgen-cs took about 2.5 min on Windows.
 - `unsafe_code = "forbid"` was expected to need an exception for the bridge crate. It does not: UniFFI 0.31.0's macro output passes
   (checked by adding an `unsafe {}` block, which the lint then rejected).
 
 ## What the owner runs by hand
-Nothing here has been run with a display. On a Windows 11 PC and on a Mac, check out PROTOTYPE_COMMIT and run:
+Nothing here has been run with a display. On a Windows 11 PC and on a Mac, check out `1df3660` and run:
 
 **Windows.** Needs Rust (rustup), the .NET 10 SDK, and
 `cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.1+v0.31.0 uniffi-bindgen-cs`. Then run
