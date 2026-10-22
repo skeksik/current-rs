@@ -52,8 +52,8 @@ before merging, and its PR carries only the record.
 Each item starts with our own research (the server's API and source, the platform's documentation, how existing clients behave),
 recorded with sources and dates, and a decision record where it decides something.
 - [ ] Server setup: add a Jellyfin server by URL, check it is the same server on every address, warn about plain HTTP except locally
-      (core done 2026-10-22, ADR 0012: address parsing, probe, identity, plain-HTTP rule, the in-memory flow; the Windows screen and
-      storing the server are still to do)
+      (core done 2026-10-22, ADR 0012: address parsing, probe, identity, plain-HTTP rule, the in-memory flow; servers are stored with
+      sign-in, ADR 0015; the Windows screen is still to do)
 - [ ] Several addresses per server with roaming (local and internet, the user's order)
   - [x] Spike: research and design (2026-10-22, PR 17, ADR 0014, docs/notes/roaming.md; OS trust only for
         TLS in M1)
@@ -62,6 +62,8 @@ recorded with sources and dates, and a decision record where it decides somethin
   - [ ] Wire the providers into signed-in servers (sign-in), and `NetworkFacts` from the Windows UI (wave 3)
 - [ ] Secrets in the OS keyring and a device identity per install
 - [ ] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out
+      (core done 2026-10-22, ADR 0015: `current-jellyfin` auth, saved servers and users, the `SignIn` flow, restore, sign out; the bridge
+      and the Windows screens are still to do)
 - [ ] Local server discovery
       (core done 2026-10-22, ADR 0016: UDP discovery, probe and id check, the discovery state, picking into "add a server"; the
       Windows screen and the local check on a real network are still to do)

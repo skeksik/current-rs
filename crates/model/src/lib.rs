@@ -8,6 +8,7 @@ mod capabilities;
 mod identity;
 mod network;
 mod open;
+mod saved;
 mod server;
 mod user;
 
@@ -17,6 +18,7 @@ pub use identity::{
     ItemId, ItemRef, MediaKind, ServerId, ServerKey, ServerRef, ServiceType, UserId,
 };
 pub use network::{Connectivity, InterfaceKind, NetworkFacts, NetworkKey};
+pub use saved::{SavedServer, SavedUser};
 pub use server::{PublicServerInfo, ServerAddress};
 pub use user::{Permission, User};
 
