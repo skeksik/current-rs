@@ -14,3 +14,14 @@ pub(crate) struct PublicSystemInfo {
     pub id: Option<String>,
     pub startup_wizard_completed: Option<bool>,
 }
+
+/// A reply to the discovery request (`MediaBrowser.Model.ApiClient.ServerDiscoveryInfo`, Jellyfin 12.2), serialized by
+/// System.Text.Json with its default (PascalCase) names. `EndpointAddress` is always null from the server, so it is not read.
+/// Unknown fields are ignored, so a newer server's additions do not break discovery.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct ServerDiscoveryInfo {
+    pub address: Option<String>,
+    pub id: Option<String>,
+    pub name: Option<String>,
+}

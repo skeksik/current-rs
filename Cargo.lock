@@ -278,6 +278,7 @@ dependencies = [
  "current-model",
  "current-net",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "url",
