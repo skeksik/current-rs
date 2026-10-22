@@ -78,6 +78,11 @@ Done when: sign in and out of Jellyfin on Windows, and the app restarts signed i
       playback controller (resume, progress reporting, tracks, quality, next episode, intro skip, fallback on engine errors)
 - [ ] The libmpv engine and the Windows player UI, media keys and the media flyout
 - [ ] Playback information (route, codecs, reasons for the choice) and remembered track choices
+- [ ] Servers behind an authentication gateway (after M1; ADR 0017): a password prompt for Basic gateways, a sign-in
+      window that hands the gateway's cookies to the core, advanced extra headers, per address; the 401 rule amended so that a
+      gateway's 401 keeps the Jellyfin session. Choices decided by the owner (2026-10-22); the player and image parts follow the
+      libmpv engine and the image path
+  - [x] Spike: research and design (2026-10-22, PR 24, ADR 0017, docs/notes/gateway-auth.md)
 
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
