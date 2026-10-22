@@ -201,7 +201,8 @@ impl Shared {
         }
     }
 
-    /// A client for a saved server at its first address. Roaming (ADR 0014) replaces the fixed address here.
+    /// A client for a saved server at its first address. Moving sessions onto roaming (`App::jellyfin_addresses`, ADR 0014) replaces the
+    /// fixed address here (wave 3).
     pub(crate) fn client(
         &self,
         server: ServerRef,

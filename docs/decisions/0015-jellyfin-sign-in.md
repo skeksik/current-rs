@@ -124,8 +124,10 @@ built now (manager, 2026-10-22).
 - **Ordering:** saving a sign-in, signing out, the 401 rule and restoring each change a server's session under one async lock and
   check under it that the session or active user they act on is still current. Restore installs its client only if no sign-in or
   sign-out happened during its probe, and writes the status only while its session is current.
-- **Address:** each server uses `FixedAddress` with its first address, built in one place (`Shared::client`), so roaming (ADR 0014)
-  replaces it there.
+- **Address:** each server uses `FixedAddress` with its first address, built in one place (`Shared::client`). Moving sessions onto
+  roaming (`App::jellyfin_addresses`, ADR 0014, merged in parallel) is left for wave 3: the provider list would move into the shared
+  state, the capabilities' reachability would follow each provider's status instead of restore's probe, and restore would need the
+  server's version from elsewhere. An explicit identity check stays before any credentialed request either way.
 - **Blocking work:** the settings file and the keyring are blocking (ADR 0013). `current-app`'s async methods run them on tokio's
   blocking pool (`spawn_blocking`); `App::open` stays a sync call the shell makes off the runtime, as before. The saved-server list
   and the settings file change together (`Shared::commit`, serialized by its own lock, which writes first and keeps the old list if

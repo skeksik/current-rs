@@ -57,7 +57,8 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
   `Ready` or a saved server; success saves the server (`SavedServer` in `settings.json`: key, server id, addresses, users, active
   user) and the token in the keyring only. `App::restore_sessions` checks each saved session after an identity probe; a 401 to any
   request with the token signs the server out and deletes the token; `App::sign_out` deletes it whatever the server answers. Each
-  server uses its first address (`FixedAddress`) until roaming (ADR 0014).
+  server's session uses its first address (`FixedAddress`) for now; moving sessions onto roaming (`App::jellyfin_addresses`, ADR 0014)
+  is wave 3's.
 - **`current-ffi`** is the UniFFI surface. It owns the one tokio runtime (`core-worker` threads) and exports `Core`, `TaskHandle`
   (cancel and abort on drop), `CancelToken` and one error enum, `CoreError`. Values are pumped from `watch` channels to listeners, lists
   as diff batches (`list_diff!` declares the per-item diff enum). `Core::live_listeners` counts the listeners the core holds, for leak

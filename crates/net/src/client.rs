@@ -39,8 +39,9 @@ impl Default for ClientConfig {
     }
 }
 
-/// A request relative to the server's address.
-#[derive(Clone, Debug)]
+/// A request relative to the server's address. Its `Debug` output shows no body, no header values and only the query values the
+/// request log shows, since bodies, headers and queries can carry passwords and tokens.
+#[derive(Clone)]
 pub struct Request {
     method: Method,
     path: String,
@@ -105,8 +106,8 @@ impl Request {
     }
 }
 
-/// A successful (2xx) response.
-#[derive(Clone, Debug)]
+/// A successful (2xx) response. Its `Debug` output shows no body and no header values: a sign-in's body holds a token.
+#[derive(Clone)]
 pub struct Response {
     pub status: u16,
     pub headers: HeaderMap,
@@ -114,6 +115,39 @@ pub struct Response {
     /// Where the response came from: the request's address after any followed redirects, without the credentials `RequestAuth`
     /// adds. Server setup reads it to adopt an http to https upgrade or find a base path. Redacted from Debug and never logged.
     pub url: Location,
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Request")
+            .field("method", &self.method)
+            .field("path", &self.path)
+            .field("query", &redact_query(&self.query))
+            .field("headers", &HeaderNames(&self.headers))
+            .field("body_bytes", &self.body.as_ref().map(Vec::len))
+            .field("timeout", &self.timeout)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Response {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Response")
+            .field("status", &self.status)
+            .field("headers", &HeaderNames(&self.headers))
+            .field("body_bytes", &self.body.len())
+            .field("url", &self.url)
+            .finish()
+    }
+}
+
+/// A header map's names only, for `Debug`.
+struct HeaderNames<'a>(&'a HeaderMap);
+
+impl std::fmt::Debug for HeaderNames<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.0.keys()).finish()
+    }
 }
 
 impl Response {
@@ -496,6 +530,55 @@ mod tests {
     use tokio::net::TcpListener;
 
     use super::*;
+
+    #[test]
+    fn a_request_debug_shows_no_body_header_value_or_secret_query_value() {
+        let request = Request::post("/Users/AuthenticateByName")
+            .query("limit", "5")
+            .query("secret", "qc-secret-value")
+            .header(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_static("MediaBrowser Token=\"token-value\""),
+            )
+            .json(&serde_json::json!({"Username": "Example User", "Pw": "pa55-word-value"}))
+            .unwrap();
+        let text = format!("{request:?}");
+        for secret in [
+            "pa55-word-value",
+            "Example User",
+            "token-value",
+            "qc-secret-value",
+            "MediaBrowser",
+        ] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        assert!(text.contains("/Users/AuthenticateByName"), "{text}");
+        assert!(text.contains("\"limit\", \"5\""), "{text}");
+        assert!(text.contains("authorization"), "{text}");
+        assert!(text.contains("body_bytes: Some("), "{text}");
+    }
+
+    #[test]
+    fn a_response_debug_shows_no_body_header_value_or_address() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            reqwest::header::SET_COOKIE,
+            reqwest::header::HeaderValue::from_static("session=cookie-value"),
+        );
+        let response = Response {
+            status: 200,
+            headers,
+            body: br#"{"AccessToken":"token-value"}"#.to_vec(),
+            url: Location(url("http://192.168.1.10:8096/Users/AuthenticateByName")),
+        };
+        let text = format!("{response:?}");
+        for secret in ["token-value", "cookie-value", "192.168.1.10"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        assert!(text.contains("status: 200"), "{text}");
+        assert!(text.contains("set-cookie"), "{text}");
+        assert!(text.contains("body_bytes: 29"), "{text}");
+    }
 
     /// Serves `first` until a request fails, then offers `second` (as a provider that just re-raced would), and records reports.
     struct Switching {
