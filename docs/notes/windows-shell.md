@@ -1,0 +1,106 @@
+# Windows app shell (D5b)
+
+The WinUI 3 app in `apps/windows`: its layout, folders, identity, single instance, the smoke run, and what the owner checks by hand.
+Dates are when a source was read.
+
+## Layout
+```
+apps/windows/
+  Current.Shell/          the app (WinUI 3, net10.0-windows10.0.26100.0, unpackaged, self-contained, x64); builds Current.exe
+    Program.cs            own Main: AppUserModelID, single instance, then XAML
+    AppIdentity.cs        AppUserModelID, single-instance key, data folder
+    App.xaml(.cs)         owns the CoreHost (one per process) and the main window
+    MainWindow.xaml(.cs)  Mica, TitleBar, NavigationView over one Frame, back navigation
+    Pages/                HomePage (empty state), SettingsPage
+    ViewModels/           SettingsViewModel (version, capabilities, diagnostics)
+    DispatcherQueueUi.cs  IUiDispatcher over DispatcherQueue (ADR 0004)
+    SmokeRun.cs           Current.exe --smoke
+  build.ps1               dotnet publish -c Release -r win-x64 -p:Platform=x64 into apps/windows/out/app
+  smoke.ps1               runs Current.exe --smoke and checks its result
+```
+Build: `pwsh bindings/csharp/build.ps1` (core, generated C#, bindings), then `pwsh apps/windows/build.ps1`, then
+`pwsh apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe`. CI runs the same three in the job "App (Windows)".
+
+The app references `Current.Bindings` by project; `-p:CoreLibDir` (set by `build.ps1`) flows to it, and its `current_ffi.dll` item is
+copied into the app's output and publish folder. The pitfalls in `docs/notes/uniffi-bridge.md` apply: `-p:Platform=x64` with
+`-r win-x64`, `ImplicitUsings`, and `x:DataType` only on public types (the settings page binds `Current.Bindings.ServerStatus`).
+
+## Shell behaviour (ADR 0001: the platform's default)
+- **Window:** `MicaBackdrop` (Base), `ExtendsContentIntoTitleBar` and `SetTitleBar` on a WinUI `TitleBar` control titled "Current";
+  the system caption buttons stay the system's. Theme: no `RequestedTheme` anywhere, so the app follows the Windows light/dark setting.
+- **Navigation:** a left `NavigationView` with Home and the built-in Settings item over one `Frame`, as in the NavigationView page's
+  example (learn.microsoft.com/windows/apps/develop/ui/controls/navigationview, ms.date 2026-10-02, read 2026-10-22): navigate on
+  `ItemInvoked` only when the page differs (no duplicate back stack entries), keep the selection and header in step on
+  `Frame.Navigated` (the settings item via `SettingsItem`), and do not go back while the pane overlays the content.
+- **Back button in the title bar.** The TitleBar page (learn.microsoft.com/windows/apps/develop/ui/controls/title-bar, ms.date
+  2026-10-13, read 2026-10-22): "Fluent Design guidance recommends that these controls be placed in the title bar when a custom title
+  bar is used." So the NavigationView's back and pane toggle buttons are hidden and the TitleBar's are used, enabled from
+  `Frame.CanGoBack`.
+- **Alt+Left, the GoBack key and the mouse Back button** call the same `TryGoBack`. The WinUI 3 page "Navigation history and backwards
+  navigation" (ms.date 2026-09-19, read 2026-10-22) no longer lists these inputs; the UWP page
+  (learn.microsoft.com/windows/uwp/ui-input/back-navigation, ms.date 2025-04-10, read 2026-10-22) does: "Alt+Left arrow,
+  VirtualKey.GoBack" and "VirtualKey.XButton1 (Such as the back button found on some mice.)". Its `CoreDispatcher` and `CoreWindow`
+  events do not exist in WinUI 3 desktop, so the window root has two `KeyboardAccelerator`s (Left with Menu, and GoBack) and a
+  `PointerPressed` handler registered with handledEventsToo that checks `IsXButton1Pressed`. Windows+Backspace and the gamepad B button
+  come through `SystemNavigationManager`, which a desktop window does not have. Forward (Alt+Right, XButton2) is left out: there is no
+  forward button (manager's decision pending).
+- **Home:** the empty state before any server exists: "No servers yet". Server setup is M1.
+- **Settings:** the core's version (`CoreHost.AppInfo`), the capabilities state through `ObserveCapabilities` (empty: "No servers are
+  set up."), and "Copy diagnostics", which puts `DiagnosticsText()` on the clipboard (`Clipboard.SetContent`, then `Flush` so it
+  stays after the app exits) and shows a success `InfoBar`. The subscription starts on the page's `Loaded` and is disposed on
+  `Unloaded` (ADR 0004 lifetimes).
+- **Core lifetime:** one `CoreHost` per process, created in `OnLaunched` and disposed when the main window closes.
+
+## Identity: the AppUserModelID
+- `Skeksik.Current` (owner's choice, 2026-10-22). "Application User Model IDs" (learn.microsoft.com/windows/win32/shell/appids, updated
+  2025-04-15, read 2026-10-22): the form is `CompanyName.ProductName.SubProduct.VersionInformation`, "no more than 128 characters and
+  cannot contain spaces"; `VersionInformation` "should be omitted so that an upgraded version can use the same AppUserModelID".
+- The process sets it first thing in `Main` with `SetCurrentProcessExplicitAppUserModelID`, which "must" be called "before the
+  application presents any UI" (same page). The same page says an app with an explicit ID "must also assign the same AppUserModelID to
+  all running windows or processes, shortcuts, and file associations": the installer writes it into the Start menu shortcut's
+  `System.AppUserModel.ID` (installer section).
+- Whether the media flyout and taskbar then show "Current" (ADR 0007's open item) is checked by hand once the shortcut exists; the
+  flyout needs the player (M2), so for now only the taskbar and Start are checked.
+
+## Single instance
+`Program.Main` follows "How to create a single-instanced WinUI app with C#" (learn.microsoft.com/windows/apps/windows-app-sdk/
+applifecycle/applifecycle-single-instance, ms.date 2026-09-10, read 2026-10-22): `DISABLE_XAML_GENERATED_MAIN`,
+`AppInstance.FindOrRegisterForKey("main")`; a later launch calls `RedirectActivationToAsync` on a worker thread while the STA waits in
+`CoWaitForMultipleObjects`, then hands the foreground to the first instance's window and exits. The first instance's `Activated`
+handler restores its window if minimised and activates it. `--smoke` skips the key, so a smoke run is never redirected.
+
+## Folders
+| What | Where | Why |
+|---|---|---|
+| Program | `%LOCALAPPDATA%\Programs\Current` | `FOLDERID_UserProgramFiles`, default path `%LOCALAPPDATA%\Programs`, per user ("KNOWNFOLDERID", learn.microsoft.com/windows/win32/shell/knownfolderid, updated 2023-08-30, read 2026-10-22) |
+| Data | `%LOCALAPPDATA%\Current` | `FOLDERID_LocalAppData` (same page): per user, not roaming; a separate tree from the program folder |
+
+- The program folder is never the data folder, and the installer never names the data folder, so uninstall and upgrade cannot delete
+  it. The install test checks this with a marker file.
+- The data folder is a C# constant (`AppIdentity.DataFolder`) for now; nothing writes there yet. When storage arrives (M1), the
+  platform UI resolves its native data folder and passes it to the core when it creates `App` (manager, 2026-10-22).
+
+## Smoke run: `Current.exe --smoke`
+Starts XAML and the core without showing a window, prints one line per check and exits 0 only if all pass. These are the bridge
+checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs by hand"), now run in CI:
+1. the core starts and reports a version;
+2. subscribing to the capabilities state makes the core hold one more listener;
+3. the first value arrives, and on the UI thread (`DispatcherQueue.HasThreadAccess` inside the `PropertyChanged` handler);
+4. it has no servers;
+5. disposing the subscription brings `LiveListeners` back to where it was (within 10 s);
+6. the diagnostics text can be read;
+7. the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes.
+`smoke.ps1` fails on a non-zero exit code, a missing "smoke run passed" line or a run longer than 120 s.
+
+## What the owner checks by hand
+On the owner's PC, with the installer from CI (or `apps/windows/out/app/Current.exe`):
+1. The window has Mica, the title bar is part of the window, it drags and double-click maximises; the caption buttons and snap layouts
+   (hover over maximise) work.
+2. Switch Windows between light and dark: the app follows at once.
+3. Home shows the empty state. Settings shows the version, "No servers are set up." and "Copy diagnostics"; paste the clipboard
+   somewhere: the text is there, also after closing the app.
+4. Back: go Home -> Settings, then back with the title bar's back button, Alt+Left, and a mouse Back button. Each returns to Home; at
+   Home the back button is disabled. Narrow the window until the pane collapses: the pane toggle in the title bar opens it.
+5. Keyboard only: Tab reaches the back button, the pane and the settings controls; Narrator reads them by name.
+6. Start a second copy (from Start or the exe): no second window; the first one comes to the front, also when minimised.
+7. Taskbar and Start show "Current" with the app's name (not "Current.exe"); pin to the taskbar and start from the pin.
