@@ -13,7 +13,7 @@ use current_net::{AddressProvider, NetError, RoamingAddresses};
 use current_store::StoreError;
 use tokio::sync::{OnceCell, watch};
 
-use crate::session::{Shared, Target};
+use crate::session::{LinkError, Shared, Target};
 
 /// How long an attempt on a saved server waits for its address provider to select an address before it gives up.
 const SELECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -254,14 +254,14 @@ impl SignIn {
                     // A new server's link is made with the flow.
                     return Err(SignInError::ServerRemoved);
                 };
-                let saved = self
-                    .shared
-                    .saved(server)
-                    .ok_or(SignInError::ServerRemoved)?;
-                let (client, provider) = self
-                    .shared
-                    .saved_client(&saved)
-                    .map_err(|error| SignInError::Auth(AuthError::Network(error)))?;
+                let (client, provider) =
+                    self.shared
+                        .saved_client(server)
+                        .await
+                        .map_err(|error| match error {
+                            LinkError::Removed => SignInError::ServerRemoved,
+                            error => SignInError::Auth(AuthError::Network(error.into_net())),
+                        })?;
                 Ok(Link {
                     client,
                     provider: Some(provider),

@@ -61,6 +61,8 @@ struct Link {
     /// The saved addresses it was built over: a change rebuilds it.
     addresses: Vec<ServerAddress>,
     id: ServerId,
+    /// Tells this link apart from the server's earlier and later ones.
+    generation: u64,
     provider: Arc<RoamingAddresses>,
     identity: JellyfinIdentity,
     /// The task that copies the provider's status into the capabilities state.
@@ -70,6 +72,55 @@ struct Link {
 impl Drop for Link {
     fn drop(&mut self) {
         self.follow.abort();
+    }
+}
+
+/// The server's provider if it was built from `saved`'s addresses and id.
+fn current_link(
+    links: &HashMap<ServerRef, Link>,
+    saved: &SavedServer,
+) -> Option<Arc<RoamingAddresses>> {
+    links
+        .get(&saved.server)
+        .filter(|link| link.addresses == saved.addresses && link.id == saved.id)
+        .map(|link| link.provider.clone())
+}
+
+/// Why a saved server's provider or client could not be made.
+#[derive(Debug)]
+pub(crate) enum LinkError {
+    /// The server is no longer saved.
+    Removed,
+    /// Called outside the tokio runtime, or the blocking pool lost the work.
+    NoRuntime,
+    Roaming(RoamingError),
+    Net(NetError),
+}
+
+impl LinkError {
+    /// The error a request would have met. `Removed` has its own sign-in error and does not reach here in practice.
+    pub(crate) fn into_net(self) -> NetError {
+        match self {
+            Self::Net(error) => error,
+            Self::Roaming(RoamingError::Tls) => NetError::Tls,
+            Self::Removed
+            | Self::NoRuntime
+            | Self::Roaming(RoamingError::InvalidAddress(_) | RoamingError::TooManyAddresses) => {
+                NetError::InvalidRequest
+            }
+        }
+    }
+}
+
+/// Puts a check that did not finish (its future was dropped, say a cancelled restore) back to unchecked, so that the next
+/// reach of the server checks again.
+struct CheckGuard<'a>(&'a AtomicU8);
+
+impl Drop for CheckGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self
+            .0
+            .compare_exchange(CHECKING, UNCHECKED, Ordering::AcqRel, Ordering::Acquire);
     }
 }
 
@@ -97,6 +148,7 @@ pub(crate) struct Shared {
     sessions: Mutex<HashMap<ServerRef, Session>>,
     /// One address provider per saved Jellyfin server, made when first needed (restore, a sign-in) since it needs the runtime.
     links: Mutex<HashMap<ServerRef, Link>>,
+    next_link: AtomicU64,
     pub(crate) roaming: Mutex<Roaming>,
     next_session: AtomicU64,
     /// Orders session changes (see the module documentation).
@@ -139,6 +191,7 @@ impl Shared {
             write: Mutex::new(()),
             sessions: Mutex::new(HashMap::new()),
             links: Mutex::new(HashMap::new()),
+            next_link: AtomicU64::new(1),
             roaming: Mutex::new(Roaming::default()),
             next_session: AtomicU64::new(1),
             changes: tokio::sync::Mutex::new(()),
@@ -270,82 +323,97 @@ impl Shared {
         )
     }
 
-    /// A client for a saved Jellyfin server over its address provider, and the provider. Needs the tokio runtime: the provider
-    /// runs its races there.
-    pub(crate) fn saved_client(
+    /// A client for a saved Jellyfin server over its address provider, and the provider. Async: the provider may have to be made.
+    pub(crate) async fn saved_client(
         self: &Arc<Self>,
-        saved: &SavedServer,
-    ) -> Result<(JellyfinClient, Arc<RoamingAddresses>), NetError> {
-        let provider = self.provider(saved).map_err(|error| match error {
-            RoamingError::Tls => NetError::Tls,
-            RoamingError::InvalidAddress(_) | RoamingError::TooManyAddresses => {
-                NetError::InvalidRequest
-            }
-        })?;
+        server: &ServerRef,
+    ) -> Result<(JellyfinClient, Arc<RoamingAddresses>), LinkError> {
+        let provider = self.provider(server).await?;
         let client = JellyfinClient::new(
-            saved.server.clone(),
+            server.clone(),
             provider.clone(),
             self.identity.clone(),
             self.request_log.clone(),
-        )?;
+        )
+        .map_err(LinkError::Net)?;
         Ok((client, provider))
     }
 
-    /// The saved server's address provider, made on first use and made again when its addresses or id changed. A new one hears
-    /// network facts from now on and its status is followed into the capabilities state. Call it on the tokio runtime.
-    pub(crate) fn provider(
+    /// The saved server's address provider, made on first use and made again when its saved addresses or id changed. Always built
+    /// from the saved list as it is now, never from a caller's older copy, so a slow caller cannot replace a provider with one over
+    /// fewer addresses. A new one hears network facts from now on and its status is followed into the capabilities state.
+    pub(crate) async fn provider(
         self: &Arc<Self>,
-        saved: &SavedServer,
-    ) -> Result<Arc<RoamingAddresses>, RoamingError> {
-        let current = |links: &HashMap<ServerRef, Link>| {
-            links
-                .get(&saved.server)
-                .filter(|link| link.addresses == saved.addresses && link.id == saved.id)
-                .map(|link| link.provider.clone())
-        };
-        if let Some(provider) = current(&lock(&self.links)) {
-            return Ok(provider);
-        }
-        // Built outside the lock: building sets up TLS for each address, which takes noticeable time.
-        // All callers are async code on tokio, as the HTTP client already requires.
-        let runtime = RuntimeHandle::current();
-        let identity = JellyfinIdentity::new(saved.id.clone());
-        let provider = RoamingAddresses::new(
-            saved.server.clone(),
-            &saved.addresses,
-            Arc::new(identity.clone()),
-            self.request_log.clone(),
-            RoamingConfig::default(),
-            &runtime,
-        )?;
-        {
-            let mut links = lock(&self.links);
-            // Another caller made one for the same addresses meanwhile: use theirs.
-            if let Some(provider) = current(&links) {
+        server: &ServerRef,
+    ) -> Result<Arc<RoamingAddresses>, LinkError> {
+        let runtime = RuntimeHandle::try_current().map_err(|_| LinkError::NoRuntime)?;
+        loop {
+            let saved = self.saved(server).ok_or(LinkError::Removed)?;
+            if let Some(provider) = current_link(&lock(&self.links), &saved) {
                 return Ok(provider);
             }
-            let follow = runtime
-                .spawn(follow(
-                    Arc::downgrade(self),
-                    saved.server.clone(),
-                    provider.status(),
+            // Built on the blocking pool: building sets up TLS for each address, which takes noticeable time.
+            let identity = JellyfinIdentity::new(saved.id.clone());
+            let built = {
+                let (saved, identity, log, runtime) = (
+                    saved.clone(),
                     identity.clone(),
-                ))
-                .abort_handle();
-            // Replacing a link drops the old one, which stops its follow task.
-            links.insert(
-                saved.server.clone(),
-                Link {
-                    addresses: saved.addresses.clone(),
-                    id: saved.id.clone(),
-                    provider: provider.clone(),
-                    identity,
-                    follow,
-                },
-            );
+                    self.request_log.clone(),
+                    runtime.clone(),
+                );
+                tokio::task::spawn_blocking(move || {
+                    RoamingAddresses::new(
+                        saved.server.clone(),
+                        &saved.addresses,
+                        Arc::new(identity),
+                        log,
+                        RoamingConfig::default(),
+                        &runtime,
+                    )
+                })
+                .await
+                .map_err(|_| LinkError::NoRuntime)?
+                .map_err(LinkError::Roaming)?
+            };
+            {
+                let mut links = lock(&self.links);
+                // The saved list changed while building (a sign-in added an address): build again from the new one.
+                if !self
+                    .saved(server)
+                    .is_some_and(|now| now.addresses == saved.addresses && now.id == saved.id)
+                {
+                    continue;
+                }
+                // Another caller made one for the same list meanwhile: use theirs.
+                if let Some(provider) = current_link(&links, &saved) {
+                    return Ok(provider);
+                }
+                let generation = self.next_link.fetch_add(1, Ordering::Relaxed);
+                let follow = runtime
+                    .spawn(follow(
+                        Arc::downgrade(self),
+                        server.clone(),
+                        generation,
+                        built.status(),
+                        identity.clone(),
+                    ))
+                    .abort_handle();
+                // Replacing a link drops the old one, which stops its follow task.
+                links.insert(
+                    server.clone(),
+                    Link {
+                        addresses: saved.addresses.clone(),
+                        id: saved.id.clone(),
+                        generation,
+                        provider: built.clone(),
+                        identity,
+                        follow,
+                    },
+                );
+            }
+            self.register(&built);
+            return Ok(built);
         }
-        self.register(&provider);
-        Ok(provider)
     }
 
     /// Makes `provider` hear network facts from now on, starting from the last ones reported.
@@ -363,36 +431,47 @@ impl Shared {
         }
     }
 
-    /// Copies the server's provider status into the capabilities state now (the follow task does it on every change). A provider
-    /// that has not tried yet (reachability unknown) leaves the status as it is: a sign-in has just reached the server.
+    /// Copies the server's provider status into the capabilities state now (the follow task does it on every change).
     fn refresh_status(self: &Arc<Self>, server: &ServerRef) {
         let found = lock(&self.links).get(server).map(|link| {
             (
+                link.generation,
                 link.provider.status().borrow().clone(),
                 link.identity.version(),
             )
         });
-        if let Some((status, version)) = found {
-            self.apply_roaming(server, &status, version);
+        if let Some((generation, status, version)) = found {
+            self.apply_roaming(server, generation, &status, version);
         }
     }
 
+    /// Writes a provider's status into the server's status, if `generation` is still the server's link: a follow task of a
+    /// replaced provider writes nothing. A provider that has not tried yet (reachability unknown) leaves the status as it is: a
+    /// sign-in has just reached the server.
     fn apply_roaming(
         self: &Arc<Self>,
         server: &ServerRef,
+        generation: u64,
         roaming: &RoamingStatus,
         version: Option<String>,
     ) {
         if roaming.reachability == Reachability::Unknown {
             return;
         }
-        self.update_status(server, |status| {
-            status.reachability = roaming.reachability;
-            status.address = roaming.position;
-            if version.is_some() {
-                status.version = version;
+        {
+            // Held while writing, so a rebuild cannot slip in between the check and the write.
+            let links = lock(&self.links);
+            if links.get(server).map(|link| link.generation) != Some(generation) {
+                return;
             }
-        });
+            self.update_status(server, |status| {
+                status.reachability = roaming.reachability;
+                status.address = roaming.position;
+                if version.is_some() {
+                    status.version = version;
+                }
+            });
+        }
         if roaming.reachability == Reachability::Reachable {
             self.recheck(server);
         }
@@ -540,8 +619,8 @@ impl Shared {
         user.server = server.clone();
         // The session goes over the server's provider, made again if this sign-in added an address. Its first request waits for
         // the provider's race, which checks the server's id. Building it fails only for an address that is not a URL, which setup
-        // never saves.
-        if let Ok((client, provider)) = self.saved_client(&saved) {
+        // never saves, or a server removed meanwhile.
+        if let Ok((client, provider)) = self.saved_client(&server).await {
             client.set_token(signed_in.token);
             self.install(Arc::new(client), user.id.clone(), CHECKED);
             // Race now, so that the status soon shows the address in use.
@@ -565,16 +644,18 @@ impl Shared {
             if saved.server.service != ServiceType::JELLYFIN {
                 continue;
             }
-            // Every saved server gets its provider, signed in or not, so that it hears network facts. An invalid address
-            // leaves the server without one; its restore below says unreachable.
-            let _ = self.provider(&saved);
-            if self.session_id(&saved.server).is_some() {
-                // A restored session whose user was never confirmed: check again.
-                self.recheck(&saved.server);
-            } else if saved.active_user.is_some() {
-                let shared = self.clone();
-                tasks.spawn(async move { shared.restore(saved).await });
-            }
+            let shared = self.clone();
+            tasks.spawn(async move {
+                // Every saved server gets its provider, signed in or not, so that it hears network facts. An invalid address
+                // leaves the server without one; its restore below says unreachable.
+                let _ = shared.provider(&saved.server).await;
+                if shared.session_id(&saved.server).is_some() {
+                    // A restored session whose user was never confirmed: check again.
+                    shared.recheck(&saved.server);
+                } else if saved.active_user.is_some() {
+                    shared.restore(saved).await;
+                }
+            });
         }
         while tasks.join_next().await.is_some() {}
     }
@@ -617,8 +698,8 @@ impl Shared {
             }
         };
 
-        let Ok((client, _)) = self.saved_client(&saved) else {
-            // No usable address list: nothing can be reached.
+        let Ok((client, _)) = self.saved_client(&server).await else {
+            // No usable address list (or the server was removed): nothing can be reached.
             if self.session_id(&server).is_none() {
                 self.update_status(&server, |status| {
                     status.reachability = Reachability::Unreachable;
@@ -652,6 +733,7 @@ impl Shared {
         client: &JellyfinClient,
         check: &AtomicU8,
     ) {
+        let _unfinished = CheckGuard(check);
         match client.current_user().await {
             Ok(user) => {
                 check.store(CHECKED, Ordering::Release);
@@ -726,6 +808,7 @@ impl Shared {
 async fn follow(
     shared: Weak<Shared>,
     server: ServerRef,
+    generation: u64,
     mut status: watch::Receiver<RoamingStatus>,
     identity: JellyfinIdentity,
 ) {
@@ -734,7 +817,7 @@ async fn follow(
         let Some(app) = shared.upgrade() else {
             return;
         };
-        app.apply_roaming(&server, &current, identity.version());
+        app.apply_roaming(&server, generation, &current, identity.version());
         drop(app);
         if status.changed().await.is_err() {
             return;
@@ -975,5 +1058,89 @@ mod tests {
         assert!(status.signed_in);
         assert_eq!(status.reachability, Reachability::Unknown);
         assert_eq!(status.user.unwrap().name, "Example User");
+    }
+
+    fn shared_with(servers: Vec<SavedServer>) -> Arc<Shared> {
+        Arc::new(Shared::new(
+            Arc::new(RequestLog::default()),
+            None,
+            ClientIdentity::current("Test", "device"),
+            servers,
+        ))
+    }
+
+    fn reachable_at(position: u8) -> RoamingStatus {
+        RoamingStatus {
+            reachability: Reachability::Reachable,
+            position: Some(position),
+            different_server: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_provider_is_built_from_the_saved_list_as_it_is_now() {
+        let shared = shared_with(vec![saved("1", "a")]);
+        let server = ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1"));
+        let first = shared.provider(&server).await.unwrap();
+        assert!(Arc::ptr_eq(
+            &first,
+            &shared.provider(&server).await.unwrap()
+        ));
+        let old = lock(&shared.links)[&server].generation;
+
+        // A sign-in adds an address: the next caller gets a provider over both, whatever list it read earlier.
+        shared
+            .commit(|servers| {
+                servers[0].addresses.push(ServerAddress {
+                    url: "https://media.example.com".into(),
+                    plain_http_confirmed: false,
+                });
+            })
+            .unwrap();
+        let second = shared.provider(&server).await.unwrap();
+        assert!(!Arc::ptr_eq(&first, &second));
+        let links = lock(&shared.links);
+        assert_eq!(links[&server].addresses.len(), 2);
+        let new = links[&server].generation;
+        drop(links);
+
+        // The replaced provider's status no longer reaches the capabilities state; the current one's does.
+        shared.apply_roaming(&server, old, &reachable_at(1), None);
+        let status = shared.capabilities.borrow().servers[0].clone();
+        assert_eq!(status.reachability, Reachability::Unknown);
+        shared.apply_roaming(&server, new, &reachable_at(2), Some("12.2.0".into()));
+        let status = shared.capabilities.borrow().servers[0].clone();
+        assert_eq!(status.reachability, Reachability::Reachable);
+        assert_eq!(status.address, Some(2));
+        assert_eq!(status.version.as_deref(), Some("12.2.0"));
+    }
+
+    #[tokio::test]
+    async fn a_removed_server_gets_no_provider() {
+        let shared = shared_with(Vec::new());
+        let server = ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1"));
+        assert!(matches!(
+            shared.provider(&server).await,
+            Err(LinkError::Removed)
+        ));
+    }
+
+    #[test]
+    fn a_provider_needs_the_runtime() {
+        let shared = shared_with(vec![saved("1", "a")]);
+        let server = ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1"));
+        // Polled outside tokio: an error, not a panic.
+        let result = poll_once(shared.provider(&server));
+        assert!(matches!(result, Err(LinkError::NoRuntime)));
+    }
+
+    /// Polls a future that completes without waiting, on no runtime.
+    fn poll_once<F: std::future::Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        match future.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(output) => output,
+            std::task::Poll::Pending => panic!("the future waited"),
+        }
     }
 }

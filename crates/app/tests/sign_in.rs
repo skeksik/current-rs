@@ -188,10 +188,12 @@ async fn start(id: &str) -> (Arc<Server>, String) {
 struct Endpoint {
     /// Answers the identity probe with this server id instead of the server's own: another server at this address.
     id: Mutex<Option<String>>,
-    /// Closes every connection without an answer.
+    /// Reads each request, records it and closes the connection without an answer.
     down: AtomicBool,
     /// Reads requests and never answers.
     hang: AtomicBool,
+    /// Never answers `/Users/Me`.
+    hang_me: AtomicBool,
     received: Mutex<Vec<Received>>,
 }
 
@@ -215,18 +217,20 @@ async fn listen(server: &Arc<Server>) -> (Arc<Endpoint>, String) {
     let at = endpoint.clone();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
-            if at.down.load(Ordering::SeqCst) {
-                continue;
-            }
             let state = state.clone();
             let at = at.clone();
             tokio::spawn(async move {
                 let Some(received) = read_request(&mut socket).await else {
                     return;
                 };
-                state.received.lock().unwrap().push(received.clone());
                 at.received.lock().unwrap().push(received.clone());
-                if at.hang.load(Ordering::SeqCst) {
+                if at.down.load(Ordering::SeqCst) {
+                    return;
+                }
+                state.received.lock().unwrap().push(received.clone());
+                if at.hang.load(Ordering::SeqCst)
+                    || (received.path == "/Users/Me" && at.hang_me.load(Ordering::SeqCst))
+                {
                     std::future::pending::<()>().await;
                 }
                 if received.path == "/Sessions/Logout" {
@@ -1238,8 +1242,12 @@ async fn the_status_follows_reachability_and_the_user_is_checked_once_reached() 
 
     // Down at the start: signed in, unreachable, the user not confirmed (no permissions known yet).
     first_at.down.store(true, Ordering::SeqCst);
+    let sent = first_at.with_token();
     let app = open(temp.path(), &secrets);
     app.restore_sessions().await;
+    // The probes reached the address but failed, so no request carried the token.
+    assert!(first_at.received.lock().unwrap().len() > sent);
+    assert_eq!(first_at.with_token(), sent);
     let status = app.capabilities().borrow().servers[0].clone();
     assert!(status.signed_in);
     assert_eq!(status.reachability, Reachability::Unreachable);
@@ -1318,4 +1326,79 @@ async fn signing_in_again_waits_for_an_address_in_signing_in_and_can_be_cancelle
         .collect();
     assert_eq!(paths, ["/System/Info/Public"]);
     drop(server);
+}
+
+#[tokio::test]
+async fn a_cancelled_restore_checks_the_user_again_later() {
+    let (_server, [(first_at, first), _]) = two_addresses().await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &first).await;
+    drop(app);
+
+    // The restore is dropped while `/Users/Me` hangs.
+    first_at.hang_me.store(true, Ordering::SeqCst);
+    let app = open(temp.path(), &secrets);
+    let cancelled = tokio::time::timeout(Duration::from_millis(300), app.restore_sessions()).await;
+    assert!(cancelled.is_err());
+    assert!(app.jellyfin(&jellyfin("1")).is_some());
+    let me = || {
+        first_at
+            .received
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.path == "/Users/Me")
+            .count()
+    };
+    let before = me();
+
+    // Running restore again checks the user that was never confirmed.
+    first_at.hang_me.store(false, Ordering::SeqCst);
+    app.restore_sessions().await;
+    eventually(|| {
+        app.capabilities().borrow().servers[0]
+            .user
+            .as_ref()
+            .is_some_and(|user| user.has_permission(&Permission::ADMIN))
+    })
+    .await;
+    assert_eq!(me(), before + 1);
+}
+
+#[tokio::test]
+async fn a_sign_in_that_adds_an_address_rebuilds_the_provider_and_the_status_follows_it() {
+    let (_server, [(first_at, first), (second_at, second)]) = two_addresses().await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &first).await;
+    eventually(|| app.capabilities().borrow().servers[0].address == Some(1)).await;
+
+    // Setup finds the same server at a second address; signing in there adds it to the saved server.
+    signed_in_with_password(&app, &second).await;
+    let saved = app.servers();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].addresses.len(), 2);
+    let client = app.jellyfin(&jellyfin("1")).unwrap();
+
+    // The session goes over both addresses: with the first one down, a network change moves it to the second, and the status
+    // follows the new provider.
+    first_at.down.store(true, Ordering::SeqCst);
+    let sent = first_at.with_token();
+    app.network_changed(network("away"));
+    assert_eq!(client.current_user().await.unwrap().name, "Example User");
+    eventually(|| {
+        let status = app.capabilities().borrow().servers[0].clone();
+        status.reachability == Reachability::Reachable && status.address == Some(2)
+    })
+    .await;
+    assert_eq!(first_at.with_token(), sent);
+    assert!(second_at.with_token() > 0);
+
+    // A restore now (its list is the current one) keeps the same provider: the status stays on address 2.
+    app.restore_sessions().await;
+    settle().await;
+    assert_eq!(app.capabilities().borrow().servers[0].address, Some(2));
 }

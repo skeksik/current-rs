@@ -141,7 +141,14 @@ built now (manager, 2026-10-22).
     that selected it, and during a race after a failure or a network change it serves none (ADR 0014, "Implementation"). Every
     request with a token or a password goes through it and waits for that check. Tested: an address answering with another
     server's id never gets the token, at restore or after a network change mid-session. No explicit probe is left in restore or
-    sign-in-again.
+    sign-in-again. **Known window:** a request that took its address just before the platform reported a network change still
+    goes to that address, with the token, after the device has moved to the new network. The identity check cannot close it, and
+    it is no protection against an attacker anyway (it catches mistakes; only TLS proves who answers, ADR 0014).
+  - The provider is always built from the saved list as it is at that moment, never from a caller's older copy. It is built on
+    the blocking pool, because each address sets up TLS. A replaced provider's status no longer reaches the capabilities state:
+    each provider has a generation, checked under the lock that guards the replacement.
+  - A user check that does not finish (a restore dropped mid-request, say) goes back to "unchecked", so the next time the server
+    is reached, or the next restore, checks again.
   - **The capabilities state follows the provider:** a task per provider copies its status into the server's `ServerStatus`:
     reachability and the position of the address in use (`address`), never the address itself. A provider that has not tried
     yet leaves the status as it is, so a sign-in that just reached the server shows it reachable. The version comes from the
