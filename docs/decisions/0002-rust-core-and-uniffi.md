@@ -55,7 +55,7 @@ comment saying why. (Narrowed by ADR 0004: UniFFI's generated code compiles unde
 | Errors | thiserror | MIT/Apache-2.0 |
 | Logging | tracing | MIT |
 | Cache | rusqlite with bundled SQLite (SQLite is public domain) | MIT |
-| Secrets | keyring 4 with its per-platform stores (Windows Credential Manager, Apple Keychain, Secret Service, Android) | MIT/Apache-2.0 |
+| Secrets | keyring 4 with its per-platform stores (Windows Credential Manager, Apple Keychain, Secret Service, Android); since v4 that is keyring-core plus one store crate per platform (ADR 0013) | MIT/Apache-2.0 |
 | Stash GraphQL | graphql_client (cynic is MPL-2.0) | MIT/Apache-2.0 |
 | URLs, ids, time | url, uuid, time | MIT/Apache-2.0 |
 
