@@ -1,0 +1,5 @@
+# Exact version on purpose: change it only in its own PR, with the owner's approval.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

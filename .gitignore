@@ -1,0 +1,11 @@
+/target/
+.idea/
+.vscode/
+.DS_Store
+.claude/settings.local.json
+
+# Local secrets and signing material
+.env
+.env.*
+*.jks
+*.keystore
