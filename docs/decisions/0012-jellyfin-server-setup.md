@@ -36,7 +36,8 @@ end; "Jellyfin" means the server at tag `v12.2`.
 ## Decision
 - **Parsing** (`current_jellyfin::parse_address`): trim; only http and https; no user name or password in an address; a bare IPv6
   literal gets brackets. Names become punycode through `url` (the typed text stays what the UI shows). IPv6 zone ids (`fe80::1%eth0`)
-  are not part of a URL in the WHATWG URL Standard that `url` follows, so they are refused. Query and fragment are dropped, the
+  are not part of a URL in the WHATWG URL Standard that `url` follows, so they are refused; a link-local IPv6 address without one
+  is accepted but usually unreachable, and link-local addresses are not supported (ADR 0014). Query and fragment are dropped, the
   path is the base path without trailing slashes, and a pasted web client URL is cut before its last `web` segment (a server whose
   base path is `/web` itself keeps it when its own web client URL, `/web/web/...`, is pasted).
 - **Candidates**, tried in order until a Jellyfin server answers:
