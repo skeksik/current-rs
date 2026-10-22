@@ -1,22 +1,29 @@
 //! The core's composition root and the state objects the app shells render (ADR 0002, ADR 0004).
 //!
 //! [`App`] is created once per process. It owns what every feature shares: the request log, the capabilities state and, when opened
-//! on a data folder, the settings, the secrets and the device id (ADR 0013). Server setup ([`AddServer`]) builds on it; sign-in (M1)
-//! adds to it. The crate holds no async runtime: `current-ffi` and the Linux app bring their own.
+//! on a data folder, the settings, the secrets and the device id (ADR 0013). Server setup ([`AddServer`]) finds a server; signing in
+//! ([`SignIn`]) saves it with its user, and the sessions are restored at the next start (ADR 0015). The crate holds no async runtime:
+//! `current-ffi` and the Linux app bring their own, and its async methods expect tokio's.
 
 mod add_server;
 mod list;
+mod session;
+mod sign_in;
 
 use std::path::Path;
 use std::sync::Arc;
 
-use current_model::Capabilities;
-use current_net::RequestLog;
+use current_jellyfin::{AuthError, ClientIdentity, JellyfinClient, platform_name};
+use current_model::{Capabilities, SavedServer, ServerRef};
+use current_net::{NetError, RequestLog};
 use current_store::{DeviceId, LoadReport, Secrets, SettingsStore, StoreError};
 use tokio::sync::watch;
 
 pub use add_server::{AddServer, AddServerState, NewServer};
 pub use list::{ListSubscription, ObservableList, VectorDiff};
+pub use sign_in::{SignIn, SignInError, SignInState};
+
+use session::{Shared, Storage, Target};
 
 /// What the about and diagnostics screens show about the core.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,19 +33,19 @@ pub struct AppInfo {
 }
 
 /// The core: one per process.
-#[derive(Debug)]
 pub struct App {
-    request_log: Arc<RequestLog>,
-    capabilities: watch::Sender<Capabilities>,
-    storage: Option<Storage>,
+    shared: Arc<Shared>,
+    device_id: Option<DeviceId>,
 }
 
-/// What an app opened on a data folder keeps between runs.
-#[derive(Debug)]
-struct Storage {
-    settings: SettingsStore,
-    secrets: Arc<dyn Secrets>,
-    device_id: DeviceId,
+impl std::fmt::Debug for App {
+    /// Leaves out the device name (often the computer's name) and the addresses of saved servers.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("stored", &self.shared.storage.is_some())
+            .field("servers", &self.shared.servers().len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for App {
@@ -48,48 +55,63 @@ impl Default for App {
 }
 
 impl App {
-    /// A core with no servers configured and nothing stored: empty capabilities and an empty request log. For tests, and for the
-    /// shells until they pass a data folder to [`App::open`].
+    /// A core with no servers configured and nothing stored: empty capabilities and an empty request log. Sign-ins work for the
+    /// run, under a device id made for it. For tests, and for the shells until they pass a data folder to [`App::open`].
     pub fn new() -> Self {
+        // A random id for this run only. The OS random number generator failing is not worth failing over here: the fallback
+        // still names a device, and nothing is stored under it.
+        let device_id = DeviceId::generate()
+            .map(|id| id.to_string())
+            .unwrap_or_else(|_| "current-unsaved".to_owned());
         Self {
-            request_log: Arc::new(RequestLog::default()),
-            capabilities: watch::Sender::new(Capabilities::default()),
-            storage: None,
+            shared: Arc::new(Shared::new(
+                Arc::new(RequestLog::default()),
+                None,
+                ClientIdentity::current(platform_name(), &device_id),
+                Vec::new(),
+            )),
+            device_id: None,
         }
     }
 
-    /// A core on the data folder the UI passes in (ADR 0013): loads the settings, creating them and the device id on first start.
-    /// `secrets` is the OS keyring in the apps and memory in tests. Blocking file I/O: call it at start, off the async runtime.
+    /// A core on the data folder the UI passes in (ADR 0013): loads the settings, creating them and the device id on first start,
+    /// and the saved servers, each signed in if it has an active user until [`App::restore_sessions`] checks. `secrets` is the OS
+    /// keyring in the apps and memory in tests. `device_name` is what Jellyfin shows for this device: the UI passes the platform's
+    /// name for the computer (ADR 0015); an empty one becomes the platform's name. Blocking file I/O: call it at start, off the
+    /// async runtime.
     pub fn open(
         data_dir: &Path,
         secrets: Arc<dyn Secrets>,
+        device_name: &str,
     ) -> Result<(Self, LoadReport), StoreError> {
         let (settings, report) = SettingsStore::open(data_dir)?;
-        let device_id = settings.get().device_id;
+        let stored = settings.get();
+        let identity = ClientIdentity::current(device_name, stored.device_id.as_str());
         let app = Self {
-            storage: Some(Storage {
-                settings,
-                secrets,
-                device_id,
-            }),
-            ..Self::new()
+            shared: Arc::new(Shared::new(
+                Arc::new(RequestLog::default()),
+                Some(Storage { settings, secrets }),
+                identity,
+                stored.servers,
+            )),
+            device_id: Some(stored.device_id),
         };
         Ok((app, report))
     }
 
     /// This install's id, sent to servers as Jellyfin's `DeviceId`. `None` when nothing is stored ([`App::new`]).
     pub fn device_id(&self) -> Option<&DeviceId> {
-        self.storage.as_ref().map(|s| &s.device_id)
+        self.device_id.as_ref()
     }
 
     /// The settings store. `None` when nothing is stored ([`App::new`]).
     pub fn settings(&self) -> Option<&SettingsStore> {
-        self.storage.as_ref().map(|s| &s.settings)
+        self.shared.storage.as_ref().map(|s| &s.settings)
     }
 
     /// Where secrets are kept. `None` when nothing is stored ([`App::new`]).
     pub fn secrets(&self) -> Option<&Arc<dyn Secrets>> {
-        self.storage.as_ref().map(|s| &s.secrets)
+        self.shared.storage.as_ref().map(|s| &s.secrets)
     }
 
     pub fn info(&self) -> AppInfo {
@@ -100,17 +122,17 @@ impl App {
 
     /// The log every server client writes to.
     pub fn request_log(&self) -> &Arc<RequestLog> {
-        &self.request_log
+        &self.shared.request_log
     }
 
-    /// The capabilities state: the current value now, and every change after. Empty until server setup exists (M1).
+    /// The capabilities state: the current value now, and every change after. One status per saved server.
     pub fn capabilities(&self) -> watch::Receiver<Capabilities> {
-        self.capabilities.subscribe()
+        self.shared.capabilities.subscribe()
     }
 
     /// Replaces the capabilities state. Subscribers see the new value; an equal value notifies no one.
     pub fn set_capabilities(&self, capabilities: Capabilities) {
-        self.capabilities.send_if_modified(|current| {
+        self.shared.capabilities.send_if_modified(|current| {
             if *current == capabilities {
                 false
             } else {
@@ -120,14 +142,67 @@ impl App {
         });
     }
 
+    /// The saved servers, in the order they were added.
+    pub fn servers(&self) -> Vec<SavedServer> {
+        self.shared.servers()
+    }
+
+    /// The signed-in client of a server, for the features that browse and play.
+    pub fn jellyfin(&self, server: &ServerRef) -> Option<Arc<JellyfinClient>> {
+        self.shared.session(server)
+    }
+
     /// A new "add a server" flow. Its probes go to the shared request log.
     pub fn add_server(&self) -> AddServer {
-        AddServer::new(self.request_log.clone())
+        AddServer::new(self.shared.request_log.clone())
+    }
+
+    /// A sign-in to the server [`AddServer`] found (its `Ready` state). Success saves the server, or adds the address and user to
+    /// the saved server with the same id. Its requests are logged as `jellyfin/setup`.
+    pub fn sign_in(&self, server: NewServer) -> Result<SignIn, NetError> {
+        let setup = ServerRef::new(
+            current_model::ServiceType::JELLYFIN,
+            current_model::ServerKey::new("setup"),
+        );
+        let client = self.shared.client(setup, &server.address)?;
+        let target = Target::New {
+            id: server.info.id,
+            name: server.info.name,
+            address: server.address,
+            version: server.info.version,
+        };
+        Ok(SignIn::new(self.shared.clone(), target, client))
+    }
+
+    /// A sign-in to a saved server, at its first address. `None` if no such server is saved.
+    pub fn sign_in_again(&self, server: &ServerRef) -> Option<Result<SignIn, NetError>> {
+        let saved = self.shared.saved(server)?;
+        let address = saved.addresses.first()?;
+        Some(
+            self.shared.client(server.clone(), address).map(|client| {
+                SignIn::new(self.shared.clone(), Target::Saved(server.clone()), client)
+            }),
+        )
+    }
+
+    /// Checks every saved session, all servers at once; the shell runs it in the background after [`App::open`], and may run it
+    /// again (for example when the network returns) for servers without a live session. For each server with an active user: the
+    /// token from the keyring, then the identity probe on its address (the token goes only to the same server, ADR 0014), then the
+    /// current user. The capabilities state follows: signed in with the user and version, signed out when the token is gone or the
+    /// server answers 401, unreachable (still signed in) when the server does not answer.
+    pub async fn restore_sessions(&self) {
+        self.shared.restore_all().await;
+    }
+
+    /// Signs out of a server: tells the server, then deletes the token and the active user whatever it answered. Returns the
+    /// server's answer, for the UI to mention that the server could not be told; the app is signed out either way.
+    pub async fn sign_out(&self, server: &ServerRef) -> Result<(), AuthError> {
+        self.shared.sign_out(server).await
     }
 
     /// The request log as text, oldest first: what "copy diagnostics" puts on the clipboard. Redacted by construction (ADR 0006).
     pub fn diagnostics_text(&self) -> String {
-        self.request_log.to_text()
+        self.shared.request_log.to_text()
     }
 }
 
@@ -198,14 +273,14 @@ mod tests {
     fn open_loads_the_settings_and_keeps_the_device_id() {
         let temp = tempfile::tempdir().unwrap();
         let secrets: Arc<dyn Secrets> = Arc::new(MemorySecrets::new());
-        let (app, report) = App::open(temp.path(), secrets.clone()).unwrap();
+        let (app, report) = App::open(temp.path(), secrets.clone(), "Office PC").unwrap();
         assert_eq!(report, LoadReport::Created);
         let id = app.device_id().unwrap().clone();
         assert_eq!(app.settings().unwrap().get().device_id, id);
         assert!(app.secrets().is_some());
         drop(app);
 
-        let (app, report) = App::open(temp.path(), secrets).unwrap();
+        let (app, report) = App::open(temp.path(), secrets, "Office PC").unwrap();
         assert_eq!(report, LoadReport::Loaded);
         assert_eq!(app.device_id(), Some(&id));
     }
