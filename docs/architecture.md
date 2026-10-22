@@ -70,4 +70,4 @@ Player UI (WinUI | SwiftUI | GTK)  ->  playback controller (current-playback)  -
 |---|---|---|
 | Windows | libmpv (our LGPL-2.1 build), `vo=gpu-next`, D3D11 | `SwapChainPanel` (D2) |
 | macOS | AVPlayer (ADR 0008), with our own subtitle layer: libass, PGS/VobSub bitmaps (ADR 0010); a fallback engine only for local playback | `AVPlayerLayer` plus a subtitle `CALayer` |
-| Linux | libmpv | `GtkGLArea` (D8) |
+| Linux | libmpv (system library in development; our LGPL-2.1 build when distributed), OpenGL render API (`vo=libmpv`), SDR (ADR 0011) | `GtkGLArea` under GTK controls in a `GtkOverlay` |
