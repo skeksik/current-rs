@@ -236,7 +236,9 @@ impl ServerClient {
             }
             Err(error) => Outcome::Error(error.kind()),
         };
-        self.log(request, selected.position(), outcome, started);
+        // An attempt that never started went to no address.
+        let address = if expired { None } else { selected.position() };
+        self.log(request, address, outcome, started);
         let reported = match &result {
             Ok(_) => AddressOutcome::Ok,
             Err(error) => outcome_of(error),
@@ -571,6 +573,12 @@ mod tests {
             [(Some(1), AddressOutcome::Timeout)]
         );
         assert_eq!(second_accepted.load(Ordering::SeqCst), 0);
+        // Nothing was sent to address 2, so no log line names it.
+        assert!(
+            !client.log.to_text().contains("address 2"),
+            "{}",
+            client.log.to_text()
+        );
     }
 
     #[tokio::test]

@@ -620,6 +620,12 @@ impl Driver {
                 // checks identity again anyway.
                 self.different.clear();
                 self.publish_different();
+                // `network_changed` begins its race before this report arrives, so a race for the current epoch may have started
+                // with the previous network's cache winner and marks: start it again with this network's.
+                let epoch = self.shared.state.borrow().epoch;
+                if self.race.as_ref().is_some_and(|race| race.epoch == epoch) {
+                    self.race = None;
+                }
             }
             Command::Used => {
                 if self.timer.is_none() && self.race.is_none() {
@@ -1375,6 +1381,29 @@ mod tests {
         let _ = roaming.commands.send(Command::Network(network("away")));
         assert_eq!(position(&roaming).await, Some(1));
         assert_eq!(script.probed(), [1]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_race_begun_before_the_new_facts_arrive_starts_again_with_them() {
+        let script = Script::new(&[Probe::Fail(1), Probe::Pass(50)]);
+        let roaming = roaming(&script);
+        roaming.network_changed(&network("home"));
+        assert_eq!(position(&roaming).await, Some(2));
+        script.set(1, Probe::Pass(50));
+
+        // What `network_changed` does, with the driver waking in between: the race starts with home's cached winner first.
+        roaming.shared.begin_race(None);
+        let _ = roaming.commands.send(Command::Wake);
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(script.probed().last(), Some(&2));
+        *roaming.shared.facts.lock().unwrap() = Some(network("away"));
+        let _ = roaming.commands.send(Command::Network(network("away")));
+
+        // Away has no cached winner: the user's order, address 1 first.
+        assert_eq!(position(&roaming).await, Some(1));
+        assert_eq!(script.probed().last(), Some(&1));
     }
 
     #[tokio::test(start_paused = true)]
