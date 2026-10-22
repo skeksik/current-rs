@@ -99,7 +99,8 @@ Measured on `windows-latest` on 2026-10-22, run 39815666606:
 - **Cold** (no cache): 29 min for the job (28 min again in run 39820199961); the build step 27 min (1637 s). Per stage: FFmpeg 984 s, shaderc with glslang and
   SPIRV-Tools 300 s, dav1d 102 s, HarfBuzz 71 s, mpv 43 s, SPIRV-Cross 34 s, libplacebo 21 s, pkgconf 19 s, libass 17 s, the rest
   under 15 s each. The check step takes a few seconds.
-- **Cached** (same sources, scripts and workflow): CACHED_PLACEHOLDER
+- **Cached** (same sources, scripts and workflow, run 39824438208): 1 min 14 s for the job; the build step finds every stage
+  stamped and only the checks, the probe and the upload run.
 
 The build cache is keyed on `build/mpv-windows/**` and the workflow file, so any change to a script or a pinned source rebuilds
 everything; downloads are cached separately, keyed on `sources.toml`.
