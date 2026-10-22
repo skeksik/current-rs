@@ -29,26 +29,30 @@ finally {
     Pop-Location
 }
 
-# The licence files of the Microsoft runtimes in the app (docs/notes/windows-shell.md, ADR 0003), shipped next to it in licences\.
+# The licence and notice files of the runtimes in the app (docs/notes/windows-shell.md, ADR 0003), shipped next to it in licences\:
+# those of every Windows App SDK component and of WebView2 as restored, and of the .NET runtime pack.
 $packages = (dotnet nuget locals global-packages --list) -replace '^global-packages:\s*', ''
 $runtime = (Get-Content (Join-Path $out 'Current.runtimeconfig.json') | ConvertFrom-Json).runtimeOptions.includedFrameworks |
     Where-Object name -eq 'Microsoft.NETCore.App'
-$appSdk = ([xml](Get-Content (Join-Path $PSScriptRoot 'Current.Shell/Current.Shell.csproj') -Raw)).Project.ItemGroup.PackageReference |
-    Where-Object Include -eq 'Microsoft.WindowsAppSDK'
+$assets = Get-Content (Join-Path $PSScriptRoot 'Current.Shell/obj/project.assets.json') -Raw | ConvertFrom-Json
+$restored = $assets.libraries.PSObject.Properties.Name |
+    Where-Object { $_ -like 'Microsoft.WindowsAppSDK.*/*' -or $_ -like 'Microsoft.Web.WebView2/*' }
 $licences = Join-Path $out 'licences'
 New-Item -ItemType Directory -Force $licences | Out-Null
-$copies = @(
-    @("microsoft.windowsappsdk/$($appSdk.Version)/license.txt", 'WindowsAppSDK-license.txt'),
-    @("microsoft.windowsappsdk/$($appSdk.Version)/NOTICE.txt", 'WindowsAppSDK-NOTICE.txt'),
-    @("microsoft.netcore.app.runtime.win-x64/$($runtime.version)/LICENSE.TXT", 'dotnet-LICENSE.txt'),
-    @("microsoft.netcore.app.runtime.win-x64/$($runtime.version)/THIRD-PARTY-NOTICES.TXT", 'dotnet-THIRD-PARTY-NOTICES.txt')
-)
-foreach ($copy in $copies) {
-    Copy-Item (Join-Path $packages $copy[0]) (Join-Path $licences $copy[1])
+foreach ($library in $restored) {
+    $name, $libraryVersion = $library -split '/'
+    $folder = Join-Path $packages "$($name.ToLowerInvariant())/$libraryVersion"
+    $files = Get-ChildItem $folder -File | Where-Object Name -match '^(license|notice)\.txt$'
+    if (-not $files) { throw "$library has no licence or notice file" }
+    foreach ($file in $files) { Copy-Item $file.FullName (Join-Path $licences "$name-$libraryVersion-$($file.Name)") }
 }
+$dotnet = Join-Path $packages "microsoft.netcore.app.runtime.win-x64/$($runtime.version)"
+Copy-Item (Join-Path $dotnet 'LICENSE.TXT') (Join-Path $licences "Microsoft.NETCore.App-$($runtime.version)-LICENSE.txt")
+Copy-Item (Join-Path $dotnet 'THIRD-PARTY-NOTICES.TXT') (Join-Path $licences "Microsoft.NETCore.App-$($runtime.version)-THIRD-PARTY-NOTICES.txt")
+Write-Host "Runtime packages: $($restored -join ', '); Microsoft.NETCore.App $($runtime.version)"
 
 # What ships: every file with its size, for the licence list in docs/notes/windows-shell.md.
 Get-ChildItem $out -Recurse -File | Sort-Object FullName |
     ForEach-Object { '{0,12}  {1}' -f $_.Length, $_.FullName.Substring($out.Length + 1) } |
     Tee-Object -FilePath (Join-Path $PSScriptRoot 'out/files.txt')
-Write-Host "Published Current $Version to $out (.NET $($runtime.version), Windows App SDK $($appSdk.Version))"
+Write-Host "Published Current $Version to $out"
