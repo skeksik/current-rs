@@ -1,12 +1,14 @@
 //! Probing an address: is a Jellyfin server there, which one, and can Current use it (ADR 0012).
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use current_model::{PublicServerInfo, ServerAddress, ServerId, ServerRef};
 use current_net::{
-    ClientConfig, FixedAddress, Location, NetError, Request, RequestLog, ServerClient, Transport,
-    Url,
+    ClientConfig, FixedAddress, IdentityCheck, IdentityProbe, Location, NetError, Request,
+    RequestLog, ServerClient, Transport, Url,
 };
 
 use crate::address::{AddressError, parse_address};
@@ -219,15 +221,10 @@ impl Prober {
                 self.log.clone(),
                 &self.config,
             )?;
-            let response = client.send(Request::get(INFO_PATH)).await?;
-            let answered = response.url.url();
-            if let Some(address) = strip_info_path(answered) {
-                let info = response.json::<wire::PublicSystemInfo>()?;
-                return found(info, address);
-            }
-            match web_client_base(answered) {
-                Some(next) if next != base => base = next,
-                _ => break,
+            match ask(&client).await? {
+                Answer::Found(found) => return Ok(found),
+                Answer::WebClient(next) if next != base => base = next,
+                Answer::WebClient(_) => break,
             }
         }
         Err(ProbeError::NotJellyfin)
@@ -248,6 +245,58 @@ impl Prober {
         } else {
             Err(ProbeError::DifferentServer)
         }
+    }
+}
+
+/// What an address answered to the info request.
+enum Answer {
+    Found(FoundServer),
+    /// The server sent the request to its web client: its base path is this one.
+    WebClient(Url),
+}
+
+/// Sends the info request on `client` and reads the answer.
+async fn ask(client: &ServerClient) -> Result<Answer, ProbeError> {
+    let response = client.send(Request::get(INFO_PATH)).await?;
+    let answered = response.url.url();
+    if let Some(address) = strip_info_path(answered) {
+        let info = response.json::<wire::PublicSystemInfo>()?;
+        return found(info, address).map(Answer::Found);
+    }
+    web_client_base(answered)
+        .map(Answer::WebClient)
+        .ok_or(ProbeError::NotJellyfin)
+}
+
+/// The identity check for roaming between a server's addresses (ADR 0014): the address must answer as a usable Jellyfin server with
+/// the expected id. Runs on `current-net`'s probe client for the address, which carries no credentials and is reused between races.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JellyfinIdentity {
+    expected: ServerId,
+}
+
+impl JellyfinIdentity {
+    pub fn new(expected: ServerId) -> Self {
+        Self { expected }
+    }
+
+    /// Checks the address `client` is bound to. A server that sends the request to its web client fails: a stored address is
+    /// already the base path, unlike what a user types in setup.
+    pub async fn check_client(&self, client: &ServerClient) -> IdentityCheck {
+        match ask(client).await {
+            Ok(Answer::Found(found)) if found.info.id == self.expected => IdentityCheck::Passed,
+            Ok(Answer::Found(_)) => IdentityCheck::DifferentServer,
+            Ok(Answer::WebClient(_)) | Err(_) => IdentityCheck::Failed,
+        }
+    }
+}
+
+impl IdentityProbe for JellyfinIdentity {
+    fn check<'a>(
+        &'a self,
+        client: &'a ServerClient,
+    ) -> Pin<Box<dyn Future<Output = IdentityCheck> + Send + 'a>> {
+        Box::pin(self.check_client(client))
     }
 }
 

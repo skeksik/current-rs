@@ -26,7 +26,6 @@ use url::Url;
 
 use crate::address::{AddressOutcome, AddressProvider, ProbeAddress, Selected};
 use crate::client::{ClientConfig, ServerClient};
-use crate::error::NetError;
 use crate::log::RequestLog;
 use crate::scope::transport;
 
@@ -37,14 +36,14 @@ pub use tokio::runtime::Handle as RuntimeHandle;
 const CACHED_NETWORKS: usize = 16;
 
 /// What an identity probe found at an address.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IdentityCheck {
     /// The expected server answered.
     Passed,
     /// Another server answered: the address is skipped until the user edits it.
     DifferentServer,
-    /// No usable answer.
-    Failed(NetError),
+    /// No usable answer. Why is in the request log.
+    Failed,
 }
 
 /// Checks that an address leads to the expected server; implemented by the service crates (Jellyfin compares its server id).
@@ -505,7 +504,7 @@ impl Race {
         self.running.spawn(async move {
             let check = match tokio::time::timeout(timeout, probe.check(&client)).await {
                 Ok(check) => check,
-                Err(_) => IdentityCheck::Failed(NetError::Timeout),
+                Err(_) => IdentityCheck::Failed,
             };
             (index, check)
         });
@@ -530,7 +529,7 @@ impl Race {
                     return Poll::Ready(RaceEvent::Different(index));
                 }
                 // A failed or panicked probe: the next starts at once once none runs.
-                Poll::Ready(Some(Ok((_, IdentityCheck::Failed(_))) | Err(_))) => {}
+                Poll::Ready(Some(Ok((_, IdentityCheck::Failed)) | Err(_))) => {}
                 Poll::Ready(None) if self.queue.is_empty() => {
                     return Poll::Ready(RaceEvent::Lost);
                 }
@@ -929,7 +928,7 @@ mod tests {
                     }
                     Probe::Fail(delay) => {
                         tokio::time::sleep(ms(delay)).await;
-                        IdentityCheck::Failed(NetError::Unreachable)
+                        IdentityCheck::Failed
                     }
                     Probe::Hang => std::future::pending().await,
                 }

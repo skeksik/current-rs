@@ -9,4 +9,4 @@ mod probe;
 mod wire;
 
 pub use address::{AddressError, DEFAULT_HTTP_PORT, DEFAULT_HTTPS_PORT, parse_address};
-pub use probe::{FoundServer, MINIMUM_VERSION, ProbeError, Prober, same_server};
+pub use probe::{FoundServer, JellyfinIdentity, MINIMUM_VERSION, ProbeError, Prober, same_server};
