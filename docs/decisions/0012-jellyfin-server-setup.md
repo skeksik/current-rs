@@ -66,11 +66,15 @@ end; "Jellyfin" means the server at tag `v12.2`.
   every candidate fails, the most telling error wins (Unavailable, then Redirected, Tls, NotJellyfin or Status, Timeout,
   Unreachable); `TooOld` and `SetupIncomplete` end the search, since a Jellyfin server answered. No error holds an address.
 - **Identity:** `ServerId` (model) is the server's `Id`, compared byte for byte; `same_server` compares two answers and
-  `probe_expecting` checks an address leads to a known server. The app's own `ServerKey` (ADR 0005) stays the identity in the app,
-  since a reinstall changes the server's id.
+  `probe_expecting` checks an address leads to a known server; it is the identity check roaming runs on every address (ADR 0014),
+  and credentials go only to addresses that passed it. Probes carry no credentials. The id is public, so it catches mistakes (another
+  server, a portal page), not attackers: only TLS proves who answers. The app's own `ServerKey` (ADR 0005) stays the identity in the
+  app, since a reinstall changes the server's id.
 - **https that fails:** when an https candidate fails its TLS handshake and plain http then answers, the result says so
   (`https_failed_tls`), so the UI can tell the user the server offers https with a certificate this device does not trust instead of
-  silently settling for http. Whether Current may trust a self-signed certificate is ADR 0014's question, for the owner.
+  silently settling for http. Certificates are checked against the OS trust store only (ADR 0006; the owner decided against
+  accepting self-signed certificates in M1, ADR 0014): a self-signed https server shows `Tls` with that hint, and on a local network
+  the user can use plain http under the rule below.
 - **Plain HTTP** (`current_net::transport`, service-agnostic so that roaming and the other services share it): https is silent.
   Plain http is silent to this device (127.0.0.0/8, `::1`, `localhost`, `*.localhost`) and the local network: private IPv4 (RFC
   1918), link-local (169.254.0.0/16, `fe80::/10`), IPv6 unique local (`fc00::/7`), IPv4-mapped forms of these, single-label names,
