@@ -23,8 +23,19 @@ allow = [
 confidence-threshold = 0.93
 # The list is the policy, not what is in use today.
 unused-allowed-license = "allow"
-# Exceptions (ADR 0003). UniFFI (MPL-2.0) is added here with UniFFI itself, crate by crate.
-exceptions = []
+# Exceptions (ADR 0003), crate by crate.
+exceptions = [
+    # UniFFI (MPL-2.0): the bridge to C# and Swift. uniffi_bindgen and uniffi_udl are reached only through the Swift generator tool
+    # (tools/uniffi-bindgen); the rest are built into current-ffi.
+    { allow = ["MPL-2.0"], crate = "uniffi" },
+    { allow = ["MPL-2.0"], crate = "uniffi_bindgen" },
+    { allow = ["MPL-2.0"], crate = "uniffi_core" },
+    { allow = ["MPL-2.0"], crate = "uniffi_internal_macros" },
+    { allow = ["MPL-2.0"], crate = "uniffi_macros" },
+    { allow = ["MPL-2.0"], crate = "uniffi_meta" },
+    { allow = ["MPL-2.0"], crate = "uniffi_pipeline" },
+    { allow = ["MPL-2.0"], crate = "uniffi_udl" },
+]
 
 # Our own crates are proprietary and unpublished (no licence field).
 [licenses.private]
