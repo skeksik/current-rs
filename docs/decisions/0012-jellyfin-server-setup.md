@@ -109,7 +109,8 @@ Current follows Chrome's split: silent for private addresses, one confirmation p
 - The https upgrade path is tested at the level of URL handling only: there is no TLS stand-in server in the tests.
 
 ## Sources (read 2026-10-22)
-- Jellyfin server, tag `v12.2` (commit ca0f16eb, 2026-10-05), https://github.com/jellyfin/jellyfin: `Jellyfin.Api/Controllers/SystemController.cs`,
+- Jellyfin server, tag `v12.2` (commit ca0f16eb, 2026-10-05), https://github.com/jellyfin/jellyfin:
+  `Jellyfin.Api/Controllers/SystemController.cs`,
   `Emby.Server.Implementations/SystemManager.cs`, `MediaBrowser.Model/System/PublicSystemInfo.cs`,
   `Emby.Server.Implementations/Devices/DeviceId.cs`, `Emby.Server.Implementations/ApplicationHost.cs` (`SystemId`, `FriendlyName`,
   `GetSmartApiUrl`), `MediaBrowser.Common/Net/NetworkConfiguration.cs`, `Jellyfin.Api/Middleware/BaseUrlRedirectionMiddleware.cs`,
