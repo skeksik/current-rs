@@ -255,6 +255,21 @@ async fn a_redirect_on_the_same_server_is_followed_with_credentials() {
     assert!(!log.to_text().contains(SECRET));
 }
 
+#[tokio::test]
+async fn a_response_tells_where_it_came_from_without_showing_it() {
+    let server = StandIn::start(Reply::Redirect(302, "/base/end?page=2".into())).await;
+    let log = Arc::new(RequestLog::default());
+    let response = ok(client(&server.address, &log, Duration::from_secs(5))
+        .send(Request::get("/start"))
+        .await);
+    // The final hop, as the caller would have built it: no credentials.
+    assert_eq!(response.url.url().path(), "/base/end");
+    assert_eq!(response.url.url().query(), Some("page=2"));
+    assert_eq!(response.url.url().host_str(), Some("127.0.0.1"));
+    assert_clean(&format!("{response:?}"), &server.address);
+    assert_clean(&log.to_text(), &server.address);
+}
+
 fn post() -> Request {
     ok(Request::post("/start").json(&serde_json::json!({ "a": 1 })))
 }

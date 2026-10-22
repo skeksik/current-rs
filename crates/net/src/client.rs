@@ -126,6 +126,9 @@ pub struct Response {
     pub status: u16,
     pub headers: HeaderMap,
     pub body: Vec<u8>,
+    /// Where the response came from: the request's address after any followed redirects, without the credentials `RequestAuth`
+    /// adds. Server setup reads it to adopt an http to https upgrade or find a base path. Redacted from Debug and never logged.
+    pub url: Location,
 }
 
 impl Response {
@@ -297,6 +300,7 @@ impl ServerClient {
                 status,
                 headers: response_headers,
                 body,
+                url: Location(url),
             });
         }
     }
