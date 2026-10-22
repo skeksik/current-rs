@@ -108,16 +108,21 @@ built now (manager, 2026-10-22).
   the session lasts for the run (ADR 0013).
 - **Before anything is sent:** an attempt fails at once with `Save(NewerVersion)` when the settings belong to a newer version (the
   sign-in could not be saved, and it would log out this device's earlier token on the server). For a saved server, each attempt
-  first probes its address with `probe_expecting` (ADR 0012), so no password and no Quick Connect request goes to an address that
-  does not answer as that server (ADR 0014; setup has just probed a new one). A sign-in whose `ServerId` differs from the expected
-  server's is not saved (`Probe(DifferentServer)`).
+  first waits (in `SigningIn`, up to 10 s, cancellable) until the server's address provider has selected an address that passed the
+  identity check (ADR 0014). It fails with `Probe(DifferentServer)` when none did but one answered as another server, else with
+  `Auth(Network(Unreachable))`. No password and no Quick Connect request can reach an unchecked address even without that wait: the
+  attempt's client goes through the same provider, which serves nothing before a passed check (see "Address"). Setup has just
+  probed a new server's one address. A sign-in whose `ServerId` differs from the expected server's is not saved
+  (`Probe(DifferentServer)`).
 - **Restore:** `App::open` loads the saved servers into the capabilities state, signed in where a user is active, reachability
-  unknown. The shell then runs `App::restore_sessions()` in the background; it checks every server at once (`JoinSet`): the token from
-  the keyring (none: signed out and the active user cleared; keyring unavailable: signed out for this run, the user kept); then the
-  identity probe on the first address (`probe_expecting`, ADR 0012), because the token goes only to an address that answers as the
-  same server (ADR 0014); then `GET /Users/Me`. Results: signed in with user, permissions and version; signed out on 401 (the 401
-  rule); unreachable but still signed in when the server does not answer or another server answers there (no token is sent then).
-  It may run again later for servers without a live session. Servers of other services are skipped.
+  unknown. The shell then runs `App::restore_sessions()` in the background. It gives every saved Jellyfin server its address
+  provider and checks every server at once (`JoinSet`): the token from the keyring (none: signed out and the active user cleared;
+  keyring unavailable: signed out for this run, the user kept); then the session is installed over the provider with the token;
+  then `GET /Users/Me`. There is no separate identity probe: `/Users/Me` is the first request with the token, and it waits for the
+  provider's race, whose identity check must pass first. Results: signed in with user and permissions; signed out on 401 (the 401
+  rule); still signed in and unreachable when no address answers as the server (no token is sent then). Such a session stays
+  installed, and its user is checked once its provider reaches the server. Running restore again checks sessions whose user is not
+  yet confirmed. Servers of other services are skipped. (Changed in wave 3: before, an unreachable server got no session.)
 - **Sign out:** `App::sign_out` first signs out on this device, under the session lock: the session, the active user and the stored
   token are gone, and the status shows it, before anything is sent. It then calls `POST /Sessions/Logout` (10 s timeout) with the
   token the old client still holds in memory, and returns the server's answer for the UI to mention. The user stays saved. A restore
@@ -126,10 +131,31 @@ built now (manager, 2026-10-22).
 - **Ordering:** saving a sign-in, signing out, the 401 rule and restoring each change a server's session under one async lock and
   check under it that the session or active user they act on is still current. Restore installs its client only if no sign-in or
   sign-out happened during its probe, and writes the status only while its session is current.
-- **Address:** each server uses `FixedAddress` with its first address, built in one place (`Shared::client`). Moving sessions onto
-  roaming (`App::jellyfin_addresses`, ADR 0014, merged in parallel) is left for wave 3: the provider list would move into the shared
-  state, the capabilities' reachability would follow each provider's status instead of restore's probe, and restore would need the
-  server's version from elsewhere. An explicit identity check stays before any credentialed request either way.
+- **Address** (wave 3, ADR 0014): each saved Jellyfin server has one `RoamingAddresses` over all its addresses with
+  `JellyfinIdentity` (its `ServerId`). It is kept in the shared state with the addresses it was built from, and it hears network
+  facts (`App::network_changed`, `App::returned_to_foreground`). Its session and its sign-ins use it. It is made when first needed
+  (restore, a sign-in, a sign-in-again attempt), because it needs the tokio runtime and `App::open` runs off it. It is made again
+  when the saved addresses or id change, for example a sign-in through setup that adds an address. A new server's sign-in itself
+  uses `FixedAddress` on the address setup just probed; the session saved from it uses the provider.
+  - **Credentials only to checked addresses:** the provider serves an address only once it passed the identity check in the race
+    that selected it, and during a race after a failure or a network change it serves none (ADR 0014, "Implementation"). Every
+    request with a token or a password goes through it and waits for that check. Tested: an address answering with another
+    server's id never gets the token, at restore or after a network change mid-session. No explicit probe is left in restore or
+    sign-in-again. **Known window:** a request that took its address just before the platform reported a network change still
+    goes to that address, with the token, after the device has moved to the new network. The identity check cannot close it, and
+    it is no protection against an attacker anyway (it catches mistakes; only TLS proves who answers, ADR 0014).
+  - The provider is always built from the saved list as it is at that moment, never from a caller's older copy. It is built on
+    the blocking pool, because each address sets up TLS. A replaced provider's status no longer reaches the capabilities state:
+    each provider has a generation, checked under the lock that guards the replacement.
+  - A user check that does not finish (a restore dropped mid-request, say) goes back to "unchecked", so the next time the server
+    is reached, or the next restore, checks again.
+  - **The capabilities state follows the provider:** a task per provider copies its status into the server's `ServerStatus`:
+    reachability and the position of the address in use (`address`), never the address itself. A provider that has not tried
+    yet leaves the status as it is, so a sign-in that just reached the server shows it reachable. The version comes from the
+    identity check's answer (`JellyfinIdentity::version()`, the last passed check's `Version`), and from setup for a new server.
+  - `App::jellyfin(server)` returns a restored session's client also while the server is unreachable; its requests fail fast
+    until the provider reaches the server.
+  - `App::saved_servers()` publishes the saved list on every change, for the bridge.
 - **Blocking work:** the settings file and the keyring are blocking (ADR 0013). `current-app`'s async methods run them on tokio's
   blocking pool (`spawn_blocking`); `App::open` stays a sync call the shell makes off the runtime, as before. The saved-server list
   and the settings file change together (`Shared::commit`, serialized by its own lock, which writes first and keeps the old list if
@@ -175,7 +201,10 @@ server's dashboard to its administrators, as every Jellyfin client's does; it ne
   dropped and riding out a 503; restore ok, revoked, unreachable and another server at the address; a 401 and a 403 mid-session; a
   late 401 on an old client of the same or another user; signing in again to an address that answers as another server; a sign-in
   reporting another server's id; settings from a newer version; sign out with the server up and gone, racing a new sign-in and racing a restore; no
-  keyring; settings round trip. None ran against a real Jellyfin server.
+  keyring; settings round trip. Roaming (wave 3): a two-address server restoring on address 2 when address 1 is down; an address
+  with another server's id never getting the token, at restore and after a network change mid-session; a network change racing
+  again with the session going on; the status following reachability and the user checked once the server is reached;
+  signing in again waiting in `SigningIn` and cancelled. None ran against a real Jellyfin server.
 
 ## Sources (read 2026-10-22)
 - Jellyfin server, tag `v12.2` (commit ca0f16eb, 2026-10-05), https://github.com/jellyfin/jellyfin:
