@@ -53,8 +53,8 @@ Each item starts with our own research (the server's API and source, the platfor
 recorded with sources and dates, and a decision record where it decides something.
 - [ ] Server setup: add a Jellyfin server by URL, check it is the same server on every address, warn about plain HTTP except locally
 - [ ] Several addresses per server with roaming (local and internet, the user's order)
-  - [x] Spike: research and design (ADR 0014, docs/notes/roaming.md; proposed, the owner decides TLS for self-signed servers and
-        tokio in `current-net`)
+  - [x] Spike: research and design (2026-10-22, PR 17, ADR 0014, docs/notes/roaming.md; OS trust only for
+        TLS in M1)
   - [ ] Implement `RoamingAddresses` in `current-net`, `NetworkFacts` from the Windows UI, and the request log's address position
 - [ ] Secrets in the OS keyring and a device identity per install
 - [ ] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out

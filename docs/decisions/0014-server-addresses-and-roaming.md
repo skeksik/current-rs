@@ -1,7 +1,7 @@
 # 0014: Several addresses per server, and roaming between them
 
-Status: proposed (2026-10-22), from the M1 roaming spike. Research, sources and measurements: `docs/notes/roaming.md`. Two choices are
-left to the owner (marked **Owner decides**).
+Status: proposed (2026-10-22), from the M1 roaming spike. Research, sources and measurements: `docs/notes/roaming.md`. The owner decided
+the two open choices on 2026-10-22 (marked **Decided by the owner**).
 
 ## Context
 A server is often reachable at more than one address: a LAN address at home, a public name elsewhere, sometimes a VPN address. ADR 0006
@@ -118,7 +118,7 @@ capabilities state.
 - **The request log** (ADR 0006) gains the address's position: `jellyfin/1 address 2 GET /Items -> 200`. Never the address. Probes are
   logged like requests. Errors stay without addresses.
 
-### Owner decides: TLS for servers without a publicly trusted certificate
+### Decided by the owner: TLS for servers without a publicly trusted certificate
 ADR 0006 checks certificates with the OS verifier only. For a self-signed or private-CA server on the LAN:
 
 | Option | What the user does | Risk |
@@ -128,12 +128,13 @@ ADR 0006 checks certificates with the OS verifier only. For a self-signed or pri
 | C. Pin the certificate's key per address, trust on first use | Accepts the fingerprint once, in setup | An attacker present at setup is pinned instead; a server that renews with a new key breaks until the user accepts again; a custom `ServerCertVerifier` of our own |
 | D. Refuse | Nothing | Some self-hosted setups cannot use HTTPS with Current at all |
 
-Recommendation: **A for M1**, revisit B or C if users need it. A needs no new code.
+**Decided (owner, 2026-10-22): A for M1**, revisit B or C if users need it. A needs no new code.
 
-### Owner decides: tokio in `current-net`
+### Decided by the owner: tokio in `current-net`
 The provider needs tokio as a normal dependency of `current-net` (today a dev-dependency) with the `rt`, `time` and `sync` features.
 tokio is already in `[workspace.dependencies]` and runs the core (ADR 0002), so this adds features, not a crate. The tests would like
-`test-util` (paused time) as a dev feature.
+`test-util` (paused time) as a dev feature. **Approved (owner, 2026-10-22)**: `rt`, `time` and `sync` as a normal dependency,
+`test-util` for tests.
 
 ### Metered networks
 Later question, not decided: whether a metered or constrained network should lower quality, pause downloads or warn (M2 and
@@ -159,7 +160,7 @@ Stand-in servers on **several ports of 127.0.0.1** (not 127.0.0.2+, which macOS 
   retry.
 - Log and errors: entries carry `address N`; no log line, error or Debug output contains a stand-in's address or the network key.
 - Reachability: the states map as in the table.
-- Timing tests use tokio's paused time if `test-util` is approved, else real time with wide margins.
+- Timing tests use tokio's paused time (`test-util`, approved).
 - Apple's Local Network permission cannot be tested in CI (Terminal-run tools are exempt): checked by hand on a Mac in the macOS app task.
 
 ## Consequences
