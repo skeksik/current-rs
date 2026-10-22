@@ -1,6 +1,10 @@
 //! The two observable shapes (ADR 0004): values pumped from a `watch` channel and lists pumped as batches of diffs. Each runs as one
 //! task on the core's runtime per subscription, so a listener's callbacks are ordered and run on a core worker thread.
+//!
+//! UniFFI turns an exception thrown by a foreign callback into a Rust panic (ADR 0004). Each delivery is guarded so that a failing
+//! callback costs that delivery only, not the subscription: the next value still goes out, and a list's next batch is a fresh Reset.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -25,7 +29,8 @@ where
         loop {
             // Clone first so the callback never runs while the channel's lock is held.
             let value = rx.borrow_and_update().clone();
-            deliver(value);
+            // The listener's own state is foreign and outlives a failed call; nothing of ours is left half-changed.
+            let _ = catch_unwind(AssertUnwindSafe(|| deliver(value)));
             if rx.changed().await.is_err() {
                 break;
             }
@@ -47,7 +52,10 @@ where
 {
     Arc::new(TaskHandle::new(runtime.spawn(async move {
         while let Some(batch) = subscription.next_batch().await {
-            deliver(batch);
+            // A lost batch leaves the UI's mirror behind: send it the whole list next.
+            if catch_unwind(AssertUnwindSafe(|| deliver(batch))).is_err() {
+                subscription.request_reset();
+            }
         }
     })))
 }

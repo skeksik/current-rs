@@ -140,6 +140,7 @@ impl<T: Clone + Send + 'static> ObservableList<T> {
             list: Arc::downgrade(self),
             rx: inner.tx.subscribe(),
             first: Some(inner.values.clone()),
+            reset_requested: false,
         }
     }
 
@@ -166,14 +167,23 @@ pub struct ListSubscription<T> {
     list: Weak<ObservableList<T>>,
     rx: broadcast::Receiver<VectorDiff<T>>,
     first: Option<Vec<T>>,
+    reset_requested: bool,
 }
 
 impl<T: Clone + Send + 'static> ListSubscription<T> {
+    /// Makes the next batch a fresh `[Reset]`: for a subscriber that lost a batch (its listener failed) and so cannot apply diffs.
+    pub fn request_reset(&mut self) {
+        self.reset_requested = true;
+    }
+
     /// The next batch: `[Reset]` first, then every diff waiting, at least one. A subscriber that fell behind gets `[Reset]` again.
     /// `None` once the list is dropped.
     pub async fn next_batch(&mut self) -> Option<Vec<VectorDiff<T>>> {
         if let Some(values) = self.first.take() {
             return Some(vec![VectorDiff::Reset { values }]);
+        }
+        if std::mem::take(&mut self.reset_requested) {
+            return self.resync();
         }
         let first = match self.rx.recv().await {
             Ok(diff) => diff,
@@ -258,6 +268,25 @@ mod tests {
         assert_eq!(
             sub.next_batch().await,
             Some(vec![VectorDiff::Append { values: vec![10] }])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_requested_reset_comes_next() {
+        let list = ObservableList::new();
+        let mut sub = list.subscribe();
+        sub.next_batch().await.unwrap();
+        list.append(vec![1]);
+        sub.request_reset();
+        assert_eq!(
+            sub.next_batch().await,
+            Some(vec![VectorDiff::Reset { values: vec![1] }])
+        );
+        // The diff sent before the reset is not sent again.
+        list.append(vec![2]);
+        assert_eq!(
+            sub.next_batch().await,
+            Some(vec![VectorDiff::Append { values: vec![2] }])
         );
     }
 

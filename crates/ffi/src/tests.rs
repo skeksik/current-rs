@@ -126,7 +126,7 @@ fn cancel_releases_the_listener() {
         drops.load(Ordering::SeqCst) == 1
     });
     assert_eq!(core.live_listeners(), 0);
-    assert!(handle.is_finished());
+    eventually("the task ends", || handle.is_finished());
 
     core.app.set_capabilities(one_server("2"));
     thread::sleep(Duration::from_millis(50));
@@ -169,12 +169,15 @@ fn a_slow_listener_skips_to_the_latest_value() {
     let core = Core::new().unwrap();
     let (tx, rx) = mpsc::channel();
     let gate = Arc::new(Mutex::new(()));
+    let (entered_tx, entered) = mpsc::channel();
     struct Slow {
         tx: Mutex<Sender<CapabilitiesSnapshot>>,
+        entered: Mutex<Sender<()>>,
         gate: Arc<Mutex<()>>,
     }
     impl CapabilitiesListener for Slow {
         fn on_value(&self, value: CapabilitiesSnapshot) {
+            let _ = self.entered.lock().unwrap().send(());
             let _open = self.gate.lock().unwrap();
             let _ = self.tx.lock().unwrap().send(value);
         }
@@ -182,10 +185,11 @@ fn a_slow_listener_skips_to_the_latest_value() {
     let closed = gate.lock().unwrap();
     let _handle = core.subscribe_capabilities(Box::new(Slow {
         tx: Mutex::new(tx),
+        entered: Mutex::new(entered_tx),
         gate: Arc::clone(&gate),
     }));
     // The first delivery is stuck behind the gate while three changes happen.
-    thread::sleep(Duration::from_millis(50));
+    entered.recv_timeout(WAIT).unwrap();
     for key in ["a", "b", "c"] {
         core.app.set_capabilities(one_server(key));
     }
@@ -231,7 +235,10 @@ fn a_list_subscription_starts_with_a_reset_and_mirrors_the_core() {
     let list = ObservableList::new();
     list.append(vec![String::from("a")]);
     let (tx, rx) = mpsc::channel();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let guard = DropCounter(Arc::clone(&drops));
     let handle = subscribe::watch_list(&runtime, list.subscribe(), move |batch| {
+        let _ = &guard;
         let _ = tx.send(
             batch
                 .into_iter()
@@ -265,8 +272,93 @@ fn a_list_subscription_starts_with_a_reset_and_mirrors_the_core() {
         mirror == expected
     });
 
+    assert!(!handle.is_finished(), "running until cancelled");
     handle.cancel();
+    eventually("the listener is dropped", || {
+        drops.load(Ordering::SeqCst) == 1
+    });
     eventually("the task ends", || handle.is_finished());
+}
+
+/// Counts its own drop: stands in for a foreign listener the core must release.
+struct DropCounter(Arc<AtomicUsize>);
+
+impl Drop for DropCounter {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_failing_listener_keeps_its_subscription() {
+    // UniFFI turns a foreign exception into a panic in the callback; this listener panics on its first call.
+    struct FailsOnce {
+        calls: AtomicUsize,
+        tx: Mutex<Sender<CapabilitiesSnapshot>>,
+    }
+    impl CapabilitiesListener for FailsOnce {
+        fn on_value(&self, value: CapabilitiesSnapshot) {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                panic!("the foreign callback threw");
+            }
+            let _ = self.tx.lock().unwrap().send(value);
+        }
+    }
+    let core = Core::new().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let listener = Arc::new(FailsOnce {
+        calls: AtomicUsize::new(0),
+        tx: Mutex::new(tx),
+    });
+    struct Shared(Arc<FailsOnce>);
+    impl CapabilitiesListener for Shared {
+        fn on_value(&self, value: CapabilitiesSnapshot) {
+            self.0.on_value(value);
+        }
+    }
+    let handle = core.subscribe_capabilities(Box::new(Shared(Arc::clone(&listener))));
+    eventually("the first call fails", || {
+        listener.calls.load(Ordering::SeqCst) == 1
+    });
+
+    core.app.set_capabilities(one_server("after"));
+    assert_eq!(rx.recv_timeout(WAIT).unwrap().servers[0].key, "after");
+    assert!(!handle.is_finished());
+    assert_eq!(core.live_listeners(), 1);
+}
+
+#[test]
+fn a_failing_list_listener_gets_a_reset_next() {
+    let runtime = runtime::handle().unwrap();
+    let list = ObservableList::new();
+    let (tx, rx) = mpsc::channel();
+    let calls = AtomicUsize::new(0);
+    let _handle = subscribe::watch_list(&runtime, list.subscribe(), move |batch| {
+        // The second batch (the first diffs) is lost.
+        if calls.fetch_add(1, Ordering::SeqCst) == 1 {
+            panic!("the foreign callback threw");
+        }
+        let _ = tx.send(
+            batch
+                .into_iter()
+                .map(TextDiff::from_core)
+                .collect::<Vec<_>>(),
+        );
+    });
+    assert_eq!(
+        rx.recv_timeout(WAIT).unwrap(),
+        vec![TextDiff::Reset { values: vec![] }]
+    );
+
+    list.append(vec![String::from("lost")]);
+    // Whether "next" shares the lost batch or comes after it, what arrives next is the whole list.
+    list.append(vec![String::from("next")]);
+    assert_eq!(
+        rx.recv_timeout(WAIT).unwrap(),
+        vec![TextDiff::Reset {
+            values: vec!["lost".into(), "next".into()]
+        }]
+    );
 }
 
 /// Applies a diff as a UI does.
