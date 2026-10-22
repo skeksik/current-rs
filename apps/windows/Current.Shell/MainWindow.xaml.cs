@@ -82,6 +82,17 @@ public sealed partial class MainWindow : Window
         return true;
     }
 
+    // The Frame drops its forward stack itself when a new page is navigated to.
+    private bool TryGoForward()
+    {
+        if (!ContentFrame.CanGoForward)
+        {
+            return false;
+        }
+        ContentFrame.GoForward();
+        return true;
+    }
+
     private void OnTitleBarBackRequested(TitleBar sender, object args) => TryGoBack();
 
     private void OnTitleBarPaneToggleRequested(TitleBar sender, object args) => NavView.IsPaneOpen = !NavView.IsPaneOpen;
@@ -89,11 +100,23 @@ public sealed partial class MainWindow : Window
     private void OnBackAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) =>
         args.Handled = TryGoBack();
 
+    private void OnForwardAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) =>
+        args.Handled = TryGoForward();
+
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        if (e.Pointer.PointerDeviceType == PointerDeviceType.Mouse && e.GetCurrentPoint(Root).Properties.IsXButton1Pressed)
+        if (e.Pointer.PointerDeviceType != PointerDeviceType.Mouse)
+        {
+            return;
+        }
+        var buttons = e.GetCurrentPoint(Root).Properties;
+        if (buttons.IsXButton1Pressed)
         {
             e.Handled = TryGoBack();
+        }
+        else if (buttons.IsXButton2Pressed)
+        {
+            e.Handled = TryGoForward();
         }
     }
 }

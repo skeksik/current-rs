@@ -7,11 +7,13 @@
         <MicaBackdrop Kind="Base" />
     </Window.SystemBackdrop>
 
-    <!-- Alt+Left, the GoBack key and the mouse Back button go back from anywhere in the window (docs/notes/windows-shell.md). -->
+    <!-- Alt+Left, the GoBack key and the mouse Back button go back, Alt+Right and the mouse Forward button go forward, from anywhere
+         in the window (docs/notes/windows-shell.md). -->
     <Grid x:Name="Root" KeyboardAcceleratorPlacementMode="Hidden">
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="Left" Modifiers="Menu" Invoked="OnBackAccelerator" />
             <KeyboardAccelerator Key="GoBack" Invoked="OnBackAccelerator" />
+            <KeyboardAccelerator Key="Right" Modifiers="Menu" Invoked="OnForwardAccelerator" />
         </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />

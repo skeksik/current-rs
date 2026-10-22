@@ -41,14 +41,17 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   2026-10-13, read 2026-10-22): "Fluent Design guidance recommends that these controls be placed in the title bar when a custom title
   bar is used." So the NavigationView's back and pane toggle buttons are hidden and the TitleBar's are used, enabled from
   `Frame.CanGoBack`.
-- **Alt+Left, the GoBack key and the mouse Back button** call the same `TryGoBack`. The WinUI 3 page "Navigation history and backwards
-  navigation" (ms.date 2026-09-19, read 2026-10-22) no longer lists these inputs; the UWP page
-  (learn.microsoft.com/windows/uwp/ui-input/back-navigation, ms.date 2025-04-10, read 2026-10-22) does: "Alt+Left arrow,
-  VirtualKey.GoBack" and "VirtualKey.XButton1 (Such as the back button found on some mice.)". Its `CoreDispatcher` and `CoreWindow`
-  events do not exist in WinUI 3 desktop, so the window root has two `KeyboardAccelerator`s (Left with Menu, and GoBack) and a
-  `PointerPressed` handler registered with handledEventsToo that checks `IsXButton1Pressed`. Windows+Backspace and the gamepad B button
-  come through `SystemNavigationManager`, which a desktop window does not have. Forward (Alt+Right, XButton2) is left out: there is no
-  forward button (manager's decision pending).
+- **Alt+Left, the GoBack key and the mouse Back button** call the same `TryGoBack`; **Alt+Right and the mouse Forward button** call
+  `TryGoForward` (`Frame.GoForward` when `CanGoForward`). The WinUI 3 page "Navigation history and backwards navigation" (ms.date
+  2026-09-19, read 2026-10-22) no longer lists these inputs; the UWP page (learn.microsoft.com/windows/uwp/ui-input/back-navigation,
+  ms.date 2025-04-10, read 2026-10-22) does: "Alt+Left arrow, VirtualKey.GoBack" and "VirtualKey.XButton1 (Such as the back button
+  found on some mice.)", and "We recommend that you support accelerator keys for both forward and back navigation because users who
+  rely on these will expect both", with Alt+Right and `IsXButton2Pressed` for forward. Its `CoreDispatcher` and `CoreWindow` events do
+  not exist in WinUI 3 desktop, so the window root has `KeyboardAccelerator`s (Left with Menu, GoBack, Right with Menu) and a
+  `PointerPressed` handler registered with handledEventsToo that checks `IsXButton1Pressed` and `IsXButton2Pressed`. The forward stack
+  is the Frame's own: it drops it on a new navigation; nothing custom is added (manager, 2026-10-22). There is no forward button, as in
+  the NavigationView's design. Windows+Backspace and the gamepad B button come through `SystemNavigationManager`, which a desktop
+  window does not have.
 - **Home:** the empty state before any server exists: "No servers yet". Server setup is M1.
 - **Settings:** the core's version (`CoreHost.AppInfo`), the capabilities state through `ObserveCapabilities` (empty: "No servers are
   set up."), and "Copy diagnostics", which puts `DiagnosticsText()` on the clipboard (`Clipboard.SetContent`, then `Flush` so it
@@ -90,8 +93,10 @@ handler restores its window if minimised and activates it. `--smoke` skips the k
   platform UI resolves its native data folder and passes it to the core when it creates `App` (manager, 2026-10-22).
 
 ## Installer (ADR 0009)
-- Inno Setup 6.7.3, installed in CI from its official installer (`github.com/jrsoftware/issrc` release `is-6_7_3`), checked against a
-  pinned SHA-256 (computed on 2026-10-22; jrsoftware.org publishes no checksums), installed per user into the runner's temp folder.
+- Inno Setup 6.7.3 (the owner's approval covers 6.x; 7.1.0 of 2026-08-12 exists and would need its own licence check), installed in
+  CI from its official installer (`github.com/jrsoftware/issrc` release `is-6_7_3`) per user into the runner's temp folder. The
+  SHA-256 is our own measurement of that download on 2026-10-22, since jrsoftware.org publishes no checksums: trust on first
+  download.
 - `Current.iss`: fixed `AppId`, `PrivilegesRequired=lowest`, `DefaultDirName={autopf}\Current`, x64 only, one shortcut
   `{autoprograms}\Current` with `AppUserModelID: "Skeksik.Current"` (Inno's `[Icons]` parameter: "Specifies the Windows 7 (or later)
   Application User Model ID for the shortcut", ishelp, read 2026-10-22), and an "Open Current" check box at the end (not in silent
@@ -127,8 +132,9 @@ On the owner's PC, with the installer from CI (or `apps/windows/out/app/Current.
 2. Switch Windows between light and dark: the app follows at once.
 3. Home shows the empty state. Settings shows the version, "No servers are set up." and "Copy diagnostics"; paste the clipboard
    somewhere: the text is there, also after closing the app.
-4. Back: go Home -> Settings, then back with the title bar's back button, Alt+Left, and a mouse Back button. Each returns to Home; at
-   Home the back button is disabled. Narrow the window until the pane collapses: the pane toggle in the title bar opens it.
+4. Back and forward: go Home -> Settings, then back with the title bar's back button, Alt+Left, and a mouse Back button; each
+   returns to Home, and at Home the back button is disabled. After going back, Alt+Right and a mouse Forward button return to
+   Settings. Narrow the window until the pane collapses: the pane toggle in the title bar opens it.
 5. Keyboard only: Tab reaches the back button, the pane and the settings controls; Narrator reads them by name.
 6. Start a second copy (from Start or the exe): no second window; the first one comes to the front, also when minimised.
 7. Taskbar and Start show "Current" with the app's name (not "Current.exe"); pin to the taskbar and start from the pin.
