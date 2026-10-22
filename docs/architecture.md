@@ -50,7 +50,7 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
 - **Server setup** (ADR 0012): `current-jellyfin` turns typed text into candidate base URLs, probes `/System/Info/Public` on each
   and identifies the server by its id; `current-net::transport` says whether plain HTTP to an address needs the user's confirmation
   (silent on loopback and the local network). `current-app`'s `AddServer` is the flow's state (`Idle`, `Probing`, `Failed`,
-  `ConfirmPlainHttp`, `Ready`); not yet on the bridge.
+  `ConfirmPlainHttp`, `Ready`).
 - **Sign-in** (ADR 0015): `current-jellyfin` sends `Authorization: MediaBrowser Client, Device, DeviceId, Version[, Token]` with
   percent-encoded values on every request; `JellyfinClient` signs in by password or Quick Connect, reads the current user and signs
   out. `current-app`'s `SignIn` flow (`Ready`, `SigningIn`, `QuickConnectWaiting`, `Failed`, `SignedIn`) starts from `AddServer`'s
@@ -59,15 +59,33 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
   request with the token signs the server out and deletes the token; `App::sign_out` deletes it whatever the server answers. Each
   server's session uses its first address (`FixedAddress`) for now; moving sessions onto roaming (`App::jellyfin_addresses`, ADR 0014)
   is wave 3's.
-- **`current-ffi`** is the UniFFI surface. It owns the one tokio runtime (`core-worker` threads) and exports `Core`, `TaskHandle`
-  (cancel and abort on drop), `CancelToken` and one error enum, `CoreError`. Values are pumped from `watch` channels to listeners, lists
-  as diff batches (`list_diff!` declares the per-item diff enum). `Core::live_listeners` counts the listeners the core holds, for leak
-  checks.
-- **`bindings/csharp`** (`Current.Bindings`, net10.0-windows): the generated C# (internal) plus public adapters: `CoreHost`,
-  `ValueSubscription<T>` (weak listener, catch-all, hop through `IUiDispatcher`), `DiffObservableCollection<T>`, and cancellable calls
-  that take a `CancellationToken`. The WinUI app implements `IUiDispatcher` over `DispatcherQueue`.
+- **`current-ffi`** is the UniFFI surface. It owns the one tokio runtime (`core-worker` threads, I/O and time enabled) and exports
+  `Core`, `TaskHandle` (cancel and abort on drop), `CancelToken` and one error enum, `CoreError`. Values are pumped from `watch`
+  channels to listeners, lists as diff batches (`list_diff!` declares the per-item diff enum). `Core::live_listeners` counts the
+  listeners the core holds, for leak checks.
+  - `open_core(data_dir, device_name, secrets)` is async: the core opens the settings and the keyring on its own blocking pool, so a
+    UI awaits it from its UI thread. `SecretStore::Keyring` in the apps, `Memory` for tests only. `Core::load_report` says what the
+    store found. `Core::new` is the core that stores nothing (tests, the smoke run).
+  - The M1 flows are objects: `AddServerFlow`, `DiscoveryFlow` and `SignInFlow`, each with `subscribe_state` (a value) and actions;
+    long actions are async with a `CancelToken`, and a cancelled one puts its flow back unless a newer action started. Sessions are on
+    `Core`: `sign_in_again`, `restore_sessions`, `sign_out` (not cancellable; reports whether the server heard), `network_changed`,
+    `returned_to_foreground`. The saved servers are a diff list (`subscribe_servers`), kept in step with `App::saved_servers` by
+    server key.
+  - Nothing secret crosses in a state: no address, token, password, Quick Connect secret or network key. Records carry ids, names,
+    versions and counts; failures are flat enums (`ProbeProblem`, `SignInProblem`, `NetProblem`, `StoreProblem`, ...) without
+    server messages or redirect targets. The password goes in only as an argument, the network key only inside `NetworkFacts`.
+  - `export_diagnostics` is what "copy diagnostics" copies: the version, platform, architecture and the settings' load report, then
+    the redacted request log.
+- **`bindings/csharp`** (`Current.Bindings`, net10.0-windows): the generated C# (internal) plus public adapters: `CoreHost`
+  (`Create`, `OpenAsync`), `AddServerFlow`, `DiscoveryFlow`, `SignInFlow`, public records for every state and problem,
+  `ValueSubscription<T>` (weak listener, catch-all, hop through `IUiDispatcher`), `ListSubscription<T>` over
+  `DiffObservableCollection<T>`, cancellable calls that take a `CancellationToken`, and one public exception per `CoreError`
+  variant. The WinUI app implements `IUiDispatcher` over `DispatcherQueue`. Tests run against the Jellyfin stand-in process.
 - **`bindings/swift`** (SwiftPM, Swift 6): the XCFramework and generated Swift plus adapters: `@MainActor @Observable`
-  `ObservedValue` and `ObservedList` pumped by one `AsyncStream` each, and `withCoreCancellation`.
+  `ObservedValue` and `ObservedList` pumped by one `AsyncStream` each, `observeState()`/`observeServers()` helpers, and async
+  wrappers through `withCoreCancellation`. The generated records are used directly. Tests run against the stand-in process.
+- **`tools/jellyfin-stand-in`**: a hand-written Jellyfin on 127.0.0.1 for the bridge tests (a library for Rust, a process for C# and
+  Swift). Test code only, never shipped.
 - **`apps/windows`** (`Current.Shell`, WinUI 3, unpackaged, self-contained x64): a Mica window with a TitleBar and a NavigationView
   (Home, Settings), one `CoreHost` per process, `DispatcherQueueUi` as the `IUiDispatcher`, page-scoped subscriptions, an explicit
   AppUserModelID when unpackaged and a single instance through `AppInstance`. Installed per user by Inno Setup into

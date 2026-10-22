@@ -357,6 +357,45 @@ Check on each:
 
 Report anything else (wrong thread, out-of-order list, a crash) to the manager with the step number.
 
+## The real surface (M1 wave 3)
+The M1 flows went onto the bridge in `feat/ffi-sign-in`. What it added to the pattern above, and what was learned:
+
+- **The runtime needs I/O.** The spike's runtime enabled only time. The first request through the bridge panicked on a core worker
+  thread ("A Tokio 1.x context was found, but IO is disabled"), which ended the call's task. The runtime now calls `enable_io()`
+  too. The Rust flow tests caught it; the existing tests had no network call.
+- **Opening is an async free function**, `open_core`, which runs `App::open` on the runtime's blocking pool. UniFFI exports it as
+  Swift's `openCore(dataDir:deviceName:secrets:)` and as C#'s `CurrentFfiMethods.OpenCore(...)` (`internal static class
+  <Namespace>Methods` in uniffi-bindgen-cs's `wrapper.cs`, read 2026-10-22). It has no `CancelToken`: it is short, and an abandoned
+  open would leave a store half-opened.
+- **Flows are objects** that the core hands out (`Core::add_server`, `AddServerFlow::sign_in`, ...). Each async action wraps
+  `run_cancellable`. On `Cancelled` it also undoes the flow's state (reset, or the sign-in's own cancel), but only if no newer action
+  started on the same flow since. A counter per flow tracks that (tested in `a_cancel_leaves_a_newer_probe_alone`).
+- **Sign-out takes no token.** Aborting it halfway, between forgetting the user and updating the status, would leave the state
+  inconsistent. It is bounded by its own 10 s timeout instead.
+- **The saved-server list** is an `ObservableList` in `current-ffi`, synced from `App::saved_servers()` (a `watch` of the whole list)
+  by server key. Removals, inserts and in-place changes become `Remove`, `Insert` and `Set`; a reorder becomes a `Reset`.
+- **Shapes in the generated code** (uniffi-bindgen-cs `v0.11.1+v0.31.0` and uniffi 0.31.0 Swift, generated in a Linux container on
+  2026-10-22):
+  - A data-carrying enum is an `internal record` in C# with one nested `record` per variant. Its fields are PascalCase properties
+    (`Failed(ProbeProblem Problem)`).
+  - A field named like its variant gets a `Value` suffix in C#. The bridge avoids this by naming status variants
+    `UnexpectedStatus { status }`.
+  - Error variants keep `@field` names in C# (`CoreException.Store.@problem`).
+  - Fieldless enums become plain C# `enum`s and Swift enums with lowerCamel cases (`InterfaceKind::Wifi` is `.wifi`).
+  - `Option<u8>` is `byte?` in C# and `UInt8?` in Swift. Sequences are C# arrays.
+- **Testing against a server.** `tools/jellyfin-stand-in` answers setup, sign-in, Quick Connect, `/Users/Me` and logout on 127.0.0.1
+  with a fake account (`stand-in-user` / `not-a-real-password`).
+  - Rust tests use it as a library.
+  - The C# and Swift tests start its binary and read `listening <address>` from its first line. They send `revoke` and
+    `quick-connect off|on` on stdin. It exits when stdin closes, so a crashed test run cannot leave it behind; test.ps1 also stops
+    any leftover one.
+- **Keyrings in CI.** The C# tests use Windows Credential Manager once (`KeyringKeepsTheSession`) and sign out in a `finally` so the
+  entry is deleted. The macOS keychain is not tested: CI's login keychain may prompt or be locked (not verified), so the Swift tests
+  use `SecretStore::Memory` only.
+- **Discovery in tests.** Whether a runner may broadcast and whether anything answers depends on the machine. The tests check only
+  that a search ends (`Done` or `Failed`) and that cancelling and resetting return to `Idle`. Picking a discovered server is not
+  tested end to end: no test can make a server answer the broadcast.
+
 ## Sources (read 2026-10-22)
 - uniffi-bindgen-cs `v0.11.1+v0.31.0`: `Cargo.toml`, `bindgen/Cargo.toml`, `Cargo.lock`; generated C# from a local install at that
   tag. https://github.com/NordSecurity/uniffi-bindgen-cs

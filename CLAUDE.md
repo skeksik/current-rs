@@ -20,8 +20,9 @@ crates/net          current-net: HTTP client per server, typed errors, redacted 
 crates/store        current-store: settings file, secrets in the OS keyring, device id (ADR 0013)
 crates/jellyfin     current-jellyfin: Jellyfin client; so far server setup (ADR 0012), discovery (ADR 0016) and sign-in (ADR 0015)
 crates/app          current-app: composition root (App), capabilities state, observable lists, add-a-server and sign-in flows, sessions, local discovery
-crates/ffi          current-ffi: UniFFI surface over current-app (runtime, TaskHandle, CancelToken, CoreError; ADR 0004)
+crates/ffi          current-ffi: UniFFI surface over current-app (runtime, TaskHandle, CancelToken, CoreError; ADR 0004); opening, setup, sign-in, sessions
 tools/uniffi-bindgen  UniFFI's generator at the workspace's uniffi version, for Swift
+tools/jellyfin-stand-in  a fake Jellyfin on 127.0.0.1 for the bridge tests (Rust, C#, Swift); never shipped
 bindings/csharp     Current.Bindings: generated C# (not checked in) + public adapters, and a console test runner
 bindings/swift      SwiftPM package: XCFramework + generated Swift (not checked in) + adapters, with tests
 apps/windows        the WinUI 3 app (Current.Shell, builds Current.exe), its Inno Setup installer and install test (ADR 0009)
