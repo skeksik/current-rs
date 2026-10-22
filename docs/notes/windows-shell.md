@@ -193,3 +193,32 @@ On the owner's PC, with the installer from CI (or `apps/windows/out/app/Current.
 5. Keyboard only: Tab reaches the back button, the pane and the settings controls; Narrator reads them by name.
 6. Start a second copy (from Start or the exe): no second window; the first one comes to the front, also when minimised.
 7. Taskbar and Start show "Current" with the app's name (not "Current.exe"); pin to the taskbar and start from the pin.
+
+## Windows shell: owner's run
+2026-10-22, head 4e56bcd, Windows 11 Pro 25H2 (build 26200.9711), x64. Built locally as above, since CI keeps no installer artifact:
+Rust 1.99.1, .NET SDK 10.0.402 (runtime pack 10.0.13; the licence table above has 10.0.12), MSVC from Visual Studio 2026,
+uniffi-bindgen-cs v0.11.1+v0.31.0, Inno Setup 7.1.0 (SHA-256 as in CI). C# tests 12/12, smoke run passed,
+`Current-0.1.0-x64-setup.exe` 45.5 MB. The owner looked; Claude guided and read the install state, the event log and the clipboard.
+1. Install (normal setup): **pass.** No admin prompt; `Current.exe` in `%LOCALAPPDATA%\Programs\Current`; Apps entry "Current
+   0.1.0"; Start shows "Current", and its shortcut has `System.AppUserModel.ID` `Skeksik.Current`.
+2. Window: **pass.** Mica, title bar part of the window, drag, double-click maximises, caption buttons, snap layouts.
+3. Light/dark: **pass.** Follows at once both ways.
+4. Home and Settings: **fail.** Home's empty state, the version, "© 2026 Skeksik" and "No servers are set up." are there, but
+   "Copy diagnostics" crashes the app on every click (3 of 3). Event log: `Microsoft.UI.Xaml.dll`, exception 0xc000027b (stowed
+   exception), WER signature `combase.dll` / `800401d0` (`CLIPBRD_E_CANT_OPEN`). The clipboard is empty afterwards, so `SetContent`
+   took it and the unguarded `Clipboard.Flush()` in `SettingsPage.OnCopyDiagnostics` threw. Cause not verified: Windows clipboard
+   history is on and no other clipboard tool runs; the same `SetContent` + `Flush` from a Windows PowerShell STA succeeded 20 of 20.
+   Suggested: catch the `COMException`, retry `Flush` briefly, and show an error instead of crashing.
+5. Back and forward: **pass.** Title bar back button, Alt+Left, mouse Back; Alt+Right and mouse Forward; the pane toggle when
+   collapsed. Back is disabled at Home only when the back stack is empty (Home -> Settings -> Home keeps it enabled), as in Windows
+   Settings: expected.
+6. Keyboard and Narrator: **pass.** Tab reaches the back button, the pane and the settings controls, and Narrator names them. While
+   tabbing Narrator reads only focusable controls, not the empty-state text (its scan mode reads that); not a defect.
+7. Single instance: **pass.** From Start and from the exe, also when minimised: no second window, the first comes to the front.
+8. Taskbar and Start: **pass.** "Current" in both; pinned and started from the pin.
+9. Uninstall from Settings > Apps: **pass with the app closed; finding with it open.** Closed: program folder, Start shortcut and
+   Apps entry gone; a marker file in `%LOCALAPPDATA%\Current` stays (a fresh install plus silent uninstall gave the same). Open (the
+   copy started from the pin): the uninstaller neither closed Current nor warned (the Restart Manager logged a session only for the
+   install), reported success and left the program folder with the 47 files the running process had loaded. After a reinstall over
+   that folder, the next uninstall removed every file but left the empty folder. Inno's `AppMutex`, with a named mutex the app
+   creates, would make setup and uninstall detect the running app (not verified here).
