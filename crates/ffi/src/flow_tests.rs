@@ -226,7 +226,6 @@ fn adding_a_server_and_signing_in_with_a_password() {
     let add_states = until(&add_rx, "Ready", |state| {
         matches!(state, AddServerState::Ready { .. })
     });
-    assert_eq!(add_states[0], AddServerState::Idle);
 
     let flow = add.sign_in().unwrap();
     let (listener, sign_in_rx) = recorder();
@@ -543,13 +542,13 @@ fn discovery_ends_and_a_pick_needs_a_listed_server() {
     let _state = discovery.subscribe_state(listener);
     block_on(discovery.search(CancelToken::new())).unwrap();
     // Whether the container may broadcast, and whether a server answers, depends on the machine: only the shape is checked.
-    let states = until(&rx, "the search ends", |state| {
+    // The first delivery may already be `Searching`: values are latest-only.
+    until(&rx, "the search ends", |state| {
         matches!(
             state,
             DiscoveryState::Done { .. } | DiscoveryState::Failed { .. }
         )
     });
-    assert_eq!(states[0], DiscoveryState::Idle);
 
     let add = core.add_server();
     assert!(!add.pick(Arc::clone(&discovery), "not-listed".into()));
