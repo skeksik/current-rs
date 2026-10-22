@@ -8,6 +8,9 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 out="$root/bindings/swift/Generated"
 target=aarch64-apple-darwin
 lib="$root/target/$target/release"
+# The same minimum as Package.swift's platforms. Without it, C code in dependencies (ring) is built for the runner's macOS, and the
+# linker warns that those objects are newer than the package.
+export MACOSX_DEPLOYMENT_TARGET=14.0
 
 cd "$root"
 rustup target add "$target"

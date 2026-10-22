@@ -14,8 +14,8 @@ let package = Package(
         // libcurrent_ffi.a with the C header and module map (module current_ffiFFI).
         .binaryTarget(name: "CurrentFFI", path: "Generated/CurrentFFI.xcframework"),
         // The Swift that uniffi-bindgen generates.
-        // The frameworks are what the static library needs on macOS (through current-net's TLS and proxy support); build.sh prints
-        // rustc's list (native-static-libs).
+        // What the static library needs on macOS (through current-net's TLS and proxy support), from rustc's native-static-libs,
+        // which build.sh prints: -framework Security -framework SystemConfiguration -framework CoreFoundation -liconv (plus libSystem).
         .target(
             name: "CurrentFFIBindings",
             dependencies: ["CurrentFFI"],
@@ -24,6 +24,7 @@ let package = Package(
                 .linkedFramework("CoreFoundation"),
                 .linkedFramework("Security"),
                 .linkedFramework("SystemConfiguration"),
+                .linkedLibrary("iconv"),
             ]
         ),
         // Adapters: main-actor models fed by an AsyncStream, and explicit cancellation.
