@@ -54,8 +54,25 @@ Copy-Item (Join-Path $dotnet 'LICENSE.TXT') (Join-Path $licences "Microsoft.NETC
 Copy-Item (Join-Path $dotnet 'THIRD-PARTY-NOTICES.TXT') (Join-Path $licences "Microsoft.NETCore.App-$($runtime.version)-THIRD-PARTY-NOTICES.txt")
 Write-Host "Runtime packages: $($restored -join ', '); Microsoft.NETCore.App $($runtime.version)"
 
-# What ships: every file with its size, for the licence list in docs/notes/windows-shell.md.
-Get-ChildItem $out -Recurse -File | Sort-Object FullName |
-    ForEach-Object { '{0,12}  {1}' -f $_.Length, $_.FullName.Substring($out.Length + 1) } |
-    Tee-Object -FilePath (Join-Path $PSScriptRoot 'out/files.txt')
+# What ships, file by file, with the package each file comes from (from Current.deps.json), for the licence list in
+# docs/notes/windows-shell.md. Files no package claims are the app's own, the licence files, or listed as "(not in deps.json)".
+$deps = Get-Content (Join-Path $out 'Current.deps.json') -Raw | ConvertFrom-Json
+$owner = @{}
+foreach ($target in $deps.targets.PSObject.Properties) {
+    foreach ($library in $target.Value.PSObject.Properties) {
+        foreach ($kind in 'runtime', 'native', 'resources') {
+            $assets = $library.Value.$kind
+            if (-not $assets) { continue }
+            foreach ($asset in $assets.PSObject.Properties.Name) {
+                $owner[(Split-Path $asset -Leaf).ToLowerInvariant()] = $library.Name
+            }
+        }
+    }
+}
+Get-ChildItem $out -Recurse -File | Sort-Object FullName | ForEach-Object {
+    $path = $_.FullName.Substring($out.Length + 1)
+    $package = $owner[$_.Name.ToLowerInvariant()]
+    if (-not $package) { $package = '(not in deps.json)' }
+    '{0,12}  {1}  {2}' -f $_.Length, $path, $package
+} | Tee-Object -FilePath (Join-Path $PSScriptRoot 'out/files.txt')
 Write-Host "Published Current $Version to $out"
