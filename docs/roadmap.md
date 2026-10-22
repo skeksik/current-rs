@@ -25,16 +25,23 @@ before merging, and its PR carries only the record.
 - [x] D3 spike (2026-10-22, PR 6, ADR 0008): macOS video. AVPlayer under our own SwiftUI controls: HDR/EDR, PiP, Now Playing and remote commands, AirPlay; which of
       our formats need a server remux or transcode, so the size of the gap a fallback engine must fill is known
 - [x] D4 (2026-10-22, PR 2, ADRs 0005-0006): `current-model` and `current-net`: identity and open values, one client per server, error model, redacted request log
-- [ ] D5a: `current-app` and `current-ffi` (ADR 0004): the composition root, app info, the capabilities state and diagnostics over
+- [x] D5a (2026-10-22, PR 8): `current-app` and `current-ffi` (ADR 0004): the composition root, app info, the capabilities state and diagnostics over
       the bridge; C# and Swift bindings with their adapters, built in CI
-- [ ] D5b: Windows app shell and packaging: the WinUI app over `current-ffi`, navigation, settings window, unpackaged self-contained build,
+- [x] D5b (2026-10-22, PR 12, ADR 0009): Windows app shell and packaging: the WinUI app over `current-ffi`, navigation, settings window, unpackaged self-contained build,
       per-user install in `%LOCALAPPDATA%` (program folder never the data folder), an AppUserModelID so the media flyout names the app,
       installer tested in CI; the bridge checks D1 left unrun
-- [ ] D6: our LGPL-2.1 FFmpeg and libmpv builds for Windows in CI (ADR 0003, ADR 0007), with the codec list the player needs; no
+- [x] D6 (2026-10-22, PR 9): our LGPL-2.1 FFmpeg and libmpv builds for Windows in CI (ADR 0003, ADR 0007), with the codec list the player needs; no
       LAME; uchardet allowed (owner, 2026-10-22)
-- [ ] D7 spike: macOS subtitle renderer over AVPlayer (ADR 0008): styled ASS through libass and PGS/VobSub bitmaps, fed by subtitle
+- [x] D7 spike (2026-10-22, PR 14, ADR 0010): macOS subtitle renderer over AVPlayer (ADR 0008): styled ASS through libass and PGS/VobSub bitmaps, fed by subtitle
       streams the server extracts. A full fallback engine waits for local and offline playback
-- [ ] D8 spike: Linux. A GTK4 + libadwaita window on the core; libmpv in a `GtkGLArea` (SDR) and the state of HDR on Linux
+- [ ] D8 spike: Linux. A GTK4 + libadwaita window on the core; libmpv in a `GtkGLArea` (SDR) and the state of HDR on Linux. Hands-on
+      checks in WSL2 (WSLg); HDR, hardware decoding, MPRIS, the keyring and Orca need native Linux later
+
+## Follow-ups from phase D
+- [ ] "Copy diagnostics" copies an empty text until a server exists: include the app version (the core's diagnostics export) in M1
+- [ ] Shipping libmpv in the app (`current-mpv`) brings the Visual C++ runtime (vcruntime140, msvcp140) under Microsoft's
+      redistributable terms: record them in ADR 0003 with the owner first
+- [ ] The libmpv build installs unpinned MSYS2 make/diffutils at build time (build-only; docs/notes/windows-mpv-build.md)
 
 ## M1: Jellyfin sign-in and server setup (Windows)
 Each item starts with our own research (the server's API and source, the platform's documentation, how existing clients behave),
@@ -59,7 +66,8 @@ Done when: sign in and out of Jellyfin on Windows, and the app restarts signed i
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
 ## M3: macOS
-- [ ] The M1-M2 screens in SwiftUI on the shared core; AVPlayer plus the fallback engine from D7; Keychain; Now Playing, PiP, AirPlay
+- [ ] The M1-M2 screens in SwiftUI on the shared core; AVPlayer with our own subtitle layer (ADR 0010: libass, PGS/VobSub decoder in
+      the core, External delivery from Jellyfin); Keychain; Now Playing, PiP, AirPlay
 
 Done when: everything from M1-M2 works on a Mac.
 

@@ -69,5 +69,5 @@ Player UI (WinUI | SwiftUI | GTK)  ->  playback controller (current-playback)  -
 | Platform | Engine | Surface |
 |---|---|---|
 | Windows | libmpv (our LGPL-2.1 build), `vo=gpu-next`, D3D11 | `SwapChainPanel` (D2) |
-| macOS | AVPlayer first; fallback engine from D7 | `AVPlayerLayer` / sample-buffer layer |
+| macOS | AVPlayer (ADR 0008), with our own subtitle layer: libass, PGS/VobSub bitmaps (ADR 0010); a fallback engine only for local playback | `AVPlayerLayer` plus a subtitle `CALayer` |
 | Linux | libmpv | `GtkGLArea` (D8) |
