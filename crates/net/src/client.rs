@@ -575,10 +575,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_retry_that_runs_out_of_time_does_not_blame_the_new_address() {
-        // Bound but not listening: connections are refused, and no other test can take the port meanwhile.
-        let reserved = tokio::net::TcpSocket::new_v4().unwrap();
-        reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-        let refused = reserved.local_addr().unwrap().port();
+        // A port whose listener is gone: connections are refused. Another test could take the port meanwhile, which is unlikely.
+        // (A socket bound but not listening does not refuse everywhere: on the macOS runner connections to one hung.)
+        let refused = {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap().port()
+        };
         let (second, second_accepted) = silent().await;
         let (client, provider) =
             switching_client(url(&format!("http://127.0.0.1:{refused}")), second);

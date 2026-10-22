@@ -17,7 +17,7 @@ use current_net::{
     RequestLog, RoamingAddresses, RoamingConfig, RuntimeHandle, ServerClient,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpSocket};
+use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 const SECRET: &str = "s3cret-token-value";
@@ -106,12 +106,12 @@ impl StandIn {
         }
     }
 
-    /// A port where nothing listens, so connections are refused: a socket bound to it but never listening. The socket must be kept
-    /// while the port is in use, so that no other test can take the port.
-    fn refused() -> (u16, TcpSocket) {
-        let socket = TcpSocket::new_v4().unwrap();
-        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-        (socket.local_addr().unwrap().port(), socket)
+    /// A port where nothing listens, so connections are refused: a listener's port after it is dropped. Another test could take
+    /// the port meanwhile, which is unlikely; a socket bound but not listening would reserve it, but connections to one hung on the
+    /// macOS runner instead of being refused.
+    async fn refused() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        listener.local_addr().unwrap().port()
     }
 
     fn set(&self, mode: Mode) {
@@ -237,7 +237,7 @@ fn position(roaming: &RoamingAddresses) -> Option<u8> {
 
 #[tokio::test]
 async fn the_race_skips_dead_and_wrong_addresses() {
-    let (refused, _reserved) = StandIn::refused();
+    let refused = StandIn::refused().await;
     let silent = StandIn::start(Mode::Silent).await;
     let other = StandIn::start(Mode::Serve(OTHER_ID)).await;
     let right = StandIn::start(Mode::Serve(SERVER_ID)).await;
@@ -400,7 +400,7 @@ async fn no_retry_when_the_race_picks_the_same_address() {
 
 #[tokio::test]
 async fn no_log_line_error_or_debug_output_names_an_address_or_the_network() {
-    let (refused, _reserved) = StandIn::refused();
+    let refused = StandIn::refused().await;
     let right = StandIn::start(Mode::Serve(SERVER_ID)).await;
     let (roaming, client, log) = setup(&[refused, right.port]);
     roaming.network_changed(&NetworkFacts {
