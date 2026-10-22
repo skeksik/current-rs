@@ -31,7 +31,8 @@ Build tools, not shipped: LLVM clang and clang-cl with lld-link (on the runner i
 (Visual Studio on the image, through `vcvars64.bat`), CMake and Python (image), meson and ninja (pip, versions pinned in the workflow),
 nasm 3.02 (official win64 zip, SHA-256 pinned), pkgconf 3.0.10 (built from source first), jinja and markupsafe (libplacebo's shader
 generator), and MSYS2's bash and make (on the image; FFmpeg's configure needs a POSIX shell). The licence check fails if any DLL
-imports an MSYS or MinGW runtime.
+imports an MSYS or MinGW runtime. Known reproducibility gap: the workflow installs MSYS2's `make` and `diffutils` with
+`pacman -Sy`, so their versions are not pinned (`build-info.json` records the make version each run used); they are build-only.
 
 Linking: every LGPL component is its own DLL, so a user can replace it (ADR 0003); permissive libraries are linked statically into the
 DLL that uses them. Everything uses the shared Universal CRT (`/MD`), checked from the imports, so the app must ship or require the
