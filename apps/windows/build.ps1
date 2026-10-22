@@ -28,4 +28,27 @@ try {
 finally {
     Pop-Location
 }
-Write-Host "Published Current $Version to $out"
+
+# The licence files of the Microsoft runtimes in the app (docs/notes/windows-shell.md, ADR 0003), shipped next to it in licences\.
+$packages = (dotnet nuget locals global-packages --list) -replace '^global-packages:\s*', ''
+$runtime = (Get-Content (Join-Path $out 'Current.runtimeconfig.json') | ConvertFrom-Json).runtimeOptions.includedFrameworks |
+    Where-Object name -eq 'Microsoft.NETCore.App'
+$appSdk = ([xml](Get-Content (Join-Path $PSScriptRoot 'Current.Shell/Current.Shell.csproj') -Raw)).Project.ItemGroup.PackageReference |
+    Where-Object Include -eq 'Microsoft.WindowsAppSDK'
+$licences = Join-Path $out 'licences'
+New-Item -ItemType Directory -Force $licences | Out-Null
+$copies = @(
+    @("microsoft.windowsappsdk/$($appSdk.Version)/license.txt", 'WindowsAppSDK-license.txt'),
+    @("microsoft.windowsappsdk/$($appSdk.Version)/NOTICE.txt", 'WindowsAppSDK-NOTICE.txt'),
+    @("microsoft.netcore.app.runtime.win-x64/$($runtime.version)/LICENSE.TXT", 'dotnet-LICENSE.txt'),
+    @("microsoft.netcore.app.runtime.win-x64/$($runtime.version)/THIRD-PARTY-NOTICES.TXT", 'dotnet-THIRD-PARTY-NOTICES.txt')
+)
+foreach ($copy in $copies) {
+    Copy-Item (Join-Path $packages $copy[0]) (Join-Path $licences $copy[1])
+}
+
+# What ships: every file with its size, for the licence list in docs/notes/windows-shell.md.
+Get-ChildItem $out -Recurse -File | Sort-Object FullName |
+    ForEach-Object { '{0,12}  {1}' -f $_.Length, $_.FullName.Substring($out.Length + 1) } |
+    Tee-Object -FilePath (Join-Path $PSScriptRoot 'out/files.txt')
+Write-Host "Published Current $Version to $out (.NET $($runtime.version), Windows App SDK $($appSdk.Version))"

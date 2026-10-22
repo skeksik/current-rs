@@ -73,8 +73,8 @@ jobs:
         shell: pwsh
         run: ./bindings/csharp/test.ps1
 
-  # The Windows app (apps/windows): build the core and the bindings, publish the app self-contained for x64 and run its smoke test
-  # (docs/notes/windows-shell.md).
+  # The Windows app (apps/windows): build the core and the bindings, publish the app self-contained for x64, run its smoke test, build
+  # the installer and test install, upgrade and uninstall (docs/notes/windows-shell.md, ADR 0009).
   app-windows:
     name: App (Windows)
     runs-on: windows-latest
@@ -94,6 +94,34 @@ jobs:
       - name: Smoke run (headless start and exit, bridge checks)
         shell: pwsh
         run: ./apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe
+      - name: Install Inno Setup (official installer, checksum checked)
+        shell: pwsh
+        env:
+          INNO_VERSION: 6.7.3
+          INNO_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
+        run: |
+          $tag = 'is-' + $env:INNO_VERSION.Replace('.', '_')
+          $setup = Join-Path $env:RUNNER_TEMP "innosetup-$env:INNO_VERSION.exe"
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/$tag/innosetup-$env:INNO_VERSION.exe" -OutFile $setup
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash
+          if ($hash -ne $env:INNO_SHA256) { throw "innosetup-$env:INNO_VERSION.exe has SHA-256 $hash" }
+          $dir = Join-Path $env:RUNNER_TEMP 'inno'
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER', "/DIR=`"$dir`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the Inno Setup installer exited with $($p.ExitCode)" }
+          "ISCC=$(Join-Path $dir 'ISCC.exe')" >> $env:GITHUB_ENV
+      # An older version first, so the second install is an upgrade.
+      - name: Build the installers
+        shell: pwsh
+        run: |
+          ./apps/windows/installer/build-installer.ps1 -Version 0.0.1 -Iscc $env:ISCC
+          ./apps/windows/installer/build-installer.ps1 -Iscc $env:ISCC
+      - name: Install, upgrade and uninstall test
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          ./apps/windows/installer/test-install.ps1 `
+            -Old apps/windows/out/installer/Current-0.0.1-x64-setup.exe -OldVersion 0.0.1 `
+            -New "apps/windows/out/installer/Current-$version-x64-setup.exe" -NewVersion $version
 
   # The Swift package (bindings/swift): XCFramework, generated bindings and adapters (ADR 0004).
   bindings-macos:

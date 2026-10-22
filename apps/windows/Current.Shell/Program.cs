@@ -18,8 +18,12 @@ public static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        // Before any UI: the taskbar, Start and the media flyout group the process under this ID (docs/notes/windows-shell.md).
-        AppIdentity.ApplyToProcess();
+        // Before any UI: the taskbar, Start and the media flyout group the process under this ID (docs/notes/windows-shell.md). A
+        // packaged build gets its identity from the package instead.
+        if (!AppIdentity.IsPackaged)
+        {
+            AppIdentity.ApplyToProcess();
+        }
 
         WinRT.ComWrappersSupport.InitializeComWrappers();
 
@@ -30,7 +34,7 @@ public static class Program
             return 0;
         }
 
-        Application.Start(_ =>
+        Application.Start(p =>
         {
             var context = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
             SynchronizationContext.SetSynchronizationContext(context);
