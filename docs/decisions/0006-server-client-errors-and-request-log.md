@@ -14,16 +14,20 @@ reports in a public repo, so neither may carry a server's address or a secret.
   from the request as the caller made it, before the hook runs and before the address is joined, so neither credentials nor the host
   can reach it (tested).
 - **Every request has a timeout:** the client's (default 30 s for the whole request, 10 s to connect) unless the request sets its own.
-- **Redirects stay on the server:** at most 5 hops, each to the original request's host, on the same scheme and port or as an http to
-  https upgrade (reverse proxies commonly redirect to https or add a trailing slash). Any other redirect (another host or port, https to
-  http, too many hops) stops with `NetError::Redirected`, whose `Location` lets server setup show where the server points; its Debug
-  output hides the address. Credentials therefore never reach another host (tested). Credentials sent as query pairs do not survive a
-  redirect, since the new location carries its own query. Header credentials do, except that reqwest drops `Authorization` and
-  `Cookie` when the scheme changes, so an http to https upgrade loses them (reqwest `src/redirect.rs`, `remove_sensitive_headers`).
+- **Redirects stay on the server, with their credentials.** reqwest follows none (`Policy::none()`); `ServerClient` follows them
+  itself: at most 5 hops, each to the original request's host, on the same scheme and port or as an http to https upgrade (reverse
+  proxies commonly redirect to https or add a trailing slash). `RequestAuth` runs again on every hop, on fresh copies of the caller's
+  headers and the new location's query, so header and query credentials survive a followed redirect (reqwest's own following drops
+  `Authorization` on a scheme change and loses query credentials: reqwest `src/redirect.rs`, `remove_sensitive_headers`). 301 and 302
+  turn anything but GET and HEAD into a GET without body, 303 always does (except HEAD); 307 and 308 keep method and body, as browsers
+  do. One timeout covers all hops. Any other redirect (another host or port, https to http, too many hops) stops with
+  `NetError::Redirected`, whose `Location` lets server setup show where the server points; its Debug output hides the address.
+  Credentials therefore never reach another host (tested).
 - **Errors (`NetError`, thiserror), by what the UI does:** `Unreachable` (offline, DNS, refused or dropped connection), `Timeout`,
   `Tls`, `Auth` (401/403), `Status` (any other non-2xx), `Redirected`, `Decode`, `InvalidRequest` (a path or body the calling crate got wrong; no
   server involved). `Auth` and `Status` carry the server's message (from a JSON `message`, `detail`, `title` or `error` field, or a
-  short text body, cut at 300 characters) for the UI only. No variant carries a URL, header or library error text: transport errors are
+  short text body, cut at 300 characters) for the UI only; `NetError`'s Debug output leaves it out, so logging an error with
+  `tracing::debug!(?error)` is safe. No variant carries a URL, header or library error text: transport errors are
   sorted by kind after `reqwest::Error::without_url()`, and `Decode` keeps only line and column because a decoder's message can quote
   the response. Tests check no error's Display or Debug contains the stand-in server's address.
 - **Request log:** a bounded ring buffer (default 200 entries) shared by all clients, with time, `ServerRef` (in place of the host),

@@ -166,18 +166,8 @@ impl ServerClient {
         let http = reqwest::Client::builder()
             .timeout(config.timeout)
             .connect_timeout(config.connect_timeout)
-            .redirect(redirect::Policy::custom(|attempt| {
-                let follow = attempt.previous().len() <= MAX_REDIRECTS
-                    && attempt
-                        .previous()
-                        .first()
-                        .is_some_and(|first| may_follow(first, attempt.url()));
-                if follow {
-                    attempt.follow()
-                } else {
-                    attempt.stop()
-                }
-            }))
+            // Redirects are followed in `execute`, which re-applies the credentials on every hop (ADR 0006).
+            .redirect(redirect::Policy::none())
             .build()
             // Building fails only when the TLS backend cannot start.
             .map_err(|_| NetError::Tls)?;
@@ -226,55 +216,100 @@ impl ServerClient {
         self.send(request).await?.json()
     }
 
+    /// Fresh copies of `url` and `headers` with the credentials added. Runs on every hop, so a followed redirect keeps them.
+    fn authorize(&self, url: &Url, headers: &HeaderMap) -> (Url, HeaderMap) {
+        let (mut url, mut headers) = (url.clone(), headers.clone());
+        if let Some(auth) = &self.auth {
+            let mut query: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+            auth.apply(&mut headers, &mut query);
+            url.set_query(None);
+            if !query.is_empty() {
+                url.query_pairs_mut().extend_pairs(&query);
+            }
+        }
+        (url, headers)
+    }
+
     async fn execute(&self, request: Request) -> Result<Response, NetError> {
         let Request {
-            method,
+            mut method,
             path,
-            mut query,
+            query,
             mut headers,
-            body,
+            mut body,
             timeout,
         } = request;
-        if let Some(auth) = &self.auth {
-            auth.apply(&mut headers, &mut query);
-        }
-        let url = join(&self.address.current(), &path, &query)?;
-        let mut builder = self
-            .http
-            .request(method, url)
-            .headers(headers)
-            .timeout(timeout.unwrap_or(self.timeout));
-        if let Some(body) = body {
-            builder = builder.body(body);
-        }
-        let response = builder.send().await.map_err(NetError::from_reqwest)?;
-        let status = response.status().as_u16();
-        let headers = response.headers().clone();
-        if (300..400).contains(&status) {
-            // A redirect the policy would not follow, or the end of a chain that was too long.
-            let location = headers
-                .get(reqwest::header::LOCATION)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| response.url().join(value).ok());
-            return Err(NetError::Redirected {
+        // One deadline for the whole request, redirects included.
+        let deadline = Instant::now() + timeout.unwrap_or(self.timeout);
+        let original = join(&self.address.current(), &path, &query)?;
+        let mut url = original.clone();
+        let mut hops = 0;
+        loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or(NetError::Timeout)?;
+            let (authorized_url, authorized_headers) = self.authorize(&url, &headers);
+            let mut builder = self
+                .http
+                .request(method.clone(), authorized_url)
+                .headers(authorized_headers)
+                .timeout(remaining);
+            if let Some(body) = &body {
+                builder = builder.body(body.clone());
+            }
+            let response = builder.send().await.map_err(NetError::from_reqwest)?;
+            let status = response.status().as_u16();
+            let response_headers = response.headers().clone();
+
+            if let Some(next) = redirect_target(status, &response_headers, &url) {
+                if hops >= MAX_REDIRECTS || !may_follow(&original, &next) {
+                    return Err(NetError::Redirected {
+                        status,
+                        location: Some(Location(next)),
+                    });
+                }
+                // As browsers do: 303 always becomes GET, and so do 301 and 302 for anything but GET and HEAD; 307 and 308 keep the
+                // method and body.
+                if (status == 303 && method != Method::HEAD)
+                    || (matches!(status, 301 | 302)
+                        && method != Method::GET
+                        && method != Method::HEAD)
+                {
+                    method = Method::GET;
+                    body = None;
+                    headers.remove(reqwest::header::CONTENT_TYPE);
+                }
+                hops += 1;
+                url = next;
+                continue;
+            }
+
+            let body = response
+                .bytes()
+                .await
+                .map_err(NetError::from_reqwest)?
+                .to_vec();
+            if !(200..300).contains(&status) {
+                return Err(NetError::from_status(status, &body));
+            }
+            return Ok(Response {
                 status,
-                location: location.map(Location),
+                headers: response_headers,
+                body,
             });
         }
-        let body = response
-            .bytes()
-            .await
-            .map_err(NetError::from_reqwest)?
-            .to_vec();
-        if !(200..300).contains(&status) {
-            return Err(NetError::from_status(status, &body));
-        }
-        Ok(Response {
-            status,
-            headers,
-            body,
-        })
     }
+}
+
+/// Where a redirect response points, resolved against the request's URL. `None` for any other response, including a 3xx without a
+/// usable `Location`.
+fn redirect_target(status: u16, headers: &HeaderMap, url: &Url) -> Option<Url> {
+    if !matches!(status, 301 | 302 | 303 | 307 | 308) {
+        return None;
+    }
+    let location = headers.get(reqwest::header::LOCATION)?.to_str().ok()?;
+    url.join(location).ok()
 }
 
 /// How many redirects one request follows.

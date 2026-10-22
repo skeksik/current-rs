@@ -19,8 +19,8 @@ const SECRET: &str = "s3cret-token-value";
 enum Reply {
     /// Answers with this status and body.
     With(u16, &'static str),
-    /// Answers 302 to `/start` with this location, and 200 to anything else.
-    Redirect(String),
+    /// Answers this redirect status to `/start` with this location, and 200 to anything else.
+    Redirect(u16, String),
     /// Reads the request and never answers.
     Silent,
     /// Answers in plain HTTP as soon as the connection opens, without reading (what a TLS client meets at a plain-HTTP port).
@@ -63,10 +63,10 @@ impl StandIn {
                     };
                     let response = match &reply {
                         Reply::With(status, body) => Some(answer(*status, "", body)),
-                        Reply::Redirect(location) if head.contains(" /base/start") => {
-                            Some(answer(302, &format!("location: {location}\r\n"), ""))
+                        Reply::Redirect(status, location) if head.contains(" /base/start") => {
+                            Some(answer(*status, &format!("location: {location}\r\n"), ""))
                         }
-                        Reply::Redirect(_) => Some(answer(200, "", "{}")),
+                        Reply::Redirect(..) => Some(answer(200, "", "{}")),
                         Reply::Silent | Reply::PlainHttp => None,
                     };
                     if let Some(response) = response {
@@ -74,7 +74,7 @@ impl StandIn {
                         let _ = socket.shutdown().await;
                     }
                     match reply {
-                        Reply::With(..) | Reply::Redirect(_) => {}
+                        Reply::With(..) | Reply::Redirect(..) => {}
                         Reply::Silent => tokio::time::sleep(Duration::from_secs(30)).await,
                         Reply::PlainHttp => {}
                     }
@@ -119,6 +119,10 @@ impl RequestAuth for TokenAuth {
         headers.insert(
             HeaderName::from_static("x-test-token"),
             HeaderValue::from_static(SECRET),
+        );
+        headers.insert(
+            HeaderName::from_static("authorization"),
+            HeaderValue::from_static("Test s3cret-token-value"),
         );
         query.push(("api_key".to_owned(), SECRET.to_owned()));
     }
@@ -223,30 +227,108 @@ async fn other_statuses_are_status_errors() {
     );
 }
 
-#[tokio::test]
-async fn a_redirect_on_the_same_server_is_followed() {
-    let server = StandIn::start(Reply::Redirect("/base/end".into())).await;
+/// Sends `request` to a server that redirects `/start` with `status` to `/base/end?page=2`, and returns what the server received.
+async fn follow(status: u16, request: Request) -> (Vec<String>, Arc<RequestLog>) {
+    let server = StandIn::start(Reply::Redirect(status, "/base/end?page=2".into())).await;
     let log = Arc::new(RequestLog::default());
     let response = ok(client(&server.address, &log, Duration::from_secs(5))
-        .send(Request::get("/start"))
+        .send(request)
         .await);
     assert_eq!(response.status, 200);
-    let received = server.received();
+    (server.received(), log)
+}
+
+#[tokio::test]
+async fn a_redirect_on_the_same_server_is_followed_with_credentials() {
+    let (received, log) = follow(302, Request::get("/start")).await;
     assert_eq!(received.len(), 2);
+    // The credentials are applied again on the new hop: header, Authorization and query pair (added to the location's own query).
     assert!(
-        received[1].starts_with("GET /base/end HTTP/1.1"),
+        received[1].starts_with(&format!("GET /base/end?page=2&api_key={SECRET} HTTP/1.1")),
         "{}",
         received[1]
     );
+    assert!(received[1].contains(&format!("x-test-token: {SECRET}")));
+    assert!(received[1].contains(&format!("authorization: Test {SECRET}")));
     // One logged request: the one the caller made.
     assert_eq!(log.entries().len(), 1);
+    assert!(!log.to_text().contains(SECRET));
+}
+
+fn post() -> Request {
+    ok(Request::post("/start").json(&serde_json::json!({ "a": 1 })))
+}
+
+#[tokio::test]
+async fn see_other_and_moved_turn_a_post_into_a_get_without_body() {
+    for status in [301, 302, 303] {
+        let (received, _) = follow(status, post()).await;
+        assert!(
+            received[0].starts_with("POST /base/start"),
+            "{}",
+            received[0]
+        );
+        assert!(
+            received[1].starts_with("GET /base/end"),
+            "{status}: {}",
+            received[1]
+        );
+        assert!(
+            !received[1].contains("content-type"),
+            "{status}: {}",
+            received[1]
+        );
+        assert!(
+            !received[1].contains("content-length: 7"),
+            "{status}: {}",
+            received[1]
+        );
+    }
+}
+
+#[tokio::test]
+async fn temporary_and_permanent_redirects_keep_the_method_and_body() {
+    for status in [307, 308] {
+        let (received, _) = follow(status, post()).await;
+        assert!(
+            received[1].starts_with("POST /base/end"),
+            "{status}: {}",
+            received[1]
+        );
+        assert!(
+            received[1].contains("content-type: application/json"),
+            "{status}: {}",
+            received[1]
+        );
+        assert!(
+            received[1].contains("content-length: 7"),
+            "{status}: {}",
+            received[1]
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_redirect_loop_stops_after_a_few_hops() {
+    let server = StandIn::start(Reply::Redirect(302, "/base/start".into())).await;
+    let log = Arc::new(RequestLog::default());
+    let error = client(&server.address, &log, Duration::from_secs(5))
+        .send(Request::get("/start"))
+        .await
+        .err();
+    assert!(
+        matches!(error, Some(NetError::Redirected { status: 302, .. })),
+        "{error:?}"
+    );
+    // The first request and five followed hops.
+    assert_eq!(server.received().len(), 6);
 }
 
 #[tokio::test]
 async fn a_redirect_to_another_server_is_not_followed() {
     let other = StandIn::start(Reply::With(200, "{}")).await;
     let target = ok(other.address.join("end"));
-    let server = StandIn::start(Reply::Redirect(target.to_string())).await;
+    let server = StandIn::start(Reply::Redirect(302, target.to_string())).await;
     let log = Arc::new(RequestLog::default());
     let error = client(&server.address, &log, Duration::from_secs(5))
         .send(Request::get("/start"))

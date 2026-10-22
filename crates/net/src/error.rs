@@ -8,7 +8,8 @@ use std::error::Error as _;
 /// Longest server message kept, in characters.
 const MESSAGE_LIMIT: usize = 300;
 
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+/// Debug output leaves out the server's message (see the `Debug` impl), so `tracing::debug!(?error)` stays safe to log.
+#[derive(Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NetError {
     /// No connection: the device is offline, the name did not resolve, the server refused or dropped the connection.
     #[error("the server could not be reached")]
@@ -45,6 +46,51 @@ pub enum NetError {
     /// calling crate, not a server problem.
     #[error("the request could not be built")]
     InvalidRequest,
+}
+
+impl std::fmt::Debug for NetError {
+    /// Like a derived Debug, with the server's message shown only as present or absent: it is for the UI, never for logs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = |message: &Option<String>| {
+            if message.is_some() {
+                "[omitted]"
+            } else {
+                "None"
+            }
+        };
+        match self {
+            Self::Unreachable => f.write_str("Unreachable"),
+            Self::Timeout => f.write_str("Timeout"),
+            Self::Tls => f.write_str("Tls"),
+            Self::Auth {
+                status,
+                message: text,
+            } => f
+                .debug_struct("Auth")
+                .field("status", status)
+                .field("message", &format_args!("{}", message(text)))
+                .finish(),
+            Self::Status {
+                status,
+                message: text,
+            } => f
+                .debug_struct("Status")
+                .field("status", status)
+                .field("message", &format_args!("{}", message(text)))
+                .finish(),
+            Self::Redirected { status, location } => f
+                .debug_struct("Redirected")
+                .field("status", status)
+                .field("location", location)
+                .finish(),
+            Self::Decode { line, column } => f
+                .debug_struct("Decode")
+                .field("line", line)
+                .field("column", column)
+                .finish(),
+            Self::InvalidRequest => f.write_str("InvalidRequest"),
+        }
+    }
 }
 
 impl NetError {
@@ -212,6 +258,19 @@ mod tests {
         assert_eq!(message(b"<html><body>Bad Gateway</body></html>"), None);
         assert_eq!(message(b""), None);
         assert_eq!(message(&[0xff, 0xfe]), None);
+    }
+
+    #[test]
+    fn debug_leaves_out_the_server_message() {
+        let error = NetError::from_status(500, br#"{"message":"Some Library Title is missing"}"#);
+        assert_eq!(
+            format!("{error:?}"),
+            "Status { status: 500, message: [omitted] }"
+        );
+        assert_eq!(
+            format!("{:?}", NetError::from_status(401, b"")),
+            "Auth { status: 401, message: None }"
+        );
     }
 
     #[test]
