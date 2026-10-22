@@ -95,6 +95,13 @@ opaque_id! {
     UserId
 }
 
+opaque_id! {
+    /// The id a server gives itself, the same on every address it is reached at (a Jellyfin server's `Id`). Tells whether two
+    /// addresses lead to the same server; compared byte for byte. Unlike [`ServerKey`], the server chooses it, and a reinstall can
+    /// change it.
+    ServerId
+}
+
 /// An item anywhere: its server and its id there. Two items are the same only if both match.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ItemRef {
