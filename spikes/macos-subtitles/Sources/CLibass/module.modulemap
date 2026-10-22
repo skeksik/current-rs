@@ -1,5 +1,0 @@
-module CLibass [system] {
-    header "shim.h"
-    link "ass"
-    export *
-}

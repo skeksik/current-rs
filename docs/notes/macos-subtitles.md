@@ -282,7 +282,7 @@ sync.
   - `meson_options.txt` has no option to drop FriBidi. Meson has been a secondary build system since 0.17.2.
 - **FreeType:** `LICENSE.TXT`, FTL or GPLv2; we take the FTL. Its §2 requires binary redistribution to "provide a disclaimer that states
   that the software is based in part of the work of the FreeType Team, in the distribution documentation".
-- **HarfBuzz 15.0.0:** "Old MIT" (`COPYING`).
+- **HarfBuzz 15.0.0:** "Old MIT" (`COPYING`). The prototype ran Homebrew's 14.4.0; its licence was not read separately.
 - **FriBidi 1.0.17:** `COPYING` LGPL-2.1, with "version 2.1 of the License, or (at your option) any later version" in every `lib/`
   and `gen.tab/` file.
   - The only GPL files are `bin/getopt*.c`, which are linked into the command-line tools only (`bin/meson.build`). Building with

@@ -32,7 +32,7 @@ before merging, and its PR carries only the record.
       installer tested in CI; the bridge checks D1 left unrun
 - [x] D6 (2026-10-22, PR 9): our LGPL-2.1 FFmpeg and libmpv builds for Windows in CI (ADR 0003, ADR 0007), with the codec list the player needs; no
       LAME; uchardet allowed (owner, 2026-10-22)
-- [ ] D7 spike (ADR 0010): macOS subtitle renderer over AVPlayer (ADR 0008): styled ASS through libass and PGS/VobSub bitmaps, fed by subtitle
+- [x] D7 spike (2026-10-22, PR 14, ADR 0010): macOS subtitle renderer over AVPlayer (ADR 0008): styled ASS through libass and PGS/VobSub bitmaps, fed by subtitle
       streams the server extracts. A full fallback engine waits for local and offline playback
 - [ ] D8 spike: Linux. A GTK4 + libadwaita window on the core; libmpv in a `GtkGLArea` (SDR) and the state of HDR on Linux. Hands-on
       checks in WSL2 (WSLg); HDR, hardware decoding, MPRIS, the keyring and Orca need native Linux later
