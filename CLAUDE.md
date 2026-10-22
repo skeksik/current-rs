@@ -16,6 +16,7 @@ libadwaita in Rust on Linux; Android, iOS, tvOS and the web later. **Desktop fir
 ## Layout
 ```
 crates/model        current-model: domain types (pure, no I/O)
+crates/net          current-net: HTTP client per server, typed errors, redacted request log
 docs/               architecture.md, roadmap.md, decisions/ (ADRs)
 ```
 Target layout (ADR 0002): `crates/{model,net,store,jellyfin,seerr,stash,playback,mpv,app,ffi}`, `apps/{windows,macos,linux}`. Each crate
