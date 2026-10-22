@@ -61,6 +61,16 @@ int main(void)
     printf("licence swresample: %s\n", swresample_license());
     printf("licence swscale: %s\n", swscale_license());
     printf("ffmpeg configuration: %s\n", avutil_configuration());
+    // mpv's decoder-list has audio and video decoders only; subtitle decoders are looked up in libavcodec directly.
+    static const char *const subtitle_decoders[] = {"ass", "subrip", "webvtt", "hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle",
+                                                    "mov_text"};
+    for (size_t i = 0; i < sizeof(subtitle_decoders) / sizeof(subtitle_decoders[0]); i++) {
+        // Codec names, as mpv uses them; a decoder's own name can differ (hdmv_pgs_subtitle is decoded by "pgssub").
+        const AVCodecDescriptor *desc = avcodec_descriptor_get_by_name(subtitle_decoders[i]);
+        const AVCodec *codec = desc ? avcodec_find_decoder(desc->id) : NULL;
+        printf("subtitle-decoder: %s %s%s%s\n", subtitle_decoders[i], codec ? "found" : "missing", codec ? " " : "",
+               codec ? codec->name : "");
+    }
 
     mpv_handle *mpv = mpv_create();
     if (!mpv) {

@@ -32,9 +32,11 @@ SYSTEM_IMPORT = re.compile(r"^(api-ms-win-.*|ext-ms-.*|vcruntime140.*|msvcp140.*
                            r"bcrypt|secur32|crypt32|ncrypt|ws2_32|winmm|avrt|d3d11|d3d12|dxgi|d3dcompiler_47|dwrite|version|ntdll|"
                            r"shlwapi|psapi|dwmapi|imm32|uxtheme|comctl32|comdlg32|setupapi|propsys|mfplat|mf|mfreadwrite|"
                            r"powrprof|userenv|iphlpapi|dbghelp|cfgmgr32|winhttp|wininet)(\.dll)?$", re.I)
-# Decoders and demuxers the player needs (ADR 0007, docs/architecture.md); mpv must list each.
+# Decoders and demuxers the player needs (ADR 0007, docs/architecture.md). mpv's decoder-list covers audio and video only
+# (mp_add_lavc_decoders is called from vd_lavc.c and ad_lavc.c), so probe.c looks subtitle decoders up in libavcodec by name.
 REQUIRED_DECODERS = {"h264", "hevc", "av1", "vp9", "vp8", "mpeg2video", "vc1", "aac", "ac3", "eac3", "truehd", "dts", "flac", "opus",
-                     "vorbis", "mp3", "pcm_s16le", "ass", "subrip", "webvtt", "hdmv_pgs_subtitle", "dvd_subtitle", "mjpeg", "png"}
+                     "vorbis", "mp3", "pcm_s16le", "mjpeg", "png"}
+REQUIRED_SUBTITLE_DECODERS = {"ass", "subrip", "webvtt", "hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "mov_text"}
 REQUIRED_DEMUXERS = {"matroska,webm", "mov,mp4,m4a,3gp,3g2,mj2", "mpegts", "hls", "flac", "ogg", "avi", "srt", "ass", "webvtt"}
 
 failures = []
@@ -165,6 +167,9 @@ def run_probe(prefix, out, work, env):
     decoders = set(re.findall(r"^decoder-list: (.*)$", text, re.M))
     missing = sorted(REQUIRED_DECODERS - decoders)
     (fail if missing else ok)(f"required decoders present (missing: {missing}); {len(decoders)} codecs in total")
+    subtitles = set(re.findall(r"^subtitle-decoder: (\S+) found\b", text, re.M))
+    missing = sorted(REQUIRED_SUBTITLE_DECODERS - subtitles)
+    (fail if missing else ok)(f"required subtitle decoders in libavcodec (missing: {missing})")
     demuxers = set(re.findall(r"^demuxer-lavf-list: (.*)$", text, re.M))
     missing = sorted(REQUIRED_DEMUXERS - demuxers)
     (fail if missing else ok)(f"required demuxers present (missing: {missing}); {len(demuxers)} in total")

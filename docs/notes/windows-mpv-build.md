@@ -76,8 +76,10 @@ Visual C++ runtime (`vcruntime140.dll`, `msvcp140.dll` for the C++ parts).
 - mpv's `config.h` has `HAVE_GPL 0` and its configuration `-Dgpl=false`, and the features above are on;
 - libmpv accepts `vo=gpu-next`, `gpu-api=d3d11`, `gpu-context=d3d11`, `d3d11-output-mode=composition`, `d3d11-composition-size`,
   `display-fps-override` and the colour options of ADR 0007 (mpv validates option values when they are set), initialises headless, and
-  lists the decoders and demuxers the player needs (H.264, HEVC, AV1, VP9, the common audio codecs, ASS, SRT, WebVTT, PGS and DVD
-  subtitles; Matroska, MP4, MPEG-TS, HLS and others);
+  lists the decoders and demuxers the player needs (H.264, HEVC, AV1, VP9 and the common audio codecs in mpv's `decoder-list`;
+  Matroska, MP4, MPEG-TS, HLS and others in `demuxer-lavf-list`); the subtitle decoders (ASS, SRT, WebVTT, PGS, DVD, DVB, mov_text)
+  are looked up in libavcodec by codec, because mpv's `decoder-list` holds audio and video decoders only (it is filled from
+  `vd_lavc.c` and `ad_lavc.c`);
 - no DLL imports an MSYS or MinGW runtime, and every DLL uses the shared C runtime.
 
 It writes `components.json` and `components.md` (name, version, licence, source and checksum for every component and tool),
