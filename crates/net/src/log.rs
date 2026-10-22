@@ -50,6 +50,9 @@ pub struct LogEntry {
     pub at: SystemTime,
     /// The server, by its app-assigned key: stands in for the host, which is never stored.
     pub server: ServerRef,
+    /// The 1-based place, in the user's list, of the address the request went to; `None` for a server with one address or a
+    /// request that found no address. Stands in for the address, which is never stored.
+    pub address: Option<u8>,
     pub method: String,
     /// The path relative to the server's address, as the calling crate gave it.
     pub path: String,
@@ -60,15 +63,13 @@ pub struct LogEntry {
 }
 
 impl LogEntry {
-    /// One line: time, server, method, path with redacted query, outcome and duration.
+    /// One line: time, server, address position, method, path with redacted query, outcome and duration.
     pub fn to_line(&self) -> String {
-        let mut line = format!(
-            "{} {} {} {}",
-            format_utc(self.at),
-            self.server,
-            self.method,
-            self.path
-        );
+        let mut line = format!("{} {}", format_utc(self.at), self.server);
+        if let Some(position) = self.address {
+            let _ = write!(line, " address {position}");
+        }
+        let _ = write!(line, " {} {}", self.method, self.path);
         for (index, (key, value)) in self.query.iter().enumerate() {
             let separator = if index == 0 { '?' } else { '&' };
             let _ = write!(line, "{separator}{key}={value}");
@@ -208,6 +209,7 @@ mod tests {
         LogEntry {
             at: UNIX_EPOCH + Duration::from_millis(1_761_100_000_123),
             server: ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+            address: None,
             method: "GET".into(),
             path: path.into(),
             query: redact_query(&pairs(&[("searchTerm", "Some Title"), ("Limit", "20")])),
@@ -250,6 +252,17 @@ mod tests {
         assert_eq!(
             entry("/Items").to_line(),
             "2025-10-22T02:26:40.123Z jellyfin/1 GET /Items?searchTerm=[redacted]&Limit=20 -> 200 (42 ms)"
+        );
+        let positioned = LogEntry {
+            address: Some(2),
+            ..entry("/Items")
+        };
+        assert!(
+            positioned
+                .to_line()
+                .contains(" jellyfin/1 address 2 GET /Items?"),
+            "{}",
+            positioned.to_line()
         );
         let failed = LogEntry {
             query: Vec::new(),

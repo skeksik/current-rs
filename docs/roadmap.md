@@ -57,7 +57,9 @@ recorded with sources and dates, and a decision record where it decides somethin
 - [ ] Several addresses per server with roaming (local and internet, the user's order)
   - [x] Spike: research and design (2026-10-22, PR 17, ADR 0014, docs/notes/roaming.md; OS trust only for
         TLS in M1)
-  - [ ] Implement `RoamingAddresses` in `current-net`, `NetworkFacts` from the Windows UI, and the request log's address position
+  - [x] Core: `RoamingAddresses` in `current-net`, Jellyfin's identity check, `NetworkFacts`, `App::network_changed` and the
+        request log's address position (2026-10-22, ADR 0014)
+  - [ ] Wire the providers into signed-in servers (sign-in), and `NetworkFacts` from the Windows UI (wave 3)
 - [ ] Secrets in the OS keyring and a device identity per install
 - [ ] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out
 - [ ] Local server discovery

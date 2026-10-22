@@ -15,4 +15,4 @@ pub use discovery::{
     Candidate, DISCOVERY_PORT, DiscoveryConfig, DiscoveryError, MAX_ADDRESSES_PER_SERVER,
     MAX_REPLY_BYTES, MAX_SERVERS, discover,
 };
-pub use probe::{FoundServer, MINIMUM_VERSION, ProbeError, Prober, same_server};
+pub use probe::{FoundServer, JellyfinIdentity, MINIMUM_VERSION, ProbeError, Prober, same_server};
