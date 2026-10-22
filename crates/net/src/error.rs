@@ -141,7 +141,8 @@ impl NetError {
     }
 }
 
-/// Where a redirect pointed. Holds an address, so its Debug output hides it; read it with [`Location::url`].
+/// An address the server pointed to (a redirect's target, or where a response came from). Its Debug output hides it; read it with
+/// [`Location::url`].
 #[derive(Clone, PartialEq, Eq)]
 pub struct Location(pub(crate) url::Url);
 

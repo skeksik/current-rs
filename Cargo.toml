@@ -12,6 +12,7 @@ publish = false
 # Member crates then use `name.workspace = true`.
 [workspace.dependencies]
 current-app = { path = "crates/app" }
+current-jellyfin = { path = "crates/jellyfin" }
 current-model = { path = "crates/model" }
 current-net = { path = "crates/net" }
 current-store = { path = "crates/store" }
