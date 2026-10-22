@@ -165,11 +165,6 @@ impl App {
         self.shared.servers()
     }
 
-    /// The saved servers: the current list now, and every change after (a sign-in, a sign-out, a renamed user).
-    pub fn saved_servers(&self) -> watch::Receiver<Vec<SavedServer>> {
-        self.shared.saved.subscribe()
-    }
-
     /// The signed-in client of a server, for the features that browse and play.
     pub fn jellyfin(&self, server: &ServerRef) -> Option<Arc<JellyfinClient>> {
         self.shared.session(server)
