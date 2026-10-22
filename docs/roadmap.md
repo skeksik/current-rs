@@ -17,18 +17,23 @@ before merging, and its PR carries only the record.
 - [x] D1 spike (2026-10-22, PR 3, ADR 0004): the UniFFI bridge. A small API (an observable value, a list with diffs, an async call with cancellation, an error, a
       listener implemented by the UI) shown in a minimal WinUI 3 app and a minimal SwiftUI app, both built in CI. Decides the exact
       observable pattern and how each UI wraps it (ADR 0002). Built in CI; running both apps by hand is left to D5's checks
-- [ ] D2 spike: Windows video. libmpv into a WinUI 3 `SwapChainPanel` (mpv 0.41's D3D11 composition mode, `display-swapchain`) with
+- [x] D2 spike (2026-10-22, PR 4, ADR 0007): Windows video. libmpv into a WinUI 3 `SwapChainPanel` (mpv 0.41's D3D11 composition mode, `display-swapchain`) with
       XAML controls over the video; real HDR10 output on an HDR display; resizing, full screen, several monitors; media keys and the
       Windows media flyout (`SystemMediaTransportControls` for a window). Fallbacks if it fails: mpv's D3D11 render API (unreleased,
       mpv 0.42) into our own swap chain; libmpv in a child window (`wid`) with our controls in an owned
       overlay window
-- [ ] D3 spike: macOS video. AVPlayer under our own SwiftUI controls: HDR/EDR, PiP, Now Playing and remote commands, AirPlay; which of
+- [x] D3 spike (2026-10-22, PR 6, ADR 0008): macOS video. AVPlayer under our own SwiftUI controls: HDR/EDR, PiP, Now Playing and remote commands, AirPlay; which of
       our formats need a server remux or transcode, so the size of the gap a fallback engine must fill is known
 - [x] D4 (2026-10-22, PR 2, ADRs 0005-0006): `current-model` and `current-net`: identity and open values, one client per server, error model, redacted request log
-- [ ] D5: Windows app shell and packaging: the WinUI app over `current-ffi`, navigation, settings window, unpackaged self-contained build,
-      per-user install in `%LOCALAPPDATA%` (program folder never the data folder), installer tested in CI
-- [ ] D6: our LGPL-2.1 FFmpeg and libmpv builds for Windows in CI (ADR 0003), with the codec list the player needs
-- [ ] D7 spike: macOS fallback engine, if D3 shows one is needed (FFmpeg with VideoToolbox into a sample-buffer layer, or libmpv)
+- [ ] D5a: `current-app` and `current-ffi` (ADR 0004): the composition root, app info, the capabilities state and diagnostics over
+      the bridge; C# and Swift bindings with their adapters, built in CI
+- [ ] D5b: Windows app shell and packaging: the WinUI app over `current-ffi`, navigation, settings window, unpackaged self-contained build,
+      per-user install in `%LOCALAPPDATA%` (program folder never the data folder), an AppUserModelID so the media flyout names the app,
+      installer tested in CI; the bridge checks D1 left unrun
+- [ ] D6: our LGPL-2.1 FFmpeg and libmpv builds for Windows in CI (ADR 0003, ADR 0007), with the codec list the player needs; no
+      LAME; uchardet allowed (owner, 2026-10-22)
+- [ ] D7 spike: macOS subtitle renderer over AVPlayer (ADR 0008): styled ASS through libass and PGS/VobSub bitmaps, fed by subtitle
+      streams the server extracts. A full fallback engine waits for local and offline playback
 - [ ] D8 spike: Linux. A GTK4 + libadwaita window on the core; libmpv in a `GtkGLArea` (SDR) and the state of HDR on Linux
 
 ## M1: Jellyfin sign-in and server setup (Windows)
@@ -71,7 +76,16 @@ Done when: a title can be found, requested and followed to "available", then pla
 - [ ] Hidden unless a server offers it and the user may see it; access rules enforced in the core. Details are kept privately while the
       repo is public.
 
-## Later
+## Before the first distribution (to anyone, testers included)
+Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 when merged):
+- [ ] End-user terms (EULA) that protect Microsoft at least as much as the Windows App SDK licence does (its section 3(b)(ii)); the
+      indemnity in 3(b)(iii) accepted by the owner; the installer shows the terms
+- [ ] What the Windows App SDK sends to Microsoft (its section 2(a)) checked, and turned off where possible
+- [ ] Code signing for Windows (SmartScreen; the Microsoft Store's installer route requires it) and Apple (Developer ID)
+- [ ] Inno Setup commercial licence: requested, not required, from commercial users above USD 5,000 a year in revenue
+- [ ] Each LGPL library's source and build scripts published with the release; licence texts and notices shipped (ADR 0003)
+- [ ] Store policies checked before any store submission (adult content, M6)
+
 - [ ] Android (Compose, Media3 plus a fallback engine), iOS and iPadOS (SwiftUI from macOS), tvOS, the web (the core on WebAssembly)
 - [ ] Local files, downloads and offline playback; several servers and user switching; casting and watch-together
 - Not planned yet (ask to add): music, live TV, books, photos, other media servers.

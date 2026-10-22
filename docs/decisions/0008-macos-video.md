@@ -65,8 +65,21 @@ writes that they are "not recommended for network-facing applications" (`MTProfe
 - The planner keeps the per-platform codec lists above. Jellyfin's HLS output must use fMP4 with `hvc1` for HEVC, which the HLS
   authoring spec requires.
 - D7 is narrowed to a subtitle renderer first; a second engine on macOS is deferred.
-- **AirPlay is not verified:** the picker works, but playback on the owner's AirPlay monitor stopped within seconds in the spike
-  (notes, case 4). It is re-tested before M3 relies on it. AirPlay of an HLS URL hands the URL, including any token, to the receiver;
-  that affects how Jellyfin URLs are formed.
+- **AirPlay works for HLS that the receiver can reach** (re-checked 2026-10-22 on a third-party AirPlay 2 monitor; notes, case 4).
+  The spike's failure was our own UI: auto-hide rebuilt the `AVRoutePickerView`, and a new picker for the same player ended the
+  active route. What M3 must do:
+  - Create one `AVRoutePickerView` per player and keep it for the player's lifetime. Hide the controls with opacity, never by
+    removing the view that holds the picker.
+  - Set no Info.plist key for AirPlay. Per TN3179, AirPlay needs no local network access, and `NSBonjourServices` is only for
+    Bonjour the app does itself. The app still needs `NSLocalNetworkUsageDescription` to reach servers on the LAN, and an
+    Apple-issued signing identity so local network privacy tracks it reliably.
+  - Keep `allowsExternalPlayback` at true (the default). `usesExternalPlaybackWhileExternalScreenIsActive` doesn't exist on macOS.
+  - Draw our own "playing on" placeholder while `isExternalPlaybackActive`, because AVPlayerLayer shows only black. Our controls and
+    Now Playing drive the receiver, and stopping AirPlay continues locally.
+  - Offer AirPlay video only for URLs the receiver can fetch. Local files and loopback URLs fail on this receiver, in QuickTime Player
+    as well. So local or offline playback and anything we proxy on 127.0.0.1 can't be AirPlayed as video there.
+  - AirPlay of an HLS URL is understood to hand the URL, including any token, to the receiver (inferred, not confirmed). That
+    affects how Jellyfin URLs are formed.
+  Not verified: an Apple TV as receiver, HLS from a LAN server, AirPlay without an `AVPlayerLayer`, and HDR on the receiver.
 - Also not verified: SDR external displays, the layer's `preferredDynamicRange` values compared by eye, the Jellyfin HLS output for
   real files, M3's AV1 hardware, and Dolby Vision profiles other than 5.

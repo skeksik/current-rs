@@ -17,6 +17,11 @@ libadwaita in Rust on Linux; Android, iOS, tvOS and the web later. **Desktop fir
 ```
 crates/model        current-model: domain types (pure, no I/O)
 crates/net          current-net: HTTP client per server, typed errors, redacted request log
+crates/app          current-app: composition root (App), capabilities state, observable lists
+crates/ffi          current-ffi: UniFFI surface over current-app (runtime, TaskHandle, CancelToken, CoreError; ADR 0004)
+tools/uniffi-bindgen  UniFFI's generator at the workspace's uniffi version, for Swift
+bindings/csharp     Current.Bindings: generated C# (not checked in) + public adapters, and a console test runner
+bindings/swift      SwiftPM package: XCFramework + generated Swift (not checked in) + adapters, with tests
 docs/               architecture.md, roadmap.md, decisions/ (ADRs)
 ```
 Target layout (ADR 0002): `crates/{model,net,store,jellyfin,seerr,stash,playback,mpv,app,ffi}`, `apps/{windows,macos,linux}`. Each crate
@@ -29,9 +34,14 @@ cargo test --workspace
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                                       # licences and sources (deny.toml, ADR 0003); install: cargo install --locked cargo-deny
+pwsh bindings/csharp/build.ps1; pwsh bindings/csharp/test.ps1   # Windows: build current-ffi, generate C#, build and test the adapters
+sh bindings/swift/build.sh; swift test --package-path bindings/swift   # macOS: build current-ffi, generate Swift, XCFramework, test
 ```
-CI (`.github/workflows/ci.yml`) runs the Rust checks on Linux, Windows and macOS, and cargo-deny on Linux. C# and Swift builds join CI
-with the first app shells (D5 on Windows; build steps in docs/notes/uniffi-bridge.md). They cannot be built in a Linux cloud container: say so in the PR and let CI build them.
+The C# build needs uniffi-bindgen-cs: `cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag
+v0.11.1+v0.31.0 uniffi-bindgen-cs`.
+CI (`.github/workflows/ci.yml`) runs the Rust checks on Linux, Windows and macOS, cargo-deny on Linux, and the bindings jobs "Bindings
+(C#, Windows)" and "Bindings (Swift, macOS)" (the scripts above). C# and Swift cannot be built in a Linux cloud container: say so in the
+PR and let CI build them.
 
 ## Conventions
 - Rust edition 2024, toolchain pinned in `rust-toolchain.toml`. `unsafe_code` is forbidden workspace-wide; a crate that must call C
