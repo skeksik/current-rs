@@ -12,13 +12,11 @@ libadwaita in Rust on Linux; Android, iOS, tvOS and the web later. **Desktop fir
 - **Native behaviour by default.** Each app looks and behaves as its platform's own apps do. If the platform does something a certain
   way, keep it. Departing from it needs a reason and the owner's agreement, recorded in a decision record (ADR 0001).
 - **The player is our own on every platform**, styled and behaving like a native player there (ADR 0001).
-- **Research from the Kotlin project** (`docs/reference/kmp/`) is reference, not a rule. Re-check facts before relying on them; its UI
-  rules apply only when a decision record here adopts them.
 
 ## Layout
 ```
 crates/model        current-model: domain types (pure, no I/O)
-docs/               architecture.md, roadmap.md, decisions/ (ADRs), reference/kmp/ (the Kotlin project's research)
+docs/               architecture.md, roadmap.md, decisions/ (ADRs)
 ```
 Target layout (ADR 0002): `crates/{model,net,store,jellyfin,seerr,stash,playback,mpv,app,ffi}`, `apps/{windows,macos,linux}`. Each crate
 is created by the task that first needs it; a new crate copies the shape of `crates/model` (workspace version, edition, lints).

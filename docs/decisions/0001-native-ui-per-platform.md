@@ -3,11 +3,10 @@
 Status: accepted (2026-10-22)
 
 ## Context
-Current was first built in Kotlin Multiplatform: one Kotlin core, Compose Multiplatform on Android, Windows and Linux, SwiftUI on Apple and
-React on the web (`docs/reference/kmp/`). The owner stopped it because Compose Multiplatform is immature on desktop and does not feel native
-there. Its desktop app needed workarounds for basics a native toolkit has: video under the UI only through a second transparent window
-(reference ADR 0010), no UI Automation for screen readers on Windows, and hand-written rules to make Esc, Back and focus behave like each
-platform.
+Current must run on Windows, macOS and Linux first, then Android, iOS, tvOS and the web, and it must feel native on each. A single
+cross-platform UI toolkit saves writing screens more than once, but on desktop it gives up exactly what a media app needs: drawing its own
+controls over hardware-rendered HDR video, the platform's accessibility APIs, and the platform's own navigation, keyboard, focus and
+windowing conventions, which then have to be imitated by hand. Keeping the logic shared and the UI native avoids that trade.
 
 ## Decision
 - **A shared Rust core** holds all logic: service clients, storage, playback planning and the presentation state each screen renders
@@ -30,8 +29,6 @@ platform.
 - **The player is our own on every platform** (custom controls over the video, never the system player view), but it looks and
   behaves like a player native to that platform: Liquid Glass on Apple, Fluent on Windows, libadwaita on Linux. Its layout may differ
   from the system player's (buttons placed differently), and each platform gets the features this project needs on top.
-- **Research from the Kotlin project is reference, not a rule.** Server facts there remain useful after a re-check. Its UI rules apply
-  only when a decision record here adopts them.
 
 ## Consequences
 - Every screen is written once per platform UI. The shared core keeps that to rendering and platform integration: no logic is

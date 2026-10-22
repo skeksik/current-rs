@@ -63,7 +63,7 @@ comment saying why.
 Wire types are hand-written for the endpoints we use and checked against each server's published spec: Jellyfin's OpenAPI
 (`api.jellyfin.org/openapi/`), Seerr's `seerr-api.yml` at its repo root, Stash's `graphql/schema/`. No mature Rust Jellyfin crate exists
 for 12.x, and generating all of Jellyfin's 357 schemas costs compile time for little gain. Jellyfin 12.0 (2026-09) broke parts of the API
-from 10.11; we support the latest releases only (as the Kotlin project did).
+from 10.11; we support the latest server releases only.
 
 ### Portability
 The core must stay buildable for Android, iOS, tvOS and later WebAssembly. Platform-specific code sits behind traits with per-platform

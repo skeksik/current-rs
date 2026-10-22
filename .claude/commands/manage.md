@@ -49,7 +49,7 @@ message the manager.
 You are a worker session for Current, started by the manager session <manager session id>.
 Task: <title>. Branch: <type>/<topic> (create it from the latest main).
 Scope: <what to build, crates/apps touched, done-when>. Out of scope: <nearby work that belongs to another task>.
-Context: <roadmap item, ADRs, reference notes, earlier PRs, review findings>.
+Context: <roadmap item, ADRs, notes, earlier PRs, review findings>.
 Overlaps: <other open branches touching the same files; whoever merges second merges main and keeps both>.
 
 Follow CLAUDE.md exactly, in particular: no new dependency, tool, Action or version bump without asking; nothing private in code,

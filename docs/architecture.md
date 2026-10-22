@@ -53,5 +53,3 @@ Player UI (WinUI | SwiftUI | GTK)  ->  playback controller (current-playback)  -
 | Windows | libmpv (our LGPL-2.1 build), `vo=gpu-next`, D3D11 | `SwapChainPanel` (D2) |
 | macOS | AVPlayer first; fallback engine from D7 | `AVPlayerLayer` / sample-buffer layer |
 | Linux | libmpv | `GtkGLArea` (D8) |
-
-Facts and measurements from the Kotlin project's research: `docs/reference/kmp/playback.md` and reference ADRs 0007 and 0010.

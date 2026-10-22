@@ -12,7 +12,7 @@ first (Windows, then macOS, then Linux), then the other platforms (ADR 0001). Re
 ## D: Desktop foundations
 Spikes first: they decide whether the stack works at all. Each spike ends in a decision record or notes; its prototype is removed
 before merging, and its PR carries only the record.
-- [ ] D0: docs foundation: CLAUDE.md, architecture, ADRs 0001-0003, reference notes from the Kotlin project, `/manage`, PR template,
+- [ ] D0: docs foundation: CLAUDE.md, architecture, ADRs 0001-0003, `/manage`, PR template,
       CI (Rust on Linux, Windows and macOS; licences with cargo-deny)
 - [ ] D1 spike: the UniFFI bridge. A small API (an observable value, a list with diffs, an async call with cancellation, an error, a
       listener implemented by the UI) shown in a minimal WinUI 3 app and a minimal SwiftUI app, both built in CI. Decides the exact
@@ -20,7 +20,8 @@ before merging, and its PR carries only the record.
 - [ ] D2 spike: Windows video. libmpv into a WinUI 3 `SwapChainPanel` (mpv 0.41's D3D11 composition mode, `display-swapchain`) with
       XAML controls over the video; real HDR10 output on an HDR display; resizing, full screen, several monitors; media keys and the
       Windows media flyout (`SystemMediaTransportControls` for a window). Fallbacks if it fails: mpv's D3D11 render API (unreleased,
-      mpv 0.42) into our own swap chain; the child window plus overlay window measured in the Kotlin project (reference ADR 0010)
+      mpv 0.42) into our own swap chain; libmpv in a child window (`wid`) with our controls in an owned
+      overlay window
 - [ ] D3 spike: macOS video. AVPlayer under our own SwiftUI controls: HDR/EDR, PiP, Now Playing and remote commands, AirPlay; which of
       our formats need a server remux or transcode, so the size of the gap a fallback engine must fill is known
 - [ ] D4: `current-model` and `current-net`: identity and open values, one client per server, error model, redacted request log
@@ -31,6 +32,8 @@ before merging, and its PR carries only the record.
 - [ ] D8 spike: Linux. A GTK4 + libadwaita window on the core; libmpv in a `GtkGLArea` (SDR) and the state of HDR on Linux
 
 ## M1: Jellyfin sign-in and server setup (Windows)
+Each item starts with our own research (the server's API and source, the platform's documentation, how existing clients behave),
+recorded with sources and dates, and a decision record where it decides something.
 - [ ] Server setup: add a Jellyfin server by URL, check it is the same server on every address, warn about plain HTTP except locally
 - [ ] Several addresses per server with roaming (local and internet, the user's order)
 - [ ] Secrets in the OS keyring and a device identity per install

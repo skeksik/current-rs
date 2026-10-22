@@ -1,6 +1,6 @@
 # 0003: Dependency licences
 
-Status: accepted (2026-10-22). Carries over the licence rules of the Kotlin project (reference ADR 0009), with one exception for UniFFI.
+Status: accepted (2026-10-22).
 
 ## Decision
 - **Allowed in a distributed build:** permissively licensed code (MIT, BSD, ISC, Apache-2.0, zlib, Unicode and the like) and LGPL-2.1
@@ -9,7 +9,11 @@ Status: accepted (2026-10-22). Carries over the licence rules of the Kotlin proj
 - **For every LGPL library we ship:** its licence and source (with our changes and build configuration) are published with each release;
   it stays replaceable (a separate dynamic library; where only static linking is possible, our app is offered as object files for
   relinking); our terms allow modifying and debugging it; and the app has an open-source licences screen. FFmpeg and libmpv are built from
-  source in LGPL-2.1 configurations: common prebuilt "LGPL" builds are LGPL-3.0 or GPL (reference ADR 0010).
+  source in LGPL-2.1 configurations. mpv is LGPL-2.1+ only when built without its GPL files (`-Dgpl=false`) and linked against an
+  FFmpeg built without `--enable-gpl`, `--enable-version3` and `--enable-nonfree` (mpv's `Copyright` file, read 2026-10-22,
+  https://github.com/mpv-player/mpv/blob/master/Copyright). Common prebuilt Windows builds do not qualify: shinchiro's builds document no
+  LGPL option, and zhongfly's "lgpl" package links FFmpeg as LGPL-3.0 (their READMEs, read 2026-10-22,
+  https://github.com/shinchiro/mpv-winbuild-cmake, https://github.com/zhongfly/mpv-winbuild).
 - **Exceptions:**
 
 | Library | Licence | Decided | Scope |
@@ -22,7 +26,7 @@ Status: accepted (2026-10-22). Carries over the licence rules of the Kotlin proj
   exception enters `deny.toml`, crate by crate, in the PR that adds the library). A new licence or exception changes `deny.toml` and this
   record in the same PR, with the owner's approval. .NET (NuGet) and Swift packages get
   the same check when their first package is added.
-- **Patents** are a separate check per codec before a commercial release: prefer OS and hardware decoders (reference ADR 0009).
+- **Patents** are a separate check per codec before a commercial release: prefer OS and hardware decoders.
 
 ## Consequences
 - Build tools that are not shipped (cargo-deny, test-only crates) still need the owner's approval to be added, but not a licence exception.
