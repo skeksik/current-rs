@@ -76,7 +76,16 @@ Done when: a title can be found, requested and followed to "available", then pla
 - [ ] Hidden unless a server offers it and the user may see it; access rules enforced in the core. Details are kept privately while the
       repo is public.
 
-## Later
+## Before the first distribution (to anyone, testers included)
+Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 when merged):
+- [ ] End-user terms (EULA) that protect Microsoft at least as much as the Windows App SDK licence does (its section 3(b)(ii)); the
+      indemnity in 3(b)(iii) accepted by the owner; the installer shows the terms
+- [ ] What the Windows App SDK sends to Microsoft (its section 2(a)) checked, and turned off where possible
+- [ ] Code signing for Windows (SmartScreen; the Microsoft Store's installer route requires it) and Apple (Developer ID)
+- [ ] Inno Setup commercial licence: requested, not required, from commercial users above USD 5,000 a year in revenue
+- [ ] Each LGPL library's source and build scripts published with the release; licence texts and notices shipped (ADR 0003)
+- [ ] Store policies checked before any store submission (adult content, M6)
+
 - [ ] Android (Compose, Media3 plus a fallback engine), iOS and iPadOS (SwiftUI from macOS), tvOS, the web (the core on WebAssembly)
 - [ ] Local files, downloads and offline playback; several servers and user switching; casting and watch-together
 - Not planned yet (ask to add): music, live TV, books, photos, other media servers.
