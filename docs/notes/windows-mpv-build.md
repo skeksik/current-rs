@@ -14,7 +14,7 @@ commit and tag. Versions were the newest releases on 2026-10-22.
 | mpv | 0.41.0 | LGPL-2.1-or-later (`-Dgpl=false`) | DLL | The engine. 0.41.0 has `--d3d11-output-mode=composition`, `--d3d11-composition-size` and `--display-fps-override` (its `DOCS/man/options.rst`) |
 | FFmpeg | 9.0.2 | LGPL-2.1-or-later | DLLs (avcodec, avformat, avfilter, avutil, swresample, swscale) | Demuxing, decoding, hwdec d3d11va |
 | libplacebo | 7.360.1 | LGPL-2.1-or-later | DLL | `vo=gpu-next` with its D3D11 backend |
-| shaderc (+ glslang, SPIRV-Tools, SPIRV-Headers at the commits its DEPS file pins) | 2026.4 | Apache-2.0 (glslang: BSD/MIT/Apache-2.0, one Bison-exception file, ADR 0003) | DLLs (`shaderc_shared`, `SPIRV-Tools-shared`; glslang static in shaderc) | GLSL to SPIR-V. mpv's `d3d11` feature requires shaderc and SPIRV-Cross (its `meson.build`) |
+| shaderc (+ glslang, SPIRV-Tools, SPIRV-Headers at the commits its DEPS file pins) | 2026.4 | Apache-2.0 (glslang: BSD/MIT/Apache-2.0, one Bison-exception file, ADR 0003) | DLL (`shaderc_shared`; glslang and SPIRV-Tools linked into it) | GLSL to SPIR-V. mpv's `d3d11` feature requires shaderc and SPIRV-Cross (its `meson.build`) |
 | SPIRV-Cross | vulkan-sdk-1.4.363.0 | Apache-2.0 | DLL (`spirv-cross-c-shared`, the name mpv and libplacebo require) | SPIR-V to HLSL for D3D11 |
 | libass | 0.17.5 | ISC | static in mpv | ASS/SSA rendering, DirectWrite font provider |
 | FreeType | 2.15.0 | FTL (of FTL or GPL-2.0) | static in mpv | Fonts for libass |
@@ -87,13 +87,22 @@ It writes `components.json` and `components.md` (name, version, licence, source 
 tool versions, stage times).
 
 ## Output
-The workflow artifact `libmpv-windows-x64`: `bin/` with the DLL set (13 DLLs: `mpv-2.dll`; `avcodec-63.dll`, `avfilter-12.dll`,
+The workflow artifact `libmpv-windows-x64`: `bin/` with the DLL set (12 DLLs, 44 MB: `mpv-2.dll`; `avcodec-63.dll`, `avfilter-12.dll`,
 `avformat-63.dll`, `avutil-61.dll`, `swresample-7.dll`, `swscale-10.dll`; `libplacebo-360.dll`, `fribidi-0.dll`, `uchardet.dll`;
-`shaderc_shared.dll` with `SPIRV-Tools-shared.dll` (shaderc's shared build links SPIRV-Tools as its own DLL), and
-`spirv-cross-c-shared.dll`), `include/mpv/` and `lib/mpv.lib` for linking, and the files above.
+`shaderc_shared.dll` and `spirv-cross-c-shared.dll`), `include/mpv/` and `lib/mpv.lib` for linking, and the files above. Only DLLs
+that `mpv-2.dll` imports, directly or through another of ours, are shipped (SPIRV-Tools also installs a `SPIRV-Tools-shared.dll` that
+nothing imports). Besides the system DLLs, the set needs the Visual C++ runtime (`vcruntime140.dll`, `vcruntime140_1.dll`,
+`msvcp140.dll`) and the Universal CRT (`api-ms-win-crt-*`); packaging them is the app's task (D5).
 
 ## Build time
-BUILD_TIME_PLACEHOLDER
+Measured on `windows-latest` (4 vCPUs) on 2026-10-22, run 39815666606:
+- **Cold** (no cache): 29 min for the job; the build step 27 min (1637 s). Per stage: FFmpeg 984 s, shaderc with glslang and
+  SPIRV-Tools 300 s, dav1d 102 s, HarfBuzz 71 s, mpv 43 s, SPIRV-Cross 34 s, libplacebo 21 s, pkgconf 19 s, libass 17 s, the rest
+  under 15 s each. The check step takes a few seconds.
+- **Cached** (same sources, scripts and workflow): CACHED_PLACEHOLDER
+
+The build cache is keyed on `build/mpv-windows/**` and the workflow file, so any change to a script or a pinned source rebuilds
+everything; downloads are cached separately, keyed on `sources.toml`.
 
 ## Rebuilding locally
 On Windows 11 x64 with Visual Studio 2022 or later (C++ desktop workload), LLVM (clang, clang-cl, lld-link, llvm-readobj on `PATH`

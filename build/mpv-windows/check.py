@@ -102,18 +102,34 @@ def check_mpv_config(info):
     return {"configuration": configuration}
 
 
-def assemble(prefix, out):
+def dll_imports(dll, env):
+    text = subprocess.run(["llvm-readobj", "--coff-imports", str(dll)], capture_output=True, text=True, check=True, env=env).stdout
+    return sorted(set(re.findall(r"^\s*Name: (\S+\.dll)\s*$", text, re.M | re.I)), key=str.lower)
+
+
+def assemble(prefix, out, env):
+    """Copies mpv-2.dll and the built DLLs it needs, directly or indirectly; anything else the prefix holds is not shipped."""
     if out.exists():
         shutil.rmtree(out)
     (out / "bin").mkdir(parents=True)
-    for dll in sorted((prefix / "bin").glob("*.dll")):
-        shutil.copyfile(dll, out / "bin" / dll.name)
+    built = {p.name.lower(): p for p in (prefix / "bin").glob("*.dll")}
+    if "mpv-2.dll" not in built:
+        fail(f"mpv-2.dll not built; the prefix has {sorted(built)}")
+        return []
+    needed, todo = set(), ["mpv-2.dll"]
+    while todo:
+        name = todo.pop()
+        if name in needed:
+            continue
+        needed.add(name)
+        todo += [n.lower() for n in dll_imports(built[name], env) if n.lower() in built]
+    for name in sorted(needed):
+        shutil.copyfile(built[name], out / "bin" / built[name].name)
     shutil.copytree(prefix / "include" / "mpv", out / "include" / "mpv")
     (out / "lib").mkdir()
     shutil.copyfile(prefix / "lib" / "mpv.lib", out / "lib" / "mpv.lib")
-    dlls = sorted(p.name for p in (out / "bin").glob("*.dll"))
-    mpv = [d for d in dlls if re.fullmatch(r"(lib)?mpv-2\.dll", d)]
-    (ok if mpv else fail)(f"DLL set: {dlls}")
+    dlls = sorted(built[n].name for n in needed)
+    ok(f"DLL set: {dlls}; built but not needed by mpv-2.dll: {sorted(built[n].name for n in built.keys() - needed)}")
     return dlls
 
 
@@ -122,8 +138,7 @@ def check_imports(out, env):
     table = {}
     forbidden = 0
     for dll in sorted((out / "bin").glob("*.dll")):
-        text = subprocess.run(["llvm-readobj", "--coff-imports", str(dll)], capture_output=True, text=True, check=True, env=env).stdout
-        names = sorted(set(re.findall(r"^\s*Name: (\S+\.dll)\s*$", text, re.M | re.I)), key=str.lower)
+        names = dll_imports(dll, env)
         table[dll.name] = names
         # Every DLL must use the shared Universal CRT; a statically linked CRT would mean one heap per DLL.
         if not any(n.lower().startswith(("api-ms-win-crt-", "ucrtbase", "vcruntime140")) for n in names):
@@ -219,7 +234,7 @@ def main():
 
     ffmpeg = check_ffmpeg_config(info)
     mpv = check_mpv_config(info)
-    dlls = assemble(prefix, out)
+    dlls = assemble(prefix, out, env)
     imports = check_imports(out, env)
     versions = run_probe(prefix, out, work, env)
 
