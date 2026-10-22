@@ -420,8 +420,12 @@ async fn the_identity_check_compares_the_server_id() {
         let identity = identity.clone();
         async move { identity.check_client(&client).await }
     };
-    assert_eq!(check(&right).await, IdentityCheck::Passed);
+    assert_eq!(identity.version(), None);
     assert_eq!(check(&other).await, IdentityCheck::DifferentServer);
+    assert_eq!(identity.version(), None);
+    assert_eq!(check(&right).await, IdentityCheck::Passed);
+    // Clones share the version of the last passed check.
+    assert_eq!(identity.version().as_deref(), Some("12.2.0"));
     assert_eq!(check(&portal).await, IdentityCheck::Failed);
     assert_eq!(check(&web).await, IdentityCheck::Failed);
 }
