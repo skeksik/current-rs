@@ -332,6 +332,9 @@ class Build:
              self.env["PKG_CONFIG"].replace("\\", "/")], cwd=bld, env=env)
         keep = self.info / "ffmpeg"
         keep.mkdir(parents=True, exist_ok=True)
+        # With the MSVC toolchain FFmpeg installs its import libraries next to the DLLs; linkers look in lib.
+        for implib in (self.prefix / "bin").glob("*.lib"):
+            shutil.move(implib, self.prefix / "lib" / implib.name)
         for f in ("config.h", "config_components.h", "ffbuild/config.mak", "ffbuild/config.log"):
             shutil.copyfile(bld / f, keep / Path(f).name)
 
