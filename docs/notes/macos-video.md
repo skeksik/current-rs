@@ -62,7 +62,8 @@ main playlist was narrowed into one playlist per video range (DV only, HDR10 onl
   tvOS and in Mac Catalyst apps. Default is NO on macOS."). With it set to YES, `pmset -g assertions` showed a
   `PreventUserIdleDisplaySleep` assertion held by the app while playing, and none after pausing.
 
-### 4. AirPlay: not verified
+### 4. AirPlay: works for HLS the receiver can reach, once the route picker lives as long as the player (re-check below)
+First run (spike):
 - `AVRoutePickerView` (with `player` set) sits in our bar, opens the system's native route menu and lists the owner's AirPlay-capable
   monitor. With `allowsExternalPlayback = true`, playback on the monitor stopped within seconds for every item: Apple's public HLS
   playlists, local MP4 files, and HLS served from 127.0.0.1. Video from another app (YouTube) worked on the same monitor.
@@ -73,6 +74,77 @@ main playlist was narrowed into one playlist per video range (DV only, HDR10 onl
   reverted. The QuickTime Player comparison on the same monitor was not run. **To check later:** a QuickTime Player baseline, the Local
   Network privacy permission for an ad-hoc signed app, and an Apple TV as the receiver. For Jellyfin, AirPlay of an HLS URL sends the
   URL, including any `api_key`, to the receiver.
+
+#### AirPlay re-check (2026-10-22)
+Same Mac and macOS (26.6.2, 25G83). Receiver: a Samsung smart monitor with built-in AirPlay 2 (AirPlay source version 377.40.00
+in its Bonjour record), on the same Wi-Fi as the Mac. No Apple TV was available, so case 4 below is not tested. The prototype from
+`7308ead` was rebuilt the same way (SwiftPM, ad-hoc signed `.app`) with extra logging and two launch switches; the owner watched the
+monitor and picked routes (the route menu belongs to a system process).
+
+**Cause of the spike's failure: our UI, not AirPlay.** The control bar was in an `if controlsVisible` branch, so auto-hide removed it
+and the next mouse move built a new `AVRoutePickerView` bound to the same player. Reproduced: with AirPlay active and the bar hidden,
+moving the pointer over the window created a picker, and `isExternalPlaybackActive` went false in the same second; playback fell back
+to the Mac. The system log at that moment shows the audio routing service removing the monitor because a routing context was
+finalized ("Going to empty AirPlay aggregate and deactivate endpoint due to routing context ... finalize",
+`DeactivateReason_ContextUnregistered`). With the bar faded by opacity instead (the picker created once and kept), AirPlay ran for
+about 5 minutes through every test below without dropping. Apple's documentation doesn't say that a second picker for the same player
+ends the route; this is observed behaviour only.
+
+| Item | QuickTime Player | Our prototype (picker kept alive) |
+|---|---|---|
+| Apple `bipbop_adv_example_hevc/master.m3u8` (HLS, HEVC) | Plays on the monitor (owner) | Plays (owner); held about 5 min |
+| Apple `adv_dv_atmos/main.m3u8` (DV, HDR10, SDR, Atmos) | Not run | Plays (owner); whether the monitor showed HDR was not judged |
+| Local MP4, H.264 + AAC (synthetic, 1 min) | **Fails**: the monitor shows only its AirPlay screen; `-11870`, underlying `-17226` | **Fails** the same way: `AVFoundationErrorDomain -11870` "The content cannot be played on the device", underlying `-17226` |
+| HLS of that MP4 served from 127.0.0.1 | Not run | Fails about 7 s after loading: `-11870`, underlying `-60011`; the monitor showed only its AirPlay screen |
+| HLS from a server on the LAN | Not tested: the owner skipped it | Not tested |
+
+- **Local files:** QuickTime fails with the same codes, so this is the receiver, not our app. CoreMedia logs, for both apps, that the
+  item "is not compatible with the receiver because it doesn't support local media content" (system log, not API). Whether an Apple
+  TV plays local files sent this way: not verified.
+- **127.0.0.1:** expected, since the receiver cannot reach the Mac's loopback address. The code differs from the spike's (`-11868`,
+  underlying `-17223`); why was not investigated.
+- **Changing items keeps the route:** stepping through a queue with ⌘→ sent each new item to the monitor without picking the route
+  again.
+
+Local Network permission (case 2):
+- The prototype never showed the local network alert and is not in System Settings > Privacy & Security > Local Network, yet AirPlay
+  worked. TN3179 lists AirPlay among "high-level services that use Bonjour internally" that don't require local network access.
+  So **AirPlay video needs neither `NSLocalNetworkUsageDescription` nor `NSBonjourServices`**; `NSBonjourServices` is for apps that
+  register or browse Bonjour services themselves (TN3179). The keys were not added to the prototype, because AirPlay already worked
+  without them.
+- Separately from AirPlay, the real app will need `NSLocalNetworkUsageDescription`: an outgoing TCP connection to a local network
+  address (a Jellyfin, Seerr or Stash server on the LAN) requires local network access on macOS 15 and later (TN3179). TN3179 also
+  says local network privacy tracks a program by its code signature, which is unreliable for ad-hoc signed code. A shipped app should
+  be signed with an Apple-issued identity.
+
+Player settings (case 3):
+- `allowsExternalPlayback` is true by default (AVPlayer header and documentation); the prototype sets it explicitly.
+- `usesExternalPlaybackWhileExternalScreenIsActive` and `externalPlaybackVideoGravity` are unavailable on macOS (AVPlayer header,
+  `API_UNAVAILABLE(macos, ...)`).
+- `isExternalPlaybackActive` is KVO-observable and changed exactly when the route started and stopped.
+- In every failure the item's `errorLog()` had no entries. The failure arrived only as the item's error (status `.failed`) or as
+  `failedToPlayToEndTimeNotification`.
+- **Without an `AVPlayerLayer` (`player` detached):** inconclusive. AirPlay started three times and failed 4 to 10 s later with
+  `-11870`, underlying `200401`. Then the owner stopped the testing because AirPlay was misbehaving again. There was no control run
+  with the layer afterwards, so whether the missing layer or the receiver or network caused it is not known.
+- **`allowsExternalPlayback = false`:** not tested.
+
+With the picker kept alive (case 5):
+- Our play/pause, ±10 s and the scrubber drove playback on the monitor (owner confirmed each). The time in our bar kept advancing during
+  AirPlay. Whether it matched the monitor exactly was not measured.
+- **The Mac window shows black:** AVPlayerLayer draws no "playing on" placeholder for AirPlay (unlike PiP, and unlike QuickTime,
+  which shows "This video is playing on …"). The AirPlay button turns blue and our PiP button is disabled
+  (`isPictureInPicturePossible` false).
+- Now Playing (Control Center) showed the title, a preview image, play/pause and seeking, and its play/pause, skip and F8 controlled
+  the monitor (remote command handlers logged, on the main thread). Whether macOS should also show the AirPlay device there was not
+  checked against another app.
+- Picking the Mac in our AirPlay menu stopped AirPlay. Playback continued in our window from the monitor's position after a short
+  buffering wait.
+
+Still unverified: an Apple TV as receiver (none available), HLS from a LAN server (the real Jellyfin case), AirPlay without an
+`AVPlayerLayer`, `allowsExternalPlayback = false`, and whether the monitor showed HDR for the Dolby Vision stream. That AirPlay of an
+HLS URL hands the URL itself to the receiver (with any `api_key` in it) is inferred: public URLs play and a loopback URL fails. It was
+not confirmed from Apple's documentation or a packet capture.
 
 ### 5. Formats: direct play versus remux or transcode
 Probe results on this Mac. "Silent" means `AVPlayerItem` reaches `.readyToPlay` and time advances, but the track is not rendered:
@@ -157,3 +229,11 @@ Jellyfin serving HLS for the same files: **not verified** (the owner skipped it)
   `hev1`/`dvhe`), 2.5 (multichannel codecs: AAC, ALAC, FLAC, AC-3, E-AC-3, E-AC-3 JOC), 2.25 (FLAC and ALAC MUST be fMP4), 4.2 and 5.2-5.4
   (subtitles: WebVTT with `X-TIMESTAMP-MAP`, or IMSC1 text in fMP4).
 - HTTP Live Streaming examples, https://developer.apple.com/streaming/examples/.
+- AirPlay re-check: TN3179 "Understanding local network privacy" (revision 2026-10-06),
+  https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy (platforms table: macOS 15;
+  outgoing TCP to a local network address requires access; AirPlay doesn't; `NSBonjourServices` for Bonjour service types the app
+  uses; code-signing identity). `NSLocalNetworkUsageDescription` and `NSBonjourServices`,
+  https://developer.apple.com/documentation/bundleresources/information-property-list/nslocalnetworkusagedescription and
+  `.../nsbonjourservices`. `AVPlayer.allowsExternalPlayback`,
+  https://developer.apple.com/documentation/avfoundation/avplayer/allowsexternalplayback. macOS 27.0 SDK headers
+  `AVFoundation/AVPlayer.h` (`AVPlayerExternalPlaybackSupport`) and `AVKit/AVRoutePickerView.h` (`player`).
