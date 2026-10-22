@@ -2,7 +2,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use current_model::{PublicServerInfo, ServerAddress, ServerId, ServerRef};
@@ -270,24 +270,42 @@ async fn ask(client: &ServerClient) -> Result<Answer, ProbeError> {
 
 /// The identity check for roaming between a server's addresses (ADR 0014): the address must answer as a usable Jellyfin server with
 /// the expected id. Runs on `current-net`'s probe client for the address, which carries no credentials and is reused between races.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// It keeps the version the server reported in its last passed check, for the capabilities state; clones share it.
+#[derive(Clone, Debug)]
 pub struct JellyfinIdentity {
     expected: ServerId,
+    version: Arc<Mutex<Option<String>>>,
 }
 
 impl JellyfinIdentity {
     pub fn new(expected: ServerId) -> Self {
-        Self { expected }
+        Self {
+            expected,
+            version: Arc::default(),
+        }
     }
 
     /// Checks the address `client` is bound to. A server that sends the request to its web client fails: a stored address is
     /// already the base path, unlike what a user types in setup.
     pub async fn check_client(&self, client: &ServerClient) -> IdentityCheck {
         match ask(client).await {
-            Ok(Answer::Found(found)) if found.info.id == self.expected => IdentityCheck::Passed,
+            Ok(Answer::Found(found)) if found.info.id == self.expected => {
+                *self.version.lock().unwrap_or_else(PoisonError::into_inner) =
+                    Some(found.info.version);
+                IdentityCheck::Passed
+            }
             Ok(Answer::Found(_)) => IdentityCheck::DifferentServer,
             Ok(Answer::WebClient(_)) | Err(_) => IdentityCheck::Failed,
         }
+    }
+
+    /// The version the server reported in the last check that passed; `None` before one did. Recorded before the check returns,
+    /// so it is there by the time the race that selects the address publishes its result.
+    pub fn version(&self) -> Option<String> {
+        self.version
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 

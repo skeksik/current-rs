@@ -11,6 +11,7 @@ use current_app::{AddServerState, App, NewServer, SignIn, SignInError, SignInSta
 use current_jellyfin::AuthError;
 use current_jellyfin::ProbeError;
 use current_model::{Permission, Reachability, ServerKey, ServerRef, ServiceType, UserId};
+use current_net::NetError;
 use current_store::{
     MemorySecrets, Secret, SecretKey, Secrets, SecretsError, SettingsStore, StoreError,
 };
@@ -52,10 +53,9 @@ struct Server {
 }
 
 impl Server {
-    fn info(&self) -> String {
+    fn info(id: &str) -> String {
         format!(
-            r#"{{"LocalAddress":"http://192.168.1.10:8096","ServerName":"Test Server","Version":"12.2.0","ProductName":"Jellyfin Server","Id":"{}","StartupWizardCompleted":true}}"#,
-            self.id
+            r#"{{"LocalAddress":"http://192.168.1.10:8096","ServerName":"Test Server","Version":"12.2.0","ProductName":"Jellyfin Server","Id":"{id}","StartupWizardCompleted":true}}"#
         )
     }
 
@@ -106,9 +106,9 @@ impl Server {
         Self::token(received).is_some_and(|token| self.tokens.lock().unwrap().contains_key(&token))
     }
 
-    fn answer(&self, received: &Received) -> (u16, String) {
+    fn answer(&self, received: &Received, id: Option<String>) -> (u16, String) {
         match received.path.as_str() {
-            "/System/Info/Public" => (200, self.info()),
+            "/System/Info/Public" => (200, Self::info(id.as_deref().unwrap_or(&self.id))),
             "/Users/AuthenticateByName" if received.body.contains(PASSWORD) => {
                 let user = if received.body.contains("Another User") {
                     OTHER_USER_ID
@@ -179,24 +179,68 @@ async fn start(id: &str) -> (Arc<Server>, String) {
         id: id.to_owned(),
         ..Server::default()
     });
+    let (_, address) = listen(&server).await;
+    (server, address)
+}
+
+/// One address of a stand-in: several can lead to the same server state, as a LAN address and a public name do.
+#[derive(Default)]
+struct Endpoint {
+    /// Answers the identity probe with this server id instead of the server's own: another server at this address.
+    id: Mutex<Option<String>>,
+    /// Reads each request, records it and closes the connection without an answer.
+    down: AtomicBool,
+    /// Reads requests and never answers.
+    hang: AtomicBool,
+    /// Never answers `/Users/Me`.
+    hang_me: AtomicBool,
+    received: Mutex<Vec<Received>>,
+}
+
+impl Endpoint {
+    fn with_token(&self) -> usize {
+        self.received
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.authorization.contains("Token="))
+            .count()
+    }
+}
+
+/// Opens another address for `server`; returns it with its own state.
+async fn listen(server: &Arc<Server>) -> (Arc<Endpoint>, String) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let endpoint = Arc::new(Endpoint::default());
     let state = server.clone();
+    let at = endpoint.clone();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let state = state.clone();
+            let at = at.clone();
             tokio::spawn(async move {
                 let Some(received) = read_request(&mut socket).await else {
                     return;
                 };
+                at.received.lock().unwrap().push(received.clone());
+                if at.down.load(Ordering::SeqCst) {
+                    return;
+                }
                 state.received.lock().unwrap().push(received.clone());
+                if at.hang.load(Ordering::SeqCst)
+                    || (received.path == "/Users/Me" && at.hang_me.load(Ordering::SeqCst))
+                {
+                    std::future::pending::<()>().await;
+                }
                 if received.path == "/Sessions/Logout" {
                     let hold = state.hold_logout.lock().unwrap().clone();
                     if let Some(hold) = hold {
                         hold.notified().await;
                     }
                 }
-                let (status, body) = state.answer(&received);
+                let id = at.id.lock().unwrap().clone();
+                let (status, body) = state.answer(&received, id);
                 let response = format!(
                     "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
@@ -206,7 +250,7 @@ async fn start(id: &str) -> (Arc<Server>, String) {
             });
         }
     });
-    (server, address)
+    (endpoint, address)
 }
 
 async fn read_request(socket: &mut tokio::net::TcpStream) -> Option<Received> {
@@ -565,7 +609,8 @@ async fn a_restart_restores_the_session() {
     assert_eq!(status.version.as_deref(), Some("12.2.0"));
     assert!(status.user.unwrap().has_permission(&Permission::ADMIN));
     assert!(app.jellyfin(&jellyfin("1")).is_some());
-    // The identity probe ran before the token was sent.
+    assert_eq!(status.address, Some(1));
+    // The provider's identity probe ran before the token was sent.
     let paths = server.paths();
     let probe = paths
         .iter()
@@ -575,7 +620,7 @@ async fn a_restart_restores_the_session() {
     assert!(probe < me, "{paths:?}");
     assert!(
         app.diagnostics_text()
-            .contains("jellyfin/1 GET /Users/Me -> 200")
+            .contains("jellyfin/1 address 1 GET /Users/Me -> 200")
     );
     assert_nothing_secret(&app, temp.path(), "", &server);
 }
@@ -733,10 +778,11 @@ async fn sign_out_deletes_the_token_even_when_the_server_is_gone() {
     let app = open(temp.path(), &secrets);
     app.restore_sessions().await;
 
-    // Restore found the server unreachable, so there is no live client: signing out is local.
+    // Restore found the server unreachable but kept the session: the server cannot be told, and the app signs out anyway.
+    assert!(app.jellyfin(&jellyfin("1")).is_some());
     assert_eq!(
         app.sign_out(&jellyfin("1")).await,
-        Err(AuthError::NotSignedIn)
+        Err(AuthError::Network(NetError::Unreachable))
     );
     assert!(secrets.get(&secret_key()).unwrap().is_none());
     assert_eq!(app.settings().unwrap().get().servers[0].active_user, None);
@@ -881,6 +927,8 @@ async fn a_403_mid_session_changes_nothing() {
     let secrets = Arc::new(MemorySecrets::new());
     let app = open(temp.path(), &secrets);
     signed_in_with_password(&app, &address).await;
+    // The session's provider has selected its address.
+    eventually(|| app.capabilities().borrow().servers[0].address == Some(1)).await;
     let before = app.capabilities().borrow().clone();
     let token = stored(&secrets, USER_ID);
 
@@ -929,10 +977,9 @@ async fn signing_in_again_checks_the_server_before_sending_the_password() {
             error: SignInError::Probe(ProbeError::DifferentServer)
         }
     );
-    assert_eq!(
-        other.paths(),
-        ["/System/Info/Public", "/System/Info/Public"]
-    );
+    // The provider checked the address once and skips it from then on: no password and no Quick Connect request reached it.
+    assert_eq!(other.paths(), ["/System/Info/Public"]);
+    assert_eq!(other.with_token(), 0);
     assert!(stored(&secrets, USER_ID).is_none());
     drop(server);
 }
@@ -1036,4 +1083,322 @@ async fn a_restore_while_signing_out_does_not_sign_back_in() {
     assert!(app.jellyfin(&jellyfin("1")).is_none());
     assert!(stored(&secrets, USER_ID).is_none());
     assert_eq!(app.settings().unwrap().get().servers[0].active_user, None);
+}
+
+#[tokio::test]
+async fn the_saved_servers_are_published_on_every_change() {
+    let (_server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    let mut saved = app.saved_servers();
+    assert!(saved.borrow_and_update().is_empty());
+
+    signed_in_with_password(&app, &address).await;
+    assert!(saved.has_changed().unwrap());
+    let list = saved.borrow_and_update().clone();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].active_user, Some(UserId::new(USER_ID)));
+
+    app.sign_out(&jellyfin("1")).await.unwrap();
+    assert!(saved.has_changed().unwrap());
+    assert_eq!(saved.borrow_and_update()[0].active_user, None);
+    assert_eq!(*saved.borrow(), app.servers());
+}
+
+/// Saves `addresses` as server 1's list, in this order.
+fn set_addresses(app: &App, addresses: &[&str]) {
+    app.settings()
+        .unwrap()
+        .update(|settings| {
+            settings.servers[0].addresses = addresses
+                .iter()
+                .map(|url| current_model::ServerAddress {
+                    url: (*url).to_owned(),
+                    plain_http_confirmed: false,
+                })
+                .collect();
+        })
+        .unwrap();
+}
+
+fn network(key: &str) -> current_model::NetworkFacts {
+    current_model::NetworkFacts {
+        connectivity: current_model::Connectivity::Full,
+        network_key: Some(current_model::NetworkKey::new(key)),
+        ..current_model::NetworkFacts::default()
+    }
+}
+
+#[tokio::test]
+async fn a_saved_server_restores_on_its_second_address_when_the_first_is_down() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &address).await;
+    set_addresses(&app, &["http://127.0.0.1:1", &address]);
+    drop(app);
+
+    let app = open(temp.path(), &secrets);
+    app.restore_sessions().await;
+    let status = app.capabilities().borrow().servers[0].clone();
+    assert!(status.signed_in);
+    assert_eq!(status.reachability, Reachability::Reachable);
+    assert_eq!(status.address, Some(2));
+    assert_eq!(status.version.as_deref(), Some("12.2.0"));
+    assert!(status.user.unwrap().has_permission(&Permission::ADMIN));
+    // Address 1's probe may still be failing when address 2 wins (a refused connection takes about 2 s on Windows), so only
+    // what went to address 2 is certain; nothing but probes can go to address 1.
+    let text = app.diagnostics_text();
+    assert!(!text.contains("address 1 GET /Users/Me"), "{text}");
+    assert!(
+        text.contains("jellyfin/1 address 2 GET /Users/Me -> 200"),
+        "{text}"
+    );
+    assert_nothing_secret(&app, temp.path(), "", &server);
+}
+
+#[tokio::test]
+async fn an_address_with_another_server_id_never_gets_the_token() {
+    let (server, address) = start(SERVER_ID).await;
+    let (other, other_address) = start(OTHER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &address).await;
+    set_addresses(&app, &[&other_address, &address]);
+    drop(app);
+
+    let app = open(temp.path(), &secrets);
+    app.restore_sessions().await;
+    let status = app.capabilities().borrow().servers[0].clone();
+    assert!(status.signed_in);
+    assert_eq!(status.reachability, Reachability::Reachable);
+    assert_eq!(status.address, Some(2));
+    let client = app.jellyfin(&jellyfin("1")).unwrap();
+    assert_eq!(client.current_user().await.unwrap().name, "Example User");
+    assert_eq!(other.paths(), ["/System/Info/Public"]);
+    assert_eq!(other.with_token(), 0);
+    drop(server);
+}
+
+/// A stand-in server with two addresses; returns the server, each address's state and the addresses.
+async fn two_addresses() -> (Arc<Server>, [(Arc<Endpoint>, String); 2]) {
+    let server = Arc::new(Server {
+        id: SERVER_ID.to_owned(),
+        ..Server::default()
+    });
+    let first = listen(&server).await;
+    let second = listen(&server).await;
+    (server, [first, second])
+}
+
+#[tokio::test]
+async fn a_network_change_races_again_and_the_session_continues() {
+    let (_server, [(first_at, first), (second_at, second)]) = two_addresses().await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &first).await;
+    set_addresses(&app, &[&first, &second]);
+    drop(app);
+
+    let app = open(temp.path(), &secrets);
+    app.network_changed(network("home"));
+    app.restore_sessions().await;
+    assert_eq!(app.capabilities().borrow().servers[0].address, Some(1));
+    let client = app.jellyfin(&jellyfin("1")).unwrap();
+
+    // The same network again is no change: the session goes on at address 1.
+    app.network_changed(network("home"));
+    assert_eq!(client.current_user().await.unwrap().name, "Example User");
+    assert_eq!(second_at.with_token(), 0);
+
+    // On another network the first address leads to another server. The session races again, skips it without sending the
+    // token there and continues at the second address with the same client.
+    *first_at.id.lock().unwrap() = Some(OTHER_ID.to_owned());
+    let sent = first_at.with_token();
+    app.network_changed(network("away"));
+    assert_eq!(client.current_user().await.unwrap().name, "Example User");
+    assert_eq!(first_at.with_token(), sent);
+    assert_eq!(second_at.with_token(), 1);
+    eventually(|| app.capabilities().borrow().servers[0].address == Some(2)).await;
+    let current = app.jellyfin(&jellyfin("1")).unwrap();
+    assert!(Arc::ptr_eq(&client, &current));
+    let status = app.capabilities().borrow().servers[0].clone();
+    assert!(status.signed_in);
+    assert_eq!(status.reachability, Reachability::Reachable);
+}
+
+#[tokio::test]
+async fn the_status_follows_reachability_and_the_user_is_checked_once_reached() {
+    let (server, [(first_at, first), _]) = two_addresses().await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &first).await;
+    drop(app);
+
+    // Down at the start: signed in, unreachable, the user not confirmed (no permissions known yet).
+    first_at.down.store(true, Ordering::SeqCst);
+    let sent = first_at.with_token();
+    let app = open(temp.path(), &secrets);
+    app.restore_sessions().await;
+    // The probes reached the address but failed, so no request carried the token.
+    assert!(first_at.received.lock().unwrap().len() > sent);
+    assert_eq!(first_at.with_token(), sent);
+    let status = app.capabilities().borrow().servers[0].clone();
+    assert!(status.signed_in);
+    assert_eq!(status.reachability, Reachability::Unreachable);
+    assert_eq!(status.address, None);
+    assert!(status.user.unwrap().permissions.is_empty());
+    assert!(app.jellyfin(&jellyfin("1")).is_some());
+    let checks = || server.paths().iter().filter(|p| *p == "/Users/Me").count();
+    let before = checks();
+
+    // Back: the next race reaches it, the status follows and the user is checked.
+    first_at.down.store(false, Ordering::SeqCst);
+    app.returned_to_foreground();
+    eventually(|| {
+        let status = app.capabilities().borrow().servers[0].clone();
+        status.reachability == Reachability::Reachable
+            && status.address == Some(1)
+            && status
+                .user
+                .is_some_and(|user| user.has_permission(&Permission::ADMIN))
+    })
+    .await;
+    assert_eq!(checks(), before + 1);
+
+    // Gone again after a network change: unreachable, still signed in.
+    first_at.down.store(true, Ordering::SeqCst);
+    app.network_changed(network("away"));
+    eventually(|| app.capabilities().borrow().servers[0].reachability == Reachability::Unreachable)
+        .await;
+    let status = app.capabilities().borrow().servers[0].clone();
+    assert!(status.signed_in);
+    assert_eq!(status.address, None);
+    // Reached again: the user was confirmed already, so no second check.
+    first_at.down.store(false, Ordering::SeqCst);
+    app.returned_to_foreground();
+    eventually(|| app.capabilities().borrow().servers[0].address == Some(1)).await;
+    settle().await;
+    assert_eq!(checks(), before + 1);
+}
+
+#[tokio::test]
+async fn signing_in_again_waits_for_an_address_in_signing_in_and_can_be_cancelled() {
+    let (server, [(first_at, first), _]) = two_addresses().await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &first).await;
+    app.sign_out(&jellyfin("1")).await.unwrap();
+    drop(app);
+
+    // The address takes the connection and never answers: the provider's race waits for its probe.
+    first_at.hang.store(true, Ordering::SeqCst);
+    let before = first_at.received.lock().unwrap().len();
+    let app = open(temp.path(), &secrets);
+    let flow = Arc::new(app.sign_in_again(&jellyfin("1")).unwrap().unwrap());
+    let task = tokio::spawn({
+        let flow = flow.clone();
+        async move { flow.with_password("Example User", PASSWORD).await }
+    });
+    eventually(|| first_at.received.lock().unwrap().len() == before + 1).await;
+    assert_eq!(*flow.state().borrow(), SignInState::SigningIn);
+    flow.cancel();
+    tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        *flow.state().borrow(),
+        SignInState::Ready {
+            quick_connect: None
+        }
+    );
+    // Only the probe reached the server: no password.
+    let paths: Vec<String> = first_at.received.lock().unwrap()[before..]
+        .iter()
+        .map(|r| r.path.clone())
+        .collect();
+    assert_eq!(paths, ["/System/Info/Public"]);
+    drop(server);
+}
+
+#[tokio::test]
+async fn a_cancelled_restore_checks_the_user_again_later() {
+    let (_server, [(first_at, first), _]) = two_addresses().await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &first).await;
+    drop(app);
+
+    // The restore is dropped while `/Users/Me` hangs.
+    first_at.hang_me.store(true, Ordering::SeqCst);
+    let app = open(temp.path(), &secrets);
+    let cancelled = tokio::time::timeout(Duration::from_millis(300), app.restore_sessions()).await;
+    assert!(cancelled.is_err());
+    assert!(app.jellyfin(&jellyfin("1")).is_some());
+    let me = || {
+        first_at
+            .received
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.path == "/Users/Me")
+            .count()
+    };
+    let before = me();
+
+    // Running restore again checks the user that was never confirmed.
+    first_at.hang_me.store(false, Ordering::SeqCst);
+    app.restore_sessions().await;
+    eventually(|| {
+        app.capabilities().borrow().servers[0]
+            .user
+            .as_ref()
+            .is_some_and(|user| user.has_permission(&Permission::ADMIN))
+    })
+    .await;
+    assert_eq!(me(), before + 1);
+}
+
+#[tokio::test]
+async fn a_sign_in_that_adds_an_address_rebuilds_the_provider_and_the_status_follows_it() {
+    let (_server, [(first_at, first), (second_at, second)]) = two_addresses().await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &first).await;
+    eventually(|| app.capabilities().borrow().servers[0].address == Some(1)).await;
+
+    // Setup finds the same server at a second address; signing in there adds it to the saved server.
+    signed_in_with_password(&app, &second).await;
+    let saved = app.servers();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].addresses.len(), 2);
+    let client = app.jellyfin(&jellyfin("1")).unwrap();
+
+    // The session goes over both addresses: with the first one down, a network change moves it to the second, and the status
+    // follows the new provider.
+    first_at.down.store(true, Ordering::SeqCst);
+    let sent = first_at.with_token();
+    app.network_changed(network("away"));
+    assert_eq!(client.current_user().await.unwrap().name, "Example User");
+    eventually(|| {
+        let status = app.capabilities().borrow().servers[0].clone();
+        status.reachability == Reachability::Reachable && status.address == Some(2)
+    })
+    .await;
+    assert_eq!(first_at.with_token(), sent);
+    assert!(second_at.with_token() > 0);
+
+    // A restore now (its list is the current one) keeps the same provider: the status stays on address 2.
+    app.restore_sessions().await;
+    settle().await;
+    assert_eq!(app.capabilities().borrow().servers[0].address, Some(2));
 }

@@ -186,7 +186,11 @@ merge):
   - `LogEntry` gains `address: Option<u8>`.
 - **`current-app`:** `App::network_changed(facts)` fans out to every provider made by `App::jellyfin_addresses(server, id,
   addresses, runtime)`, and providers made later start from the last facts. `App::returned_to_foreground()` makes unreachable servers
-  race at once. Wiring providers into signed-in servers and the capabilities state is left to sign-in.
+  race at once. Signed-in servers use them since wave 3 (ADR 0015, "Address"): one provider per saved Jellyfin server, kept in the
+  app's shared state, and the capabilities state follows its status. `JellyfinIdentity::version()` gives the version from the last
+  passed check, so `IdentityCheck` stays a plain enum. Known window: a request that took its address just before the platform
+  reported a network change still goes there, with its credentials, on the new network; the `Id` check cannot close that, and
+  catches mistakes rather than attackers anyway.
 - **While `Unreachable`, `wait` returns at once** instead of holding requests until the next retry: a request fails fast, and the
   backoff races go on.
 - **Connectivity `None` skips probing:** the provider goes to `Unreachable` with no retry timer until the next report.
