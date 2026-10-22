@@ -1,7 +1,7 @@
 # Architecture
 
 > Status (2026-10-22): the workspace holds `current-model` (ADR 0005), `current-net` (ADR 0006), `current-store` (ADR 0013),
-> `current-jellyfin` (server setup, ADR 0012), `current-app` and `current-ffi` (ADR 0004), with the C# and Swift bindings in `bindings/`
+> `current-jellyfin` (server setup, ADR 0012; sign-in, ADR 0015), `current-app` and `current-ffi` (ADR 0004), with the C# and Swift bindings in `bindings/`
 > and the Windows app shell in `apps/windows` (ADR 0009). Everything else here is the target (ADR 0001, ADR 0002); details are settled
 > by the desktop spikes (docs/roadmap.md, phase D).
 
@@ -37,9 +37,11 @@ shown with an offline state.
 Each screen or feature has a state object in `current-app`. A UI subscribes with a listener and gets a task handle it cancels when the
 screen goes away; lists arrive as diffs. Actions are methods on the state object; long work is async.
 
-- **`current-app`** is the composition root. `App` is created once per process and owns the shared request log and the capabilities
-  state (a `watch` value, empty until server setup exists). `App::open` takes the data folder the UI passes in and a `Secrets`
-  implementation, and loads the settings and the device id (ADR 0013). `ObservableList` is the core-side list: changes and subscriptions under one
+- **`current-app`** is the composition root. `App` is created once per process and owns the shared request log, the capabilities
+  state (a `watch` value, one status per saved server), the saved servers and one signed-in `JellyfinClient` per live session.
+  `App::open` takes the data folder the UI passes in, a `Secrets` implementation and the device name Jellyfin shows (ADR 0015), and
+  loads the settings, the device id and the saved servers (ADR 0013). Its async methods run settings and keyring calls on tokio's
+  blocking pool. `ObservableList` is the core-side list: changes and subscriptions under one
   lock, `Reset` first and after lag. It has no runtime of its own.
 - **`current-store`** keeps what lasts between runs (ADR 0013): `settings.json` (versioned, saved atomically, migrated step by step;
   a corrupt file is kept aside, a newer one is read-only), the `Secrets` trait over the OS keyring (Windows Credential Manager, macOS
@@ -48,7 +50,14 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
 - **Server setup** (ADR 0012): `current-jellyfin` turns typed text into candidate base URLs, probes `/System/Info/Public` on each
   and identifies the server by its id; `current-net::transport` says whether plain HTTP to an address needs the user's confirmation
   (silent on loopback and the local network). `current-app`'s `AddServer` is the flow's state (`Idle`, `Probing`, `Failed`,
-  `ConfirmPlainHttp`, `Ready`), in memory until `current-store` persists servers; not yet on the bridge.
+  `ConfirmPlainHttp`, `Ready`); not yet on the bridge.
+- **Sign-in** (ADR 0015): `current-jellyfin` sends `Authorization: MediaBrowser Client, Device, DeviceId, Version[, Token]` with
+  percent-encoded values on every request; `JellyfinClient` signs in by password or Quick Connect, reads the current user and signs
+  out. `current-app`'s `SignIn` flow (`Ready`, `SigningIn`, `QuickConnectWaiting`, `Failed`, `SignedIn`) starts from `AddServer`'s
+  `Ready` or a saved server; success saves the server (`SavedServer` in `settings.json`: key, server id, addresses, users, active
+  user) and the token in the keyring only. `App::restore_sessions` checks each saved session after an identity probe; a 401 to any
+  request with the token signs the server out and deletes the token; `App::sign_out` deletes it whatever the server answers. Each
+  server uses its first address (`FixedAddress`) until roaming (ADR 0014).
 - **`current-ffi`** is the UniFFI surface. It owns the one tokio runtime (`core-worker` threads) and exports `Core`, `TaskHandle`
   (cancel and abort on drop), `CancelToken` and one error enum, `CoreError`. Values are pumped from `watch` channels to listeners, lists
   as diff batches (`list_diff!` declares the per-item diff enum). `Core::live_listeners` counts the listeners the core holds, for leak
