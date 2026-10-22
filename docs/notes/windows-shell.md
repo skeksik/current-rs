@@ -240,3 +240,16 @@ uniffi-bindgen-cs v0.11.1+v0.31.0, Inno Setup 7.1.0 (SHA-256 as in CI). C# tests
    install), reported success and left the program folder with the 47 files the running process had loaded. After a reinstall over
    that folder, the next uninstall removed every file but left the empty folder. Inno's `AppMutex`, with a named mutex the app
    creates, would make setup and uninstall detect the running app (not verified here).
+
+## Windows shell: owner's re-check
+2026-10-22, head 71b6c4d, same PC and tools as the owner's run; C# tests 12/12, smoke run passed, setup 45.5 MB, installed with the
+normal setup. Only cases 4 and 9.
+4. Copy diagnostics: **pass.** 10 clicks with clipboard history on (5 spaced, 5 in a quick burst): no crash, no event log entry,
+   "Diagnostics copied to the clipboard." every time, the error InfoBar never. Before each spaced click a marker was put on the
+   clipboard; each click replaced it, and the text stayed after Current exited. With no servers the text is empty (the request log
+   is empty, as `App::diagnostics_text` is designed), so the paste shows nothing yet.
+9. Uninstall with Current open: **pass.** Settings > Apps: after the uninstaller's confirmation, "Uninstall has detected that
+   Current is currently running." OK with Current still open asks again; Cancel removed nothing, and Current started again from
+   Start. After closing Current, OK: the program folder (the folder itself too), the Start entry and the Apps entry are gone.
+   `%LOCALAPPDATA%\Current` did not exist (nothing writes there yet), so its staying was not seen here (the install test checks it).
+   Running the setup with Current open gives "Setup has detected that Current is currently running."; Cancel exits it.
