@@ -209,9 +209,12 @@ internal static class Tests
         var ui = new ManualDispatcher();
         Subscribe(core, ui);
         Check(core.LiveListeners == 1, "one listener");
-        // The listener holds its subscription weakly, so nothing keeps it alive; its handle's finaliser frees the core's task.
+        await Eventually("the first value is queued", () => ui.Pending == 1);
+        // The listener holds its subscription weakly, so nothing keeps it alive once the UI thread has run the work it queued (which
+        // holds the subscription until then); the handle's finaliser then frees the core's task.
         await Eventually("the core drops the listener", () =>
         {
+            ui.Drain();
             GC.Collect();
             GC.WaitForPendingFinalizers();
             return core.LiveListeners == 0;
