@@ -288,6 +288,20 @@ async fn a_get_is_retried_once_on_the_new_address_after_a_connect_failure() {
 }
 
 #[tokio::test]
+async fn a_post_that_was_never_sent_is_retried() {
+    let first = StandIn::start(Mode::Serve(SERVER_ID)).await;
+    let second = StandIn::start(Mode::Serve(SERVER_ID)).await;
+    let (_roaming, client, _) = setup(&[first.port, second.port]);
+    client.send(Request::get("/Items")).await.unwrap();
+
+    // Refused: the request never left, so even a POST may go to the new address.
+    first.stop().await;
+    client.send(Request::post("/Items")).await.unwrap();
+    assert_eq!(first.count("POST", "/Items"), 0);
+    assert_eq!(second.count("POST", "/Items"), 1);
+}
+
+#[tokio::test]
 async fn a_post_after_a_dropped_response_is_not_retried() {
     let first = StandIn::start(Mode::Serve(SERVER_ID)).await;
     let second = StandIn::start(Mode::Serve(SERVER_ID)).await;

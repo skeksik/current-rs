@@ -237,8 +237,9 @@ impl std::fmt::Debug for RoamingAddresses {
 }
 
 impl RoamingAddresses {
-    /// A provider for `server` over `addresses` in the user's order. One probe client per usable address is built now and reused;
-    /// probes are logged to `log`. Races run on `runtime`; nothing runs until the first request or [`RoamingAddresses::retry_now`].
+    /// A provider for `server` over `addresses` in the user's order. One probe client per usable address is built now and reused
+    /// (building one sets up TLS, which takes noticeable time: make providers once per server, not per request); probes are logged
+    /// to `log`. Races run on `runtime`; nothing runs until the first request or [`RoamingAddresses::retry_now`].
     ///
     /// # Errors
     /// [`RoamingError`] for an address that is not an http(s) URL, more than 255 addresses, or a TLS backend that does not start.
