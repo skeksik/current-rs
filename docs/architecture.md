@@ -1,7 +1,7 @@
 # Architecture
 
-> Status (2026-10-22): the workspace holds `current-model` (ADR 0005), `current-net` (ADR 0006), `current-app` and `current-ffi`
-> (ADR 0004), with the C# and Swift bindings in `bindings/` and the Windows app shell in `apps/windows` (ADR 0009). Everything else here is the target (ADR 0001, ADR 0002); details are settled
+> Status (2026-10-22): the workspace holds `current-model` (ADR 0005), `current-net` (ADR 0006), `current-jellyfin` (server setup,
+> ADR 0012), `current-app` and `current-ffi` (ADR 0004), with the C# and Swift bindings in `bindings/` and the Windows app shell in `apps/windows` (ADR 0009). Everything else here is the target (ADR 0001, ADR 0002); details are settled
 > by the desktop spikes (docs/roadmap.md, phase D).
 
 ## Overview
@@ -39,6 +39,10 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
 - **`current-app`** is the composition root. `App` is created once per process and owns the shared request log and the capabilities
   state (a `watch` value, empty until server setup exists). `ObservableList` is the core-side list: changes and subscriptions under one
   lock, `Reset` first and after lag. It has no runtime of its own.
+- **Server setup** (ADR 0012): `current-jellyfin` turns typed text into candidate base URLs, probes `/System/Info/Public` on each
+  and identifies the server by its id; `current-net::transport` says whether plain HTTP to an address needs the user's confirmation
+  (silent on loopback and the local network). `current-app`'s `AddServer` is the flow's state (`Idle`, `Probing`, `Failed`,
+  `ConfirmPlainHttp`, `Ready`), in memory until `current-store` persists servers; not yet on the bridge.
 - **`current-ffi`** is the UniFFI surface. It owns the one tokio runtime (`core-worker` threads) and exports `Core`, `TaskHandle`
   (cancel and abort on drop), `CancelToken` and one error enum, `CoreError`. Values are pumped from `watch` channels to listeners, lists
   as diff batches (`list_diff!` declares the per-item diff enum). `Core::live_listeners` counts the listeners the core holds, for leak

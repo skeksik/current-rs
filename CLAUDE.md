@@ -16,8 +16,9 @@ libadwaita in Rust on Linux; Android, iOS, tvOS and the web later. **Desktop fir
 ## Layout
 ```
 crates/model        current-model: domain types (pure, no I/O)
-crates/net          current-net: HTTP client per server, typed errors, redacted request log
-crates/app          current-app: composition root (App), capabilities state, observable lists
+crates/net          current-net: HTTP client per server, typed errors, redacted request log, plain-HTTP rule
+crates/jellyfin     current-jellyfin: Jellyfin client; so far server setup (address parsing, probe, identity; ADR 0012)
+crates/app          current-app: composition root (App), capabilities state, observable lists, add-a-server flow
 crates/ffi          current-ffi: UniFFI surface over current-app (runtime, TaskHandle, CancelToken, CoreError; ADR 0004)
 tools/uniffi-bindgen  UniFFI's generator at the workspace's uniffi version, for Swift
 bindings/csharp     Current.Bindings: generated C# (not checked in) + public adapters, and a console test runner
