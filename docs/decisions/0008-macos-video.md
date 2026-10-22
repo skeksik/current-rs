@@ -55,7 +55,7 @@ AVPlayer plus a remuxing server covers containers, audio and HDR. What is left:
 **D7 starts with items 1 and 2 without replacing AVPlayer:** our own subtitle renderer, driven by AVPlayer's clock, drawing ASS
 through libass and PGS/VobSub bitmaps over the video. It is fed by subtitle streams the server extracts without touching the video.
 This removes the full-transcode cases and keeps HDR. Licences and the server's ability to extract bitmap subtitle streams are checked
-in D7 (not verified here). A full fallback engine (FFmpeg demux and decode, with VideoToolbox, into an
+in D7 (not verified here). D7's decision: ADR 0010. A full fallback engine (FFmpeg demux and decode, with VideoToolbox, into an
 `AVSampleBufferDisplayLayer`, or libmpv) is needed only for items 3 and 4. It can wait until local or offline playback is planned,
 since the server covers item 3 for streaming. MediaExtension format readers (macOS 14+) could add MKV to AVFoundation, but Apple
 writes that they are "not recommended for network-facing applications" (`MTProfessionalVideoWorkflow.h`), and they exist on macOS only.
