@@ -1,0 +1,83 @@
+name: libmpv for Windows
+
+# Builds our own LGPL-2.1 libmpv and FFmpeg for Windows x64 (ADR 0003, ADR 0007; docs/notes/windows-mpv-build.md). It takes long,
+# so it runs only by hand and when the build itself changes, not on every PR.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['build/mpv-windows/**', '.github/workflows/mpv-windows.yml']
+  pull_request:
+    paths: ['build/mpv-windows/**', '.github/workflows/mpv-windows.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mpv-windows-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Actions are pinned by commit SHA, with the tag they were taken from in a comment.
+jobs:
+  build:
+    name: libmpv (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 240
+    env:
+      # Short work path: SPIRV-Tools and FFmpeg build trees run into Windows' path length limit under the workspace.
+      WORK: C:\mpvb
+      MESON_VERSION: 1.12.1
+      NINJA_VERSION: 1.13.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Downloads are verified by checksum or commit on every use, so they can be cached by the source list alone.
+      - name: Cache downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\mpvb\dl
+          key: mpv-windows-dl-${{ hashFiles('build/mpv-windows/sources.toml') }}
+
+      # The installed build, keyed on the sources, the scripts and this workflow: any change rebuilds everything.
+      - name: Cache build
+        id: cache-build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            C:\mpvb\prefix
+            C:\mpvb\tools
+          key: mpv-windows-build-${{ hashFiles('build/mpv-windows/**', '.github/workflows/mpv-windows.yml') }}
+
+      - name: Install meson and ninja; MSYS2 make for FFmpeg
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check "meson==$env:MESON_VERSION" "ninja==$env:NINJA_VERSION"
+          C:\msys64\usr\bin\pacman.exe -Sy --noconfirm --needed make diffutils
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build
+        shell: pwsh
+        run: python build/mpv-windows/build.py --work $env:WORK
+
+      - name: Licence check and component list
+        shell: pwsh
+        run: python build/mpv-windows/check.py --work $env:WORK --out $env:WORK\out
+
+      - name: Upload the DLL set
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: libmpv-windows-x64
+          path: C:\mpvb\out
+          if-no-files-found: error
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: libmpv-windows-x64-logs
+          path: |
+            C:\mpvb\bld\**\meson-logs\meson-log.txt
+            C:\mpvb\bld\**\CMakeFiles\CMakeConfigureLog.yaml
+            C:\mpvb\bld\ffmpeg\ffbuild\config.log
+            C:\mpvb\prefix\share\current-build\**
+          if-no-files-found: ignore
