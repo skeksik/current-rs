@@ -22,6 +22,7 @@ crates/ffi          current-ffi: UniFFI surface over current-app (runtime, TaskH
 tools/uniffi-bindgen  UniFFI's generator at the workspace's uniffi version, for Swift
 bindings/csharp     Current.Bindings: generated C# (not checked in) + public adapters, and a console test runner
 bindings/swift      SwiftPM package: XCFramework + generated Swift (not checked in) + adapters, with tests
+apps/windows        the WinUI 3 app (Current.Shell, builds Current.exe), its Inno Setup installer and install test (ADR 0009)
 docs/               architecture.md, roadmap.md, decisions/ (ADRs)
 ```
 Target layout (ADR 0002): `crates/{model,net,store,jellyfin,seerr,stash,playback,mpv,app,ffi}`, `apps/{windows,macos,linux}`. Each crate
@@ -35,12 +36,14 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                                       # licences and sources (deny.toml, ADR 0003); install: cargo install --locked cargo-deny
 pwsh bindings/csharp/build.ps1; pwsh bindings/csharp/test.ps1   # Windows: build current-ffi, generate C#, build and test the adapters
+pwsh apps/windows/build.ps1; pwsh apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe   # Windows, after the C# build: publish and smoke-run the app
+pwsh apps/windows/installer/build-installer.ps1 -Iscc <path to ISCC.exe>   # Windows: build the installer (Inno Setup 7)
 sh bindings/swift/build.sh; swift test --package-path bindings/swift   # macOS: build current-ffi, generate Swift, XCFramework, test
 ```
 The C# build needs uniffi-bindgen-cs: `cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag
 v0.11.1+v0.31.0 uniffi-bindgen-cs`.
-CI (`.github/workflows/ci.yml`) runs the Rust checks on Linux, Windows and macOS, cargo-deny on Linux, and the bindings jobs "Bindings
-(C#, Windows)" and "Bindings (Swift, macOS)" (the scripts above). C# and Swift cannot be built in a Linux cloud container: say so in the
+CI (`.github/workflows/ci.yml`) runs the Rust checks on Linux, Windows and macOS, cargo-deny on Linux, the bindings jobs "Bindings
+(C#, Windows)" and "Bindings (Swift, macOS)", and "App (Windows)" (publish, smoke run, installer, install/upgrade/uninstall test). C# and Swift cannot be built in a Linux cloud container: say so in the
 PR and let CI build them.
 
 ## Conventions

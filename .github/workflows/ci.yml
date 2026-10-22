@@ -73,6 +73,58 @@ jobs:
         shell: pwsh
         run: ./bindings/csharp/test.ps1
 
+  # The Windows app (apps/windows): build the core and the bindings, publish the app self-contained for x64, run its smoke test, build
+  # the installer and test install, upgrade and uninstall (docs/notes/windows-shell.md, ADR 0009).
+  app-windows:
+    name: App (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      # Uncached: about 3 minutes.
+      - name: Install uniffi-bindgen-cs
+        run: cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.1+v0.31.0 uniffi-bindgen-cs
+      - name: Build the core and the C# bindings
+        shell: pwsh
+        run: ./bindings/csharp/build.ps1
+      - name: Publish the app
+        shell: pwsh
+        run: ./apps/windows/build.ps1
+      - name: Smoke run (headless start and exit, bridge checks)
+        shell: pwsh
+        run: ./apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe
+      - name: Install Inno Setup (official installer, checksum checked)
+        shell: pwsh
+        env:
+          INNO_VERSION: 7.1.0
+          # Measured on 2026-10-22: jrsoftware.org publishes no checksums.
+          INNO_SHA256: 0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f
+        run: |
+          $tag = 'is-' + $env:INNO_VERSION.Replace('.', '_')
+          $file = "innosetup-$env:INNO_VERSION-x64.exe"
+          $setup = Join-Path $env:RUNNER_TEMP $file
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/$tag/$file" -OutFile $setup
+          $hash = (Get-FileHash -Algorithm SHA256 $setup).Hash
+          if ($hash -ne $env:INNO_SHA256) { throw "$file has SHA-256 $hash" }
+          $dir = Join-Path $env:RUNNER_TEMP 'inno'
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER', "/DIR=`"$dir`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the Inno Setup installer exited with $($p.ExitCode)" }
+          "ISCC=$(Join-Path $dir 'ISCC.exe')" >> $env:GITHUB_ENV
+      # An older version first, so the second install is an upgrade.
+      - name: Build the installers
+        shell: pwsh
+        run: |
+          ./apps/windows/installer/build-installer.ps1 -Version 0.0.1 -Iscc $env:ISCC
+          ./apps/windows/installer/build-installer.ps1 -Iscc $env:ISCC
+      - name: Install, upgrade and uninstall test
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          ./apps/windows/installer/test-install.ps1 `
+            -Old apps/windows/out/installer/Current-0.0.1-x64-setup.exe -OldVersion 0.0.1 `
+            -New "apps/windows/out/installer/Current-$version-x64-setup.exe" -NewVersion $version
+
   # The Swift package (bindings/swift): XCFramework, generated bindings and adapters (ADR 0004).
   bindings-macos:
     name: Bindings (Swift, macOS)
