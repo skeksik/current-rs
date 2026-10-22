@@ -127,8 +127,13 @@ class Build:
             shutil.rmtree(dest)
         dest.mkdir(parents=True)
         run(["git", "init", "-q", dest])
-        run(["git", "-C", dest, "fetch", "-q", "--depth", "1", s["git"], commit])
-        run(["git", "-C", dest, "-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"])
+        if "tag" in s:
+            # Fetch the tag itself so `git describe` (mpv's and libplacebo's version strings) names the release.
+            run(["git", "-C", dest, "fetch", "-q", "--depth", "1", s["git"], f"refs/tags/{s['tag']}:refs/tags/{s['tag']}"])
+            run(["git", "-C", dest, "-c", "advice.detachedHead=false", "checkout", "-q", f"refs/tags/{s['tag']}"])
+        else:
+            run(["git", "-C", dest, "fetch", "-q", "--depth", "1", s["git"], commit])
+            run(["git", "-C", dest, "-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD"])
         head = subprocess.run(["git", "-C", dest, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
         if head != commit:
             sys.exit(f"{s['name']}: fetched {head}, expected {commit}")
