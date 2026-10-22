@@ -17,6 +17,11 @@ public enum ListDiff<Item: Sendable>: Sendable {
 public struct ListDiffOutOfRange: Error, Equatable {
     public let index: Int
     public let count: Int
+
+    public init(index: Int, count: Int) {
+        self.index = index
+        self.count = count
+    }
 }
 
 extension ListDiff {
