@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a PR branch cancels its older run; runs on main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Actions are pinned by commit SHA, with the tag they were taken from in a comment.
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Installs the toolchain pinned in rust-toolchain.toml.
+      - run: rustup toolchain install
+      - run: cargo fmt --all --check
+        if: runner.os == 'Linux'
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  licences:
+    name: Licences and sources (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DENY_VERSION: 0.20.2
+      DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - name: Install cargo-deny (release binary, checksum checked)
+        run: |
+          f="cargo-deny-${DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl -sSLf -o "$f" "https://github.com/EmbarkStudios/cargo-deny/releases/download/${DENY_VERSION}/$f"
+          echo "${DENY_SHA256}  $f" | sha256sum -c -
+          tar -xzf "$f" --strip-components=1 -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - run: cargo deny --locked check
