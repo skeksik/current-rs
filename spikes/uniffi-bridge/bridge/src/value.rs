@@ -139,8 +139,10 @@ mod tests {
         let handle = core.subscribe_value(l);
         wait_until("initial value", || !seen.take().is_empty());
         assert_eq!(alive.count(), 1);
+        assert_eq!(core.live_listeners(), 1);
         handle.cancel();
         wait_until("listener dropped", || alive.count() == 0);
+        assert_eq!(core.live_listeners(), 0);
         assert!(handle.is_finished());
         core.increment();
         std::thread::sleep(Duration::from_millis(50));

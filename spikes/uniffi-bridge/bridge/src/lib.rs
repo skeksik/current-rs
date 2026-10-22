@@ -33,6 +33,7 @@ pub struct Core {
     ticker: std::sync::Mutex<Option<Arc<TaskHandle>>>,
     feed: std::sync::Mutex<Option<Arc<TaskHandle>>>,
     in_flight: Arc<AtomicU32>,
+    listeners: Arc<AtomicU32>,
 }
 
 #[uniffi::export]
@@ -47,6 +48,7 @@ impl Core {
             ticker: std::sync::Mutex::new(None),
             feed: std::sync::Mutex::new(None),
             in_flight: Arc::new(AtomicU32::new(0)),
+            listeners: Arc::new(AtomicU32::new(0)),
         }))
     }
 
@@ -58,7 +60,14 @@ impl Core {
     /// Calls `listener.on_value` with the current value, then on every change, on a runtime worker thread,
     /// until the returned handle is cancelled or dropped.
     pub fn subscribe_value(&self, listener: Box<dyn ValueListener>) -> Arc<TaskHandle> {
-        self.value.subscribe(&self.rt, listener)
+        let held = Counted::hold(&self.listeners);
+        self.value.subscribe(
+            &self.rt,
+            Box::new(Held {
+                listener,
+                _held: held,
+            }),
+        )
     }
 
     pub fn increment(&self) {
@@ -81,7 +90,14 @@ impl Core {
 
     /// Calls `listener.on_diffs` with `[Reset(current)]`, then with each batch of changes, on a runtime worker thread.
     pub fn subscribe_items(&self, listener: Box<dyn ItemsListener>) -> Arc<TaskHandle> {
-        self.items.subscribe(&self.rt, listener)
+        let held = Counted::hold(&self.listeners);
+        self.items.subscribe(
+            &self.rt,
+            Box::new(Held {
+                listener,
+                _held: held,
+            }),
+        )
     }
 
     /// Applies the next scripted change (append, insert, set, remove, reset in turn).
@@ -116,16 +132,58 @@ impl Core {
         self.in_flight.load(Ordering::SeqCst)
     }
 
-    /// Name of the calling thread, so the apps can show which thread a callback arrived on.
-    pub fn thread_name(&self) -> String {
-        runtime::thread_name()
+    /// Number of foreign listeners the core still holds: drops when a handle is cancelled or released, so the apps
+    /// can show that unsubscribing really lets go of their object.
+    pub fn live_listeners(&self) -> u32 {
+        self.listeners.load(Ordering::SeqCst)
     }
+}
+
+/// Name of the calling thread, so the apps can show which thread a callback arrived on. A free function on purpose:
+/// a listener that captured `Core` to call a method would keep the core alive (docs/notes/uniffi-bridge.md).
+#[uniffi::export]
+pub fn current_thread_name() -> String {
+    runtime::thread_name()
 }
 
 impl Drop for Core {
     fn drop(&mut self) {
         replace_task(&self.ticker, None);
         replace_task(&self.feed, None);
+    }
+}
+
+/// Counts something while it is alive (a listener the core holds, a call still running).
+pub(crate) struct Counted(Arc<AtomicU32>);
+
+impl Counted {
+    pub(crate) fn hold(counter: &Arc<AtomicU32>) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(counter.clone())
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// A foreign listener plus the count of it; dropping the task drops both.
+struct Held<L: ?Sized> {
+    listener: Box<L>,
+    _held: Counted,
+}
+
+impl ValueListener for Held<dyn ValueListener> {
+    fn on_value(&self, value: Snapshot) {
+        self.listener.on_value(value);
+    }
+}
+
+impl ItemsListener for Held<dyn ItemsListener> {
+    fn on_diffs(&self, diffs: Vec<ItemDiff>) {
+        self.listener.on_diffs(diffs);
     }
 }
 

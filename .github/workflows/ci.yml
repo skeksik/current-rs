@@ -54,3 +54,38 @@ jobs:
           tar -xzf "$f" --strip-components=1 -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - run: cargo deny --locked check
+
+  # D1 spike only (docs/notes/uniffi-bridge.md): proves the bridge builds into a WinUI 3 app and a SwiftUI app.
+  # Removed together with spikes/ before merge.
+  spike-bridge-windows:
+    name: Spike bridge (WinUI 3)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      BINDGEN_CS_TAG: v0.11.1+v0.31.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - name: Test the bridge crate
+        working-directory: spikes/uniffi-bridge
+        run: cargo test --locked
+      - name: Install uniffi-bindgen-cs (git tag, its own lockfile)
+        run: cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag "$env:BINDGEN_CS_TAG" uniffi-bindgen-cs
+      - name: Build library, generate C#, publish the app
+        run: ./spikes/uniffi-bridge/windows/build.ps1 -Platform x64
+
+  spike-bridge-macos:
+    name: Spike bridge (SwiftUI)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - name: Test the bridge crate
+        working-directory: spikes/uniffi-bridge
+        run: |
+          cargo fmt --all --check
+          cargo clippy --all-targets --locked -- -D warnings
+          cargo test --locked
+      - name: Build library, generate Swift, build the app
+        run: sh spikes/uniffi-bridge/macos/build.sh

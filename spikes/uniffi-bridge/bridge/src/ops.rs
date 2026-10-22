@@ -7,13 +7,13 @@
 //! (Kotlin cancels by dropping it; so would Rust callers), the work is aborted too ([`AbortOnDrop`]).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 use std::time::Duration;
 
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::BridgeError;
+use crate::{BridgeError, Counted};
 
 /// Created by the UI per call (or per group of calls) and cancelled from any thread.
 #[derive(uniffi::Object)]
@@ -41,22 +41,6 @@ impl CancelToken {
     }
 }
 
-/// Counts running work; decremented when the work's future is dropped, whether it finished or was aborted.
-struct InFlight(Arc<AtomicU32>);
-
-impl InFlight {
-    fn start(counter: Arc<AtomicU32>) -> Self {
-        counter.fetch_add(1, Ordering::SeqCst);
-        Self(counter)
-    }
-}
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
 struct AbortOnDrop<T>(JoinHandle<T>);
 
 impl<T> Drop for AbortOnDrop<T> {
@@ -81,7 +65,7 @@ pub(crate) async fn slow_reverse(
     if *cancelled.borrow_and_update() {
         return Err(BridgeError::Cancelled);
     }
-    let guard = InFlight::start(in_flight);
+    let guard = Counted::hold(&in_flight); // released when the work's future is dropped, finished or aborted
     // The work runs on the core's runtime: the future UniFFI polls only waits for it, so it needs no tokio context.
     let mut work = AbortOnDrop(rt.spawn(async move {
         let _guard = guard;
