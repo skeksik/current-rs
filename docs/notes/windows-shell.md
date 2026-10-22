@@ -133,7 +133,9 @@ handler restores its window if minimised and activates it. `--smoke` skips the k
   Uninstall see a running Current ("[Setup or Uninstall] has detected that [AppName] is currently running. Please close all
   instances of it now, then click OK to continue, or Cancel to exit.", Inno's AppMutex topic, read 2026-10-22). Without it, the
   owner's run found that uninstalling with the app open neither closed nor warned and left the 47 loaded files behind. The topic
-  does not say what happens in a silent run; the install test's running-app case shows which way Inno goes (below).
+  does not say what happens in a silent run. CI shows it (PR run 39822556373, 2026-10-22): a silent uninstall with the app running
+  stops at once and removes nothing; Inno's log says "Defaulting to Cancel for suppressed message box (OK/Cancel): Uninstall has
+  detected that Current is currently running." Interactively, the same message lets the user close Current and continue.
   `[UninstallDelete] Type: dirifempty` removes the then empty program folder, which an uninstall after a reinstall over leftovers
   had left.
 - `test-install.ps1` (CI, job "App (Windows)"): installs 0.0.1, checks `Current.exe`, the Apps entry's version, the shortcut and its
