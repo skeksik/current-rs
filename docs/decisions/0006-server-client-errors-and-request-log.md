@@ -1,6 +1,6 @@
 # 0006: Server client, errors and request log
 
-Status: accepted (2026-10-22). Crypto provider: see below.
+Status: accepted (2026-10-22).
 
 ## Context
 `current-net` is the one HTTP client every service crate builds on. Its errors reach the UI, and its log is meant to be pasted into bug
@@ -14,9 +14,14 @@ reports in a public repo, so neither may carry a server's address or a secret.
   from the request as the caller made it, before the hook runs and before the address is joined, so neither credentials nor the host
   can reach it (tested).
 - **Every request has a timeout:** the client's (default 30 s for the whole request, 10 s to connect) unless the request sets its own.
-- **No redirects are followed:** a 3xx is reported as a status error, so credential headers never travel to another host.
+- **Redirects stay on the server:** at most 5 hops, each to the original request's host, on the same scheme and port or as an http to
+  https upgrade (reverse proxies commonly redirect to https or add a trailing slash). Any other redirect (another host or port, https to
+  http, too many hops) stops with `NetError::Redirected`, whose `Location` lets server setup show where the server points; its Debug
+  output hides the address. Credentials therefore never reach another host (tested). Credentials sent as query pairs do not survive a
+  redirect, since the new location carries its own query. Header credentials do, except that reqwest drops `Authorization` and
+  `Cookie` when the scheme changes, so an http to https upgrade loses them (reqwest `src/redirect.rs`, `remove_sensitive_headers`).
 - **Errors (`NetError`, thiserror), by what the UI does:** `Unreachable` (offline, DNS, refused or dropped connection), `Timeout`,
-  `Tls`, `Auth` (401/403), `Status` (any other non-2xx), `Decode`, `InvalidRequest` (a path or body the calling crate got wrong; no
+  `Tls`, `Auth` (401/403), `Status` (any other non-2xx), `Redirected`, `Decode`, `InvalidRequest` (a path or body the calling crate got wrong; no
   server involved). `Auth` and `Status` carry the server's message (from a JSON `message`, `detail`, `title` or `error` field, or a
   short text body, cut at 300 characters) for the UI only. No variant carries a URL, header or library error text: transport errors are
   sorted by kind after `reqwest::Error::without_url()`, and `Decode` keeps only line and column because a decoder's message can quote
@@ -28,16 +33,30 @@ reports in a public repo, so neither may carry a server's address or a secret.
   logged. The same line goes to `tracing` at debug level.
 - **Rule for service crates:** paths are logged as given, so a path must never embed a secret (tokens and keys go through
   `RequestAuth` as headers or query pairs). Ids in paths are fine: they are opaque.
-- **TLS:** reqwest 0.13 with rustls and rustls-platform-verifier (the OS's certificate store). Crypto provider: **pending the owner's
-  decision** (ring through `rustls-no-provider` and a process-wide `install_default`, or reqwest's default aws-lc-rs); recorded here
-  with sources when decided.
+- **TLS:** reqwest 0.13 with rustls and rustls-platform-verifier, which checks certificates with the OS's own verifier and store.
+- **Crypto provider: ring** (owner, 2026-10-22), not reqwest's default aws-lc-rs. ring builds with a C compiler alone; aws-lc-sys
+  builds a much larger C library and is heavier to cross-compile for Android and iOS (build requirements per target not verified).
+  Both are permissively licensed. reqwest's `rustls` feature hard-wires aws-lc-rs, so `current-net` uses `rustls-no-provider` and
+  depends on rustls directly (default features off; `ring`, `std`, `tls12`). With that feature reqwest takes rustls's process-wide
+  default provider and panics at client build if none is set, so `ServerClient::new` installs ring once (guarded by `Once`; an
+  already installed provider is kept). **The provider is process-wide:** anything else in the process using rustls's default gets ring
+  too.
+- **Proxies: the OS's settings** (owner, 2026-10-22), as native apps do. reqwest always reads the `HTTP_PROXY`, `HTTPS_PROXY` and
+  `NO_PROXY` environment variables; its `system-proxy` feature adds the Windows and macOS system settings. It adds
+  `system-configuration`, `system-configuration-sys`, `core-foundation` 0.9 (macOS) and `windows-registry`, `windows-result`,
+  `windows-strings` (Windows), all MIT OR Apache-2.0.
 
 ## Consequences
 - A UI can map each error to one message and action (sign in again, retry, check the connection) without parsing text.
 - Diagnostics are safe to paste, at the cost of hiding query values that would sometimes help debugging.
-- A server behind an http-to-https redirect must be configured with its https address.
+- A server that redirects to another host (for example a login portal in front of it) fails with `Redirected` until the user enters
+  the address it points to.
 
 ## Sources (read 2026-10-22)
 - reqwest 0.13.5 source, crates.io: `Cargo.toml` features (`rustls` enables aws-lc-rs and rustls-platform-verifier;
-  `rustls-no-provider` only the verifier), `src/async_impl/client.rs` (`CryptoProvider::get_default()` before reqwest's own default),
-  `src/error.rs` (`without_url`), `src/lib.rs` (environment proxies are always read; `system-proxy` adds Windows and macOS settings).
+  `rustls-no-provider` only the verifier), `src/async_impl/client.rs` (`CryptoProvider::get_default()`, else a panic without
+  aws-lc-rs), `src/error.rs` (`without_url`), `src/redirect.rs` (custom policies), `src/lib.rs` (environment proxies are always read;
+  `system-proxy` uses "Windows and macOS system proxy settings").
+- hyper-util 0.1.21 `Cargo.toml`: `client-proxy-system` pulls `system-configuration` and `windows-registry`.
+- Licences from each crate's `Cargo.toml`: ring 0.17.14 "Apache-2.0 AND ISC"; rustls 0.23.46 "Apache-2.0 OR ISC OR MIT"; aws-lc-sys
+  0.46.0 ISC, Apache-2.0, MIT and BSD-3-Clause terms.

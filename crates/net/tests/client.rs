@@ -19,6 +19,8 @@ const SECRET: &str = "s3cret-token-value";
 enum Reply {
     /// Answers with this status and body.
     With(u16, &'static str),
+    /// Answers 302 to `/start` with this location, and 200 to anything else.
+    Redirect(String),
     /// Reads the request and never answers.
     Silent,
     /// Answers in plain HTTP as soon as the connection opens, without reading (what a TLS client meets at a plain-HTTP port).
@@ -51,17 +53,28 @@ impl StandIn {
                     }
                     let head = read_head(&mut socket).await;
                     if let Ok(mut log) = log.lock() {
-                        log.push(head);
+                        log.push(head.clone());
+                    }
+                    let answer = |status: u16, extra: &str, body: &str| {
+                        format!(
+                            "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\n{extra}connection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    };
+                    let response = match &reply {
+                        Reply::With(status, body) => Some(answer(*status, "", body)),
+                        Reply::Redirect(location) if head.contains(" /base/start") => {
+                            Some(answer(302, &format!("location: {location}\r\n"), ""))
+                        }
+                        Reply::Redirect(_) => Some(answer(200, "", "{}")),
+                        Reply::Silent | Reply::PlainHttp => None,
+                    };
+                    if let Some(response) = response {
+                        let _ = socket.write_all(response.as_bytes()).await;
+                        let _ = socket.shutdown().await;
                     }
                     match reply {
-                        Reply::With(status, body) => {
-                            let response = format!(
-                                "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                                body.len()
-                            );
-                            let _ = socket.write_all(response.as_bytes()).await;
-                            let _ = socket.shutdown().await;
-                        }
+                        Reply::With(..) | Reply::Redirect(_) => {}
                         Reply::Silent => tokio::time::sleep(Duration::from_secs(30)).await,
                         Reply::PlainHttp => {}
                     }
@@ -211,21 +224,54 @@ async fn other_statuses_are_status_errors() {
 }
 
 #[tokio::test]
-async fn a_redirect_is_not_followed() {
-    let server = StandIn::start(Reply::With(302, "")).await;
+async fn a_redirect_on_the_same_server_is_followed() {
+    let server = StandIn::start(Reply::Redirect("/base/end".into())).await;
+    let log = Arc::new(RequestLog::default());
+    let response = ok(client(&server.address, &log, Duration::from_secs(5))
+        .send(Request::get("/start"))
+        .await);
+    assert_eq!(response.status, 200);
+    let received = server.received();
+    assert_eq!(received.len(), 2);
+    assert!(
+        received[1].starts_with("GET /base/end HTTP/1.1"),
+        "{}",
+        received[1]
+    );
+    // One logged request: the one the caller made.
+    assert_eq!(log.entries().len(), 1);
+}
+
+#[tokio::test]
+async fn a_redirect_to_another_server_is_not_followed() {
+    let other = StandIn::start(Reply::With(200, "{}")).await;
+    let target = ok(other.address.join("end"));
+    let server = StandIn::start(Reply::Redirect(target.to_string())).await;
     let log = Arc::new(RequestLog::default());
     let error = client(&server.address, &log, Duration::from_secs(5))
-        .send(Request::get("/"))
+        .send(Request::get("/start"))
         .await
         .err();
-    assert_eq!(
-        error,
-        Some(NetError::Status {
-            status: 302,
-            message: None
-        })
+
+    let Some(NetError::Redirected {
+        status: 302,
+        location: Some(location),
+    }) = &error
+    else {
+        panic!("{error:?}")
+    };
+    assert_eq!(location.url(), &target);
+    // The other server got nothing, so neither did the token.
+    assert!(other.received().is_empty());
+    assert_eq!(log.entries()[0].outcome, Outcome::Error("redirected"));
+    assert_clean(
+        &format!(
+            "{error:?} {} {}",
+            error.as_ref().map(ToString::to_string).unwrap_or_default(),
+            log.to_text()
+        ),
+        &other.address,
     );
-    assert_eq!(server.received().len(), 1);
 }
 
 #[tokio::test]
@@ -320,6 +366,10 @@ async fn every_error_displays_without_the_address() {
             message: None,
         },
         NetError::Decode { line: 1, column: 2 },
+        NetError::Redirected {
+            status: 301,
+            location: None,
+        },
         NetError::InvalidRequest,
     ];
     for error in errors {

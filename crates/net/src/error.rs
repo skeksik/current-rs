@@ -31,6 +31,13 @@ pub enum NetError {
         status: u16,
         message: Option<String>,
     },
+    /// A redirect that was not followed: to another host or port, from https to http, or too many in a row. `location` is where the
+    /// server points, for server setup to show; it is redacted from Debug and never part of Display.
+    #[error("the server redirected elsewhere ({status})")]
+    Redirected {
+        status: u16,
+        location: Option<Location>,
+    },
     /// The response did not have the expected shape. Only the position is kept: a decoder's message can quote the response.
     #[error("the server's response could not be read (line {line}, column {column})")]
     Decode { line: usize, column: usize },
@@ -81,9 +88,26 @@ impl NetError {
             Self::Tls => "tls",
             Self::Auth { .. } => "auth",
             Self::Status { .. } => "status",
+            Self::Redirected { .. } => "redirected",
             Self::Decode { .. } => "decode",
             Self::InvalidRequest => "invalid request",
         }
+    }
+}
+
+/// Where a redirect pointed. Holds an address, so its Debug output hides it; read it with [`Location::url`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct Location(pub(crate) url::Url);
+
+impl Location {
+    pub fn url(&self) -> &url::Url {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Location {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Location([redacted])")
     }
 }
 

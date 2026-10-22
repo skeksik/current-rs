@@ -10,7 +10,7 @@ mod log;
 pub use client::{
     AddressProvider, ClientConfig, FixedAddress, Request, RequestAuth, Response, ServerClient,
 };
-pub use error::NetError;
+pub use error::{Location, NetError};
 pub use log::{DEFAULT_CAPACITY, LogEntry, Outcome, REDACTED, RequestLog, redact_query};
 pub use reqwest::Method;
 pub use reqwest::header;

@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use url::Url;
 
-use crate::error::NetError;
+use crate::error::{Location, NetError};
 use crate::log::{LogEntry, Outcome, RequestLog, redact_query};
 
 /// Where a server is right now. The seam for roaming between a server's addresses (M1): the client asks before every request, so a
@@ -166,9 +166,18 @@ impl ServerClient {
         let http = reqwest::Client::builder()
             .timeout(config.timeout)
             .connect_timeout(config.connect_timeout)
-            // Credentials are headers the service crates add; following a redirect could carry them to another host. A redirect is
-            // reported as a status instead (ADR 0006).
-            .redirect(redirect::Policy::none())
+            .redirect(redirect::Policy::custom(|attempt| {
+                let follow = attempt.previous().len() <= MAX_REDIRECTS
+                    && attempt
+                        .previous()
+                        .first()
+                        .is_some_and(|first| may_follow(first, attempt.url()));
+                if follow {
+                    attempt.follow()
+                } else {
+                    attempt.stop()
+                }
+            }))
             .build()
             // Building fails only when the TLS backend cannot start.
             .map_err(|_| NetError::Tls)?;
@@ -241,6 +250,17 @@ impl ServerClient {
         let response = builder.send().await.map_err(NetError::from_reqwest)?;
         let status = response.status().as_u16();
         let headers = response.headers().clone();
+        if (300..400).contains(&status) {
+            // A redirect the policy would not follow, or the end of a chain that was too long.
+            let location = headers
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| response.url().join(value).ok());
+            return Err(NetError::Redirected {
+                status,
+                location: location.map(Location),
+            });
+        }
         let body = response
             .bytes()
             .await
@@ -254,6 +274,22 @@ impl ServerClient {
             headers,
             body,
         })
+    }
+}
+
+/// How many redirects one request follows.
+const MAX_REDIRECTS: usize = 5;
+
+/// Whether a redirect from the request's original address may be followed: only to the same host, on the same scheme and port or as
+/// an upgrade from http to https. Credentials therefore never reach another host (ADR 0006).
+fn may_follow(from: &Url, to: &Url) -> bool {
+    if from.host() != to.host() {
+        return false;
+    }
+    match (from.scheme(), to.scheme()) {
+        ("http", "https") => true,
+        (a, b) if a == b => from.port_or_known_default() == to.port_or_known_default(),
+        _ => false,
     }
 }
 
@@ -294,6 +330,40 @@ mod tests {
             Ok(url) => url,
             Err(error) => panic!("{error}"),
         }
+    }
+
+    #[test]
+    fn redirects_stay_on_the_same_host() {
+        let follows = |from: &str, to: &str| may_follow(&url(from), &url(to));
+        assert!(follows(
+            "http://192.168.1.10:8096/a",
+            "http://192.168.1.10:8096/a/"
+        ));
+        assert!(follows(
+            "http://media.example.com/a",
+            "https://media.example.com/a"
+        ));
+        assert!(follows(
+            "http://media.example.com:8096/a",
+            "https://media.example.com/a"
+        ));
+        assert!(follows(
+            "https://media.example.com/a",
+            "https://media.example.com:443/b"
+        ));
+        assert!(!follows(
+            "https://media.example.com/a",
+            "http://media.example.com/a"
+        ));
+        assert!(!follows(
+            "http://media.example.com/a",
+            "http://other.example.com/a"
+        ));
+        assert!(!follows(
+            "http://192.168.1.10:8096/a",
+            "http://192.168.1.10:8097/a"
+        ));
+        assert!(!follows("http://192.168.1.10/a", "http://127.0.0.1/a"));
     }
 
     #[test]
