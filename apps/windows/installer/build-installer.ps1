@@ -1,4 +1,4 @@
-# Builds the installer from the published app (apps/windows/build.ps1) into apps/windows/out/installer. Needs Inno Setup 6's ISCC.exe:
+# Builds the installer from the published app (apps/windows/build.ps1) into apps/windows/out/installer. Needs Inno Setup 7's ISCC.exe:
 # pass -Iscc, or have it on PATH.
 param(
     # The installer's version; defaults to the workspace version in Cargo.toml.

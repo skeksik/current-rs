@@ -1,4 +1,4 @@
-; The Windows installer (Inno Setup 6, ADR 0009): a per-user install without admin rights into %LOCALAPPDATA%\Programs\Current, with a
+; The Windows installer (Inno Setup 7, ADR 0009): a per-user install without admin rights into %LOCALAPPDATA%\Programs\Current, with a
 ; Start menu shortcut that carries the app's AppUserModelID. It never names the data folder (%LOCALAPPDATA%\Current), so neither an
 ; upgrade nor uninstall can remove it. build-installer.ps1 passes AppVersion, SourceDir (the published app), InnoLicense and OutputDir.
 
@@ -27,6 +27,9 @@ VersionInfoVersion={#AppVersion}
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\Current
 DisableProgramGroupPage=yes
+; A 64-bit installer (Inno Setup 7); this also makes x64compatible the default for ArchitecturesAllowed and
+; ArchitecturesInstallIn64BitMode, set here anyway so the script says what it does.
+SetupArchitecture=x64
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\Current.exe

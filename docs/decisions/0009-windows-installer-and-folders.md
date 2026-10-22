@@ -1,4 +1,4 @@
-# 0009: Windows installer and folders: Inno Setup 6, per user, data kept apart
+# 0009: Windows installer and folders: Inno Setup 7, per user, data kept apart
 
 Status: proposed (2026-10-22), from D5b; accepted when its PR merges. Installer tool chosen by the owner (2026-10-22). Details and
 sources: `docs/notes/windows-shell.md`.
@@ -9,8 +9,8 @@ per user without admin rights, upgrades in place and uninstalls cleanly, and mus
 Inno Setup, Velopack, WiX and a hand-built MSI (comparison below). A Microsoft Store (MSIX) build may come at release time.
 
 ## Decision
-- **Inno Setup 6** (6.7.3, pinned by version and SHA-256 in CI) builds `Current-<version>-x64-setup.exe` from
-  `apps/windows/installer/Current.iss`.
+- **Inno Setup 7** (7.1.0, owner, 2026-10-22; pinned by version and SHA-256 in CI) builds a 64-bit installer
+  (`SetupArchitecture=x64`), `Current-<version>-x64-setup.exe`, from `apps/windows/installer/Current.iss`.
   - `PrivilegesRequired=lowest`: no elevation, always a per-user install.
   - A fixed `AppId`: a newer setup upgrades in place.
   - One Start menu shortcut that carries the app's AppUserModelID `Skeksik.Current`.
@@ -47,14 +47,18 @@ From the owner's list (2026-10-22); not verified against Microsoft's documentati
 ## Consequences
 - CI builds the installer and runs an install, upgrade and uninstall test on `windows-latest` (job "App (Windows)").
 - Inno Setup's licence is permissive with notice-keeping conditions; it is recorded in ADR 0003, and its `license.txt` ships in
-  `licences\`.
+  `licences\`. Its authors request a purchased licence from commercial users above USD 5,000 a year (not required): open before first
+  distribution.
 - Uninstall leaves the data folder by design. Removing the data is for the app (a future "remove my data" action) or the user, never
   the uninstaller.
 
 ## Sources (read 2026-10-22)
-- Inno Setup License (tag `is-6_7_3`, `license.txt`): https://github.com/jrsoftware/issrc/blob/is-6_7_3/license.txt
-- Inno Setup downloads (6.7.3 of 2026-05-26 is the latest 6.x; 7.1.0 of 2026-08-12 exists; no checksums published):
-  https://jrsoftware.org/isdl.php
+- Inno Setup License (tag `is-7_1_0`, `license.txt`, identical to `is-6_7_3`'s): https://github.com/jrsoftware/issrc/blob/is-7_1_0/license.txt
+- Inno Setup downloads (7.1.0 of 2026-08-12; no checksums published): https://jrsoftware.org/isdl.php
+- Inno Setup 7 release notes (`whatsnew.htm`, tag `is-7_1_0`): `SetupArchitecture=x64` builds a 64-bit installer and makes
+  `x64compatible` the default; "Great care has been taken to ensure maximum backward compatibility with Inno Setup 6"; existing
+  installs from 32-bit installers "can be updated by 64-bit installers without issue": https://github.com/jrsoftware/issrc/blob/is-7_1_0/whatsnew.htm
+- Inno Setup commercial licence request: https://jrsoftware.org/isorder.php
 - Inno Setup help, `PrivilegesRequired` ("Setup will not request to be run with administrative privileges") and Constants (`{autopf}` is
   `{userpf}` in non-administrative installs): https://jrsoftware.org/ishelp/
 - KNOWNFOLDERID (`FOLDERID_UserProgramFiles` default `%LOCALAPPDATA%\Programs`; updated 2023-08-30):

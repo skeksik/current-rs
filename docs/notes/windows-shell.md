@@ -93,10 +93,12 @@ handler restores its window if minimised and activates it. `--smoke` skips the k
   platform UI resolves its native data folder and passes it to the core when it creates `App` (manager, 2026-10-22).
 
 ## Installer (ADR 0009)
-- Inno Setup 6.7.3 (the owner's approval covers 6.x; 7.1.0 of 2026-08-12 exists and would need its own licence check), installed in
-  CI from its official installer (`github.com/jrsoftware/issrc` release `is-6_7_3`) per user into the runner's temp folder. The
-  SHA-256 is our own measurement of that download on 2026-10-22, since jrsoftware.org publishes no checksums: trust on first
-  download.
+- Inno Setup 7.1.0 (owner, 2026-10-22), installed in CI from its official 64-bit installer (`github.com/jrsoftware/issrc` release
+  `is-7_1_0`, `innosetup-7.1.0-x64.exe`) per user (`/CURRENTUSER`, documented for Inno's own installer since 6.1.1 per its release
+  notes) into the runner's temp folder. The SHA-256 is our own measurement of that download on 2026-10-22, since jrsoftware.org
+  publishes no checksums: trust on first download. The script builds a 64-bit installer (`SetupArchitecture=x64`, new in 7).
+  Inno 7's release notes say constants like `{autopf}` behave as before; the install test checks the resulting folder, so a
+  difference would fail CI.
 - `Current.iss`: fixed `AppId`, `PrivilegesRequired=lowest`, `DefaultDirName={autopf}\Current`, x64 only, one shortcut
   `{autoprograms}\Current` with `AppUserModelID: "Skeksik.Current"` (Inno's `[Icons]` parameter: "Specifies the Windows 7 (or later)
   Application User Model ID for the shortcut", ishelp, read 2026-10-22), and an "Open Current" check box at the end (not in silent
@@ -133,6 +135,8 @@ Nothing built here goes to anyone else, testers included, until these are done (
 3. The indemnity in the Windows App SDK licence's 3(b)(iii): the owner's to accept.
 4. The Windows App SDK's telemetry (its licence's 2(a)): check what it sends and which options turn it off.
 5. Code signing of the app and the installer (SmartScreen; the Store's installer route).
+6. Inno Setup's commercial licence: its authors request (do not require) one from for-profit users with more than USD 5,000 annual
+   revenue, for any version (jrsoftware.org/isorder.php, read 2026-10-22). The owner decides.
 
 ## What the owner checks by hand
 On the owner's PC, with the installer from CI (or `apps/windows/out/app/Current.exe`):
