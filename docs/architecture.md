@@ -1,8 +1,9 @@
 # Architecture
 
 > Status (2026-10-22): the workspace holds `current-model` (ADR 0005), `current-net` (ADR 0006), `current-jellyfin` (server setup,
-> ADR 0012), `current-app` and `current-ffi` (ADR 0004), with the C# and Swift bindings in `bindings/` and the Windows app shell in `apps/windows` (ADR 0009). Everything else here is the target (ADR 0001, ADR 0002); details are settled
-> by the desktop spikes (docs/roadmap.md, phase D).
+> ADR 0012), `current-app` and `current-ffi` (ADR 0004), with the C# and Swift bindings in `bindings/` and the Windows app shell in
+> `apps/windows` (ADR 0009). Everything else here is the target (ADR 0001, ADR 0002); details are settled by the desktop spikes
+> (docs/roadmap.md, phase D).
 
 ## Overview
 ```

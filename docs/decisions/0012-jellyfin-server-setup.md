@@ -1,6 +1,6 @@
 # 0012: Jellyfin server setup
 
-Status: accepted (2026-10-22).
+Status: proposed (2026-10-22); accepted when its PR merges.
 
 ## Context
 M1 starts with adding a Jellyfin server by its address. Users type anything from `192.168.1.10` to a pasted web client URL; servers
@@ -72,9 +72,10 @@ end; "Jellyfin" means the server at tag `v12.2`.
   app, since a reinstall changes the server's id.
 - **https that fails:** when an https candidate fails its TLS handshake and plain http then answers, the result says so
   (`https_failed_tls`), so the UI can tell the user the server offers https with a certificate this device does not trust instead of
-  silently settling for http. Certificates are checked against the OS trust store only (ADR 0006; the owner decided against
-  accepting self-signed certificates in M1, ADR 0014): a self-signed https server shows `Tls` with that hint, and on a local network
-  the user can use plain http under the rule below.
+  silently settling for http. Certificates are checked against the OS trust store only (ADR 0006; decided by the owner for M1 in
+  ADR 0014, 2026-10-22). So when `https_failed_tls` is set, or the probe ends with `Tls`, the UI explains that the server's
+  certificate is not trusted by this device and how to fix it: install the server's CA in the OS, or reach the server by a name
+  with a publicly trusted certificate. Plain http on a local network stays the user's choice under the rule below.
 - **Plain HTTP** (`current_net::transport`, service-agnostic so that roaming and the other services share it): https is silent.
   Plain http is silent to this device (127.0.0.0/8, `::1`, `localhost`, `*.localhost`) and the local network: private IPv4 (RFC
   1918), link-local (169.254.0.0/16, `fe80::/10`), IPv6 unique local (`fc00::/7`), IPv4-mapped forms of these, single-label names,
@@ -101,6 +102,8 @@ Current follows Chrome's split: silent for private addresses, one confirmation p
 
 ## Consequences
 - Typing `192.168.1.10` probes two https candidates before http on 8096; on a LAN the refused connections fail fast.
+- A dead host that drops packets can take up to 4 × 5 s before setup reports it; the staggered race of ADR 0014's implementation
+  removes that wait.
 - `LocalAddress` is not used; roaming may use it as a hint (ADR 0014).
 - A server behind a login portal on another host fails with `Redirected` until the user enters the address it points to (ADR 0006).
 - The https upgrade path is tested at the level of URL handling only: there is no TLS stand-in server in the tests.
