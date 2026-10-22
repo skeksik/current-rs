@@ -128,7 +128,7 @@ Other observations:
 | GTK | 4.14 | gtk4-rs feature `v4_14`; `GtkGraphicsOffload` (for a later HDR path) is "Since: 4.14" |
 | libadwaita | 1.5 | libadwaita-rs feature `v1_5`: `AdwOverlaySplitView`, `AdwToolbarView`, `AdwBreakpoint` (1.4), `AdwPreferencesDialog`, `AdwAboutDialog` (1.5) |
 | libmpv | soname 2, mpv 0.35 or later | Client API 2.0 came with mpv 0.35.0 ("remove headers/functions of the obsolete opengl_cb API"). The render calls used here are unchanged up to 0.41 (below) |
-| glibc | 2.34 for this build | Highest symbol version the debug binary built on Ubuntu 24.04 needs (`objdump -T target/debug/current-linux-spike | grep -o 'GLIBC_[0-9.]*' \| sort -uV \| tail -1` gives GLIBC_2.34). A release binary must be built on the oldest glibc it supports and checked again |
+| glibc | 2.34 for this build | Highest symbol version the debug binary built on Ubuntu 24.04 needs (`objdump -T target/debug/current-linux-spike \| grep -o 'GLIBC_[0-9.]*' \| sort -uV \| tail -1` gives GLIBC_2.34). A release binary must be built on the oldest glibc it supports and checked again |
 | OpenGL | GL 3.x or GLES 3.x through EGL | What mpv's OpenGL renderer and GTK's GLArea use |
 
 Development packages per distribution (the libraries the prototype links; the setup lines further down add the tools):
