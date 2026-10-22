@@ -2,9 +2,12 @@
 
 use std::sync::Arc;
 
-use current_jellyfin::{FoundServer, ProbeError, Prober, same_server};
-use current_model::{ServerId, ServerKey, ServerRef, ServiceType};
-use current_net::{RequestLog, Transport, Url};
+use current_jellyfin::{FoundServer, JellyfinIdentity, ProbeError, Prober, same_server};
+use current_model::{ServerAddress, ServerId, ServerKey, ServerRef, ServiceType};
+use current_net::{
+    AddressProvider, ClientConfig, FixedAddress, IdentityCheck, RequestLog, RoamingAddresses,
+    RoamingConfig, RuntimeHandle, ServerClient, Transport, Url,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -382,4 +385,79 @@ async fn bad_input_never_reaches_the_network() {
         Err(ProbeError::InvalidAddress(_))
     ));
     assert!(log.entries().is_empty());
+}
+
+fn client_for(address: &str) -> ServerClient {
+    ok(ServerClient::new(
+        ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+        Arc::new(FixedAddress(ok(Url::parse(address)))),
+        None,
+        Arc::new(RequestLog::default()),
+        &ClientConfig::default(),
+    ))
+}
+
+#[tokio::test]
+async fn the_identity_check_compares_the_server_id() {
+    let identity = JellyfinIdentity::new(ServerId::new(ID));
+    let right = StandIn::start(vec![(
+        "/System/Info/Public",
+        json(200, info(ID, "12.2.0", true)),
+    )])
+    .await;
+    let other = StandIn::start(vec![(
+        "/System/Info/Public",
+        json(
+            200,
+            info("fedcba9876543210fedcba9876543210", "12.2.0", true),
+        ),
+    )])
+    .await;
+    let portal = StandIn::start(vec![("/System/Info/Public", html(200))]).await;
+    let web = StandIn::start(vec![("/System/Info/Public", redirect(302, "/web/"))]).await;
+    let check = |stand_in: &StandIn| {
+        let client = client_for(&stand_in.address(""));
+        let identity = identity.clone();
+        async move { identity.check_client(&client).await }
+    };
+    assert_eq!(check(&right).await, IdentityCheck::Passed);
+    assert_eq!(check(&other).await, IdentityCheck::DifferentServer);
+    assert_eq!(check(&portal).await, IdentityCheck::Failed);
+    assert_eq!(check(&web).await, IdentityCheck::Failed);
+}
+
+#[tokio::test]
+async fn roaming_with_the_jellyfin_identity_skips_another_server() {
+    let other = StandIn::start(vec![(
+        "/System/Info/Public",
+        json(
+            200,
+            info("fedcba9876543210fedcba9876543210", "12.2.0", true),
+        ),
+    )])
+    .await;
+    let right = StandIn::start(vec![(
+        "/System/Info/Public",
+        json(200, info(ID, "12.2.0", true)),
+    )])
+    .await;
+    let addresses: Vec<ServerAddress> = [&other, &right]
+        .iter()
+        .map(|stand_in| ServerAddress {
+            url: stand_in.address(""),
+            plain_http_confirmed: false,
+        })
+        .collect();
+    let roaming = ok(RoamingAddresses::new(
+        ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+        &addresses,
+        Arc::new(JellyfinIdentity::new(ServerId::new(ID))),
+        Arc::new(RequestLog::default()),
+        RoamingConfig::default(),
+        &RuntimeHandle::current(),
+    ));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let selected = roaming.wait(deadline).await;
+    assert_eq!(selected.and_then(|s| s.position()), Some(2));
+    assert_eq!(roaming.status().borrow().different_server, [1]);
 }

@@ -1,6 +1,7 @@
 # 0014: Several addresses per server, and roaming between them
 
-Status: proposed (2026-10-22), from the M1 roaming spike. Research, sources and measurements: `docs/notes/roaming.md`. The owner decided
+Status: proposed (2026-10-22), from the M1 roaming spike; implemented in `current-net`, `current-jellyfin`, `current-model` and
+`current-app` (2026-10-22), with the changes listed under "Implementation" at the end. Research, sources and measurements: `docs/notes/roaming.md`. The owner decided
 the two open choices on 2026-10-22 (marked **Decided by the owner**).
 
 ## Context
@@ -46,7 +47,8 @@ What the research found (details in the notes):
 
 ### When to race again
 - **A request fails** on the selected address with `Unreachable`, `Timeout` or `Tls`. Any other error is the server answering: no race.
-- **The network changed** (UI report, below): race at once, the new network's cached winner first.
+- **The network changed** (UI report, below): race at once, the new network's cached winner first. The address in use stops serving
+  until it passes its identity check again on the new network (see "Implementation").
 - **Upgrade check:** while the selected address is not the first, re-probe only the better ones every 5 minutes while the server is in
   use, and switch when one passes.
 - **Unreachable:** retry with backoff from 5 s doubling to 5 minutes, and at once on a network change or when the app returns to the
@@ -72,7 +74,7 @@ The network key only has to be stable for one network and differ between network
 shown (its Debug output is redacted) and is kept in memory.
 
 ### `current-net`: the provider
-`AddressProvider` changes (trait shape is a sketch; the implementation task fixes names):
+`AddressProvider` changes (the sketch as decided; the implemented shape is under "Implementation"):
 
 ```rust
 pub struct Selected { pub url: Url, pub position: u8 /* 1-based place in the user's list */, /* race generation, private */ }
@@ -98,8 +100,8 @@ States, and what the capabilities state shows (ADR 0005's `Reachability`, unchan
 | State | Meaning | `Reachability` |
 |---|---|---|
 | `Idle` | Nothing tried yet | `Unknown` |
-| `Racing { serving: None }` | First race, or the selected address failed | `Unknown` the first time, else stays as it was until the race ends |
-| `Racing { serving: Some(s) }` | Network change or upgrade check; `s` still serves | `Reachable` |
+| `Racing { serving: None }` | First race, the selected address failed, or the network changed | `Unknown` the first time, else stays as it was until the race ends |
+| `Racing { serving: Some(s) }` | Upgrade check; `s` still serves | `Reachable` |
 | `Selected(s)` | `s` passed its identity check | `Reachable` |
 | `Unreachable { retry_at }` | The last race failed | `Unreachable` |
 
@@ -162,6 +164,56 @@ Stand-in servers on **several ports of 127.0.0.1** (not 127.0.0.2+, which macOS 
 - Reachability: the states map as in the table.
 - Timing tests use tokio's paused time (`test-util`, approved).
 - Apple's Local Network permission cannot be tested in CI (Terminal-run tools are exempt): checked by hand on a Mac in the macOS app task.
+
+## Implementation (2026-10-22)
+What the implementation fixed, and where it departs from the decision above (agreed with the manager, 2026-10-22; the owner is told at
+merge):
+
+- **A network change stops serving the address in use until it passes its identity check again** (`Racing { serving: None }`, not
+  `Some`). Otherwise credentials could go to the old address on the new network (for example `192.168.1.10` on another network,
+  someone else's host) before any check, against this ADR's own rule that credentials go only to an address that passed in this
+  race. Requests wait for the race within their deadline; the cached winner goes first, so this usually costs one probe. Reachability
+  stays as it was during that race.
+- **The API as built** (`current-net`):
+  - `Selected` has `url()` and `position() -> Option<u8>`: `None` for `FixedAddress`, whose log lines therefore carry no position.
+    Debug shows the position only.
+  - `AddressProvider::wait` takes a `tokio::time::Instant`, so that tests can use tokio's paused time.
+  - `IdentityProbe::check(&self, client: &ServerClient) -> IdentityCheck` (`Passed`, `DifferentServer`, `Failed`); `current-net`
+    builds the probe client per address and passes it in. Why a probe failed is in the request log.
+  - `RoamingAddresses::new(server, addresses, probe, log, RoamingConfig, &RuntimeHandle)`. `RuntimeHandle` is tokio's
+    `runtime::Handle`, re-exported so that callers need no tokio features. `network_changed(&facts)`, `retry_now()` and `status()`
+    (reachability, the position in use, and the positions of "different server" addresses).
+  - `LogEntry` gains `address: Option<u8>`.
+- **`current-app`:** `App::network_changed(facts)` fans out to every provider made by `App::jellyfin_addresses(server, id,
+  addresses, runtime)`, and providers made later start from the last facts. `App::returned_to_foreground()` makes unreachable servers
+  race at once. Wiring providers into signed-in servers and the capabilities state is left to sign-in.
+- **While `Unreachable`, `wait` returns at once** instead of holding requests until the next retry: a request fails fast, and the
+  backoff races go on.
+- **Connectivity `None` skips probing:** the provider goes to `Unreachable` with no retry timer until the next report.
+- **Facts before the first request only record the facts** (no race until something uses the server). A report is no change only
+  when it has the same network key (present) and the same connectivity as the last one: without a key nothing tells two networks
+  apart, so every report races again, and a change only in metered, constrained, VPN or interface does not.
+- **"Different server" marks are cleared on every network change** (decided by the manager, 2026-10-22; the owner is told at
+  merge), not kept until the user edits the address: a LAN address that answers as someone else's server on another network may
+  be the right one at home. The identity check still runs on every race, so no credentials reach a wrong server.
+- **Addresses with a user name or password are refused** (`RoamingError::InvalidAddress`): reqwest would send them as basic auth on
+  every probe.
+- **Which race runs is decided by the state alone.** Callers change the state when they start a race and then wake the driver;
+  after every event the driver drops a race for an older epoch and starts the one the state asks for, so commands arriving in
+  another order cannot leave a race unstarted.
+- **An address that needs the user's confirmation for plain HTTP (ADR 0012) and lacks it is never probed or used.** It keeps its
+  position, so the log matches the user's list.
+- **Jellyfin's identity check** (`JellyfinIdentity`) runs ADR 0012's info request on the reused probe client and compares the `Id`.
+  Unlike setup, it does not move to a base path when the server answers with its web client: a stored address is already the base.
+- **Retries and "nothing was sent":** a failure counts as before sending only when reqwest's `Error::is_connect()` is true. Read on
+  2026-10-22: hyper-util 0.1.21 `src/client/legacy/client.rs` wraps the connector's error as `ErrorKind::Connect`
+  (`.map_err(|src| e!(Connect, src))`), which reqwest 0.13.5 `src/error.rs` `is_connect()` looks for, and reqwest's rustls connector
+  (`src/connect.rs`, `hyper_rustls::HttpsConnector`) does the TLS handshake inside that connector. So DNS, refused connections,
+  connect timeouts and failed handshakes are "not sent"; a timeout from the request's own deadline is not (it counts as sent), and
+  after a followed redirect everything counts as sent.
+- **A retry needs time left** in the request's deadline. An attempt that never started because the deadline had passed is not
+  reported, and neither is a retry's timeout (the retry has only what is left of the deadline), so a short request does not knock
+  out a healthy address.
 
 ## Consequences
 - A dead preferred address costs one stagger (250 ms) after a network change, not a timeout.

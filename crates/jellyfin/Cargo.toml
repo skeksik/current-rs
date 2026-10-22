@@ -1,6 +1,6 @@
 [package]
 name = "current-jellyfin"
-description = "Jellyfin client: server setup (address parsing, probing, identity) and sign-in; wire types stay private."
+description = "Jellyfin client: server setup (address parsing, probing, identity), local discovery and sign-in; wire types stay private."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
