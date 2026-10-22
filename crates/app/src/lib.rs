@@ -8,10 +8,11 @@ mod add_server;
 mod list;
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
-use current_model::Capabilities;
-use current_net::RequestLog;
+use current_jellyfin::JellyfinIdentity;
+use current_model::{Capabilities, NetworkFacts, ServerAddress, ServerId, ServerRef};
+use current_net::{RequestLog, RoamingAddresses, RoamingConfig, RoamingError, RuntimeHandle};
 use current_store::{DeviceId, LoadReport, Secrets, SettingsStore, StoreError};
 use tokio::sync::watch;
 
@@ -31,6 +32,16 @@ pub struct App {
     request_log: Arc<RequestLog>,
     capabilities: watch::Sender<Capabilities>,
     storage: Option<Storage>,
+    roaming: Mutex<Roaming>,
+}
+
+/// Every server's address provider, so that network facts reach them all (ADR 0014).
+#[derive(Debug, Default)]
+struct Roaming {
+    /// Dropped providers are pruned on the next fan-out.
+    providers: Vec<Weak<RoamingAddresses>>,
+    /// The facts last reported, for providers made later.
+    facts: Option<NetworkFacts>,
 }
 
 /// What an app opened on a data folder keeps between runs.
@@ -55,6 +66,7 @@ impl App {
             request_log: Arc::new(RequestLog::default()),
             capabilities: watch::Sender::new(Capabilities::default()),
             storage: None,
+            roaming: Mutex::new(Roaming::default()),
         }
     }
 
@@ -125,6 +137,66 @@ impl App {
         AddServer::new(self.request_log.clone())
     }
 
+    /// The platform's report of the network, on start and on every change (ADR 0014). Every server's address provider hears it, and
+    /// providers made later start from it.
+    pub fn network_changed(&self, facts: NetworkFacts) {
+        let providers = {
+            let mut roaming = self.lock_roaming();
+            roaming
+                .providers
+                .retain(|provider| provider.strong_count() > 0);
+            roaming.facts = Some(facts.clone());
+            roaming.providers.clone()
+        };
+        for provider in providers.iter().filter_map(Weak::upgrade) {
+            provider.network_changed(&facts);
+        }
+    }
+
+    /// The app came back to the foreground: servers that are unreachable try again at once (ADR 0014).
+    pub fn returned_to_foreground(&self) {
+        let providers = self.lock_roaming().providers.clone();
+        for provider in providers.iter().filter_map(Weak::upgrade) {
+            provider.retry_now();
+        }
+    }
+
+    /// The address provider of a Jellyfin server with id `id` reached at `addresses` (the user's order), for its `ServerClient`. Its
+    /// probes check the id and go to the shared request log; its races run on `runtime`. It hears network changes from now on.
+    ///
+    /// # Errors
+    /// [`RoamingError`] for an address that is not an http(s) URL or too many addresses.
+    pub fn jellyfin_addresses(
+        &self,
+        server: ServerRef,
+        id: ServerId,
+        addresses: &[ServerAddress],
+        runtime: &RuntimeHandle,
+    ) -> Result<Arc<RoamingAddresses>, RoamingError> {
+        let provider = RoamingAddresses::new(
+            server,
+            addresses,
+            Arc::new(JellyfinIdentity::new(id)),
+            self.request_log.clone(),
+            RoamingConfig::default(),
+            runtime,
+        )?;
+        let facts = {
+            let mut roaming = self.lock_roaming();
+            roaming.providers.push(Arc::downgrade(&provider));
+            roaming.facts.clone()
+        };
+        if let Some(facts) = facts {
+            provider.network_changed(&facts);
+        }
+        Ok(provider)
+    }
+
+    fn lock_roaming(&self) -> std::sync::MutexGuard<'_, Roaming> {
+        // Each change is one assignment or one `retain`, so a poisoned lock leaves a usable value.
+        self.roaming.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// The request log as text, oldest first: what "copy diagnostics" puts on the clipboard. Redacted by construction (ADR 0006).
     pub fn diagnostics_text(&self) -> String {
         self.request_log.to_text()
@@ -135,9 +207,11 @@ impl App {
 mod tests {
     use std::time::{Duration, SystemTime};
 
-    use current_model::{ServerKey, ServerRef, ServerStatus, ServiceType};
-    use current_net::{LogEntry, Outcome};
+    use current_model::{Connectivity, NetworkKey, ServerKey, ServerStatus, ServiceType};
+    use current_net::{AddressProvider, LogEntry, Outcome};
     use current_store::MemorySecrets;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     use super::*;
 
@@ -228,5 +302,121 @@ mod tests {
             app.diagnostics_text(),
             "1970-01-01T00:00:00.000Z jellyfin/1 GET /System/Info -> 200 (12 ms)\n"
         );
+    }
+
+    const ID: &str = "0123456789abcdef0123456789abcdef";
+
+    /// A Jellyfin stand-in on 127.0.0.1 answering every request with its public info.
+    async fn jellyfin_stand_in() -> ServerAddress {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 2048];
+                    let _ = socket.read(&mut buffer).await;
+                    let body = format!(
+                        r#"{{"Version":"12.2.0","Id":"{ID}","StartupWizardCompleted":true}}"#
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        ServerAddress {
+            url: format!("http://127.0.0.1:{port}"),
+            plain_http_confirmed: false,
+        }
+    }
+
+    fn network(key: &str) -> NetworkFacts {
+        NetworkFacts {
+            connectivity: Connectivity::Full,
+            network_key: Some(NetworkKey::new(key)),
+            ..NetworkFacts::default()
+        }
+    }
+
+    async fn selected(provider: &RoamingAddresses) -> Option<u8> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        provider.wait(deadline).await.and_then(|s| s.position())
+    }
+
+    #[tokio::test]
+    async fn network_changes_reach_every_server() {
+        let app = App::new();
+        let address = jellyfin_stand_in().await;
+        let runtime = RuntimeHandle::current();
+        let providers: Vec<_> = (0..2)
+            .map(|key| {
+                let server = ServerRef::new(ServiceType::JELLYFIN, ServerKey::new(key.to_string()));
+                app.jellyfin_addresses(
+                    server,
+                    ServerId::new(ID),
+                    std::slice::from_ref(&address),
+                    &runtime,
+                )
+                .unwrap()
+            })
+            .collect();
+        for provider in &providers {
+            assert_eq!(selected(provider).await, Some(1));
+        }
+        app.network_changed(network("away"));
+        // Each provider races again before it serves on the new network.
+        for provider in &providers {
+            assert_eq!(provider.current(), None);
+        }
+        for provider in &providers {
+            assert_eq!(selected(provider).await, Some(1));
+        }
+        assert!(
+            app.diagnostics_text()
+                .contains("jellyfin/0 address 1 GET /System/Info/Public -> 200")
+        );
+
+        // A dropped provider is pruned.
+        drop(providers);
+        app.network_changed(network("home"));
+        assert!(app.lock_roaming().providers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_provider_made_later_starts_from_the_last_facts() {
+        let app = App::new();
+        let address = jellyfin_stand_in().await;
+        app.network_changed(network("home"));
+        let provider = app
+            .jellyfin_addresses(
+                jellyfin(),
+                ServerId::new(ID),
+                &[address],
+                &RuntimeHandle::current(),
+            )
+            .unwrap();
+        assert_eq!(selected(&provider).await, Some(1));
+        // The same facts again are no change for it: it already had them.
+        app.network_changed(network("home"));
+        assert!(provider.current().is_some());
+    }
+
+    #[tokio::test]
+    async fn an_invalid_address_is_refused() {
+        let app = App::new();
+        let address = ServerAddress {
+            url: "not an address".into(),
+            plain_http_confirmed: false,
+        };
+        let result = app.jellyfin_addresses(
+            jellyfin(),
+            ServerId::new(ID),
+            &[address],
+            &RuntimeHandle::current(),
+        );
+        assert_eq!(result.map(|_| ()), Err(RoamingError::InvalidAddress(1)));
     }
 }
