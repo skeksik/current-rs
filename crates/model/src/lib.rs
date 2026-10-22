@@ -7,6 +7,7 @@ mod artwork;
 mod capabilities;
 mod identity;
 mod open;
+mod saved;
 mod server;
 mod user;
 
@@ -15,6 +16,7 @@ pub use capabilities::{Capabilities, Feature, Reachability, ServerStatus};
 pub use identity::{
     ItemId, ItemRef, MediaKind, ServerId, ServerKey, ServerRef, ServiceType, UserId,
 };
+pub use saved::{SavedServer, SavedUser};
 pub use server::{PublicServerInfo, ServerAddress};
 pub use user::{Permission, User};
 

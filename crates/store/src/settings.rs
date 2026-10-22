@@ -13,6 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
+use current_model::{
+    SavedServer, SavedUser, ServerAddress, ServerId, ServerKey, ServerRef, ServiceType, UserId,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -40,6 +43,8 @@ const MIGRATIONS: &[Migration] = &[];
 pub struct Settings {
     /// This install's id (ADR 0013).
     pub device_id: DeviceId,
+    /// The servers the app signed in to, with their addresses and users (ADR 0015). Never a token: those live in [`Secrets`](crate::Secrets).
+    pub servers: Vec<SavedServer>,
     /// Fields this version does not know, written back unchanged.
     extra: Map<String, Value>,
 }
@@ -48,6 +53,7 @@ impl Settings {
     fn new(device_id: DeviceId) -> Self {
         Self {
             device_id,
+            servers: Vec::new(),
             extra: Map::new(),
         }
     }
@@ -73,8 +79,96 @@ pub enum LoadReport {
 struct Stored {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     device_id: Option<String>,
+    /// Added in ADR 0015; older files have none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    servers: Vec<StoredServer>,
     #[serde(flatten)]
     extra: Map<String, Value>,
+}
+
+/// A saved server as the file keeps it. Private: the public shape is `current-model`'s [`SavedServer`].
+#[derive(Serialize, Deserialize)]
+struct StoredServer {
+    service: String,
+    key: String,
+    server_id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    addresses: Vec<StoredAddress>,
+    #[serde(default)]
+    users: Vec<StoredUser>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_user: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredAddress {
+    url: String,
+    #[serde(default)]
+    plain_http_confirmed: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredUser {
+    id: String,
+    #[serde(default)]
+    name: String,
+}
+
+impl From<StoredServer> for SavedServer {
+    fn from(stored: StoredServer) -> Self {
+        Self {
+            server: ServerRef::new(ServiceType::new(stored.service), ServerKey::new(stored.key)),
+            id: ServerId::new(stored.server_id),
+            name: stored.name,
+            addresses: stored
+                .addresses
+                .into_iter()
+                .map(|address| ServerAddress {
+                    url: address.url,
+                    plain_http_confirmed: address.plain_http_confirmed,
+                })
+                .collect(),
+            users: stored
+                .users
+                .into_iter()
+                .map(|user| SavedUser {
+                    id: UserId::new(user.id),
+                    name: user.name,
+                })
+                .collect(),
+            active_user: stored.active_user.map(UserId::new),
+        }
+    }
+}
+
+impl From<&SavedServer> for StoredServer {
+    fn from(saved: &SavedServer) -> Self {
+        Self {
+            service: saved.server.service.to_string(),
+            key: saved.server.key.to_string(),
+            server_id: saved.id.to_string(),
+            name: saved.name.clone(),
+            addresses: saved
+                .addresses
+                .iter()
+                .map(|address| StoredAddress {
+                    url: address.url.clone(),
+                    plain_http_confirmed: address.plain_http_confirmed,
+                })
+                .collect(),
+            users: saved
+                .users
+                .iter()
+                .map(|user| StoredUser {
+                    id: user.id.to_string(),
+                    name: user.name.clone(),
+                })
+                .collect(),
+            active_user: saved.active_user.as_ref().map(ToString::to_string),
+        }
+    }
 }
 
 /// The settings of one data folder. Open it once per process: it is the folder's only writer, and saves are serialized by a lock.
@@ -199,6 +293,7 @@ impl SettingsStore {
     fn write(&self, settings: &Settings, version: u64) -> Result<(), StoreError> {
         let stored = Stored {
             device_id: Some(settings.device_id.to_string()),
+            servers: settings.servers.iter().map(StoredServer::from).collect(),
             extra: settings.extra.clone(),
         };
         let mut object = Map::new();
@@ -263,6 +358,7 @@ fn from_stored(stored: Stored) -> Result<(Settings, bool), StoreError> {
     };
     let settings = Settings {
         device_id,
+        servers: stored.servers.into_iter().map(SavedServer::from).collect(),
         extra: stored.extra,
     };
     Ok((settings, made))
@@ -541,5 +637,92 @@ mod tests {
         let (store, _) = SettingsStore::open(temp.path()).unwrap();
         let text = format!("{store:?}");
         assert!(!text.contains(&*temp.path().to_string_lossy()), "{text}");
+    }
+
+    fn saved_server() -> SavedServer {
+        SavedServer {
+            server: ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+            id: ServerId::new("0123456789abcdef0123456789abcdef"),
+            name: "Test Server".into(),
+            addresses: vec![
+                ServerAddress {
+                    url: "https://media.example.com".into(),
+                    plain_http_confirmed: false,
+                },
+                ServerAddress {
+                    url: "http://192.168.1.10:8096".into(),
+                    plain_http_confirmed: true,
+                },
+            ],
+            users: vec![
+                SavedUser {
+                    id: UserId::new("5d1c0000000000000000000000000001"),
+                    name: "Example User".into(),
+                },
+                SavedUser {
+                    id: UserId::new("5d1c0000000000000000000000000002"),
+                    name: "Another User".into(),
+                },
+            ],
+            active_user: Some(UserId::new("5d1c0000000000000000000000000002")),
+        }
+    }
+
+    #[test]
+    fn saved_servers_round_trip() {
+        let temp = tempfile::tempdir().unwrap();
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        let mut signed_out = saved_server();
+        signed_out.server.key = ServerKey::new("2");
+        signed_out.active_user = None;
+        store
+            .update(|s| s.servers = vec![saved_server(), signed_out.clone()])
+            .unwrap();
+        drop(store);
+
+        let (store, report) = SettingsStore::open(temp.path()).unwrap();
+        assert_eq!(report, LoadReport::Loaded);
+        assert_eq!(store.get().servers, [saved_server(), signed_out]);
+        let json = read_json(temp.path());
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["servers"][0]["key"], "1");
+        assert_eq!(json["servers"][0]["service"], "jellyfin");
+        assert_eq!(
+            json["servers"][0]["addresses"][1]["plain_http_confirmed"],
+            true
+        );
+        assert_eq!(
+            json["servers"][0]["active_user"],
+            "5d1c0000000000000000000000000002"
+        );
+        assert!(json["servers"][1].get("active_user").is_none());
+    }
+
+    #[test]
+    fn a_file_without_servers_reads_as_none_and_stays_without() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path(), r#"{"version": 1, "device_id": "abc"}"#);
+        let (store, report) = SettingsStore::open(temp.path()).unwrap();
+        assert_eq!(report, LoadReport::Loaded);
+        assert!(store.get().servers.is_empty());
+        store
+            .update(|s| s.device_id = DeviceId::parse("def").unwrap())
+            .unwrap();
+        assert!(read_json(temp.path()).get("servers").is_none());
+    }
+
+    #[test]
+    fn a_saved_server_with_only_the_required_fields_reads() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(
+            temp.path(),
+            r#"{"version": 1, "device_id": "abc", "servers": [{"service": "jellyfin", "key": "1", "server_id": "x", "later": 1}]}"#,
+        );
+        let (store, report) = SettingsStore::open(temp.path()).unwrap();
+        assert_eq!(report, LoadReport::Loaded);
+        let servers = store.get().servers;
+        assert_eq!(servers.len(), 1);
+        assert!(servers[0].addresses.is_empty() && servers[0].users.is_empty());
+        assert_eq!(servers[0].active_user, None);
     }
 }
