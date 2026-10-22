@@ -32,7 +32,7 @@ before merging, and its PR carries only the record.
       installer tested in CI; the bridge checks D1 left unrun
 - [x] D6 (2026-10-22, PR 9): our LGPL-2.1 FFmpeg and libmpv builds for Windows in CI (ADR 0003, ADR 0007), with the codec list the player needs; no
       LAME; uchardet allowed (owner, 2026-10-22)
-- [ ] D7 spike: macOS subtitle renderer over AVPlayer (ADR 0008): styled ASS through libass and PGS/VobSub bitmaps, fed by subtitle
+- [ ] D7 spike (ADR 0010): macOS subtitle renderer over AVPlayer (ADR 0008): styled ASS through libass and PGS/VobSub bitmaps, fed by subtitle
       streams the server extracts. A full fallback engine waits for local and offline playback
 - [ ] D8 spike: Linux. A GTK4 + libadwaita window on the core; libmpv in a `GtkGLArea` (SDR) and the state of HDR on Linux. Hands-on
       checks in WSL2 (WSLg); HDR, hardware decoding, MPRIS, the keyring and Orca need native Linux later
@@ -66,7 +66,8 @@ Done when: sign in and out of Jellyfin on Windows, and the app restarts signed i
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
 ## M3: macOS
-- [ ] The M1-M2 screens in SwiftUI on the shared core; AVPlayer plus the fallback engine from D7; Keychain; Now Playing, PiP, AirPlay
+- [ ] The M1-M2 screens in SwiftUI on the shared core; AVPlayer with our own subtitle layer (ADR 0010: libass, PGS/VobSub decoder in
+      the core, External delivery from Jellyfin); Keychain; Now Playing, PiP, AirPlay
 
 Done when: everything from M1-M2 works on a Mac.
 
