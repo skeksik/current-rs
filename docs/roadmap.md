@@ -34,14 +34,17 @@ before merging, and its PR carries only the record.
       LAME; uchardet allowed (owner, 2026-10-22)
 - [x] D7 spike (2026-10-22, PR 14, ADR 0010): macOS subtitle renderer over AVPlayer (ADR 0008): styled ASS through libass and PGS/VobSub bitmaps, fed by subtitle
       streams the server extracts. A full fallback engine waits for local and offline playback
-- [ ] D8 spike: Linux. A GTK4 + libadwaita window on the core; libmpv in a `GtkGLArea` (SDR) and the state of HDR on Linux. Hands-on
-      checks in WSL2 (WSLg); HDR, hardware decoding, MPRIS, the keyring and Orca need native Linux later
+- [x] D8 spike (2026-10-22, PR 15, ADR 0011): Linux. A GTK4 + libadwaita window on the core; libmpv in a `GtkGLArea` (SDR) and the
+      state of HDR on Linux. Run headless on software GL in a container; hands-on checks in WSL2 (WSLg) are listed in
+      docs/notes/linux-gtk.md. HDR, hardware decoding, MPRIS, the keyring and Orca need native Linux later
 
 ## Follow-ups from phase D
 - [ ] "Copy diagnostics" copies an empty text until a server exists: include the app version (the core's diagnostics export) in M1
 - [ ] Shipping libmpv in the app (`current-mpv`) brings the Visual C++ runtime (vcruntime140, msvcp140) under Microsoft's
       redistributable terms: record them in ADR 0003 with the owner first
 - [ ] The libmpv build installs unpinned MSYS2 make/diffutils at build time (build-only; docs/notes/windows-mpv-build.md)
+- [ ] Linux: choose how to ship (Flatpak, per-distro packages, AppImage or tarball; ADR 0011) before M5's release work
+- [ ] Linux HDR: revisit when GTK enables Wayland colour management by default or mpv's render API gains HDR output (ADR 0011)
 
 ## M1: Jellyfin sign-in and server setup (Windows)
 Each item starts with our own research (the server's API and source, the platform's documentation, how existing clients behave),
@@ -78,7 +81,9 @@ Done when: everything from M1-M2 works on a Mac.
 Done when: a title can be found, requested and followed to "available", then played, without leaving the app.
 
 ## M5: Linux
-- [ ] The M1-M4 screens in GTK4 + libadwaita; the libmpv engine from M2; Secret Service; MPRIS media controls
+- [ ] The M1-M4 screens in GTK4 + libadwaita; the libmpv engine from M2 through the OpenGL render API (SDR); Secret Service; MPRIS
+      media controls (ADR 0011)
+- [ ] Our LGPL-2.1 libmpv and FFmpeg for Linux (the distributions' builds are GPL; ADR 0003, ADR 0011), and the Linux CI job
 
 ## M6: Adult content
 - [ ] Hidden unless a server offers it and the user may see it; access rules enforced in the core. Details are kept privately while the
