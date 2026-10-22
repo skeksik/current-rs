@@ -47,6 +47,8 @@ pub(crate) struct Shared {
     /// The saved servers. The settings file mirrors this list: [`Shared::commit`] changes both. Held only to read or swap the
     /// list, never during file I/O, so async code may read it.
     servers: Mutex<Vec<SavedServer>>,
+    /// The same list for observers: published after every change that [`Shared::commit`] makes.
+    pub(crate) saved: watch::Sender<Vec<SavedServer>>,
     /// Serializes [`Shared::commit`]: held during the settings write, on the blocking pool only.
     write: Mutex<()>,
     /// One live session per server.
@@ -88,6 +90,7 @@ impl Shared {
             capabilities: watch::Sender::new(capabilities),
             storage,
             identity,
+            saved: watch::Sender::new(servers.clone()),
             servers: Mutex::new(servers),
             write: Mutex::new(()),
             sessions: Mutex::new(HashMap::new()),
@@ -145,7 +148,13 @@ impl Shared {
                 .settings
                 .update(|settings| settings.servers = next.clone())?;
         }
-        *lock(&self.servers) = next;
+        *lock(&self.servers) = next.clone();
+        // Under `write`, so observers see the lists in the order they were saved.
+        self.saved.send_if_modified(|saved| {
+            let changed = *saved != next;
+            *saved = next;
+            changed
+        });
         Ok(result)
     }
 

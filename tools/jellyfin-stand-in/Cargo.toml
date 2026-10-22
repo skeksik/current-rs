@@ -1,0 +1,13 @@
+[package]
+name = "jellyfin-stand-in"
+description = "A hand-written Jellyfin stand-in on 127.0.0.1 for the bridge tests in Rust, C# and Swift. Never shipped."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync"] }
+
+[lints]
+workspace = true
