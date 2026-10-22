@@ -39,6 +39,23 @@ import Testing
         await #expect(throws: CancellationError.self) { try await task.value }
     }
 
+    @MainActor @Test func theCoresValueReplacesTheInitialOne() async throws {
+        let core = try Core()
+        // Start from a value the core does not have, so only a real delivery can replace it.
+        let placeholder = ServerStatusSnapshot(
+            service: "placeholder", key: "0", signedIn: false, reachability: .unknown, user: nil, version: nil, features: [])
+        let capabilities = ObservedValue(initial: CapabilitiesSnapshot(servers: [placeholder])) { forwarder in
+            core.subscribeCapabilities(listener: forwarder)
+        }
+        #expect(capabilities.value.servers.count == 1)
+        for _ in 0..<200 where !capabilities.value.servers.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        // The pump asserts it runs on the main actor (MainActor.assertIsolated) before it sets the value.
+        #expect(capabilities.value.servers.isEmpty)
+        capabilities.cancel()
+    }
+
     @MainActor @Test func cancellingTheModelReleasesTheListener() async throws {
         let core = try Core()
         let capabilities = core.observeCapabilities()

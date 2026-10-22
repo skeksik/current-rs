@@ -10,6 +10,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a diff batch applies in order", Tests.DiffBatchAppliesInOrder),
     ("a reset raises one Reset event", Tests.ResetRaisesOneEvent),
     ("a bad index throws and changes nothing", Tests.BadIndexChangesNothing),
+    ("a batch with a bad index changes nothing", Tests.BadBatchChangesNothing),
     ("values arrive through the dispatcher", Tests.ValuesArriveThroughTheDispatcher),
     ("disposing releases the listener", Tests.DisposingReleasesTheListener),
     ("a delivery after dispose is dropped", Tests.DeliveryAfterDisposeIsDropped),
@@ -17,6 +18,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a failing dispatcher does not end the subscription", Tests.FailingDispatcherDoesNotEndTheSubscription),
     ("export diagnostics completes", Tests.ExportDiagnosticsCompletes),
     ("a cancelled token cancels the call", Tests.CancelledTokenCancelsTheCall),
+    ("a cancel the caller did not ask for is not an OperationCanceledException", Tests.UnrequestedCancelIsItsOwnException),
 };
 
 var failed = 0;
@@ -165,6 +167,25 @@ internal static class Tests
         return Task.CompletedTask;
     }
 
+    public static Task BadBatchChangesNothing()
+    {
+        var list = new DiffObservableCollection<string>();
+        list.Apply(new ListDiff<string>.Reset(["a", "b"]));
+        var events = 0;
+        list.CollectionChanged += (_, _) => events++;
+        try
+        {
+            list.Apply([new ListDiff<string>.Remove(0), new ListDiff<string>.Set(5, "x"), new ListDiff<string>.Append(["c"])]);
+            Check(false, "the batch throws");
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+        }
+        Check(list.SequenceEqual(new[] { "a", "b" }), "unchanged");
+        Check(events == 0, "no events");
+        return Task.CompletedTask;
+    }
+
     public static async Task ValuesArriveThroughTheDispatcher()
     {
         using var core = CoreHost.Create();
@@ -230,7 +251,9 @@ internal static class Tests
         var ui = new ThrowingDispatcher();
         using var capabilities = core.ObserveCapabilities(ui);
         await Eventually("the first value is delivered", () => Volatile.Read(ref ui.Calls) == 1);
-        // An exception escaping into the core would end the task and drop the listener.
+        // An exception escaping into the core would end the task and drop the listener. The fixed wait can only make this pass
+        // falsely on a very slow runner, never fail falsely; a second delivery cannot be forced from C# while capabilities have no
+        // setter (the Rust test a_failing_listener_keeps_its_subscription covers the core side).
         await Task.Delay(100);
         Check(core.LiveListeners == 1, "the core still holds the listener");
     }
@@ -240,6 +263,24 @@ internal static class Tests
         using var core = CoreHost.Create();
         var report = await core.ExportDiagnosticsAsync();
         Check(report.StartsWith($"Current {core.AppInfo.Version}", StringComparison.Ordinal), "the report starts with the version");
+    }
+
+    public static async Task UnrequestedCancelIsItsOwnException()
+    {
+        // The core's own token is cancelled, the caller's is not.
+        using var core = new uniffi.current_ffi.Core();
+        try
+        {
+            await Current.Bindings.CoreCall.RunAsync(token =>
+            {
+                token.Cancel();
+                return core.ExportDiagnostics(token);
+            }, CancellationToken.None);
+            Check(false, "the call fails");
+        }
+        catch (CoreCancelledException)
+        {
+        }
     }
 
     public static async Task CancelledTokenCancelsTheCall()

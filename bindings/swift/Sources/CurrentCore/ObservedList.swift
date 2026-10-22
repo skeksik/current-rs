@@ -76,14 +76,16 @@ public final class ObservedList<Item: Sendable> {
         handle = subscribe(ListForwarder(continuation))
         pump = Task { @MainActor in
             for await batch in stream {
+                MainActor.assertIsolated()
                 target.object?.apply(batch)
             }
         }
         target.object = self
     }
 
-    /// Applies a batch in order. A diff out of range means the mirror is broken: it stops applying the batch and waits for the next
-    /// reset rather than crashing. The core never sends one; a test would catch it first.
+    /// Applies a batch in order, all or nothing (to a copy first). A diff out of range means the mirror is out of step with the core,
+    /// which never sends one on its own: the batch is dropped, and the owner should re-subscribe, since a new subscription starts with
+    /// a fresh Reset (the core sends no unsolicited Reset for this).
     func apply(_ batch: [ListDiff<Item>]) {
         var next = items
         for diff in batch {

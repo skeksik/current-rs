@@ -6,6 +6,10 @@ namespace Current.Bindings;
 public sealed record AppInfo(string Version);
 
 /// <summary>What each configured server offers right now. Empty until server setup exists.</summary>
+/// <remarks>
+/// The records here hold lists, and record equality compares lists by reference: two equal values from two deliveries are not
+/// <c>==</c>. Do not use <c>==</c> to skip an unchanged value; the core already sends only changes.
+/// </remarks>
 public sealed record Capabilities(IReadOnlyList<ServerStatus> Servers)
 {
     public static Capabilities Empty { get; } = new([]);

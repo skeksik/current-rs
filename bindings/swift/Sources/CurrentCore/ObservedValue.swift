@@ -49,6 +49,7 @@ public final class ObservedValue<Value: Sendable> {
         handle = subscribe(ValueForwarder(continuation))
         pump = Task { @MainActor in
             for await value in stream {
+                MainActor.assertIsolated()
                 target.object?.value = value
             }
         }
