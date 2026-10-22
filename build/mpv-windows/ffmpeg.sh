@@ -6,6 +6,8 @@
 # Licence: no --enable-gpl, --enable-version3 or --enable-nonfree, so FFmpeg reports "LGPL version 2.1 or later" (check.py fails
 # otherwise). --disable-autodetect keeps external libraries to the ones named here.
 #
+# -MD: the shared Universal CRT like every other DLL in the set (clang-cl, like cl, defaults to the static one).
+#
 # Usage: ffmpeg.sh <ffmpeg source dir> <install prefix> <pkgconf.exe>   (Windows paths with forward slashes)
 set -euo pipefail
 
@@ -29,7 +31,7 @@ done
     --arch=x86_64 \
     --target-os=win64 \
     --pkg-config="$pkgconf" \
-    --extra-cflags="-I$prefix/include" \
+    --extra-cflags="-MD -I$prefix/include" \
     --extra-ldflags="-LIBPATH:$prefix/lib" \
     --enable-shared \
     --disable-static \
