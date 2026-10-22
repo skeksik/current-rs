@@ -21,7 +21,7 @@ commit and tag. Versions were the newest releases on 2026-10-22.
 | HarfBuzz | 14.6.0 | MIT | static in mpv | Text shaping for libass |
 | FriBidi | 1.0.17 | LGPL-2.1-or-later | DLL | Bidirectional text for libass |
 | uchardet | 0.0.8 | LGPL-2.1-or-later (of MPL-1.1/GPL-2.0/LGPL-2.1, ADR 0003) | DLL | Subtitle charset detection |
-| win-iconv | 0.0.10 | public domain | static in mpv | iconv over the Win32 API; mpv enables uchardet and `--sub-codepage` conversion only with iconv |
+| win-iconv | 0.0.10 | public domain ("win_iconv is placed in the public domain.", `readme.txt`) | static in mpv | iconv over the Win32 API; mpv enables uchardet and `--sub-codepage` conversion only with iconv |
 | zlib | 1.3.2 | Zlib | static in FFmpeg and mpv | PNG, compressed Matroska tracks |
 | Little CMS | 2.19.1 | MIT | static in libplacebo and mpv | ICC profiles |
 | dav1d | 1.5.4 | BSD-2-Clause | static in avcodec | Software AV1 |

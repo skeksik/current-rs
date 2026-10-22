@@ -3,9 +3,10 @@
 Status: accepted (2026-10-22).
 
 ## Decision
-- **Allowed in a distributed build:** permissively licensed code (MIT, BSD, ISC, Apache-2.0, zlib, Unicode and the like) and LGPL-2.1
-  libraries. **No GPL or AGPL** in a distributed build. Also allowed: **CDLA-Permissive-2.0** (owner, 2026-10-22), a permissive data
-  licence with no copyleft, first met through `webpki-root-certs` (Mozilla's root certificates) via `rustls-platform-verifier`
+- **Allowed in a distributed build:** permissively licensed code (MIT, BSD, ISC, Apache-2.0, zlib, Unicode and the like), code
+  dedicated to the public domain (owner, 2026-10-22, first met as win-iconv in the Windows libmpv build) and LGPL-2.1 libraries.
+  **No GPL or AGPL** in a distributed build. Also allowed: **CDLA-Permissive-2.0** (owner, 2026-10-22), a permissive data licence
+  with no copyleft, first met through `webpki-root-certs` (Mozilla's root certificates) via `rustls-platform-verifier`
   (https://cdla.dev/permissive-2-0/, read 2026-10-22).
 - **LGPL-3.0 or MPL-2.0 only by an explicit decision per library**, recorded here.
 - **For every LGPL library we ship:** its licence and source (with our changes and build configuration) are published with each release;
