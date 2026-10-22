@@ -91,6 +91,8 @@ struct Stored {
 struct StoredServer {
     service: String,
     key: String,
+    /// The server's own id. Defaulted: a service without one (Stash, ADR 0014) may store none.
+    #[serde(default)]
     server_id: String,
     #[serde(default)]
     name: String,
@@ -267,6 +269,12 @@ impl SettingsStore {
     /// A copy of the current settings.
     pub fn get(&self) -> Settings {
         self.lock().settings.clone()
+    }
+
+    /// The format of a newer file this store will not write over, if it was opened on one: saves then fail with
+    /// [`StoreError::NewerVersion`]. Lets callers refuse work whose result could not be saved.
+    pub fn newer_version(&self) -> Option<u64> {
+        self.lock().newer
     }
 
     /// Changes the settings and saves them. If the save fails, the settings stay as they were.
@@ -554,6 +562,7 @@ mod tests {
         write_file(temp.path(), text);
         let (store, report) = SettingsStore::open(temp.path()).unwrap();
         assert_eq!(report, LoadReport::NewerVersion { found: 99 });
+        assert_eq!(store.newer_version(), Some(99));
         assert_eq!(store.get().device_id.as_str(), "abc");
         let result = store.update(|s| s.device_id = DeviceId::parse("def").unwrap());
         assert_eq!(result, Err(StoreError::NewerVersion { found: 99 }));
@@ -716,12 +725,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         write_file(
             temp.path(),
-            r#"{"version": 1, "device_id": "abc", "servers": [{"service": "jellyfin", "key": "1", "server_id": "x", "later": 1}]}"#,
+            r#"{"version": 1, "device_id": "abc", "servers": [{"service": "jellyfin", "key": "1", "server_id": "x", "later": 1}, {"service": "stash", "key": "2"}]}"#,
         );
         let (store, report) = SettingsStore::open(temp.path()).unwrap();
         assert_eq!(report, LoadReport::Loaded);
+        assert_eq!(store.newer_version(), None);
         let servers = store.get().servers;
-        assert_eq!(servers.len(), 1);
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[1].id.as_str(), "");
         assert!(servers[0].addresses.is_empty() && servers[0].users.is_empty());
         assert_eq!(servers[0].active_user, None);
     }

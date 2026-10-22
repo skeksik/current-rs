@@ -47,13 +47,25 @@ secret_string! {
 }
 
 /// What the client tells Jellyfin about itself. Jellyfin keeps one device record per device id and user, shown in its dashboard
-/// as the device name next to the client and version (ADR 0015).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// as the device name next to the client and version (ADR 0015). Its `Debug` leaves out the device name, which is usually the
+/// computer's name.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ClientIdentity {
     pub client: String,
     pub version: String,
     pub device: String,
     pub device_id: String,
+}
+
+impl std::fmt::Debug for ClientIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientIdentity")
+            .field("client", &self.client)
+            .field("version", &self.version)
+            .field("device", &format_args!("<redacted>"))
+            .field("device_id", &self.device_id)
+            .finish()
+    }
 }
 
 impl ClientIdentity {
@@ -255,6 +267,13 @@ mod tests {
         assert_eq!(device_name(""), platform_name());
         assert_eq!(device_name(&"é".repeat(100)).chars().count(), 64);
         assert!(!platform_name().is_empty());
+    }
+
+    #[test]
+    fn the_device_name_never_shows_in_debug() {
+        let text = format!("{:?}", identity("Office PC"));
+        assert!(!text.contains("Office"), "{text}");
+        assert!(text.contains("<redacted>"), "{text}");
     }
 
     #[test]

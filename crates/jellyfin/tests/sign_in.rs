@@ -339,17 +339,62 @@ async fn dropping_the_wait_stops_polling() {
     let server = StandIn::start(quick_connect_server(usize::MAX)).await;
     let client = client(&server, &Arc::new(RequestLog::default()));
     let secret = QuickConnectSecret::new(QC_SECRET);
-    let wait =
-        client.quick_connect_wait(&secret, Duration::from_millis(20), Duration::from_secs(60));
+    let interval = Duration::from_millis(20);
+    let wait = client.quick_connect_wait(&secret, interval, Duration::from_secs(60));
     assert!(
         tokio::time::timeout(Duration::from_millis(150), wait)
             .await
             .is_err()
     );
+    // A request already on the wire when the future was dropped may still arrive: let it settle, then count.
+    tokio::time::sleep(interval).await;
     let polls = server.paths().len();
-    assert!(polls >= 2, "{polls}");
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(polls >= 3, "{polls}");
+    // Ten more intervals: no new poll.
+    tokio::time::sleep(interval * 10).await;
     assert_eq!(server.paths().len(), polls);
+}
+
+#[tokio::test]
+async fn quick_connect_rides_out_a_server_restart() {
+    // Two checks fail with 503 (the server restarting), then the request is approved.
+    let failures = Mutex::new(2);
+    let approve = quick_connect_server(0);
+    let server = StandIn::start(move |received: &Received| {
+        let mut failures = failures.lock().unwrap();
+        if received.path == "/QuickConnect/Connect" && *failures > 0 {
+            *failures -= 1;
+            return (503, String::new());
+        }
+        approve(received)
+    })
+    .await;
+    let client = client(&server, &Arc::new(RequestLog::default()));
+    let secret = QuickConnectSecret::new(QC_SECRET);
+    let signed_in = client
+        .quick_connect_wait(&secret, Duration::from_millis(10), Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(signed_in.token, AccessToken::new(TOKEN));
+
+    // A server that keeps failing: the wait ends at its lifetime with the last error.
+    let server = StandIn::start(|_: &Received| (503, String::new())).await;
+    let client = self::client(&server, &Arc::new(RequestLog::default()));
+    let result = client
+        .quick_connect_wait(
+            &secret,
+            Duration::from_millis(10),
+            Duration::from_millis(60),
+        )
+        .await;
+    assert_eq!(
+        result,
+        Err(AuthError::Network(NetError::Status {
+            status: 503,
+            message: None
+        }))
+    );
+    assert!(server.paths().len() >= 3);
 }
 
 #[tokio::test]

@@ -197,7 +197,9 @@ impl JellyfinClient {
     }
 
     /// Asks every `interval` whether the request was approved, then signs in. Ends with [`AuthError::QuickConnectExpired`] once
-    /// the server forgot the request or `lifetime` passed. Dropping the future stops the polling.
+    /// the server forgot the request or `lifetime` passed. A check that fails on the way (no connection, a timeout, a 5xx while the
+    /// server restarts) is retried at the next interval; the last such error is returned if the lifetime runs out on one. Dropping
+    /// the future stops the polling.
     pub async fn quick_connect_wait(
         &self,
         secret: &QuickConnectSecret,
@@ -206,8 +208,14 @@ impl JellyfinClient {
     ) -> Result<SignedIn, AuthError> {
         let deadline = Instant::now() + lifetime;
         loop {
-            if self.quick_connect_approved(secret).await? {
-                return self.quick_connect_sign_in(secret).await;
+            let last = match self.quick_connect_approved(secret).await {
+                Ok(true) => return self.quick_connect_sign_in(secret).await,
+                Ok(false) => None,
+                Err(AuthError::Network(error)) if is_transient(&error) => Some(error),
+                Err(error) => return Err(error),
+            };
+            if Instant::now() + interval >= deadline {
+                return Err(last.map_or(AuthError::QuickConnectExpired, AuthError::Network));
             }
             if Instant::now() + interval >= deadline {
                 return Err(AuthError::QuickConnectExpired);
@@ -288,6 +296,15 @@ impl JellyfinClient {
                 .filter(|id| !id.is_empty())
                 .map(ServerId::new),
         })
+    }
+}
+
+/// Errors a later attempt may not meet: the connection, a timeout, or the server failing for a moment.
+fn is_transient(error: &NetError) -> bool {
+    match error {
+        NetError::Unreachable | NetError::Timeout => true,
+        NetError::Status { status, .. } => *status >= 500,
+        _ => false,
     }
 }
 
