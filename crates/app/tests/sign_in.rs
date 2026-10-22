@@ -1144,11 +1144,10 @@ async fn a_saved_server_restores_on_its_second_address_when_the_first_is_down() 
     assert_eq!(status.address, Some(2));
     assert_eq!(status.version.as_deref(), Some("12.2.0"));
     assert!(status.user.unwrap().has_permission(&Permission::ADMIN));
+    // Address 1's probe may still be failing when address 2 wins (a refused connection takes about 2 s on Windows), so only
+    // what went to address 2 is certain; nothing but probes can go to address 1.
     let text = app.diagnostics_text();
-    assert!(
-        text.contains("jellyfin/1 address 1 GET /System/Info/Public -> unreachable"),
-        "{text}"
-    );
+    assert!(!text.contains("address 1 GET /Users/Me"), "{text}");
     assert!(
         text.contains("jellyfin/1 address 2 GET /Users/Me -> 200"),
         "{text}"
