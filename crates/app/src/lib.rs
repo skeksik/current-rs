@@ -5,6 +5,7 @@
 //! adds to it. The crate holds no async runtime: `current-ffi` and the Linux app bring their own.
 
 mod add_server;
+mod discovery;
 mod list;
 
 use std::path::Path;
@@ -16,6 +17,7 @@ use current_store::{DeviceId, LoadReport, Secrets, SettingsStore, StoreError};
 use tokio::sync::watch;
 
 pub use add_server::{AddServer, AddServerState, NewServer};
+pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use list::{ListSubscription, ObservableList, VectorDiff};
 
 /// What the about and diagnostics screens show about the core.
@@ -123,6 +125,12 @@ impl App {
     /// A new "add a server" flow. Its probes go to the shared request log.
     pub fn add_server(&self) -> AddServer {
         AddServer::new(self.request_log.clone())
+    }
+
+    /// A new search for servers on the local network, for the "add a server" screen (ADR 0016). Its probes go to the shared
+    /// request log.
+    pub fn discover_servers(&self) -> Discovery {
+        Discovery::new(self.request_log.clone())
     }
 
     /// The request log as text, oldest first: what "copy diagnostics" puts on the clipboard. Redacted by construction (ADR 0006).
