@@ -54,3 +54,35 @@ jobs:
           tar -xzf "$f" --strip-components=1 -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - run: cargo deny --locked check
+
+  # The C# bindings and their adapters (bindings/csharp), from generated code that is not checked in (ADR 0004).
+  bindings-windows:
+    name: Bindings (C#, Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      # Uncached: about 3 minutes.
+      - name: Install uniffi-bindgen-cs
+        run: cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.1+v0.31.0 uniffi-bindgen-cs
+      - name: Build the core, generate C# and build the class library
+        shell: pwsh
+        run: ./bindings/csharp/build.ps1
+      - name: Run the adapter tests
+        shell: pwsh
+        run: ./bindings/csharp/test.ps1
+
+  # The Swift package (bindings/swift): XCFramework, generated bindings and adapters (ADR 0004).
+  bindings-macos:
+    name: Bindings (Swift, macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - run: swift --version
+      - name: Build the core, generate Swift and make the XCFramework
+        run: sh bindings/swift/build.sh
+      - run: swift build --package-path bindings/swift
+      - run: swift test --package-path bindings/swift
