@@ -39,7 +39,9 @@ Local, on the owner's computer, when a task needs:
 When only part of a task needs a device, split it: a cloud worker builds and opens the PR, a local card checks it on the same branch.
 The manager queues local cards with `spawn_task` (the card must stand alone) and tells the owner which card to start. If the card does
 not show, save the prompt in the scratchpad and give the owner its full path. A cloud session cannot message a local one; local cards
-message the manager.
+message the manager. So a card that waits for the manager's reply (a plan to approve) gets it through the owner: give the owner the
+reply as a block to paste, and save it in the scratchpad too. Prefer cards that need no reply: put the approvals in the card's prompt.
+Small fixes on a card's branch (removing a prototype, ticking the roadmap) the manager may push itself.
 
 ## 3. Start a cloud worker
 `create_session` with `source_url` `https://github.com/skeksik/current-rs`, `outcome_branch` the task's branch, `title` the task title,
