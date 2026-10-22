@@ -7,17 +7,28 @@
 //! Every change to a server's session (saving a sign-in, signing out, the 401 rule, restoring) runs under one async lock and
 //! checks under it that the session it acts on is still the current one, so a late answer to an old session never touches a newer
 //! one.
+//!
+//! Each saved Jellyfin server has one address provider ([`RoamingAddresses`], ADR 0014) over all its addresses, shared by its
+//! session and its sign-ins. The provider serves an address only after it passed the identity check (the server's id) in the race
+//! that selected it, so no token and no password goes to an address before that check: no request here probes on its own. The
+//! capabilities state follows each provider's status (reachability, the position of the address in use) and the version its
+//! identity check read.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use current_jellyfin::{AccessToken, AuthError, ClientIdentity, JellyfinClient, Prober, SignedIn};
-use current_model::{
-    Capabilities, Reachability, SavedServer, SavedUser, ServerAddress, ServerId, ServerKey,
-    ServerRef, ServerStatus, ServiceType, User, UserId,
+use current_jellyfin::{
+    AccessToken, AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, SignedIn,
 };
-use current_net::{FixedAddress, NetError, RequestLog, Url};
+use current_model::{
+    Capabilities, NetworkFacts, Reachability, SavedServer, SavedUser, ServerAddress, ServerId,
+    ServerKey, ServerRef, ServerStatus, ServiceType, User, UserId,
+};
+use current_net::{
+    FixedAddress, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError,
+    RoamingStatus, RuntimeHandle, Url,
+};
 use current_store::{Secret, SecretKey, Secrets, SettingsStore, StoreError};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
@@ -36,6 +47,39 @@ struct Session {
     id: u64,
     user: UserId,
     client: Arc<JellyfinClient>,
+    /// Whether the server confirmed the user (`GET /Users/Me`) in this session: [`UNCHECKED`], [`CHECKING`] or [`CHECKED`]. A
+    /// restored session whose server could not be reached is checked again when its provider next reaches the server.
+    check: Arc<AtomicU8>,
+}
+
+const UNCHECKED: u8 = 0;
+const CHECKING: u8 = 1;
+const CHECKED: u8 = 2;
+
+/// A saved Jellyfin server's address provider, with what it was built from.
+struct Link {
+    /// The saved addresses it was built over: a change rebuilds it.
+    addresses: Vec<ServerAddress>,
+    id: ServerId,
+    provider: Arc<RoamingAddresses>,
+    identity: JellyfinIdentity,
+    /// The task that copies the provider's status into the capabilities state.
+    follow: tokio::task::AbortHandle,
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        self.follow.abort();
+    }
+}
+
+/// Every address provider, so that network facts reach them all (ADR 0014).
+#[derive(Debug, Default)]
+pub(crate) struct Roaming {
+    /// Dropped providers are pruned on the next fan-out.
+    pub(crate) providers: Vec<Weak<RoamingAddresses>>,
+    /// The facts last reported, for providers made later.
+    pub(crate) facts: Option<NetworkFacts>,
 }
 
 /// Everything the app's parts share. Held in an `Arc` so that background work (restoring sessions, the 401 hook) can reach it.
@@ -51,6 +95,9 @@ pub(crate) struct Shared {
     write: Mutex<()>,
     /// One live session per server.
     sessions: Mutex<HashMap<ServerRef, Session>>,
+    /// One address provider per saved Jellyfin server, made when first needed (restore, a sign-in) since it needs the runtime.
+    links: Mutex<HashMap<ServerRef, Link>>,
+    pub(crate) roaming: Mutex<Roaming>,
     next_session: AtomicU64,
     /// Orders session changes (see the module documentation).
     changes: tokio::sync::Mutex<()>,
@@ -91,6 +138,8 @@ impl Shared {
             servers: watch::Sender::new(servers),
             write: Mutex::new(()),
             sessions: Mutex::new(HashMap::new()),
+            links: Mutex::new(HashMap::new()),
+            roaming: Mutex::new(Roaming::default()),
             next_session: AtomicU64::new(1),
             changes: tokio::sync::Mutex::new(()),
         }
@@ -206,8 +255,7 @@ impl Shared {
         }
     }
 
-    /// A client for a saved server at its first address. Moving sessions onto roaming (`App::jellyfin_addresses`, ADR 0014) replaces the
-    /// fixed address here (wave 3).
+    /// A client for a server setup has just found, at the one address setup probed. Saved servers use [`Shared::saved_client`].
     pub(crate) fn client(
         &self,
         server: ServerRef,
@@ -222,8 +270,170 @@ impl Shared {
         )
     }
 
-    /// Makes `client` the server's session for `user`, with the 401 hook installed, replacing any earlier one. Returns its id.
-    fn install(self: &Arc<Self>, client: Arc<JellyfinClient>, user: UserId) -> u64 {
+    /// A client for a saved Jellyfin server over its address provider, and the provider. Needs the tokio runtime: the provider
+    /// runs its races there.
+    pub(crate) fn saved_client(
+        self: &Arc<Self>,
+        saved: &SavedServer,
+    ) -> Result<(JellyfinClient, Arc<RoamingAddresses>), NetError> {
+        let provider = self.provider(saved).map_err(|error| match error {
+            RoamingError::Tls => NetError::Tls,
+            RoamingError::InvalidAddress(_) | RoamingError::TooManyAddresses => {
+                NetError::InvalidRequest
+            }
+        })?;
+        let client = JellyfinClient::new(
+            saved.server.clone(),
+            provider.clone(),
+            self.identity.clone(),
+            self.request_log.clone(),
+        )?;
+        Ok((client, provider))
+    }
+
+    /// The saved server's address provider, made on first use and made again when its addresses or id changed. A new one hears
+    /// network facts from now on and its status is followed into the capabilities state. Call it on the tokio runtime.
+    pub(crate) fn provider(
+        self: &Arc<Self>,
+        saved: &SavedServer,
+    ) -> Result<Arc<RoamingAddresses>, RoamingError> {
+        let current = |links: &HashMap<ServerRef, Link>| {
+            links
+                .get(&saved.server)
+                .filter(|link| link.addresses == saved.addresses && link.id == saved.id)
+                .map(|link| link.provider.clone())
+        };
+        if let Some(provider) = current(&lock(&self.links)) {
+            return Ok(provider);
+        }
+        // Built outside the lock: building sets up TLS for each address, which takes noticeable time.
+        // All callers are async code on tokio, as the HTTP client already requires.
+        let runtime = RuntimeHandle::current();
+        let identity = JellyfinIdentity::new(saved.id.clone());
+        let provider = RoamingAddresses::new(
+            saved.server.clone(),
+            &saved.addresses,
+            Arc::new(identity.clone()),
+            self.request_log.clone(),
+            RoamingConfig::default(),
+            &runtime,
+        )?;
+        {
+            let mut links = lock(&self.links);
+            // Another caller made one for the same addresses meanwhile: use theirs.
+            if let Some(provider) = current(&links) {
+                return Ok(provider);
+            }
+            let follow = runtime
+                .spawn(follow(
+                    Arc::downgrade(self),
+                    saved.server.clone(),
+                    provider.status(),
+                    identity.clone(),
+                ))
+                .abort_handle();
+            // Replacing a link drops the old one, which stops its follow task.
+            links.insert(
+                saved.server.clone(),
+                Link {
+                    addresses: saved.addresses.clone(),
+                    id: saved.id.clone(),
+                    provider: provider.clone(),
+                    identity,
+                    follow,
+                },
+            );
+        }
+        self.register(&provider);
+        Ok(provider)
+    }
+
+    /// Makes `provider` hear network facts from now on, starting from the last ones reported.
+    pub(crate) fn register(&self, provider: &Arc<RoamingAddresses>) {
+        let facts = {
+            let mut roaming = lock(&self.roaming);
+            roaming
+                .providers
+                .retain(|provider| provider.strong_count() > 0);
+            roaming.providers.push(Arc::downgrade(provider));
+            roaming.facts.clone()
+        };
+        if let Some(facts) = facts {
+            provider.network_changed(&facts);
+        }
+    }
+
+    /// Copies the server's provider status into the capabilities state now (the follow task does it on every change). A provider
+    /// that has not tried yet (reachability unknown) leaves the status as it is: a sign-in has just reached the server.
+    fn refresh_status(self: &Arc<Self>, server: &ServerRef) {
+        let found = lock(&self.links).get(server).map(|link| {
+            (
+                link.provider.status().borrow().clone(),
+                link.identity.version(),
+            )
+        });
+        if let Some((status, version)) = found {
+            self.apply_roaming(server, &status, version);
+        }
+    }
+
+    fn apply_roaming(
+        self: &Arc<Self>,
+        server: &ServerRef,
+        roaming: &RoamingStatus,
+        version: Option<String>,
+    ) {
+        if roaming.reachability == Reachability::Unknown {
+            return;
+        }
+        self.update_status(server, |status| {
+            status.reachability = roaming.reachability;
+            status.address = roaming.position;
+            if version.is_some() {
+                status.version = version;
+            }
+        });
+        if roaming.reachability == Reachability::Reachable {
+            self.recheck(server);
+        }
+    }
+
+    /// Checks the session's user again if no check has passed yet in this session and none runs.
+    fn recheck(self: &Arc<Self>, server: &ServerRef) {
+        let found = lock(&self.sessions).get(server).and_then(|session| {
+            session
+                .check
+                .compare_exchange(UNCHECKED, CHECKING, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+                .then(|| {
+                    (
+                        session.id,
+                        session.user.clone(),
+                        session.client.clone(),
+                        session.check.clone(),
+                    )
+                })
+        });
+        let Some((id, user, client, check)) = found else {
+            return;
+        };
+        let Ok(runtime) = RuntimeHandle::try_current() else {
+            check.store(UNCHECKED, Ordering::Release);
+            return;
+        };
+        let shared = self.clone();
+        let server = server.clone();
+        runtime.spawn(async move { shared.check_user(&server, id, user, &client, &check).await });
+    }
+
+    /// Makes `client` the server's session for `user`, with the 401 hook installed, replacing any earlier one. `check` says
+    /// whether the server has confirmed the user yet. Returns its id and its check state.
+    fn install(
+        self: &Arc<Self>,
+        client: Arc<JellyfinClient>,
+        user: UserId,
+        check: u8,
+    ) -> (u64, Arc<AtomicU8>) {
         let id = self.next_session.fetch_add(1, Ordering::Relaxed);
         let server = client.server().clone();
         let shared: Weak<Self> = Arc::downgrade(self);
@@ -233,8 +443,17 @@ impl Shared {
                 shared.revoked(&hooked, id);
             }
         }));
-        lock(&self.sessions).insert(server, Session { id, user, client });
-        id
+        let check = Arc::new(AtomicU8::new(check));
+        lock(&self.sessions).insert(
+            server,
+            Session {
+                id,
+                user,
+                client,
+                check: check.clone(),
+            },
+        );
+        (id, check)
     }
 
     /// The 401 rule (ADR 0015): session `id` is over. Nothing happens if a newer session replaced it. Otherwise the status changes
@@ -296,8 +515,8 @@ impl Shared {
         let shared = self.clone();
         let user = signed_in.user.clone();
         let token = signed_in.token.clone();
-        let (server, address, version, remembered) = blocking("save", move || {
-            let Some((server, address, version)) =
+        let (saved, version, remembered) = blocking("save", move || {
+            let Some((saved, version)) =
                 shared.commit(|servers| record(servers, &target, &user))?
             else {
                 return Err(SignInError::ServerRemoved);
@@ -306,22 +525,27 @@ impl Shared {
                 Some(storage) => storage
                     .secrets
                     .set(
-                        &SecretKey::new(server.clone(), user.id.clone()),
+                        &SecretKey::new(saved.server.clone(), user.id.clone()),
                         &Secret::new(token.expose()),
                     )
                     .is_ok(),
                 None => false,
             };
-            Ok((server, address, version, remembered))
+            Ok((saved, version, remembered))
         })
         .await??;
 
+        let server = saved.server.clone();
         let mut user = signed_in.user;
         user.server = server.clone();
-        // Building a client fails only for an address that is not a URL, which setup never saves.
-        if let Ok(client) = self.client(server.clone(), &address) {
+        // The session goes over the server's provider, made again if this sign-in added an address. Its first request waits for
+        // the provider's race, which checks the server's id. Building it fails only for an address that is not a URL, which setup
+        // never saves.
+        if let Ok((client, provider)) = self.saved_client(&saved) {
             client.set_token(signed_in.token);
-            self.install(Arc::new(client), user.id.clone());
+            self.install(Arc::new(client), user.id.clone(), CHECKED);
+            // Race now, so that the status soon shows the address in use.
+            provider.retry_now();
         }
         self.update_status(&server, |status| {
             status.signed_in = true;
@@ -338,10 +562,16 @@ impl Shared {
     pub(crate) async fn restore_all(self: &Arc<Self>) {
         let mut tasks = JoinSet::new();
         for saved in self.servers() {
-            if saved.server.service == ServiceType::JELLYFIN
-                && saved.active_user.is_some()
-                && self.session_id(&saved.server).is_none()
-            {
+            if saved.server.service != ServiceType::JELLYFIN {
+                continue;
+            }
+            // Every saved server gets its provider, signed in or not, so that it hears network facts. An invalid address
+            // leaves the server without one; its restore below says unreachable.
+            let _ = self.provider(&saved);
+            if self.session_id(&saved.server).is_some() {
+                // A restored session whose user was never confirmed: check again.
+                self.recheck(&saved.server);
+            } else if saved.active_user.is_some() {
                 let shared = self.clone();
                 tasks.spawn(async move { shared.restore(saved).await });
             }
@@ -349,6 +579,9 @@ impl Shared {
         while tasks.join_next().await.is_some() {}
     }
 
+    /// Restores one session: the token from the keyring, then the session over the server's provider, then the current user.
+    /// No identity probe of its own: the provider serves no address before it passed the identity check in the race that
+    /// selected it, so `GET /Users/Me`, the first request with the token, waits for that race (ADR 0014).
     async fn restore(self: &Arc<Self>, saved: SavedServer) {
         let server = saved.server.clone();
         let Some(user_id) = saved.active_user.clone() else {
@@ -384,57 +617,56 @@ impl Shared {
             }
         };
 
-        // The address must answer as the same server before the token goes there (ADR 0014).
-        let unreachable =
-            |status: &mut ServerStatus| status.reachability = Reachability::Unreachable;
-        let Some(address) = saved.addresses.first() else {
-            self.update_status(&server, unreachable);
-            return;
-        };
-        let Ok(url) = Url::parse(&address.url) else {
-            self.update_status(&server, unreachable);
-            return;
-        };
-        let prober = Prober::new(server.clone(), self.request_log.clone());
-        let found = match prober.probe_expecting(&url, &saved.id).await {
-            Ok(found) => found,
-            // Not reachable, or another server answers there (`DifferentServer`): no token is sent.
-            Err(_) => {
-                if self.session_id(&server).is_none() {
-                    self.update_status(&server, unreachable);
-                }
-                return;
+        let Ok((client, _)) = self.saved_client(&saved) else {
+            // No usable address list: nothing can be reached.
+            if self.session_id(&server).is_none() {
+                self.update_status(&server, |status| {
+                    status.reachability = Reachability::Unreachable;
+                });
             }
-        };
-
-        let Ok(client) = self.client(server.clone(), address) else {
             return;
         };
         client.set_token(token);
         let client = Arc::new(client);
-        let id = {
+        let (id, check) = {
             let _changes = self.changes.lock().await;
-            // A sign-in or sign-out while the probe ran decides instead.
+            // A sign-in or sign-out since `restore_all` read the list decides instead.
             if self.session_id(&server).is_some()
                 || self.active_user(&server) != Some(user_id.clone())
             {
                 return;
             }
-            self.install(client.clone(), user_id.clone())
+            self.install(client.clone(), user_id.clone(), CHECKING)
         };
-        self.update_session_status(&server, id, |status| {
-            status.reachability = Reachability::Reachable;
-            status.version = Some(found.info.version);
-        });
+        self.check_user(&server, id, user_id, &client, &check).await;
+        self.refresh_status(&server);
+    }
+
+    /// Asks the server for the session's user (`GET /Users/Me`) and shows it. A failure to reach the server leaves the check to
+    /// be done again when the provider next reaches it; the 401 hook handles a revoked token.
+    async fn check_user(
+        self: &Arc<Self>,
+        server: &ServerRef,
+        id: u64,
+        user_id: UserId,
+        client: &JellyfinClient,
+        check: &AtomicU8,
+    ) {
         match client.current_user().await {
             Ok(user) => {
+                check.store(CHECKED, Ordering::Release);
                 let name = user.name.clone();
-                self.update_session_status(&server, id, |status| {
+                self.update_session_status(server, id, |status| {
                     status.signed_in = true;
                     status.user = Some(user);
                 });
-                if saved.active().is_none_or(|saved| saved.name != name) {
+                let renamed = self.saved(server).is_some_and(|saved| {
+                    saved.active_user.as_ref() == Some(&user_id)
+                        && saved.active().is_none_or(|saved| saved.name != name)
+                });
+                if renamed {
                     let shared = self.clone();
+                    let server = server.clone();
                     let _ = blocking("save", move || {
                         shared.commit(|servers| {
                             if let Some(saved) = servers.iter_mut().find(|s| s.server == server) {
@@ -445,11 +677,13 @@ impl Shared {
                     .await;
                 }
             }
-            // The 401 hook already signed the server out.
-            Err(AuthError::SessionRevoked) => {}
-            // The token works; this user is refused right now (for example outside a parental time limit).
-            Err(AuthError::Refused) => {}
-            Err(_) => self.update_session_status(&server, id, unreachable),
+            // The 401 hook already signed the server out; the token works but this user is refused right now (for example
+            // outside a parental time limit). Either way the check is done.
+            Err(AuthError::SessionRevoked | AuthError::Refused) => {
+                check.store(CHECKED, Ordering::Release);
+            }
+            // Not reached (the reachability comes from the provider), or an answer that could not be read: try again later.
+            Err(_) => check.store(UNCHECKED, Ordering::Release),
         }
     }
 
@@ -487,6 +721,27 @@ impl Shared {
     }
 }
 
+/// Copies a provider's status into the capabilities state on every change, until the provider or the app is gone or the link is
+/// replaced (which aborts it).
+async fn follow(
+    shared: Weak<Shared>,
+    server: ServerRef,
+    mut status: watch::Receiver<RoamingStatus>,
+    identity: JellyfinIdentity,
+) {
+    loop {
+        let current = status.borrow_and_update().clone();
+        let Some(app) = shared.upgrade() else {
+            return;
+        };
+        app.apply_roaming(&server, &current, identity.version());
+        drop(app);
+        if status.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
 /// Runs blocking work on tokio's blocking pool. Fails only if the work panicked; `op` names the step for the error.
 async fn blocking<R: Send + 'static>(
     op: &'static str,
@@ -500,13 +755,13 @@ async fn blocking<R: Send + 'static>(
         })
 }
 
-/// Adds or updates the target's record for a signed-in user and makes the user active. Returns the server, the address to use and
+/// Adds or updates the target's record for a signed-in user and makes the user active. Returns the saved record as it is now and
 /// the version setup saw; `None` when the saved server it was for is gone (removed while signing in).
 fn record(
     servers: &mut Vec<SavedServer>,
     target: &Target,
     user: &User,
-) -> Option<(ServerRef, ServerAddress, Option<String>)> {
+) -> Option<(SavedServer, Option<String>)> {
     let (index, version) = match target {
         Target::Saved(server) => (
             servers.iter().position(|saved| &saved.server == server)?,
@@ -546,13 +801,9 @@ fn record(
         }
     };
     let saved = &mut servers[index];
-    let address = match target {
-        Target::New { address, .. } => address.clone(),
-        Target::Saved(_) => saved.addresses.first()?.clone(),
-    };
     upsert_user(saved, user.id.clone(), user.name.clone());
     saved.active_user = Some(user.id.clone());
-    Some((saved.server.clone(), address, version))
+    Some((saved.clone(), version))
 }
 
 fn upsert_user(saved: &mut SavedServer, id: UserId, name: String) {
@@ -642,14 +893,15 @@ mod tests {
     #[test]
     fn a_new_server_gets_a_key_and_its_user_becomes_active() {
         let mut servers = vec![saved("1", "a")];
-        let (server, address, version) = record(
+        let (saved, version) = record(
             &mut servers,
             &new_target("b", "https://media.example.com"),
             &user("u1", "Example User"),
         )
         .unwrap();
-        assert_eq!(server.key, ServerKey::new("2"));
-        assert_eq!(address.url, "https://media.example.com");
+        assert_eq!(saved.server.key, ServerKey::new("2"));
+        assert_eq!(saved.addresses[0].url, "https://media.example.com");
+        assert_eq!(saved, servers[1]);
         assert_eq!(version.as_deref(), Some("12.2.0"));
         assert_eq!(servers[1].active_user, Some(UserId::new("u1")));
         assert_eq!(servers[1].users[0].name, "Example User");
@@ -662,13 +914,15 @@ mod tests {
             id: UserId::new("u1"),
             name: "Old Name".into(),
         });
-        let (server, _, _) = record(
+        let (saved, _) = record(
             &mut servers,
             &new_target("a", "https://media.example.com"),
             &user("u2", "Another User"),
         )
         .unwrap();
-        assert_eq!(server.key, ServerKey::new("1"));
+        assert_eq!(saved.server.key, ServerKey::new("1"));
+        // The session is built over both addresses.
+        assert_eq!(saved.addresses.len(), 2);
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].addresses.len(), 2);
         assert!(servers[0].addresses[1].plain_http_confirmed);
@@ -688,13 +942,12 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_server_signs_in_at_its_first_address() {
+    fn a_saved_server_keeps_its_record() {
         let mut servers = vec![saved("3", "a")];
         let target = Target::Saved(servers[0].server.clone());
-        let (server, address, version) =
-            record(&mut servers, &target, &user("u1", "Example User")).unwrap();
-        assert_eq!(server.key, ServerKey::new("3"));
-        assert_eq!(address.url, "http://192.168.1.10:8096");
+        let (saved, version) = record(&mut servers, &target, &user("u1", "Example User")).unwrap();
+        assert_eq!(saved.server.key, ServerKey::new("3"));
+        assert_eq!(saved.addresses, servers[0].addresses);
         assert_eq!(version, None);
     }
 

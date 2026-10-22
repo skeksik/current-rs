@@ -12,7 +12,7 @@ mod session;
 mod sign_in;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, PoisonError, Weak};
 
 use current_jellyfin::{
     AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, platform_name,
@@ -29,7 +29,7 @@ pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE}
 pub use list::{ListSubscription, ObservableList, VectorDiff};
 pub use sign_in::{SignIn, SignInError, SignInState};
 
-use session::{Shared, Storage, Target};
+use session::{Roaming, Shared, Storage, Target};
 
 /// What the about and diagnostics screens show about the core.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,16 +42,6 @@ pub struct AppInfo {
 pub struct App {
     shared: Arc<Shared>,
     device_id: Option<DeviceId>,
-    roaming: Mutex<Roaming>,
-}
-
-/// Every server's address provider, so that network facts reach them all (ADR 0014).
-#[derive(Debug, Default)]
-struct Roaming {
-    /// Dropped providers are pruned on the next fan-out.
-    providers: Vec<Weak<RoamingAddresses>>,
-    /// The facts last reported, for providers made later.
-    facts: Option<NetworkFacts>,
 }
 
 impl std::fmt::Debug for App {
@@ -87,7 +77,6 @@ impl App {
                 Vec::new(),
             )),
             device_id: None,
-            roaming: Mutex::new(Roaming::default()),
         }
     }
 
@@ -112,7 +101,6 @@ impl App {
                 stored.servers,
             )),
             device_id: Some(stored.device_id),
-            roaming: Mutex::new(Roaming::default()),
         };
         Ok((app, report))
     }
@@ -171,7 +159,9 @@ impl App {
         self.shared.servers.subscribe()
     }
 
-    /// The signed-in client of a server, for the features that browse and play.
+    /// The signed-in client of a server, for the features that browse and play. A restored session has a client even while the
+    /// server cannot be reached (the capabilities state says `Unreachable`): its requests go out once the server's address
+    /// provider reaches it again, and fail fast meanwhile. `None` when the server is signed out.
     pub fn jellyfin(&self, server: &ServerRef) -> Option<Arc<JellyfinClient>> {
         self.shared.session(server)
     }
@@ -196,39 +186,36 @@ impl App {
             address: server.address,
             version: server.info.version,
         };
-        Ok(SignIn::new(
-            self.shared.clone(),
-            target,
-            client,
-            expected,
-            None,
-        ))
+        Ok(SignIn::new(self.shared.clone(), target, client, expected))
     }
 
-    /// A sign-in to a saved server, at its first address. Each attempt first checks that the address answers as the saved server
-    /// (ADR 0014) before any credential is sent. `None` if no such server is saved or it has no address.
+    /// A sign-in to a saved server, over all its addresses through the server's address provider (ADR 0014). Each attempt first
+    /// waits, in `SigningIn`, until the provider has selected an address that passed the identity check (the saved server's id),
+    /// so no credential goes anywhere else. `None` if no such server is saved or it has no address; `InvalidRequest` if an
+    /// address is not an http(s) URL.
     pub fn sign_in_again(&self, server: &ServerRef) -> Option<Result<SignIn, NetError>> {
         let saved = self.shared.saved(server)?;
-        let address = saved.addresses.first()?;
-        let Ok(verify) = Url::parse(&address.url) else {
+        if saved.addresses.is_empty() {
+            return None;
+        }
+        if saved
+            .addresses
+            .iter()
+            .any(|address| Url::parse(&address.url).is_err())
+        {
             return Some(Err(NetError::InvalidRequest));
-        };
-        Some(self.shared.client(server.clone(), address).map(|client| {
-            SignIn::new(
-                self.shared.clone(),
-                Target::Saved(server.clone()),
-                client,
-                saved.id.clone(),
-                Some(verify),
-            )
-        }))
+        }
+        Some(Ok(SignIn::saved(self.shared.clone(), saved)))
     }
 
-    /// Checks every saved session, all servers at once; the shell runs it in the background after [`App::open`], and may run it
-    /// again (for example when the network returns) for servers without a live session. For each server with an active user: the
-    /// token from the keyring, then the identity probe on its address (the token goes only to the same server, ADR 0014), then the
-    /// current user. The capabilities state follows: signed in with the user and version, signed out when the token is gone or the
-    /// server answers 401, unreachable (still signed in) when the server does not answer.
+    /// Checks every saved session, all servers at once; the shell runs it in the background after [`App::open`]. Each saved Jellyfin
+    /// server gets its address provider here (it needs the runtime), and from then on the capabilities state follows the provider:
+    /// reachability, the position of the address in use, and the version its identity check read. For each server with an active
+    /// user: the token from the keyring, then the session over the provider, then the current user. The token goes only to an
+    /// address that passed the identity check (ADR 0014). Signed in with the user when the server answers, signed out when the
+    /// token is gone or the server answers 401, still signed in and unreachable when no address answers as the server; such a
+    /// session checks its user once the provider reaches the server. Running it again checks sessions whose user is not yet
+    /// confirmed.
     pub async fn restore_sessions(&self) {
         self.shared.restore_all().await;
     }
@@ -251,6 +238,7 @@ impl App {
             roaming.facts = Some(facts.clone());
             roaming.providers.clone()
         };
+        // Signed-in servers' providers are among them, so their sessions race again too.
         for provider in providers.iter().filter_map(Weak::upgrade) {
             provider.network_changed(&facts);
         }
@@ -264,8 +252,9 @@ impl App {
         }
     }
 
-    /// The address provider of a Jellyfin server with id `id` reached at `addresses` (the user's order), for its `ServerClient`. Its
-    /// probes check the id and go to the shared request log; its races run on `runtime`. It hears network changes from now on.
+    /// An address provider of a Jellyfin server with id `id` reached at `addresses` (the user's order), for a `ServerClient` of its
+    /// own. Saved servers already have one each, made by [`App::restore_sessions`] or a sign-in; this one is separate. Its probes
+    /// check the id and go to the shared request log; its races run on `runtime`. It hears network changes from now on.
     ///
     /// # Errors
     /// [`RoamingError`] for an address that is not an http(s) URL or too many addresses.
@@ -284,23 +273,16 @@ impl App {
             RoamingConfig::default(),
             runtime,
         )?;
-        let facts = {
-            let mut roaming = self.lock_roaming();
-            roaming
-                .providers
-                .retain(|provider| provider.strong_count() > 0);
-            roaming.providers.push(Arc::downgrade(&provider));
-            roaming.facts.clone()
-        };
-        if let Some(facts) = facts {
-            provider.network_changed(&facts);
-        }
+        self.shared.register(&provider);
         Ok(provider)
     }
 
     fn lock_roaming(&self) -> std::sync::MutexGuard<'_, Roaming> {
         // Each change is one assignment or one `retain`, so a poisoned lock leaves a usable value.
-        self.roaming.lock().unwrap_or_else(PoisonError::into_inner)
+        self.shared
+            .roaming
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// A new search for servers on the local network, for the "add a server" screen (ADR 0016). Its probes go to the shared

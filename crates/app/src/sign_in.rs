@@ -6,15 +6,17 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use current_jellyfin::{
-    AuthError, JellyfinClient, ProbeError, Prober, QUICK_CONNECT_INTERVAL, QUICK_CONNECT_LIFETIME,
-    SignedIn,
+    AuthError, JellyfinClient, ProbeError, QUICK_CONNECT_INTERVAL, QUICK_CONNECT_LIFETIME, SignedIn,
 };
-use current_model::{ServerId, ServerRef, User};
-use current_net::Url;
+use current_model::{SavedServer, ServerId, ServerRef, User};
+use current_net::{AddressProvider, NetError, RoamingAddresses};
 use current_store::StoreError;
-use tokio::sync::watch;
+use tokio::sync::{OnceCell, watch};
 
 use crate::session::{Shared, Target};
+
+/// How long an attempt on a saved server waits for its address provider to select an address before it gives up.
+const SELECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Why a sign-in failed.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -22,8 +24,8 @@ pub enum SignInError {
     /// The server refused or could not be reached.
     #[error(transparent)]
     Auth(#[from] AuthError),
-    /// The saved server's address did not answer as that server before credentials were sent, or the sign-in reported another
-    /// server's id ([`ProbeError::DifferentServer`]). Nothing was saved.
+    /// No address of the saved server answered as that server, but one answered as another, so no credentials were sent; or the
+    /// sign-in reported another server's id ([`ProbeError::DifferentServer`]). Nothing was saved.
     #[error(transparent)]
     Probe(#[from] ProbeError),
     /// The server could not be saved in the settings, or the settings belong to a newer version of Current and cannot be saved
@@ -64,11 +66,11 @@ pub enum SignInState {
 pub struct SignIn {
     shared: Arc<Shared>,
     target: Target,
-    client: JellyfinClient,
+    /// The client the attempts use. For a saved server it is made on the first attempt, on the runtime, over the server's address
+    /// provider.
+    link: OnceCell<Link>,
     /// The server's id: the sign-in must report this one.
     expected: ServerId,
-    /// For a saved server, the address to check before any credential is sent (ADR 0014). Setup has just checked a new one.
-    verify: Option<Url>,
     state: watch::Sender<SignInState>,
     generation: watch::Sender<u64>,
     quick_connect: Mutex<Option<bool>>,
@@ -84,20 +86,44 @@ impl std::fmt::Debug for SignIn {
     }
 }
 
+/// A sign-in's client and, for a saved server, the address provider it goes through.
+struct Link {
+    client: JellyfinClient,
+    /// `None` for a server setup has just found: its one address was probed by setup and sits in a `FixedAddress`.
+    provider: Option<Arc<RoamingAddresses>>,
+}
+
 impl SignIn {
+    /// A sign-in to a server setup has just found, through `client` on the address setup probed.
     pub(crate) fn new(
         shared: Arc<Shared>,
         target: Target,
         client: JellyfinClient,
         expected: ServerId,
-        verify: Option<Url>,
     ) -> Self {
+        let link = Link {
+            client,
+            provider: None,
+        };
+        Self::with(shared, target, OnceCell::new_with(Some(link)), expected)
+    }
+
+    /// A sign-in to a saved server, through its address provider (made on the first attempt).
+    pub(crate) fn saved(shared: Arc<Shared>, saved: SavedServer) -> Self {
+        Self::with(
+            shared,
+            Target::Saved(saved.server),
+            OnceCell::new(),
+            saved.id,
+        )
+    }
+
+    fn with(shared: Arc<Shared>, target: Target, link: OnceCell<Link>, expected: ServerId) -> Self {
         Self {
             shared,
             target,
-            client,
+            link,
             expected,
-            verify,
             state: watch::Sender::new(SignInState::Ready {
                 quick_connect: None,
             }),
@@ -122,7 +148,10 @@ impl SignIn {
 
     /// Asks the server whether Quick Connect is on, and shows it in `Ready`. An error leaves it unknown.
     pub async fn check_quick_connect(&self) {
-        let Ok(enabled) = self.client.quick_connect_enabled().await else {
+        let Ok(link) = self.link().await else {
+            return;
+        };
+        let Ok(enabled) = link.client.quick_connect_enabled().await else {
             return;
         };
         *self
@@ -141,11 +170,11 @@ impl SignIn {
     /// Signs in with a user name and password. The password is used for this one request and not kept.
     pub async fn with_password(&self, username: &str, password: &str) {
         let generation = self.begin();
-        if !self.prepare(generation).await {
+        let Some(client) = self.prepare(generation).await else {
             return;
-        }
+        };
         let result = self
-            .unless_cancelled(generation, self.client.sign_in_by_name(username, password))
+            .unless_cancelled(generation, client.sign_in_by_name(username, password))
             .await;
         if let Some(result) = result {
             self.finish(generation, result).await;
@@ -156,11 +185,11 @@ impl SignIn {
     /// most 10 minutes), then signs in.
     pub async fn with_quick_connect(&self) {
         let generation = self.begin();
-        if !self.prepare(generation).await {
+        let Some(client) = self.prepare(generation).await else {
             return;
-        }
+        };
         let Some(code) = self
-            .unless_cancelled(generation, self.client.quick_connect_initiate())
+            .unless_cancelled(generation, client.quick_connect_initiate())
             .await
         else {
             return;
@@ -178,7 +207,7 @@ impl SignIn {
                 code: code.code.clone(),
             },
         );
-        let wait = self.client.quick_connect_wait(
+        let wait = client.quick_connect_wait(
             &code.secret,
             self.quick_connect_interval,
             self.quick_connect_lifetime,
@@ -217,40 +246,63 @@ impl SignIn {
         current
     }
 
-    /// Checks before anything is sent that the result can be saved and, for a saved server, that its address answers as that
-    /// server. Returns whether to go on; on a failure the state says why.
-    async fn prepare(&self, generation: u64) -> bool {
-        if let Err(error) = self.shared.check_writable() {
-            self.set_if_current(
-                generation,
-                SignInState::Failed {
-                    error: error.into(),
-                },
-            );
-            return false;
-        }
-        let Some(url) = &self.verify else {
-            return true;
-        };
-        let prober = Prober::new(
-            self.client.server().clone(),
-            self.shared.request_log.clone(),
-        );
-        match self
-            .unless_cancelled(generation, prober.probe_expecting(url, &self.expected))
+    /// The attempts' client, made on first use for a saved server.
+    async fn link(&self) -> Result<&Link, SignInError> {
+        self.link
+            .get_or_try_init(|| async {
+                let Target::Saved(server) = &self.target else {
+                    // A new server's link is made with the flow.
+                    return Err(SignInError::ServerRemoved);
+                };
+                let saved = self
+                    .shared
+                    .saved(server)
+                    .ok_or(SignInError::ServerRemoved)?;
+                let (client, provider) = self
+                    .shared
+                    .saved_client(&saved)
+                    .map_err(|error| SignInError::Auth(AuthError::Network(error)))?;
+                Ok(Link {
+                    client,
+                    provider: Some(provider),
+                })
+            })
             .await
+    }
+
+    /// Checks before anything is sent that the result can be saved and, for a saved server, waits until its provider has selected
+    /// an address that answers as that server (ADR 0014). Returns the client to go on with; on a failure the state says why.
+    ///
+    /// The wait lets an attempt fail early with a clear error. Credentials are safe without it: the provider serves no address
+    /// before it passed the identity check, so the credentialed request would wait for that check anyway, also when the network
+    /// changes after this returns.
+    async fn prepare(&self, generation: u64) -> Option<&JellyfinClient> {
+        let failed = |error: SignInError| {
+            self.set_if_current(generation, SignInState::Failed { error });
+            None
+        };
+        if let Err(error) = self.shared.check_writable() {
+            return failed(error.into());
+        }
+        let link = match self.unless_cancelled(generation, self.link()).await? {
+            Ok(link) => link,
+            Err(error) => return failed(error),
+        };
+        let Some(provider) = &link.provider else {
+            return Some(&link.client);
+        };
+        // The user asked to sign in: an unreachable server tries again now rather than at its next retry.
+        provider.retry_now();
+        let deadline = tokio::time::Instant::now() + SELECT_TIMEOUT;
+        match self
+            .unless_cancelled(generation, provider.wait(deadline))
+            .await?
         {
-            Some(Ok(_)) => true,
-            Some(Err(error)) => {
-                self.set_if_current(
-                    generation,
-                    SignInState::Failed {
-                        error: error.into(),
-                    },
-                );
-                false
+            Some(_) => Some(&link.client),
+            None if !provider.status().borrow().different_server.is_empty() => {
+                failed(ProbeError::DifferentServer.into())
             }
-            None => false,
+            None => failed(AuthError::Network(NetError::Unreachable).into()),
         }
     }
 
