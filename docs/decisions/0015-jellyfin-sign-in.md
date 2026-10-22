@@ -118,9 +118,11 @@ built now (manager, 2026-10-22).
   same server (ADR 0014); then `GET /Users/Me`. Results: signed in with user, permissions and version; signed out on 401 (the 401
   rule); unreachable but still signed in when the server does not answer or another server answers there (no token is sent then).
   It may run again later for servers without a live session. Servers of other services are skipped.
-- **Sign out:** `App::sign_out` calls `POST /Sessions/Logout` (10 s timeout), then deletes the token and the active user whatever the
-  server answered, and returns the server's answer for the UI to mention. The user stays saved. It signs out the session current when
-  it started: a sign-in that completes while the server is being told is kept (tested).
+- **Sign out:** `App::sign_out` first signs out on this device, under the session lock: the session, the active user and the stored
+  token are gone, and the status shows it, before anything is sent. It then calls `POST /Sessions/Logout` (10 s timeout) with the
+  token the old client still holds in memory, and returns the server's answer for the UI to mention. The user stays saved. A restore
+  while the server answers finds nothing to restore, and a sign-in that completes meanwhile is a new session and is kept (both
+  tested).
 - **Ordering:** saving a sign-in, signing out, the 401 rule and restoring each change a server's session under one async lock and
   check under it that the session or active user they act on is still current. Restore installs its client only if no sign-in or
   sign-out happened during its probe, and writes the status only while its session is current.
@@ -172,7 +174,7 @@ server's dashboard to its administrators, as every Jellyfin client's does; it ne
 - Tests run against hand-written stand-ins only: password ok, wrong and refused; Quick Connect approved, off, expired, cancelled,
   dropped and riding out a 503; restore ok, revoked, unreachable and another server at the address; a 401 and a 403 mid-session; a
   late 401 on an old client of the same or another user; signing in again to an address that answers as another server; a sign-in
-  reporting another server's id; settings from a newer version; sign out with the server up and gone, and racing a new sign-in; no
+  reporting another server's id; settings from a newer version; sign out with the server up and gone, racing a new sign-in and racing a restore; no
   keyring; settings round trip. None ran against a real Jellyfin server.
 
 ## Sources (read 2026-10-22)

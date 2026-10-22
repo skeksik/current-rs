@@ -217,9 +217,6 @@ impl JellyfinClient {
             if Instant::now() + interval >= deadline {
                 return Err(last.map_or(AuthError::QuickConnectExpired, AuthError::Network));
             }
-            if Instant::now() + interval >= deadline {
-                return Err(AuthError::QuickConnectExpired);
-            }
             tokio::time::sleep(interval).await;
         }
     }

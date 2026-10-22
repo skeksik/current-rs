@@ -1011,3 +1011,29 @@ async fn a_sign_out_does_not_undo_a_sign_in_that_finished_meanwhile() {
             .is_some()
     );
 }
+
+#[tokio::test]
+async fn a_restore_while_signing_out_does_not_sign_back_in() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = Arc::new(open(temp.path(), &secrets));
+    signed_in_with_password(&app, &address).await;
+
+    // The server takes its time to answer the sign-out; a restore runs meanwhile.
+    *server.hold_logout.lock().unwrap() = Some(Arc::new(tokio::sync::Notify::new()));
+    let release = server.hold_logout.lock().unwrap().clone().unwrap();
+    let sign_out = tokio::spawn({
+        let app = app.clone();
+        async move { app.sign_out(&jellyfin("1")).await }
+    });
+    eventually(|| server.paths().last().map(String::as_str) == Some("/Sessions/Logout")).await;
+    app.restore_sessions().await;
+    release.notify_one();
+    assert_eq!(sign_out.await.unwrap(), Ok(()));
+
+    assert!(!app.capabilities().borrow().servers[0].signed_in);
+    assert!(app.jellyfin(&jellyfin("1")).is_none());
+    assert!(stored(&secrets, USER_ID).is_none());
+    assert_eq!(app.settings().unwrap().get().servers[0].active_user, None);
+}

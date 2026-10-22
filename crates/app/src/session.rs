@@ -455,32 +455,30 @@ impl Shared {
         });
     }
 
-    /// See [`App::sign_out`](crate::App::sign_out). The session signed out is the one current when it starts; a sign-in that
-    /// completes while the server is being told is kept.
+    /// See [`App::sign_out`](crate::App::sign_out). Signs out on this device first, under the session lock: the session, the active
+    /// user and the stored token are gone before the server is told, so nothing (a restore, say) can bring them back while the
+    /// server answers. The server is then told with the token the old client still holds in memory. A sign-in that completes
+    /// meanwhile is a new session and is kept.
     pub(crate) async fn sign_out(self: &Arc<Self>, server: &ServerRef) -> Result<(), AuthError> {
-        let session = lock(&self.sessions).remove(server);
-        let user = match &session {
-            Some(session) => Some(session.user.clone()),
-            None => self.active_user(server),
-        };
-        if session.is_some() {
+        let session = {
+            let _changes = self.changes.lock().await;
+            let session = lock(&self.sessions).remove(server);
+            let user = match &session {
+                Some(session) => Some(session.user.clone()),
+                None => self.active_user(server),
+            };
+            if let Some(user) = user {
+                let shared = self.clone();
+                let cleared = server.clone();
+                let _ = blocking("save", move || shared.forget_user(&cleared, &user)).await;
+            }
             self.signed_out(server);
-        }
-        let told = match &session {
+            session
+        };
+        match session {
             Some(session) => session.client.sign_out().await,
             None => Err(AuthError::NotSignedIn),
-        };
-        let _changes = self.changes.lock().await;
-        if self.session_id(server).is_some() {
-            return told;
         }
-        if let Some(user) = user {
-            let shared = self.clone();
-            let cleared = server.clone();
-            let _ = blocking("save", move || shared.forget_user(&cleared, &user)).await;
-        }
-        self.signed_out(server);
-        told
     }
 }
 
