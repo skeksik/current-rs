@@ -61,6 +61,8 @@ recorded with sources and dates, and a decision record where it decides somethin
 - [ ] Secrets in the OS keyring and a device identity per install
 - [ ] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out
 - [ ] Local server discovery
+      (core done 2026-10-22, ADR 0016: UDP discovery, probe and id check, the discovery state, picking into "add a server"; the
+      Windows screen and the local check on a real network are still to do)
 
 Done when: sign in and out of Jellyfin on Windows, and the app restarts signed in.
 
