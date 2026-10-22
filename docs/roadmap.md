@@ -59,7 +59,9 @@ recorded with sources and dates, and a decision record where it decides somethin
         TLS in M1)
   - [x] Core: `RoamingAddresses` in `current-net`, Jellyfin's identity check, `NetworkFacts`, `App::network_changed` and the
         request log's address position (2026-10-22, ADR 0014)
-  - [ ] Wire the providers into signed-in servers (sign-in), and `NetworkFacts` from the Windows UI (wave 3)
+  - [x] Wire the providers into signed-in servers: one provider per saved Jellyfin server for its session, restore and
+        sign-in again; the capabilities state follows its status (2026-10-22, ADR 0015)
+  - [ ] `NetworkFacts` from the Windows UI (wave 3)
 - [ ] Secrets in the OS keyring and a device identity per install
 - [ ] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out
       (core done 2026-10-22, ADR 0015: `current-jellyfin` auth, saved servers and users, the `SignIn` flow, restore, sign out; the bridge
