@@ -22,6 +22,31 @@ Status: accepted (2026-10-22).
 |---|---|---|---|
 | UniFFI (`uniffi` and its crates), `uniffi-bindgen-cs` | MPL-2.0 | 2026-10-22, owner | Used unmodified. MPL's obligations attach to its own files: the licences screen names it and where its source is; if we ever change one of its files, that file's source is published. Our own code is not affected |
 
+- **Platform runtimes** (owner, 2026-10-22): a platform's own runtime that the app must ship to run is allowed under its vendor's
+  terms, unmodified, with its licence file shipped next to it (in the Windows app's `licences\` folder). The list of every shipped file
+  is in `docs/notes/windows-shell.md`.
+
+| Runtime | Terms | Decided | Conditions |
+|---|---|---|---|
+| Windows App SDK 2.5.1 (WinUI and the other files its NuGet package places in a self-contained app) | Microsoft Software License Terms, Microsoft Windows App SDK (`license.txt` in the `Microsoft.WindowsAppSDK` 2.5.1 package) | 2026-10-22, owner | Below |
+| .NET 10 runtime (self-contained) | MIT, with its third-party notices (`LICENSE.TXT`, `THIRD-PARTY-NOTICES.TXT` in `Microsoft.NETCore.App.Runtime.win-x64`) | already allowed (MIT) | Ship both files |
+| Inno Setup 6.7.3 (its uninstaller in every install; the installer itself) | Inno Setup License: "Permission is granted to anyone to use this software for any purpose, including commercial applications" if copyright notices are kept, the origin is not misrepresented and modified versions are marked (`license.txt`, tag `is-6_7_3`) | 2026-10-22, owner (ADR 0009) | Ship `license.txt`; unmodified |
+
+  The Windows App SDK terms go beyond "redistributable", quoted from its `license.txt` (read 2026-10-22):
+  - 3(a)(i): "Any files that are binplaced with your application by the WindowsAppSDK NuGet package are, by definition, permitted to
+    be redistributed. This applies to both framework package dependent and self-contained deployments."
+  - 3(b): "For any code you distribute, you must: i. add significant primary functionality to it in your applications; ii. require
+    distributors and external end users to agree to terms that protect it and Microsoft at least as much as this agreement; and iii.
+    indemnify, defend, and hold harmless Microsoft from any claims, including attorneys' fees, related to the distribution or use of
+    your applications, except to the extent that any claim is based solely on the unmodified distributable code."
+  - 3(c): no use of "Microsoft's trademarks or trade dress in your application in any way that suggests your application comes from or
+    is endorsed by Microsoft", and no making the distributable code subject to a licence that requires its source to be disclosed.
+  - 2(a): "The software may collect information about you and your use of the software, and send that to Microsoft. [...] You may
+    opt-out of many of these scenarios, but not all, as described in the product documentation."
+
+  Accepted by the owner (2026-10-22) on these conditions, all due **before the first build goes to anyone else, testers included**:
+  end-user terms that protect Microsoft per 3(b)(ii), shown by the installer; the indemnity in 3(b)(iii) is the owner's to accept;
+  and the SDK's telemetry options are checked. Code signing is due by then too (ADR 0009). Until then builds exist only in CI.
 - **Current's own code is proprietary.** No open-source licence is granted and the repo has no LICENSE file. A licence granted on public
   code cannot be taken back for copies already made, so none is added while the repo is public.
 - **Checked by machine.** `cargo-deny` runs in CI against `deny.toml`, which lists the allowed licences and the exceptions above (each

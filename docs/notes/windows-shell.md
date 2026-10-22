@@ -125,6 +125,15 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
 7. the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes.
 `smoke.ps1` fails on a non-zero exit code, a missing "smoke run passed" line or a run longer than 120 s.
 
+## Open before first distribution
+Nothing built here goes to anyone else, testers included, until these are done (owner, 2026-10-22; ADR 0003, ADR 0009):
+1. End-user terms that protect Microsoft's code at least as much as the Windows App SDK licence does (its section 3(b)(ii)); the
+   owner provides them.
+2. An installer licence page showing those terms (Inno's `LicenseFile`).
+3. The indemnity in the Windows App SDK licence's 3(b)(iii): the owner's to accept.
+4. The Windows App SDK's telemetry (its licence's 2(a)): check what it sends and which options turn it off.
+5. Code signing of the app and the installer (SmartScreen; the Store's installer route).
+
 ## What the owner checks by hand
 On the owner's PC, with the installer from CI (or `apps/windows/out/app/Current.exe`):
 1. The window has Mica, the title bar is part of the window, it drags and double-click maximises; the caption buttons and snap layouts
