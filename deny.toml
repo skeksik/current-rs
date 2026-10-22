@@ -54,3 +54,7 @@ unknown-git = "deny"
 # RustSec advisories for every crate in the graph; unmaintained crates are reported for the whole graph.
 unmaintained = "all"
 yanked = "deny"
+ignore = [
+    # Re-check on the next uniffi bump (ADR 0004). current-ffi itself does not contain basic-toml (cargo tree -p current-ffi -e normal).
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml: unmaintained, reached only through uniffi_bindgen in the Swift generator tool (tools/uniffi-bindgen), not shipped; goes with the next uniffi bump" },
+]
