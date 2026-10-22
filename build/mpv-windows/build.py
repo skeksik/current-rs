@@ -245,7 +245,9 @@ class Build:
 
     def harfbuzz(self):
         self.fetch("harfbuzz")
-        self.meson("harfbuzz", ["--auto-features=disabled", "-Dfreetype=enabled", "-Draster=disabled", "-Dvector=disabled",
+        # harfbuzz turns some warnings into errors through pragmas in hb.hh; clang 20 on Windows trips one
+        # (-Wunused-function in hb-ot-layout-gsubgpos.hh), so keep its warnings as warnings.
+        self.meson("harfbuzz", ["-Dcpp_args=-DHB_NO_PRAGMA_GCC_DIAGNOSTIC_ERROR", "--auto-features=disabled", "-Dfreetype=enabled", "-Draster=disabled", "-Dvector=disabled",
                                 "-Dgpu=disabled", "-Dsubset=disabled", "-Dutilities=disabled", "-Dtests=disabled", "-Ddocs=disabled"])
 
     def libass(self):
