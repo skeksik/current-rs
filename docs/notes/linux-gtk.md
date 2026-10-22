@@ -333,3 +333,54 @@ sudo pacman -S --needed base-devel git gtk4 libadwaita mpv ffmpeg mesa-utils
 Not verified, needs native Linux: HDR output (and whether GTK and mpv can carry it at all, ADR 0011), hardware decoding (VA-API, NVDEC),
 MPRIS and media keys, the keyring (Secret Service, KWallet, the portal), portals in Flatpak, Orca, performance and frame pacing on a
 real GPU, GNOME and KDE integration (fractional scaling, multiple monitors).
+
+## WSL2 run (2026-10-22)
+The hands-on checks above, run by the owner on a Windows PC: commands run by Claude, the owner judged everything visual.
+
+| What | Version |
+|---|---|
+| Head commit | `65e9885` (spike/linux-gtk) |
+| Windows | 10.0.26200 |
+| WSL | 2.7.8.0, WSLg 1.0.73.2, kernel 6.18.33.1 |
+| Distro | Ubuntu 24.04.5 LTS (the packages from the setup above, GTK 4.14.5, libadwaita 1.5.0, libmpv 0.37.0, Mesa 25.2.8) |
+| GPU | NVIDIA GeForce RTX 5090 (the PC also has AMD Radeon integrated graphics) |
+| GL renderer, out of the box | `llvmpipe (LLVM 20.1.2, 256 bits)` |
+| GL renderer, forced | `D3D12 (NVIDIA GeForce RTX 5090)`, GL 4.6 core, with `GALLIUM_DRIVER=d3d12 MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA` |
+
+**Mesa does not pick the GPU on its own here.** `/dev/dxg`, `/usr/lib/wsl/lib/libd3d12.so` and Mesa's `d3d12_dri.so` are all there,
+but `glxinfo -B` and `eglinfo -B` (Wayland and X11) report llvmpipe, and the app logs `MESA: error: ZINK: failed to choose pdev`
+before falling back to llvmpipe. `GALLIUM_DRIVER=d3d12` alone picks the first adapter (the integrated AMD GPU);
+`MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA` picks the RTX 5090. So the run used these variants:
+
+- **llvmpipe, Wayland**: out of the box, `cargo run --release`, for cases 2 and 7 only.
+- **GPU, GLES, Wayland**: the default variant with the two variables above; cases 2 to 10 and 12.
+- **GPU, GL, Wayland**: `CURRENT_SPIKE_GL=gl` with the two variables, plus `ADW_DEBUG_COLOR_SCHEME=prefer-dark` for case 6.
+- **X11**: `GDK_BACKEND=x11`, on the GPU and then on llvmpipe, then with `GSK_RENDERER=cairo` as a diagnostic.
+
+| # | Case | Result |
+|---|---|---|
+| 1 | Build | Pass: `cargo run --release` builds without errors or warnings. |
+| 2 | GL driver | Fail out of the box (llvmpipe, see above; the info line names llvmpipe). Pass with the two variables: the info line names D3D12 (NVIDIA GeForce RTX 5090). |
+| 3 | Look and feel | Pass (GPU, Wayland): header bars, sidebar, rounded corners, shadows. The sidebar title reads "Current" in full, so "Curr…" was a weston artefact. The owner finds Preferences (Ctrl+,) and About in the primary menu right for GNOME. |
+| 4 | Core state | Pass: the "jellyfin" server appears in Preferences and on Home, Clear removes it. |
+| 5 | Keyboard | Pass on Wayland for Tab and arrows (focus ring), Ctrl+, and Escape; Ctrl+W and Ctrl+Q were not tried there. On X11 (Cairo run) Ctrl+Q, Ctrl+W and Ctrl+, did nothing while F11 worked. |
+| 6 | Light/dark | Does not follow Windows' dark mode (as expected without a settings portal). With `prefer-dark` everything turns dark and the video area stays black: pass. |
+| 7 | Video | llvmpipe: pass (colours, timer, sound). GPU GLES: colours and timer right, **no sound**. GPU GL: pass with sound. The picture was never green on the GPU. |
+| 8 | Controls | Partial, same on GPU GLES and GPU GL: **Left/Right seek twice per press**, **Space activates the last clicked button** instead of play/pause, and the seek-bar drag lags. |
+| 9 | Resizing | Pass on GPU GLES and GPU GL. |
+| 10 | Full screen | Pass on GPU GLES and GPU GL (F11, the button, double-click, several cycles). |
+| 11 | Compare GL APIs | Desktop GL behaves like GLES in cases 7 to 10, and is faster (see below). |
+| 12 | Software fallback check | Pass: on the GPU the info line does not show `fbo-format rgba8`. |
+| 13 | X11 path | **Fail: the window is transparent**, only its shadow shows, on the GPU and on llvmpipe alike. The log has `DRI3 error: Could not get DRI3 device` and `MESA: error: Failed to attach to x11 shm`. With `GSK_RENDERER=cairo` the window draws and the video plays, but **green** (llvmpipe). So GL presentation through XWayland fails in this WSLg setup; cases 7 to 10 could not be judged on X11. |
+
+**The GPU path is slow; llvmpipe was not.** On the GPU with GLES, the Player page took about half a minute to load, and the primary
+menu button took about 10 seconds to respond. Desktop GL was faster but still sometimes stuck and did not respond to clicks.
+The out-of-the-box llvmpipe run on Wayland felt fast. Not root-caused; on WSLg the d3d12 driver may have to copy every frame back
+for WSLg's compositor.
+
+**Sound on the GPU GLES run:** mpv's log shows its PipeWire and ALSA outputs failing (`Unknown PCM default`). A one-second test tone
+played with `ffmpeg -f pulse` to WSLg's PulseAudio at that time was not heard either, while sound worked on the runs before and after.
+So it is more likely a WSLg audio dropout than the app.
+
+Other log lines, harmless here: PipeWire's `can't load config client-rt.conf`, and GDK's "Compositor doesn't support moving popups,
+relying on remapping".
