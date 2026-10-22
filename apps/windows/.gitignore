@@ -1,0 +1,4 @@
+bin/
+obj/
+# Made by build.ps1
+/out/

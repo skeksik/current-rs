@@ -1,0 +1,78 @@
+<Page
+    x:Class="Current.Shell.Pages.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:bindings="using:Current.Bindings">
+    <Page.Resources>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{StaticResource ControlCornerRadius}" />
+            <Setter Property="Padding" Value="16" />
+        </Style>
+    </Page.Resources>
+
+    <ScrollViewer>
+        <StackPanel MaxWidth="1000" Padding="24,0,24,24" Spacing="4">
+            <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,8,0,4" Text="About" />
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="Current" />
+                    <TextBlock
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="{x:Bind ViewModel.VersionText}" />
+                </StackPanel>
+            </Border>
+
+            <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,24,0,4" Text="Servers" />
+            <Border Style="{StaticResource Card}">
+                <StackPanel Spacing="8">
+                    <TextBlock
+                        Visibility="{x:Bind ViewModel.NoServersVisibility, Mode=OneWay}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="No servers are set up." />
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.Servers, Mode=OneWay}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="bindings:ServerStatus">
+                                <StackPanel Margin="0,4">
+                                    <TextBlock Text="{x:Bind Service}" />
+                                    <TextBlock
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="{x:Bind Key}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Margin="0,24,0,4" Text="Diagnostics" />
+            <Border Style="{StaticResource Card}">
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Diagnostics" />
+                        <TextBlock
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap"
+                            Text="Recent server requests for a bug report, without server addresses or query values." />
+                    </StackPanel>
+                    <Button Grid.Column="1" VerticalAlignment="Center" Content="Copy diagnostics" Click="OnCopyDiagnostics" />
+                </Grid>
+            </Border>
+            <InfoBar
+                x:Name="CopiedInfo"
+                Margin="0,8,0,0"
+                Severity="Success"
+                IsOpen="False"
+                Message="Diagnostics copied to the clipboard." />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

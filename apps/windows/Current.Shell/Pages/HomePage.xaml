@@ -1,0 +1,15 @@
+<Page
+    x:Class="Current.Shell.Pages.HomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- The state before any server exists. Server setup comes with M1 (docs/roadmap.md). -->
+    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="480" Spacing="8">
+        <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" HorizontalAlignment="Center" Text="No servers yet" />
+        <TextBlock
+            Style="{StaticResource BodyTextBlockStyle}"
+            HorizontalAlignment="Center"
+            TextAlignment="Center"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            Text="Setting up a server is not available in this version." />
+    </StackPanel>
+</Page>

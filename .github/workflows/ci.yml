@@ -73,6 +73,28 @@ jobs:
         shell: pwsh
         run: ./bindings/csharp/test.ps1
 
+  # The Windows app (apps/windows): build the core and the bindings, publish the app self-contained for x64 and run its smoke test
+  # (docs/notes/windows-shell.md).
+  app-windows:
+    name: App (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      # Uncached: about 3 minutes.
+      - name: Install uniffi-bindgen-cs
+        run: cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.1+v0.31.0 uniffi-bindgen-cs
+      - name: Build the core and the C# bindings
+        shell: pwsh
+        run: ./bindings/csharp/build.ps1
+      - name: Publish the app
+        shell: pwsh
+        run: ./apps/windows/build.ps1
+      - name: Smoke run (headless start and exit, bridge checks)
+        shell: pwsh
+        run: ./apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe
+
   # The Swift package (bindings/swift): XCFramework, generated bindings and adapters (ADR 0004).
   bindings-macos:
     name: Bindings (Swift, macOS)
