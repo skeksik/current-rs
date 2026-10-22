@@ -187,6 +187,32 @@ class Build:
         if not (lib / want).exists():
             shutil.copyfile(lib / have, lib / want)
 
+    def pc_static_public(self, pc_name):
+        """Moves a static library's private link requirements into its public ones.
+
+        Consumers then link its dependencies without pkg-config's --static, which meson only uses with prefer_static, and that
+        option would also ask for static system libraries (avrt, dwrite) that do not exist."""
+        pc = self.prefix / "lib" / "pkgconfig" / f"{pc_name}.pc"
+        lines = pc.read_text().splitlines()
+        extra = {"Libs": "", "Requires": ""}
+        for line in lines:
+            for field in extra:
+                if line.startswith(f"{field}.private:"):
+                    extra[field] += " " + line.split(":", 1)[1].strip()
+        out = []
+        for line in lines:
+            if line.startswith(("Libs.private:", "Requires.private:")):
+                continue
+            for field, more in extra.items():
+                if line.startswith(f"{field}:") and more.strip():
+                    line = f"{line}{',' if field == 'Requires' and line.split(':', 1)[1].strip() else ''}{more}"
+                    extra[field] = ""
+            out.append(line)
+        for field, more in extra.items():
+            if more.strip():
+                out.append(f"{field}:{more}")
+        pc.write_text("\n".join(out) + "\n")
+
     def stage(self, name, fn):
         stamp = self.stamps / name
         if stamp.exists():
@@ -244,23 +270,28 @@ class Build:
         self.fetch("freetype")
         self.meson("freetype", ["-Dzlib=internal", "-Dbzip2=disabled", "-Dpng=disabled", "-Dharfbuzz=disabled", "-Dbrotli=disabled",
                                 "-Dtests=disabled"])
+        self.pc_static_public("freetype2")
 
     def harfbuzz(self):
         self.fetch("harfbuzz")
         # harfbuzz turns some warnings into errors through pragmas in hb.hh; clang 20 on Windows trips one
         # (-Wunused-function in hb-ot-layout-gsubgpos.hh), so keep its warnings as warnings.
-        self.meson("harfbuzz", ["-Dcpp_args=-DHB_NO_PRAGMA_GCC_DIAGNOSTIC_ERROR", "--auto-features=disabled", "-Dfreetype=enabled", "-Draster=disabled", "-Dvector=disabled",
-                                "-Dgpu=disabled", "-Dsubset=disabled", "-Dutilities=disabled", "-Dtests=disabled", "-Ddocs=disabled"])
+        self.meson("harfbuzz", ["-Dcpp_args=-DHB_NO_PRAGMA_GCC_DIAGNOSTIC_ERROR", "--auto-features=disabled", "-Dfreetype=enabled",
+                                "-Draster=disabled", "-Dvector=disabled", "-Dgpu=disabled", "-Dsubset=disabled", "-Dutilities=disabled",
+                                "-Dtests=disabled", "-Ddocs=disabled"])
+        self.pc_static_public("harfbuzz")
 
     def libass(self):
         self.fetch("libass")
         self.meson("libass", ["-Dfontconfig=disabled", "-Ddirectwrite=enabled", "-Dcoretext=disabled", "-Dasm=enabled",
                               "-Dlibunibreak=disabled", "-Dtest=disabled", "-Dcompare=disabled", "-Dprofile=disabled",
                               "-Dfuzz=disabled", "-Dcheckasm=disabled"])
+        self.pc_static_public("libass")
 
     def lcms2(self):
         self.fetch("lcms2")
         self.meson("lcms2", ["-Dtests=disabled", "-Djpeg=disabled", "-Dtiff=disabled", "-Dutils=false"])
+        self.pc_static_public("lcms2")
 
     def dav1d(self):
         self.fetch("dav1d")
@@ -307,7 +338,7 @@ class Build:
     def mpv(self):
         self.fetch("mpv")
         enabled = ["d3d11", "shaderc", "spirv-cross", "d3d-hwaccel", "wasapi", "win32-threads", "iconv", "uchardet", "lcms2", "zlib"]
-        self.meson("mpv", ["--auto-features=disabled", "-Dprefer_static=true", "-Dgpl=false", "-Dcplayer=false", "-Dlibmpv=true",
+        self.meson("mpv", ["--auto-features=disabled", "-Dgpl=false", "-Dcplayer=false", "-Dlibmpv=true",
                            "-Dtests=false", "-Dbuild-date=false", "-Dgl=disabled", "-Dlua=disabled", "-Djavascript=disabled",
                            *(f"-D{f}=enabled" for f in enabled)], default_library="shared")
         keep = self.info / "mpv"
