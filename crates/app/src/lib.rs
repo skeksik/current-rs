@@ -1,8 +1,9 @@
 //! The core's composition root and the state objects the app shells render (ADR 0002, ADR 0004).
 //!
-//! [`App`] is created once per process. It owns what every feature shares: the request log and the capabilities state. Server setup,
-//! sign-in and storage (M1) add to it. The crate holds no async runtime: `current-ffi` and the Linux app bring their own.
+//! [`App`] is created once per process. It owns what every feature shares: the request log and the capabilities state. Server setup
+//! ([`AddServer`]) builds on it; sign-in and storage (M1) add to it. The crate holds no async runtime: `current-ffi` and the Linux app bring their own.
 
+mod add_server;
 mod list;
 
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use current_model::Capabilities;
 use current_net::RequestLog;
 use tokio::sync::watch;
 
+pub use add_server::{AddServer, AddServerState, NewServer};
 pub use list::{ListSubscription, ObservableList, VectorDiff};
 
 /// What the about and diagnostics screens show about the core.
@@ -70,6 +72,11 @@ impl App {
         });
     }
 
+    /// A new "add a server" flow. Its probes go to the shared request log.
+    pub fn add_server(&self) -> AddServer {
+        AddServer::new(self.request_log.clone())
+    }
+
     /// The request log as text, oldest first: what "copy diagnostics" puts on the clipboard. Redacted by construction (ADR 0006).
     pub fn diagnostics_text(&self) -> String {
         self.request_log.to_text()
@@ -117,6 +124,17 @@ mod tests {
         let rx = app.capabilities();
         app.set_capabilities(Capabilities::default());
         assert!(!rx.has_changed().unwrap());
+    }
+
+    #[tokio::test]
+    async fn server_setup_probes_go_to_the_shared_log() {
+        let app = App::new();
+        app.add_server().probe("http://127.0.0.1:1").await;
+        let text = app.diagnostics_text();
+        assert!(
+            text.contains("jellyfin/setup GET /System/Info/Public -> unreachable"),
+            "{text}"
+        );
     }
 
     #[test]
