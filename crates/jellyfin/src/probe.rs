@@ -71,6 +71,14 @@ impl ProbeError {
         matches!(self, Self::TooOld { .. } | Self::SetupIncomplete)
     }
 
+    /// Whether an HTTP server answered: the request reached it and it sent a response.
+    fn http_answered(&self) -> bool {
+        matches!(
+            self,
+            Self::NotJellyfin | Self::Status { .. } | Self::Redirected { .. } | Self::Unavailable
+        )
+    }
+
     /// How much an error tells the user, when several candidates failed: the most telling one is reported.
     fn rank(&self) -> u8 {
         match self {
@@ -180,7 +188,7 @@ impl Prober {
         } else {
             &candidates[..1]
         };
-        let mut best: Option<ProbeError> = None;
+        let mut failures: Vec<(&Url, ProbeError)> = Vec::new();
         let mut https_failed_tls = false;
         for candidate in tried {
             match self.probe_url(candidate).await {
@@ -196,13 +204,11 @@ impl Prober {
                     if error.is_conclusive() {
                         return Err(error);
                     }
-                    if best.as_ref().is_none_or(|best| error.rank() > best.rank()) {
-                        best = Some(error);
-                    }
+                    failures.push((candidate, error));
                 }
             }
         }
-        Err(best.unwrap_or(ProbeError::Unreachable))
+        Err(most_telling(&failures))
     }
 
     /// Probes one base URL. Follows the server's own redirects on the same host (ADR 0006): an http to https upgrade is adopted as
@@ -253,6 +259,29 @@ enum Answer {
     Found(FoundServer),
     /// The server sent the request to its web client: its base path is this one.
     WebClient(Url),
+}
+
+/// The most telling of the candidates' errors. A failed https handshake on a host and port where plain http answered does not count:
+/// that port speaks plain http, so the http answer says more than the handshake.
+fn most_telling(failures: &[(&Url, ProbeError)]) -> ProbeError {
+    let http_answered_on = |https: &Url| {
+        failures.iter().any(|(url, error)| {
+            url.scheme() == "http"
+                && url.host() == https.host()
+                && url.port_or_known_default() == https.port_or_known_default()
+                && error.http_answered()
+        })
+    };
+    let mut best: Option<&ProbeError> = None;
+    for (url, error) in failures {
+        if *error == ProbeError::Tls && url.scheme() == "https" && http_answered_on(url) {
+            continue;
+        }
+        if best.is_none_or(|best| error.rank() > best.rank()) {
+            best = Some(error);
+        }
+    }
+    best.cloned().unwrap_or(ProbeError::Unreachable)
 }
 
 /// Sends the info request on `client` and reads the answer.
@@ -472,6 +501,65 @@ mod tests {
         assert!(ProbeError::Unavailable.rank() > ProbeError::NotJellyfin.rank());
         assert!(ProbeError::SetupIncomplete.is_conclusive());
         assert!(!ProbeError::Unavailable.is_conclusive());
+    }
+
+    #[test]
+    fn plain_http_answering_on_the_port_beats_its_failed_handshake() {
+        let https = url("https://192.168.1.10:3000/");
+        let http = url("http://192.168.1.10:3000/");
+        for answer in [
+            ProbeError::NotJellyfin,
+            ProbeError::Status { status: 500 },
+            ProbeError::Redirected {
+                status: 302,
+                location: None,
+            },
+        ] {
+            assert_eq!(
+                most_telling(&[(&https, ProbeError::Tls), (&http, answer.clone())]),
+                answer
+            );
+            // Whatever order they were tried in (http comes first on 80 and 8096).
+            assert_eq!(
+                most_telling(&[(&http, answer.clone()), (&https, ProbeError::Tls)]),
+                answer
+            );
+        }
+        // Nothing answered on http: the handshake still says the most.
+        for silent in [ProbeError::Unreachable, ProbeError::Timeout] {
+            assert_eq!(
+                most_telling(&[(&https, ProbeError::Tls), (&http, silent)]),
+                ProbeError::Tls
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_handshake_on_another_port_keeps_its_rank() {
+        // No port typed: https on 443 and 8920, http on 8096 and 80.
+        let candidates = [
+            url("https://media.example.com/"),
+            url("https://media.example.com:8920/"),
+            url("http://media.example.com:8096/"),
+            url("http://media.example.com/"),
+        ];
+        let failures = [
+            (&candidates[0], ProbeError::Tls),
+            (&candidates[1], ProbeError::Unreachable),
+            (&candidates[2], ProbeError::Unreachable),
+            (&candidates[3], ProbeError::NotJellyfin),
+        ];
+        assert_eq!(most_telling(&failures), ProbeError::Tls);
+        // Another host on the same port does not count either.
+        let other = url("http://192.168.1.10:443/");
+        assert_eq!(
+            most_telling(&[
+                (&candidates[0], ProbeError::Tls),
+                (&other, ProbeError::NotJellyfin)
+            ]),
+            ProbeError::Tls
+        );
+        assert_eq!(most_telling(&[]), ProbeError::Unreachable);
     }
 
     #[test]
