@@ -58,6 +58,13 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   2026-10-13, read 2026-10-22): "Fluent Design guidance recommends that these controls be placed in the title bar when a custom title
   bar is used." So the NavigationView's back and pane toggle buttons are hidden and the TitleBar's are used, enabled from
   `Frame.CanGoBack`.
+  Disabled, the TitleBar fills its back button (`TitleBarBackButtonBackgroundDisabled` is `ControlFillColorDisabledBrush` in
+  `TitleBar_themeresources.xaml`), while the NavigationView's own back button keeps its transparent background and only dims the
+  glyph (its Disabled state sets only the foreground, `NavigationBackButton.xaml`; both microsoft-ui-xaml, tag
+  winui3/release/2.5.1, read 2026-10-23). The owner saw the transparent one in Windows Settings (2026-10-23), so `MainWindow.xaml`
+  overrides that one resource on the TitleBar with `SubtleFillColorTransparentBrush`, the enabled value (lightweight styling);
+  high contrast keeps the control's value, which already equals its enabled one. That the 2.5.1 tag is the source of the
+  `Microsoft.WindowsAppSDK.WinUI` 2.3.9 package is not verified.
 - **Alt+Left, the GoBack key and the mouse Back button** call the same `TryGoBack`; **Alt+Right and the mouse Forward button** call
   `TryGoForward` (`Frame.GoForward` when `CanGoForward`). The WinUI 3 page "Navigation history and backwards navigation" (ms.date
   2026-09-19, read 2026-10-22) no longer lists these inputs; the UWP page (learn.microsoft.com/windows/uwp/ui-input/back-navigation,
@@ -134,6 +141,14 @@ Sources, read 2026-10-23 on learn.microsoft.com: "Dialog controls" (ms.date 2026
 2025-02-26), "InfoBar" (ms.date 2025-02-26), "Guidelines for progress controls" (ms.date 2026-07-08), "Guidelines for app settings"
 (ms.date 2026-04-08), "Keyboard accessibility" (ms.date 2026-10-04). Each screen renders the core's state and sends the user's
 actions; nothing is decided in C#.
+- **Page layout:** each page's content is one column left-aligned under the page title, not centred: its left edge is at 56 px,
+  where the NavigationView puts its header in the Left pane mode (`NavigationViewHeaderMargin` 56,44,0,0,
+  `NavigationView_themeresources.xaml`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-23), with 24 px on the right
+  and below (`PageColumnPadding` in `App.xaml`; the notices above the page use the same inset). Max widths: Settings and Home
+  1000 px ("a scrollable layout with a constrained max width (around 1000–1100 px)", "Guidelines for app settings"), Add a server
+  640, Sign in 480. The guidelines say nothing about alignment; left alignment follows Windows Settings as the owner saw it
+  (2026-10-23), which places its content under the page title (not verified against a Microsoft source). Home's empty and error
+  states stay centred.
 - **Home** (`HomePage`): before any server, "No servers yet", "Add a Jellyfin server to browse and play your media." and an accent
   "Add a server" button. With servers, a card per saved server: name, "Signed in as …" or "Signed out", "Jellyfin <version>", and
   "Connected", "Can't reach the server" or "Checking…" (plus "address N of M" with more than one address); a signed-out server has a
@@ -564,3 +579,16 @@ discovery first (key 1) and two users were saved: the first signed out, the seco
    credential under `jellyfin/2/`.
 8. **Pass.** The owner removed it with wired and Wi-Fi off: gone at once, no warning; `settings.json` and the credential were
    cleared. The device stays in the dashboard's list, as expected.
+
+## Layout fixes: owner's check
+Three findings from the owner's use of the app (2026-10-23), fixed on fix/windows-layout-polish. Light and dark theme, a wide
+window (wider than 1300 px) and a narrow one:
+1. At Home with nothing to go back to, the title bar's back button is dimmed with no filled background, like Windows Settings';
+   after Home -> Settings it looks as before (hover and press fills unchanged). With high contrast on, it still shows.
+2. Settings: the section headers and cards start under the "Settings" title, left-aligned at any width, no wider than 1000 px.
+   Add a server and Sign in: the form starts under the page title too. A notice (if one shows) lines up with them.
+3. Home with a server added: the card starts under the "Home" title and stays inside the window at any width, with no horizontal
+   scrolling. If it still goes past the window border, note the window width and the server's card text length: the code shows
+   no width that should exceed the window, so that part's cause is not found. The scroll viewer should hand the column the
+   viewport's width: its default style sets no horizontal bar visibility and the control starts at Disabled (`generic.xaml`,
+   `ScrollViewer_Partial.cpp`, microsoft-ui-xaml main, read 2026-10-23; not verified at run time).
