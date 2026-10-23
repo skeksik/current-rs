@@ -18,6 +18,15 @@ public sealed partial class MainWindow : Window
 {
     private static readonly Dictionary<string, Type> Pages = new() { ["home"] = typeof(HomePage) };
 
+    /// <summary>Pages reached from Home (adding a server, signing in): Home stays selected, the header names the step.</summary>
+    private static readonly Dictionary<Type, string> HomeSteps = new()
+    {
+        [typeof(AddServerPage)] = "Add a server",
+        [typeof(SignInPage)] = "Sign in",
+    };
+
+    private bool _wasDeactivated;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -32,8 +41,37 @@ public sealed partial class MainWindow : Window
         // handledEventsToo: a control under the pointer may already have handled the press.
         Root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(OnPointerPressed), true);
 
+        Activated += OnActivated;
+
         NavView.SelectedItem = HomeItem;
         Navigate(typeof(HomePage), new EntranceNavigationTransitionInfo());
+    }
+
+    /// <summary>Adds a notice above every page; the user closes it. Its text is read out when it opens (InfoBar page,
+    /// learn.microsoft.com, read 2026-10-23).</summary>
+    internal void ShowNotice(InfoBarSeverity severity, string title, string message)
+    {
+        var notice = new InfoBar { Severity = severity, Title = title, Message = message, IsOpen = true, Margin = new Thickness(0, 8, 0, 0) };
+        notice.Closed += (_, _) => Notices.Children.Remove(notice);
+        Notices.Children.Add(notice);
+    }
+
+    /// <summary>
+    /// After the window was in the background, activating it again tells the core, so unreachable servers try again at once (ADR 0014).
+    /// Restoring from minimised and a redirected second launch both activate the window.
+    /// </summary>
+    private void OnActivated(object sender, WindowActivatedEventArgs args)
+    {
+        if (args.WindowActivationState == WindowActivationState.Deactivated)
+        {
+            _wasDeactivated = true;
+            return;
+        }
+        if (_wasDeactivated)
+        {
+            _wasDeactivated = false;
+            App.ReturnedToForeground();
+        }
     }
 
     private void OnItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)
@@ -57,14 +95,47 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>Drops the back and forward history, after a finished sign-in, and keeps the title bar's back button in step.</summary>
+    internal void ClearHistory()
+    {
+        ContentFrame.BackStack.Clear();
+        ContentFrame.ForwardStack.Clear();
+        AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack;
+    }
+
+    /// <summary>
+    /// A sign-in page owns the flow it was opened with and disposes it when left, so it is never returned to: its entries leave the back
+    /// and forward stacks as soon as it is left. Back from a sign-in goes to the page before it; starting again opens a new one.
+    /// </summary>
+    private void DropSignInHistory()
+    {
+        foreach (var stack in new[] { ContentFrame.BackStack, ContentFrame.ForwardStack })
+        {
+            for (var i = stack.Count - 1; i >= 0; i--)
+            {
+                if (stack[i].SourcePageType == typeof(SignInPage))
+                {
+                    stack.RemoveAt(i);
+                }
+            }
+        }
+    }
+
     private void OnNavigated(object sender, NavigationEventArgs e)
     {
+        DropSignInHistory();
         AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack;
         if (ContentFrame.SourcePageType == typeof(SettingsPage))
         {
             // The settings item is not in MenuItems and has no tag.
             NavView.SelectedItem = NavView.SettingsItem;
             NavView.Header = "Settings";
+            return;
+        }
+        if (HomeSteps.TryGetValue(ContentFrame.SourcePageType, out var step))
+        {
+            NavView.SelectedItem = HomeItem;
+            NavView.Header = step;
             return;
         }
         var tag = Pages.FirstOrDefault(entry => entry.Value == ContentFrame.SourcePageType).Key;

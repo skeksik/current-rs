@@ -53,6 +53,10 @@ $dotnet = Join-Path $packages "microsoft.netcore.app.runtime.win-x64/$($runtime.
 Copy-Item (Join-Path $dotnet 'LICENSE.TXT') (Join-Path $licences "Microsoft.NETCore.App-$($runtime.version)-LICENSE.txt")
 # The Windows SDK projection's package has no licence file: ship our pointer to its terms.
 Copy-Item (Join-Path $PSScriptRoot 'licences/WindowsSDK-projection.txt') $licences
+# The Windows Community Toolkit packages (SettingsControls and what it needs) carry only an SPDX expression, MIT: ship the texts of
+# their two repositories, copied at the packages' commits (docs/notes/windows-shell.md).
+Copy-Item (Join-Path $PSScriptRoot 'licences/CommunityToolkit-Windows-License.md') $licences
+Copy-Item (Join-Path $PSScriptRoot 'licences/CommunityToolkit-dotnet-License.md') $licences
 Copy-Item (Join-Path $dotnet 'THIRD-PARTY-NOTICES.TXT') (Join-Path $licences "Microsoft.NETCore.App-$($runtime.version)-THIRD-PARTY-NOTICES.txt")
 Write-Host "Runtime packages: $($restored -join ', '); Microsoft.NETCore.App $($runtime.version)"
 

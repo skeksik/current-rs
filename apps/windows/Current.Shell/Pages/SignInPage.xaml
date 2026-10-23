@@ -1,0 +1,75 @@
+<Page
+    x:Class="Current.Shell.Pages.SignInPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Esc stops a running sign-in or Quick Connect (docs/notes/windows-shell.md, "Keyboard and Narrator"). -->
+    <Page.KeyboardAccelerators>
+        <KeyboardAccelerator Key="Escape" Invoked="OnEscape" />
+    </Page.KeyboardAccelerators>
+
+    <ScrollViewer>
+        <StackPanel MaxWidth="480" Padding="24,0,24,24" Spacing="12" HorizontalAlignment="Left">
+            <TextBlock
+                x:Name="Heading"
+                Style="{StaticResource SubtitleTextBlockStyle}"
+                AutomationProperties.HeadingLevel="Level1"
+                TextWrapping="Wrap" />
+            <InfoBar
+                x:Name="TlsWarning"
+                Severity="Warning"
+                IsClosable="False"
+                IsOpen="False"
+                Title="Not using https"
+                Message="This server offers https, but its certificate isn't trusted by this PC, so Current is using http." />
+
+            <!-- Password: one password box for a sign-in, nothing right next to it (PasswordBox page, learn.microsoft.com). -->
+            <StackPanel x:Name="PasswordForm" Spacing="12">
+                <TextBox
+                    x:Name="UserNameBox"
+                    Header="User name"
+                    IsSpellCheckEnabled="False"
+                    IsTextPredictionEnabled="False"
+                    KeyDown="OnFormKeyDown" />
+                <PasswordBox x:Name="PasswordInput" Header="Password" KeyDown="OnFormKeyDown" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="SignInButton" Style="{StaticResource AccentButtonStyle}" Content="Sign in" Click="OnSignIn" />
+                    <Button x:Name="CancelButton" Content="Cancel" Visibility="Collapsed" Click="OnCancel" />
+                </StackPanel>
+                <StackPanel x:Name="SigningInPanel" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                    <ProgressRing x:Name="SigningInRing" Width="20" Height="20" IsActive="False" />
+                    <TextBlock x:Name="SigningInText" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" Text="Signing in…" />
+                </StackPanel>
+
+                <StackPanel x:Name="QuickConnectOffer" Margin="0,16,0,0" Spacing="8" Visibility="Collapsed">
+                    <TextBlock
+                        Style="{StaticResource BodyTextBlockStyle}"
+                        TextWrapping="Wrap"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="Or approve this PC from a Jellyfin app where you're already signed in." />
+                    <Button x:Name="QuickConnectButton" Content="Use Quick Connect" Click="OnQuickConnect" />
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Quick Connect: the code, large, until another signed-in app approves it. -->
+            <StackPanel x:Name="QuickConnectPanel" Spacing="12" Visibility="Collapsed">
+                <TextBlock
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    TextWrapping="Wrap"
+                    Text="Enter this code under Quick Connect in a Jellyfin app where you're already signed in." />
+                <TextBlock
+                    x:Name="CodeText"
+                    AutomationProperties.LiveSetting="Assertive"
+                    Style="{StaticResource TitleLargeTextBlockStyle}"
+                    CharacterSpacing="200"
+                    IsTextSelectionEnabled="True" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ProgressRing x:Name="WaitingRing" Width="20" Height="20" IsActive="False" />
+                    <TextBlock x:Name="WaitingText" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" Text="Waiting for approval…" />
+                </StackPanel>
+                <Button x:Name="QuickConnectCancel" Content="Cancel" Click="OnCancel" />
+            </StackPanel>
+
+            <InfoBar x:Name="SignInError" Severity="Error" IsClosable="False" IsOpen="False" />
+        </StackPanel>
+    </ScrollViewer>
+</Page>

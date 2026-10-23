@@ -89,7 +89,9 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
 - **`tools/jellyfin-stand-in`**: a hand-written Jellyfin on 127.0.0.1 for the bridge tests (a library for Rust, a process for C# and
   Swift). Test code only, never shipped.
 - **`apps/windows`** (`Current.Shell`, WinUI 3, unpackaged, self-contained x64): a Mica window with a TitleBar and a NavigationView
-  (Home, Settings), one `CoreHost` per process, `DispatcherQueueUi` as the `IUiDispatcher`, page-scoped subscriptions, an explicit
+  (Home, Settings), one `CoreHost` per process opened on the data folder at start (then the network observer and session restore),
+  `DispatcherQueueUi` as the `IUiDispatcher`, page-scoped subscriptions and flows (add a server with local discovery, sign in with a
+  password or Quick Connect, saved servers with sign out in Settings, M1), `NetworkObserver` feeding `NetworkFacts`, an explicit
   AppUserModelID when unpackaged and a single instance through `AppInstance`. Installed per user by Inno Setup into
   `%LOCALAPPDATA%\Programs\Current`; data in `%LOCALAPPDATA%\Current` (ADR 0009, `docs/notes/windows-shell.md`).
 - Generated code is never checked in: `bindings/csharp/build.ps1` and `bindings/swift/build.sh` regenerate it from the built library.
