@@ -95,6 +95,15 @@ public sealed class ServersViewModel(CoreHost core, IUiDispatcher ui) : INotifyP
         Faulted = _servers.IsFaulted;
         var saved = _servers.Items;
         var statuses = _capabilities.Value.Servers;
+        // Rows of servers no longer saved go first, by key: the rows after a removed one stay the same objects, so their expanders
+        // stay open or closed and focus stays where it is.
+        for (var i = Rows.Count - 1; i >= 0; i--)
+        {
+            if (!saved.Any(s => s.Server == Rows[i].Server))
+            {
+                Rows.RemoveAt(i);
+            }
+        }
         // Keep rows that still stand for the same server, so a status change does not rebuild the list under the user.
         for (var i = 0; i < saved.Count; i++)
         {
@@ -138,6 +147,28 @@ public sealed class ServerRow : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public ServerRef Server { get; }
+
+    /// <summary>The row itself, for a button to carry explicitly (its Tag) rather than through an inherited DataContext.</summary>
+    public ServerRow Self => this;
+
+    /// <summary>A removal of this server is running: its buttons are disabled until it ends.</summary>
+    public bool Removing
+    {
+        get => _removing;
+        set
+        {
+            if (_removing != value)
+            {
+                _removing = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Removing)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Idle)));
+            }
+        }
+    }
+
+    public bool Idle => !Removing;
+
+    private bool _removing;
 
     public string Name { get; private set; } = "";
 

@@ -108,11 +108,11 @@ public sealed partial class SettingsPage : Page
     /// </summary>
     private async void OnRemove(object sender, RoutedEventArgs e)
     {
-        if (App.Core is not { } core || sender is not Button { DataContext: ServerRow row } button || XamlRoot is null)
+        if (App.Core is not { } core || sender is not Button { Tag: ServerRow row } || row.Removing || XamlRoot is null)
         {
             return;
         }
-        button.IsEnabled = false;
+        row.Removing = true;
         AccountsInfo.IsOpen = false;
         try
         {
@@ -130,13 +130,18 @@ public sealed partial class SettingsPage : Page
                 return;
             }
             var result = await core.RemoveServerAsync(row.Server);
+            FocusAfterRemoval(row);
             if (result.CredentialsLeft)
             {
                 ShowAccountsInfo(
                     InfoBarSeverity.Warning,
-                    $"Removed {row.Name}, but its saved sign-in is still in Credential Manager.",
+                    $"Removed {row.Name}, but its saved sign-in may still be in Credential Manager.",
                     "Current no longer uses it. You can delete the entries ending in \".Current\" under Windows Credentials.");
             }
+        }
+        catch (CoreStoreException error)
+        {
+            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemText.Store(error.Problem));
         }
         catch (Exception error)
         {
@@ -145,9 +150,37 @@ public sealed partial class SettingsPage : Page
         }
         finally
         {
-            // The row goes away with the server; when it stays (cancelled, failed) the button works again.
-            button.IsEnabled = true;
+            // A row that stays (cancelled, failed) works again; a removed one is gone with its buttons.
+            row.Removing = false;
         }
+    }
+
+    /// <summary>
+    /// The removed row took the focused button with it: once the row has left the list, focus goes to "Add another server", or to
+    /// "Add a server" when no server is left. Queued, so the list's visibility has changed first.
+    /// </summary>
+    private void FocusAfterRemoval(ServerRow row)
+    {
+        if (Servers is not { } servers)
+        {
+            return;
+        }
+        void MoveFocus() => DispatcherQueue.TryEnqueue(() =>
+            (servers.HasServers ? AddAnotherServerButton : AddFirstServerButton).Focus(FocusState.Programmatic));
+        if (!servers.Rows.Contains(row))
+        {
+            MoveFocus();
+            return;
+        }
+        void OnRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            if (!servers.Rows.Contains(row))
+            {
+                servers.Rows.CollectionChanged -= OnRowsChanged;
+                MoveFocus();
+            }
+        }
+        servers.Rows.CollectionChanged += OnRowsChanged;
     }
 
     private void ShowAccountsInfo(InfoBarSeverity severity, string title, string message)

@@ -16,7 +16,7 @@
             <toolkit:SettingsCard
                 Header="No servers are set up."
                 Visibility="{x:Bind Servers.EmptyVisibility, Mode=OneWay, FallbackValue=Collapsed}">
-                <Button Content="Add a server" Click="OnAddServer" />
+                <Button x:Name="AddFirstServerButton" Content="Add a server" Click="OnAddServer" />
             </toolkit:SettingsCard>
             <toolkit:SettingsCard
                 Header="Couldn't refresh the server list."
@@ -45,20 +45,25 @@
                                     Content="Sign out"
                                     AutomationProperties.Name="{x:Bind SignOutLabel, Mode=OneWay}"
                                     Visibility="{x:Bind SignOutVisibility, Mode=OneWay}"
+                                    IsEnabled="{x:Bind Idle, Mode=OneWay}"
                                     Click="OnSignOut" />
                                 <Button
                                     Content="Sign in"
                                     AutomationProperties.Name="{x:Bind SignInLabel, Mode=OneWay}"
                                     Visibility="{x:Bind SignInVisibility, Mode=OneWay}"
+                                    IsEnabled="{x:Bind Idle, Mode=OneWay}"
                                     Click="OnSignInAgain" />
                             </Grid>
                             <toolkit:SettingsExpander.Items>
                                 <toolkit:SettingsCard
                                     Header="Remove this server"
                                     Description="Signs out every user here and forgets the server's addresses on this PC.">
+                                    <!-- The row travels in Tag: the expander's items need not inherit the template's DataContext. -->
                                     <Button
                                         Content="Remove"
+                                        Tag="{x:Bind Self}"
                                         AutomationProperties.Name="{x:Bind RemoveLabel, Mode=OneWay}"
+                                        IsEnabled="{x:Bind Idle, Mode=OneWay}"
                                         Click="OnRemove" />
                                 </toolkit:SettingsCard>
                             </toolkit:SettingsExpander.Items>
@@ -67,6 +72,7 @@
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
             <Button
+                x:Name="AddAnotherServerButton"
                 Margin="0,4,0,0"
                 Content="Add another server"
                 Visibility="{x:Bind Servers.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}"

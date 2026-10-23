@@ -188,9 +188,13 @@ actions; nothing is decided in C#.
     support.microsoft.com, read 2026-10-23). "Remove" asks first, in a `ContentDialog` like the plain-http one: "Remove <name>?",
     "This signs out every user on this PC and forgets the server's addresses. You can add it again later.", primary "Remove",
     close "Cancel" (the default, so Enter and Esc cancel). Whether Windows Settings itself asks before removing an account, and
-    with what words, is not verified. Unlike sign-out it asks, because signing in again does not undo it. `CredentialsLeft`
-    shows a warning: "Removed <name>, but its saved sign-in is still in Credential Manager. Current no longer uses it. You can
-    delete the entries ending in ".Current" under Windows Credentials." Home and the list update from the saved-server list.
+    with what words, is not verified. Unlike sign-out it asks, because signing in again does not undo it. While the removal runs
+    the row's buttons are disabled. `CredentialsLeft` shows a warning: "Removed <name>, but its saved sign-in may still be in
+    Credential Manager. Current no longer uses it. You can delete the entries ending in ".Current" under Windows Credentials."
+    A settings error shows `ProblemText.Store`. Home and the list update from the saved-server list; rows are removed by key,
+    so the other servers' expanders keep their state, and focus moves to "Add another server" (or "Add a server" when none is
+    left) once the row is gone. The Remove button carries its row in `Tag` rather than relying on the DataContext the
+    expander's items inherit.
   - **Diagnostics:** "Copy diagnostics" now copies `ExportDiagnosticsAsync()` (version, platform, settings state, then the
     redacted request log).
   - **About:** a `SettingsExpander` "Current" with the version, and "© 2026 Skeksik" inside.
@@ -487,7 +491,8 @@ signed in to it from this PC too, via "Sign in" after a sign-out):
    button as "Remove <name>"; Tab reaches it.
 2. "Remove": the dialog "Remove <name>?" opens. Esc and Enter both cancel and nothing changes; "Cancel" too.
 3. "Remove" again, then the dialog's "Remove": the card disappears from Settings and from Home at once (Home shows "No servers
-   yet" if it was the only one). No warning appears.
+   yet" if it was the only one). No warning appears. Focus lands on "Add another server" (or "Add a server"), and with two
+   servers the other one's expander stays as it was.
 4. Credential Manager (Control Panel → Credential Manager → Windows Credentials): no entry ending in `.Current` is left for that
    server (`jellyfin/<key>/<user id>.Current`).
 5. `%LOCALAPPDATA%\Current\settings.json`: no entry for the server in `servers`; `last_server_key` holds its key.
