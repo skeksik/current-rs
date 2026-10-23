@@ -355,6 +355,25 @@ impl AddServerFlow {
     }
 }
 
+/// One of the device's up IPv4 interfaces, as the platform lists it before a search (ADR 0016). It is the device's own address:
+/// never show or log it. No Debug, for that reason.
+#[derive(uniffi::Record)]
+pub struct LocalInterface {
+    /// The interface's IPv4 address as text, for example `192.168.1.10`.
+    pub address: String,
+    /// The prefix length of its subnet, 0 to 32 (24 for a netmask of 255.255.255.0).
+    pub prefix_length: u8,
+}
+
+impl LocalInterface {
+    pub(crate) fn parse(&self) -> Option<current_model::LocalInterface> {
+        Some(current_model::LocalInterface {
+            address: self.address.parse().ok()?,
+            prefix_len: self.prefix_length,
+        })
+    }
+}
+
 /// Finding Jellyfin servers on the local network (ADR 0016). One per "add a server" screen.
 #[derive(uniffi::Object)]
 pub struct DiscoveryFlow {
@@ -390,17 +409,27 @@ impl DiscoveryFlow {
         DiscoveryState::from(&*self.flow.state().borrow())
     }
 
-    /// Searches once: `Searching` lists servers as they answer, then `Done`. A few seconds.
+    /// Searches once: `Searching` lists servers as they answer, then `Done`. A few seconds. `interfaces` are the device's up IPv4
+    /// interfaces, listed by the platform just before (ADR 0016); the request also goes out unbound, so an empty list still
+    /// searches. Entries whose address is not IPv4 text are skipped.
     ///
     /// # Errors
     /// [`CoreError::Cancelled`] if `token` is cancelled first: the flow is back to `Idle`.
-    pub async fn search(&self, token: Arc<CancelToken>) -> Result<(), CoreError> {
+    pub async fn search(
+        &self,
+        interfaces: Vec<LocalInterface>,
+        token: Arc<CancelToken>,
+    ) -> Result<(), CoreError> {
         let flow = self.flow.clone();
+        let interfaces: Vec<current_model::LocalInterface> = interfaces
+            .iter()
+            .filter_map(LocalInterface::parse)
+            .collect();
         attempt(
             &self.runtime,
             &self.attempts,
             token,
-            async move { flow.search().await },
+            async move { flow.search(&interfaces).await },
             || self.flow.reset(),
         )
         .await

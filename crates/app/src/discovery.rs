@@ -14,7 +14,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use current_jellyfin::{Candidate, DiscoveryConfig, DiscoveryError, FoundServer, Prober, discover};
-use current_model::{PublicServerInfo, ServerKey, ServerRef, ServiceType};
+use current_model::{LocalInterface, PublicServerInfo, ServerKey, ServerRef, ServiceType};
 use current_net::{ClientConfig, RequestLog};
 use tokio::sync::watch;
 
@@ -80,7 +80,7 @@ pub struct Discovery {
 }
 
 impl Discovery {
-    /// A search on the limited broadcast address whose probes are logged to `log` as `jellyfin/discovery`. The probes have
+    /// A search on the limited broadcast address (plus the interfaces each search is given) whose probes are logged to `log` as `jellyfin/discovery`. The probes have
     /// shorter timeouts than setup's (2 s to connect, 5 s per request): the server just answered from the local network.
     pub fn new(log: Arc<RequestLog>) -> Self {
         let server = ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("discovery"));
@@ -109,12 +109,14 @@ impl Discovery {
     }
 
     /// Searches, probes the replies ([`PROBES_AT_ONCE`] at a time) and ends in `Done` or `Failed`, unless a newer search or a reset
-    /// came first.
-    pub async fn search(&self) {
+    /// came first. The request goes out from every usable interface in `interfaces`, which the platform lists just before, as
+    /// well as from an unbound socket; with none, only from the unbound socket (ADR 0016). `Failed` only when no socket could send.
+    pub async fn search(&self, interfaces: &[LocalInterface]) {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.state
             .send_replace(DiscoveryState::Searching { found: Vec::new() });
-        let candidates = match discover(&self.config).await {
+        let config = self.config.clone().with_interfaces(interfaces);
+        let candidates = match discover(&config).await {
             Ok(candidates) => candidates,
             Err(reason) => {
                 self.update(generation, |state| {
@@ -217,9 +219,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::atomic::AtomicUsize;
 
+    use current_jellyfin::Source;
     use current_model::ServerId;
     use current_net::Url;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -274,7 +277,10 @@ mod tests {
         Discovery::with_config(
             Prober::new(server, log),
             DiscoveryConfig {
-                targets: vec![target],
+                sources: vec![Source {
+                    bind: Ipv4Addr::UNSPECIFIED,
+                    targets: vec![target],
+                }],
                 window: Duration::from_millis(300),
                 resend_after: None,
             },
@@ -306,7 +312,7 @@ mod tests {
         ])
         .await;
         let discovery = discovery(Arc::new(RequestLog::default()), target);
-        discovery.search().await;
+        discovery.search(&[]).await;
         let found = done(&discovery);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].info().id, ServerId::new(ID));
@@ -328,7 +334,7 @@ mod tests {
         ])
         .await;
         let discovery = discovery(Arc::new(RequestLog::default()), target);
-        discovery.search().await;
+        discovery.search(&[]).await;
         let found = done(&discovery);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(
@@ -342,7 +348,7 @@ mod tests {
         let port = http_stand_in().await;
         let target = udp_stand_in(vec![(format!("http://192.168.1.10:{port}"), ID.into())]).await;
         let discovery = discovery(Arc::new(RequestLog::default()), target);
-        discovery.search().await;
+        discovery.search(&[]).await;
         let found = done(&discovery);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(
@@ -359,9 +365,29 @@ mod tests {
             silent.local_addr().unwrap(),
         );
         let rx = discovery.state();
-        discovery.search().await;
+        discovery.search(&[]).await;
         assert!(done(&discovery).is_empty());
         assert!(rx.has_changed().unwrap());
+    }
+
+    #[tokio::test]
+    async fn interfaces_that_cannot_send_do_not_fail_the_search() {
+        let port = http_stand_in().await;
+        let target = udp_stand_in(vec![(format!("http://127.0.0.1:{port}"), ID.into())]).await;
+        let discovery = discovery(Arc::new(RequestLog::default()), target);
+        let interfaces = [
+            // Loopback is dropped; TEST-NET-1 (RFC 5737) is no address of this machine, so it cannot be bound.
+            LocalInterface {
+                address: Ipv4Addr::LOCALHOST,
+                prefix_len: 8,
+            },
+            LocalInterface {
+                address: Ipv4Addr::new(192, 0, 2, 1),
+                prefix_len: 24,
+            },
+        ];
+        discovery.search(&interfaces).await;
+        assert_eq!(done(&discovery).len(), 1);
     }
 
     #[tokio::test]
@@ -371,7 +397,7 @@ mod tests {
         let discovery = Arc::new(discovery(Arc::new(RequestLog::default()), target));
         let search = tokio::spawn({
             let discovery = discovery.clone();
-            async move { discovery.search().await }
+            async move { discovery.search(&[]).await }
         });
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(matches!(
@@ -388,7 +414,7 @@ mod tests {
         let port = http_stand_in().await;
         let target = udp_stand_in(vec![(format!("http://127.0.0.1:{port}"), ID.into())]).await;
         let discovery = discovery(Arc::new(RequestLog::default()), target);
-        discovery.search().await;
+        discovery.search(&[]).await;
         let found = done(&discovery);
         let flow = AddServer::new(Arc::new(RequestLog::default()));
         flow.pick(&found[0]);
@@ -431,7 +457,7 @@ mod tests {
         let target = udp_stand_in(vec![(format!("http://192.168.1.10:{port}"), ID.into())]).await;
         let log = Arc::new(RequestLog::default());
         let discovery = discovery(log.clone(), target);
-        discovery.search().await;
+        discovery.search(&[]).await;
         let state = format!("{:?}", *discovery.state().borrow());
         let diagnostics = log.to_text();
         assert!(state.contains("Test Server"), "{state}");
