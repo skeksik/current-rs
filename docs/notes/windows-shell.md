@@ -481,3 +481,29 @@ On the same multi-adapter PC, start with no `%LOCALAPPDATA%\Current`:
 2. Wi-Fi only: the same.
 3. Both on: the server is listed once, not twice.
 4. Still no firewall prompt, and no rule for `Current.exe` afterwards.
+
+#### Windows run (2026-10-23)
+Heads fix/discovery-per-interface bea8ac9 and feat/remove-server a1467f6, merged in a throwaway local worktree (never pushed) and
+built with the four scripts: binding tests 34 passed, smoke run passed. Windows 10.0.26200.9711, x64, the same multi-adapter PC
+(wired and Wi-Fi on the same /24, WSL/Hyper-V, two VPN adapters); the cases ran `out/app/Current.exe`. The earlier run's
+`%LOCALAPPDATA%\Current` and its credentials were no longer on the PC, so the order changed: discovery first from no data, then
+the Quick Connect sign-in, then the address check after re-adding the addresses, then feat/remove-server's removal cases.
+1. Wired, Wi-Fi off: **pass.** Listed on the first search within 2 s; "Search again" three times (each showed "Searching…" with
+   the list cleared): listed each time, within 2 s.
+2. Wi-Fi only (wired adapter disabled): **pass.** The same.
+3. Both on: **pass.** Listed once, on the first search and on four "Search again".
+4. **Pass.** No firewall prompt at any point; no rule for `Current.exe` (`Get-NetFirewallApplicationFilter`) after the discovery
+   cases or at the end.
+
+Quick Connect with Narrator (M1 case 9, with the fix from main): **fail.** Sign-in passes ("Signed in as …"), and Narrator now
+speaks the code when it appears, but as a number ("six hundred ninety-seven …"), not digit by digit. `SignInPage.xaml.cs` sets the
+digit-by-digit `AutomationProperties.Name` on `CodeText` and `Announce.Shown` raises `LiveRegionChanged`; what Narrator spoke
+was the visible text read as a number, so that name is not what the live-region announcement reads here. Suggested: announce the
+code with `RaiseNotificationEvent` carrying the digit-by-digit text, and check it by ear.
+
+Address in use (M1 case 8): the server had 1: LAN IP (http, from discovery), 2: DNS name (http), 3: DNS name (https), added in
+that order by signing in from typed addresses (no second LAN IP this time). Started on the wired LAN (Wi-Fi on too, same LAN):
+Home "Connected, address 1 of 3" at once and still address 1 after 6 minutes, untouched. Copy diagnostics: only the start-up
+requests, both to address 1; no address, user name, server id, device id or token in the text. Reading: with the LAN IP first
+and nothing cached for this network, the app connects to address 1 and stays there. The earlier "address 2 of 4" did not come
+back, but its saved order and cached winner were gone, so moving off a cached worse address after 5 minutes was not exercised.
