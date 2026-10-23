@@ -45,8 +45,10 @@ before merging, and its PR carries only the record.
 - [ ] Shipping libmpv in the app (`current-mpv`) brings the Visual C++ runtime (vcruntime140, msvcp140) under Microsoft's
       redistributable terms: record them in ADR 0003 with the owner first
 - [ ] The libmpv build installs unpinned MSYS2 make/diffutils at build time (build-only; docs/notes/windows-mpv-build.md)
-- [ ] A `cargo test --workspace` run in a cloud container once had 3 failures in one test binary (unidentified; 28 later runs passed).
-      If it recurs, capture the test names and fix the flake
+- [x] A `cargo test --workspace` run in a cloud container once had 3 failures in one test binary (unidentified; 28 later runs passed).
+      If it recurs, capture the test names and fix the flake. Very likely the refused-port race in `current-net`'s tests (seen again
+      in CI on PR 29): a port one test freed to be refused was handed to another test's stand-in. Stand-ins now bind under a lock
+      that a test holds while it relies on a freed port (`crates/net/tests/ports`; test/roaming-refused-port-race)
 - [ ] Linux: choose how to ship (Flatpak, per-distro packages, AppImage or tarball; ADR 0011) before M5's release work
 - [ ] Windows: move `CommunityToolkit.WinUI.Controls.SettingsControls` from 8.3.260402-preview2 to 8.3 stable when it ships with the
       same component-package dependency (docs/notes/windows-shell.md, "Windows Community Toolkit")
