@@ -22,7 +22,7 @@ mod task_handle;
 use std::path::Path;
 use std::sync::Arc;
 
-use current_app::{App, ObservableList};
+use current_app::{App, ObservableList, Removal};
 use current_store::{KeyringSecrets, MemorySecrets, Secrets};
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
@@ -39,8 +39,8 @@ pub use problems::{
 };
 pub use records::{
     AppInfo, CapabilitiesSnapshot, Connectivity, InterfaceKind, LoadReport, NetworkFacts,
-    Reachability, SavedServerSnapshot, SavedUserSnapshot, SecretStore, ServerRef,
-    ServerStatusSnapshot, SignOutResult, UserSnapshot,
+    Reachability, RemoveServerResult, SavedServerSnapshot, SavedUserSnapshot, SecretStore,
+    ServerRef, ServerStatusSnapshot, SignOutResult, UserSnapshot,
 };
 pub use runtime::WORKER_THREAD_NAME;
 pub use saved::SavedServerDiff;
@@ -284,6 +284,37 @@ impl Core {
             .map_err(|error| CoreError::Runtime {
                 message: error.to_string(),
             })
+    }
+
+    /// Removes a saved server (ADR 0015): this device signs out every user there, deletes their tokens and forgets the server and
+    /// its addresses at once; the server is told in the background. Removing a server that is not saved does nothing (`removed`
+    /// false). Not cancellable, as sign-out.
+    ///
+    /// # Errors
+    /// [`CoreError::Store`] if the settings could not be saved (a newer version's file, a failed write): nothing changed.
+    pub async fn remove_server(&self, server: ServerRef) -> Result<RemoveServerResult, CoreError> {
+        let server: current_model::ServerRef = (&server).into();
+        let app = self.app.clone();
+        let removal = self
+            .runtime
+            .spawn(async move { app.remove_server(&server).await })
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| CoreError::Store {
+                problem: (&error).into(),
+            })?;
+        Ok(match removal {
+            Removal::NotSaved => RemoveServerResult {
+                removed: false,
+                credentials_left: false,
+            },
+            Removal::Removed { credentials_left } => RemoveServerResult {
+                removed: true,
+                credentials_left,
+            },
+        })
     }
 
     /// The platform's report of the network, on start and on every change (ADR 0014). Call it from one thread.

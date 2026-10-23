@@ -1,5 +1,5 @@
 //! The M1 flows end to end through the bridge, against the Jellyfin stand-in on 127.0.0.1: opening, adding a server, signing in
-//! with a password and with Quick Connect, failures, cancelling, the saved-server list, restoring, the 401 rule and signing out.
+//! with a password and with Quick Connect, failures, cancelling, the saved-server list, restoring, the 401 rule, signing out and removing a server.
 //! Settings go to a temporary folder, secrets to memory.
 
 use std::path::Path;
@@ -502,6 +502,82 @@ fn sign_out_tells_the_server_and_clears_the_user() {
         })),
         Err(CoreError::UnknownServer)
     ));
+}
+
+#[test]
+fn removing_a_server_signs_out_and_forgets_it() {
+    let stand_in = stand_in();
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let core = core_on(temp.path(), &secrets);
+    signed_in(&core, &stand_in);
+    assert_eq!(stand_in.live_sessions(), 1);
+    let (listener, rx) = recorder();
+    let _servers = core.subscribe_servers(listener);
+    let mut list = Vec::new();
+    for diff in until(&rx, "the saved server", |diffs| !diffs.is_empty())
+        .into_iter()
+        .flatten()
+    {
+        apply(&mut list, diff);
+    }
+    assert_eq!(list.len(), 1);
+
+    let result = block_on(core.remove_server(first_server())).unwrap();
+    assert_eq!(
+        result,
+        RemoveServerResult {
+            removed: true,
+            credentials_left: false
+        }
+    );
+    // The list, the capabilities state and the keyring forget it at once; the server hears of it in the background.
+    for diff in until(&rx, "the removal", |diffs| !diffs.is_empty())
+        .into_iter()
+        .flatten()
+    {
+        apply(&mut list, diff);
+    }
+    assert!(list.is_empty());
+    assert!(core.servers().is_empty());
+    let (listener, capabilities) = recorder();
+    let _capabilities = core.subscribe_capabilities(listener);
+    assert!(capabilities.recv_timeout(WAIT).unwrap().servers.is_empty());
+    let key = current_store::SecretKey::new(
+        (&first_server()).into(),
+        current_model::UserId::new(USER_ID),
+    );
+    assert!(secrets.get(&key).unwrap().is_none());
+    eventually("the server is told", || stand_in.live_sessions() == 0);
+
+    // Removing it again, or a server never saved, does nothing.
+    let again = block_on(core.remove_server(first_server())).unwrap();
+    assert!(!again.removed);
+
+    // A second core on the same folder does not bring it back.
+    drop(core);
+    let core = core_on(temp.path(), &secrets);
+    assert!(core.servers().is_empty());
+}
+
+#[test]
+fn removing_a_server_with_settings_from_a_newer_version_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("settings.json"),
+        format!(
+            r#"{{"version": 99, "device_id": "abc", "servers": [{{"service": "jellyfin", "key": "1", "server_id": "{SERVER_ID}"}}]}}"#
+        ),
+    )
+    .unwrap();
+    let core = core_on(temp.path(), &Arc::new(MemorySecrets::new()));
+    assert!(matches!(
+        block_on(core.remove_server(first_server())),
+        Err(CoreError::Store {
+            problem: StoreProblem::NewerVersion { found: 99 }
+        })
+    ));
+    assert_eq!(core.servers().len(), 1);
 }
 
 #[test]
