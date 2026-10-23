@@ -71,6 +71,8 @@ recorded with sources and dates, and a decision record where it decides somethin
 - [ ] Local server discovery
       (core done 2026-10-22, ADR 0016: UDP discovery, probe and id check, the discovery state, picking into "add a server"; the
       Windows screen and the local check on a real network are still to do)
+  - [ ] Search from each up interface (2026-10-23, ADR 0016 amended after the owner's Windows run): core, bridge and the
+        Windows app's interface list; the owner re-runs the multi-adapter case
 
 Done when: sign in and out of Jellyfin on Windows, and the app restarts signed in.
 
@@ -93,6 +95,7 @@ Done when: a Jellyfin library is browsable and playable on Windows every day, wi
 ## M3: macOS
 - [ ] The M1-M2 screens in SwiftUI on the shared core; AVPlayer with our own subtitle layer (ADR 0010: libass, PGS/VobSub decoder in
       the core, External delivery from Jellyfin); Keychain; Now Playing, PiP, AirPlay
+- [ ] Local discovery from each up interface: list the IPv4 interfaces with `getifaddrs` and pass them to each search (ADR 0016)
 
 Done when: everything from M1-M2 works on a Mac.
 
