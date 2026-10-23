@@ -201,14 +201,18 @@ owner chose this exact set. Read on nuget.org (registration API and nuspecs) on 
   SDK package, which would resolve to the old all-in-one 1.6 package next to our 2.x components and bring back what the component
   packages left out (Layout). 8.3.260402-preview2 depends only on `Microsoft.WindowsAppSDK.WinUI >= 1.8.260204000`, which our 2.3.9
   satisfies, so NuGet adds no platform package. It was built against WinUI 1.8; the smoke run builds the settings page, so CI shows
-  whether it loads with 2.3.9. If it does not, the fallback is hand-built cards (manager, 2026-10-23). Move to 8.3 stable when it
+  whether it loads with 2.3.9 (it does, below). If it does not, the fallback is hand-built cards (manager, 2026-10-23). Move to 8.3 stable when it
   ships (docs/roadmap.md).
 - The packages carry only the SPDX expression, no licence file: `apps/windows/licences/CommunityToolkit-Windows-License.md` (from
   CommunityToolkit/Windows at the package's commit 39c45efe) and `CommunityToolkit-dotnet-License.md` (CommunityToolkit/dotnet at
   `CommunityToolkit.Common`'s commit 2258fd31) ship in `licences\` (`build.ps1`). Both: MIT, "Copyright © .NET Foundation and
   Contributors".
-- Whether the toolkit's `.pri` files ship next to the app or merge into `Current.pri` is shown by `out/files.txt` in CI (not
-  verified here).
+- What ships (`out/files.txt`, CI run 39884007811, 2026-10-23): the five `.dll` files only (34,952 + 106,320 + 129,360 + 76,624 +
+  31,568 bytes); the packages' `.pri` files are merged into `Current.pri` and their `.pdb` and `.xml` files are not published. The two
+  licence texts ship in `licences\`.
+- The same run's smoke run built the settings page, `SettingsCard`s included, with WinUI 2.3.9 ("home, add-server, sign-in and
+  settings pages built"). Building is not rendering: the pages are not shown in the smoke run, so how the cards look is the owner's
+  check.
 
 ## Identity: the AppUserModelID
 - `Skeksik.Current` (owner's choice, 2026-10-22). "Application User Model IDs" (learn.microsoft.com/windows/win32/shell/appids, updated
@@ -309,7 +313,7 @@ matched by name against the contents of the restored packages. The installer add
 | Runtime, lifecycle and resources: `Microsoft.WindowsAppRuntime*.dll`, `MRM.dll`, `RestartAgent.exe`, `Microsoft.Windows.*.winmd` and projections | `Microsoft.WindowsAppSDK.Foundation` 2.3.12 | 47 | 5.0 MB | same | platform runtime (owner) |
 | Windows SDK projection: `Microsoft.Windows.SDK.NET.dll`, `WinRT.Runtime.dll` | `Microsoft.Windows.SDK.NET.Ref` 10.0.26100.57 | 2 | 26.9 MB | Microsoft Software License Terms, Windows SDK for Windows 10; on its redist list | platform runtime (owner) |
 | WebView2: `WebView2Loader.dll`, `Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.Core.Projection.dll` | `Microsoft.Web.WebView2` 1.0.3719.77 (a WinUI dependency) | 3 | 1.6 MB | BSD-3-Clause | allowed (BSD) |
-| Windows Community Toolkit: `CommunityToolkit.WinUI.Controls.SettingsControls.dll`, `…Triggers.dll`, `…Helpers.dll`, `…Extensions.dll`, `CommunityToolkit.Common.dll` and their `.pri` files (added in M1, not in the CI run above; see "Windows Community Toolkit") | `CommunityToolkit.WinUI.*` 8.3.260402-preview2, `CommunityToolkit.Common` 8.2.1 | 5-9 | 0.4 MB | MIT | allowed (MIT; Microsoft's platform packages pre-approved, owner 2026-10-23) |
+| Windows Community Toolkit: `CommunityToolkit.WinUI.Controls.SettingsControls.dll`, `…Triggers.dll`, `…Helpers.dll`, `…Extensions.dll`, `CommunityToolkit.Common.dll` (added in M1, CI run 39884007811; their `.pri` resources merge into `Current.pri`) | `CommunityToolkit.WinUI.*` 8.3.260402-preview2, `CommunityToolkit.Common` 8.2.1 | 5 | 0.4 MB | MIT | allowed (MIT; Microsoft's platform packages pre-approved, owner 2026-10-23) |
 | Licence and notice files | (from the packages above, plus `apps/windows/licences/WindowsSDK-projection.txt`) | 11 | 0.5 MB | | |
 | Uninstaller: `unins000.exe`, `unins000.dat`, `InnoSetup-license.txt` | Inno Setup 7.1.0 | 3 | | Inno Setup License | allowed (owner, ADR 0009) |
 
