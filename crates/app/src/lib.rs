@@ -38,6 +38,17 @@ pub struct AppInfo {
     pub version: String,
 }
 
+/// How removing a saved server went ([`App::remove_server`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Removal {
+    /// No such server was saved (unknown, or removed already): nothing changed.
+    NotSaved,
+    /// The server is gone from the list, the settings file and the capabilities state, and signed out on this device.
+    /// `credentials_left` is true when a saved sign-in could not be deleted from the keyring: the UI says so, since it stays in
+    /// the OS's credential store until deleted there (its key is never given to another server).
+    Removed { credentials_left: bool },
+}
+
 /// The core: one per process.
 pub struct App {
     shared: Arc<Shared>,
@@ -75,6 +86,7 @@ impl App {
                 None,
                 ClientIdentity::current(platform_name(), &device_id),
                 Vec::new(),
+                0,
             )),
             device_id: None,
         }
@@ -100,6 +112,7 @@ impl App {
                 Some(Storage { settings, secrets }),
                 identity,
                 stored.servers,
+                stored.last_server_key,
             )),
             device_id: Some(stored.device_id),
         };
@@ -227,6 +240,19 @@ impl App {
     /// server's answer, for the UI to mention that the server could not be told; the app is signed out either way.
     pub async fn sign_out(&self, server: &ServerRef) -> Result<(), AuthError> {
         self.shared.sign_out(server).await
+    }
+
+    /// Removes a saved server (ADR 0015, "Remove a server"), local first, as sign-out: under the session lock the list without it
+    /// is saved and its session, address provider and status are dropped; then every saved user's token for it is deleted from
+    /// the keyring. Only then, in the background and without waiting, is the server told (`POST /Sessions/Logout` for each token,
+    /// through its identity-checked provider); its answer changes nothing. A restore or sign-in to it that ends later finds it gone
+    /// and saves nothing. Removing a server that is not saved does nothing.
+    ///
+    /// # Errors
+    /// The settings could not be saved (a newer version's file, a failed write): nothing changed, the server is still saved and
+    /// signed in as before.
+    pub async fn remove_server(&self, server: &ServerRef) -> Result<Removal, StoreError> {
+        self.shared.remove_server(server).await
     }
 
     /// The platform's report of the network, on start and on every change (ADR 0014). Every server's address provider hears it, and

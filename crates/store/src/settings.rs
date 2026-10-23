@@ -45,6 +45,9 @@ pub struct Settings {
     pub device_id: DeviceId,
     /// The servers the app signed in to, with their addresses and users (ADR 0015). Never a token: those live in [`Secrets`](crate::Secrets).
     pub servers: Vec<SavedServer>,
+    /// The highest numeric server key ever given out, so a removed server's key is never given to another server (its keyring
+    /// entries might have outlived it). Older files have none: the highest key in `servers` stands in.
+    pub last_server_key: u64,
     /// Fields this version does not know, written back unchanged.
     extra: Map<String, Value>,
 }
@@ -54,6 +57,7 @@ impl Settings {
         Self {
             device_id,
             servers: Vec::new(),
+            last_server_key: 0,
             extra: Map::new(),
         }
     }
@@ -82,8 +86,15 @@ struct Stored {
     /// Added in ADR 0015; older files have none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     servers: Vec<StoredServer>,
+    /// Added with "remove a server" (ADR 0015, 2026-10-23); older files have none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    last_server_key: u64,
     #[serde(flatten)]
     extra: Map<String, Value>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// A saved server as the file keeps it. Private: the public shape is `current-model`'s [`SavedServer`].
@@ -302,6 +313,7 @@ impl SettingsStore {
         let stored = Stored {
             device_id: Some(settings.device_id.to_string()),
             servers: settings.servers.iter().map(StoredServer::from).collect(),
+            last_server_key: settings.last_server_key,
             extra: settings.extra.clone(),
         };
         let mut object = Map::new();
@@ -367,6 +379,7 @@ fn from_stored(stored: Stored) -> Result<(Settings, bool), StoreError> {
     let settings = Settings {
         device_id,
         servers: stored.servers.into_iter().map(SavedServer::from).collect(),
+        last_server_key: stored.last_server_key,
         extra: stored.extra,
     };
     Ok((settings, made))
@@ -705,6 +718,19 @@ mod tests {
             "5d1c0000000000000000000000000002"
         );
         assert!(json["servers"][1].get("active_user").is_none());
+    }
+
+    #[test]
+    fn the_last_server_key_round_trips_and_older_files_read_without_it() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path(), r#"{"version": 1, "device_id": "abc"}"#);
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        assert_eq!(store.get().last_server_key, 0);
+        store.update(|s| s.last_server_key = 3).unwrap();
+        assert_eq!(read_json(temp.path())["last_server_key"], 3);
+        drop(store);
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        assert_eq!(store.get().last_server_key, 3);
     }
 
     #[test]

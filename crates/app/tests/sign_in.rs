@@ -1,4 +1,4 @@
-//! Sign-in, restore, the 401 rule and sign out, end to end through `App`, against a hand-written Jellyfin stand-in on 127.0.0.1
+//! Sign-in, restore, the 401 rule, sign out and removing a server, end to end through `App`, against a hand-written Jellyfin stand-in on 127.0.0.1
 //! (ADR 0015). Settings go to a temporary folder, secrets to memory.
 
 use std::collections::HashMap;
@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use current_app::{AddServerState, App, NewServer, SignIn, SignInError, SignInState};
+use current_app::{AddServerState, App, NewServer, Removal, SignIn, SignInError, SignInState};
 use current_jellyfin::AuthError;
 use current_jellyfin::ProbeError;
 use current_model::{Permission, Reachability, ServerKey, ServerRef, ServiceType, UserId};
@@ -1405,4 +1405,243 @@ async fn a_sign_in_that_adds_an_address_rebuilds_the_provider_and_the_status_fol
     app.restore_sessions().await;
     settle().await;
     assert_eq!(app.capabilities().borrow().servers[0].address, Some(2));
+}
+
+const REMOVED: Removal = Removal::Removed {
+    credentials_left: false,
+};
+
+#[tokio::test]
+async fn removing_a_server_signs_out_every_user_and_forgets_it() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    // Two users signed in from this device, the second one active: each has a token in the keyring and on the server.
+    signed_in_with_password(&app, &address).await;
+    let flow = app.sign_in_again(&jellyfin("1")).unwrap().unwrap();
+    flow.with_password("Another User", PASSWORD).await;
+    assert!(matches!(
+        *flow.state().borrow(),
+        SignInState::SignedIn { .. }
+    ));
+    assert!(stored(&secrets, USER_ID).is_some() && stored(&secrets, OTHER_USER_ID).is_some());
+    assert_eq!(server.tokens.lock().unwrap().len(), 2);
+    let mut saved = app.saved_servers();
+    saved.borrow_and_update();
+
+    assert_eq!(app.remove_server(&jellyfin("1")).await, Ok(REMOVED));
+
+    // Gone on this device at once: list, settings file, capabilities, session and every token.
+    assert!(saved.has_changed().unwrap());
+    assert!(saved.borrow_and_update().is_empty());
+    assert!(app.servers().is_empty());
+    assert!(app.settings().unwrap().get().servers.is_empty());
+    assert!(app.capabilities().borrow().servers.is_empty());
+    assert!(app.jellyfin(&jellyfin("1")).is_none());
+    assert!(stored(&secrets, USER_ID).is_none() && stored(&secrets, OTHER_USER_ID).is_none());
+    // The server hears of both sessions in the background.
+    eventually(|| server.tokens.lock().unwrap().is_empty()).await;
+    assert_nothing_secret(&app, temp.path(), "", &server);
+
+    // A restart does not bring it back, and the next server gets a new key.
+    drop(app);
+    let app = open(temp.path(), &secrets);
+    assert!(app.servers().is_empty());
+    app.restore_sessions().await;
+    assert!(app.capabilities().borrow().servers.is_empty());
+    assert_eq!(app.settings().unwrap().get().last_server_key, 1);
+    signed_in_with_password(&app, &address).await;
+    assert_eq!(app.servers()[0].server, jellyfin("2"));
+}
+
+#[tokio::test]
+async fn removing_an_unknown_or_removed_server_does_nothing() {
+    let (_server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    assert_eq!(
+        app.remove_server(&jellyfin("1")).await,
+        Ok(Removal::NotSaved)
+    );
+    signed_in_with_password(&app, &address).await;
+    assert_eq!(
+        app.remove_server(&jellyfin("9")).await,
+        Ok(Removal::NotSaved)
+    );
+    assert_eq!(app.servers().len(), 1);
+    assert_eq!(app.remove_server(&jellyfin("1")).await, Ok(REMOVED));
+    assert_eq!(
+        app.remove_server(&jellyfin("1")).await,
+        Ok(Removal::NotSaved)
+    );
+}
+
+#[tokio::test]
+async fn removing_a_server_the_server_cannot_hear_still_removes_it() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &address).await;
+    // The server takes its time to answer: the removal does not wait for it.
+    *server.hold_logout.lock().unwrap() = Some(Arc::new(tokio::sync::Notify::new()));
+    let release = server.hold_logout.lock().unwrap().clone().unwrap();
+    let removal = tokio::time::timeout(Duration::from_secs(2), app.remove_server(&jellyfin("1")))
+        .await
+        .unwrap();
+    assert_eq!(removal, Ok(REMOVED));
+    assert!(app.servers().is_empty());
+    assert!(stored(&secrets, USER_ID).is_none());
+    eventually(|| server.paths().last().map(String::as_str) == Some("/Sessions/Logout")).await;
+    release.notify_one();
+}
+
+#[tokio::test]
+async fn a_restore_while_removing_does_not_bring_the_server_back() {
+    let (_server, [(first_at, first), _]) = two_addresses().await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &first).await;
+    drop(app);
+
+    // The restore waits on `/Users/Me` while the server is removed.
+    first_at.hang_me.store(true, Ordering::SeqCst);
+    let app = Arc::new(open(temp.path(), &secrets));
+    let restore = tokio::spawn({
+        let app = app.clone();
+        async move { app.restore_sessions().await }
+    });
+    eventually(|| {
+        first_at
+            .received
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.path == "/Users/Me")
+    })
+    .await;
+    assert_eq!(app.remove_server(&jellyfin("1")).await, Ok(REMOVED));
+    first_at.hang_me.store(false, Ordering::SeqCst);
+    restore.await.unwrap();
+    app.restore_sessions().await;
+    settle().await;
+
+    assert!(app.servers().is_empty());
+    assert!(app.capabilities().borrow().servers.is_empty());
+    assert!(app.jellyfin(&jellyfin("1")).is_none());
+    assert!(stored(&secrets, USER_ID).is_none());
+}
+
+#[tokio::test]
+async fn a_sign_in_racing_a_removal_leaves_no_token_behind() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = Arc::new(open(temp.path(), &secrets));
+    signed_in_with_password(&app, &address).await;
+    app.sign_out(&jellyfin("1")).await.unwrap();
+
+    // Whichever wins the session lock, the outcome is the same: either the sign-in saved first and its token is deleted with
+    // the server, or it finds the server gone and saves nothing.
+    let flow = app.sign_in_again(&jellyfin("1")).unwrap().unwrap();
+    let sign_in = flow.with_password("Another User", PASSWORD);
+    let first = jellyfin("1");
+    let removal = app.remove_server(&first);
+    let ((), removal) = tokio::join!(sign_in, removal);
+    assert_eq!(removal, Ok(REMOVED));
+    let state = flow.state().borrow().clone();
+    assert!(
+        matches!(
+            state,
+            SignInState::SignedIn { .. }
+                | SignInState::Failed {
+                    error: SignInError::ServerRemoved
+                }
+        ),
+        "{state:?}"
+    );
+    assert!(app.servers().is_empty());
+    assert!(app.capabilities().borrow().servers.is_empty());
+    assert!(app.jellyfin(&jellyfin("1")).is_none());
+    assert!(stored(&secrets, OTHER_USER_ID).is_none());
+    eventually(|| server.tokens.lock().unwrap().is_empty()).await;
+}
+
+#[tokio::test]
+async fn a_sign_in_saved_just_before_the_removal_has_its_token_deleted_too() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    signed_in_with_password(&app, &address).await;
+    let flow = app.sign_in_again(&jellyfin("1")).unwrap().unwrap();
+    flow.with_password("Another User", PASSWORD).await;
+    assert!(stored(&secrets, OTHER_USER_ID).is_some());
+
+    assert_eq!(app.remove_server(&jellyfin("1")).await, Ok(REMOVED));
+    assert!(stored(&secrets, USER_ID).is_none() && stored(&secrets, OTHER_USER_ID).is_none());
+    eventually(|| server.tokens.lock().unwrap().is_empty()).await;
+}
+
+/// A keyring that reads and stores but cannot delete.
+#[derive(Debug, Default)]
+struct UndeletableKeyring(MemorySecrets);
+
+impl Secrets for UndeletableKeyring {
+    fn get(&self, key: &SecretKey) -> Result<Option<Secret>, SecretsError> {
+        self.0.get(key)
+    }
+    fn set(&self, key: &SecretKey, secret: &Secret) -> Result<(), SecretsError> {
+        self.0.set(key, secret)
+    }
+    fn delete(&self, _: &SecretKey) -> Result<(), SecretsError> {
+        Err(SecretsError::Failed)
+    }
+}
+
+#[tokio::test]
+async fn a_keyring_that_cannot_delete_still_lets_the_server_go_and_says_so() {
+    let (server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let (app, _) = App::open(
+        temp.path(),
+        Arc::new(UndeletableKeyring::default()),
+        "Office PC",
+    )
+    .unwrap();
+    signed_in_with_password(&app, &address).await;
+    assert_eq!(
+        app.remove_server(&jellyfin("1")).await,
+        Ok(Removal::Removed {
+            credentials_left: true
+        })
+    );
+    assert!(app.servers().is_empty());
+    assert!(app.settings().unwrap().get().servers.is_empty());
+    // The token left in the keyring no longer works: the server was told.
+    eventually(|| server.tokens.lock().unwrap().is_empty()).await;
+}
+
+#[tokio::test]
+async fn settings_from_a_newer_version_refuse_a_removal() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("settings.json"),
+        format!(
+            r#"{{"version": 99, "device_id": "abc", "servers": [{{"service": "jellyfin", "key": "1", "server_id": "{SERVER_ID}", "addresses": [{{"url": "http://127.0.0.1:1"}}]}}]}}"#
+        ),
+    )
+    .unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    assert_eq!(app.servers().len(), 1);
+    assert_eq!(
+        app.remove_server(&jellyfin("1")).await,
+        Err(StoreError::NewerVersion { found: 99 })
+    );
+    assert_eq!(app.servers().len(), 1);
+    assert_eq!(app.capabilities().borrow().servers.len(), 1);
 }

@@ -1,10 +1,11 @@
-//! Saved servers and their sessions: what the app remembers, the signed-in clients, restoring them at start, the 401 rule and
-//! sign out (ADR 0015).
+//! Saved servers and their sessions: what the app remembers, the signed-in clients, restoring them at start, the 401 rule, sign
+//! out and removing a server (ADR 0015).
 //!
 //! Blocking work (the settings file, the OS keyring) runs on tokio's blocking pool (`spawn_blocking`), so the async methods here
 //! need a tokio runtime, as the HTTP client does anyway.
 //!
-//! Every change to a server's session (saving a sign-in, signing out, the 401 rule, restoring) runs under one async lock and
+//! Every change to a server's session (saving a sign-in, signing out, removing the server, the 401 rule, restoring) runs under
+//! one async lock and
 //! checks under it that the session it acts on is still the current one, so a late answer to an old session never touches a newer
 //! one.
 //!
@@ -29,9 +30,10 @@ use current_net::{
     FixedAddress, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError,
     RoamingStatus, RuntimeHandle, Url,
 };
-use current_store::{Secret, SecretKey, Secrets, SettingsStore, StoreError};
+use current_store::{Secret, SecretKey, Secrets, SecretsError, SettingsStore, StoreError};
 use tokio::sync::watch;
 
+use crate::Removal;
 use crate::sign_in::SignInError;
 
 /// What an app opened on a data folder keeps between runs.
@@ -143,6 +145,9 @@ pub(crate) struct Shared {
     pub(crate) servers: watch::Sender<Vec<SavedServer>>,
     /// Serializes [`Shared::commit`]: held during the settings write, on the blocking pool only.
     write: Mutex<()>,
+    /// The highest numeric server key ever given out, saved with the list: a removed server's key is never given again. Changed
+    /// only by [`Shared::commit`], under `write`.
+    last_key: AtomicU64,
     /// One live session per server.
     sessions: Mutex<HashMap<ServerRef, Session>>,
     /// One address provider per saved Jellyfin server, made when first needed (restore, a sign-in) since it needs the runtime.
@@ -177,10 +182,12 @@ impl Shared {
         storage: Option<Storage>,
         identity: ClientIdentity,
         servers: Vec<SavedServer>,
+        last_key: u64,
     ) -> Self {
         let capabilities = Capabilities {
             servers: servers.iter().map(saved_status).collect(),
         };
+        let last_key = last_key.max(highest_key(&servers));
         Self {
             request_log,
             capabilities: watch::Sender::new(capabilities),
@@ -188,6 +195,7 @@ impl Shared {
             identity,
             servers: watch::Sender::new(servers),
             write: Mutex::new(()),
+            last_key: AtomicU64::new(last_key),
             sessions: Mutex::new(HashMap::new()),
             links: Mutex::new(HashMap::new()),
             next_link: AtomicU64::new(1),
@@ -236,17 +244,24 @@ impl Shared {
         }
     }
 
-    /// Changes the saved servers and writes them to the settings file; on a failed write neither changes. Blocking: run it on the
-    /// blocking pool.
-    fn commit<R>(&self, change: impl FnOnce(&mut Vec<SavedServer>) -> R) -> Result<R, StoreError> {
+    /// Changes the saved servers and writes them to the settings file, with the highest key given out so far; on a failed write
+    /// neither changes. `change` gets that highest key, for a new server's. Blocking: run it on the blocking pool.
+    fn commit<R>(
+        &self,
+        change: impl FnOnce(&mut Vec<SavedServer>, u64) -> R,
+    ) -> Result<R, StoreError> {
         let _write = lock(&self.write);
         let mut next = self.servers();
-        let result = change(&mut next);
+        let last_key = self.last_key.load(Ordering::Relaxed);
+        let result = change(&mut next, last_key);
+        let last_key = last_key.max(highest_key(&next));
         if let Some(storage) = &self.storage {
-            storage
-                .settings
-                .update(|settings| settings.servers = next.clone())?;
+            storage.settings.update(|settings| {
+                settings.servers = next.clone();
+                settings.last_server_key = last_key;
+            })?;
         }
+        self.last_key.store(last_key, Ordering::Relaxed);
         self.servers.send_if_modified(|servers| {
             let changed = *servers != next;
             *servers = next;
@@ -257,16 +272,15 @@ impl Shared {
 
     /// Clears the server's active user if it is still `user`, and deletes that user's token. Blocking. Called under `changes`.
     fn forget_user(&self, server: &ServerRef, user: &UserId) {
-        let cleared =
-            self.commit(
-                |servers| match servers.iter_mut().find(|saved| &saved.server == server) {
-                    Some(saved) if saved.active_user.as_ref() == Some(user) => {
-                        saved.active_user = None;
-                        true
-                    }
-                    _ => false,
-                },
-            );
+        let cleared = self.commit(|servers, _| {
+            match servers.iter_mut().find(|saved| &saved.server == server) {
+                Some(saved) if saved.active_user.as_ref() == Some(user) => {
+                    saved.active_user = None;
+                    true
+                }
+                _ => false,
+            }
+        });
         if let (Ok(true), Some(storage)) = (cleared, &self.storage) {
             // Nothing more can be done if the keyring fails: the token no longer works anyway.
             let _ = storage
@@ -275,9 +289,14 @@ impl Shared {
         }
     }
 
-    /// Changes one server's status in the capabilities state, adding it if it is missing.
+    /// Changes one server's status in the capabilities state, adding it if it is missing. Only a saved server has a status: work
+    /// that ends after its server was removed (a restore, say) writes nothing. Checked under the state's lock, which removing a
+    /// server takes after its commit, so a status cannot come back after the removal.
     pub(crate) fn update_status(&self, server: &ServerRef, change: impl FnOnce(&mut ServerStatus)) {
         self.capabilities.send_if_modified(|capabilities| {
+            if self.saved(server).is_none() {
+                return false;
+            }
             let index = match capabilities
                 .servers
                 .iter()
@@ -351,29 +370,8 @@ impl Shared {
             if let Some(provider) = current_link(&lock(&self.links), &saved) {
                 return Ok(provider);
             }
-            // Built on the blocking pool: building sets up TLS for each address, which takes noticeable time.
             let identity = JellyfinIdentity::new(saved.id.clone());
-            let built = {
-                let (saved, identity, log, runtime) = (
-                    saved.clone(),
-                    identity.clone(),
-                    self.request_log.clone(),
-                    runtime.clone(),
-                );
-                tokio::task::spawn_blocking(move || {
-                    RoamingAddresses::new(
-                        saved.server.clone(),
-                        &saved.addresses,
-                        Arc::new(identity),
-                        log,
-                        RoamingConfig::default(),
-                        &runtime,
-                    )
-                })
-                .await
-                .map_err(|_| LinkError::NoRuntime)?
-                .map_err(LinkError::Roaming)?
-            };
+            let built = self.build_provider(&saved, &identity, &runtime).await?;
             {
                 let mut links = lock(&self.links);
                 // The saved list changed while building (a sign-in added an address): build again from the new one.
@@ -413,6 +411,35 @@ impl Shared {
             self.register(&built);
             return Ok(built);
         }
+    }
+
+    /// A new address provider over `saved`'s addresses, checking `identity`. Built on the blocking pool: building sets up TLS for
+    /// each address, which takes noticeable time.
+    async fn build_provider(
+        &self,
+        saved: &SavedServer,
+        identity: &JellyfinIdentity,
+        runtime: &RuntimeHandle,
+    ) -> Result<Arc<RoamingAddresses>, LinkError> {
+        let (saved, identity, log, runtime) = (
+            saved.clone(),
+            identity.clone(),
+            self.request_log.clone(),
+            runtime.clone(),
+        );
+        tokio::task::spawn_blocking(move || {
+            RoamingAddresses::new(
+                saved.server.clone(),
+                &saved.addresses,
+                Arc::new(identity),
+                log,
+                RoamingConfig::default(),
+                &runtime,
+            )
+        })
+        .await
+        .map_err(|_| LinkError::NoRuntime)?
+        .map_err(LinkError::Roaming)
     }
 
     /// Makes `provider` hear network facts from now on, starting from the last ones reported.
@@ -595,7 +622,7 @@ impl Shared {
         let token = signed_in.token.clone();
         let (saved, version, remembered) = blocking("save", move || {
             let Some((saved, version)) =
-                shared.commit(|servers| record(servers, &target, &user))?
+                shared.commit(|servers, last_key| record(servers, &target, &user, last_key))?
             else {
                 return Err(SignInError::ServerRemoved);
             };
@@ -756,7 +783,7 @@ impl Shared {
                     let shared = self.clone();
                     let server = server.clone();
                     let _ = blocking("save", move || {
-                        shared.commit(|servers| {
+                        shared.commit(|servers, _| {
                             if let Some(saved) = servers.iter_mut().find(|s| s.server == server) {
                                 upsert_user(saved, user_id, name);
                             }
@@ -807,6 +834,156 @@ impl Shared {
             None => Err(AuthError::NotSignedIn),
         }
     }
+
+    /// See [`App::remove_server`](crate::App::remove_server). Runs to the end even if the caller stops waiting.
+    pub(crate) async fn remove_server(
+        self: &Arc<Self>,
+        server: &ServerRef,
+    ) -> Result<Removal, StoreError> {
+        let shared = self.clone();
+        let server = server.clone();
+        tokio::spawn(async move { shared.apply_removal(server).await })
+            .await
+            .unwrap_or(Err(StoreError::Io {
+                op: "save",
+                kind: std::io::ErrorKind::Other,
+            }))
+    }
+
+    /// Removes the server on this device first, then tells it. Under the session lock, kept short (no keyring I/O): the list
+    /// without the server is saved, then its session, provider and status are dropped. From then on nothing can write a token
+    /// under its key: a sign-in or restore finds no saved server, a sign-in saved earlier has already stored its token (read and
+    /// deleted below), and the key is never given out again. After the lock: every saved user's token is read and deleted from
+    /// the keyring, and each token found, with the live session's, is logged out on the server in the background, through the
+    /// server's identity-checked provider (ADR 0014), never awaited.
+    async fn apply_removal(self: &Arc<Self>, server: ServerRef) -> Result<Removal, StoreError> {
+        let (saved, session, provider) = {
+            let _changes = self.changes.lock().await;
+            let Some(saved) = self.saved(&server) else {
+                return Ok(Removal::NotSaved);
+            };
+            self.check_writable()?;
+            let shared = self.clone();
+            let removed = server.clone();
+            blocking("save", move || {
+                shared.commit(|servers, _| servers.retain(|saved| saved.server != removed))
+            })
+            .await??;
+            let session = lock(&self.sessions).remove(&server);
+            // Dropping the link stops its follow task; the provider itself lives on for the logouts below.
+            let provider = lock(&self.links)
+                .remove(&server)
+                .map(|link| link.provider.clone());
+            self.capabilities.send_if_modified(|capabilities| {
+                let before = capabilities.servers.len();
+                capabilities
+                    .servers
+                    .retain(|status| status.server != server);
+                capabilities.servers.len() != before
+            });
+            (saved, session, provider)
+        };
+
+        let mut users: Vec<UserId> = saved.users.iter().map(|user| user.id.clone()).collect();
+        if let Some(active) = &saved.active_user
+            && !users.contains(active)
+        {
+            users.push(active.clone());
+        }
+        let (tokens, credentials_left) = match &self.storage {
+            Some(storage) => {
+                let secrets = storage.secrets.clone();
+                let server = server.clone();
+                blocking("delete from the keyring", move || {
+                    forget_tokens(secrets.as_ref(), &server, &users)
+                })
+                .await
+                .unwrap_or((Vec::new(), true))
+            }
+            None => (Vec::new(), false),
+        };
+
+        self.tell_removed(&saved, session, provider, tokens).await;
+        Ok(Removal::Removed { credentials_left })
+    }
+
+    /// Logs out the removed server's live session and each stored token (but the live session's user's, which that session
+    /// covers), in the background: best effort, never awaited, the answers ignored.
+    async fn tell_removed(
+        self: &Arc<Self>,
+        saved: &SavedServer,
+        session: Option<Session>,
+        provider: Option<Arc<RoamingAddresses>>,
+        tokens: Vec<(UserId, Secret)>,
+    ) {
+        let live = session.as_ref().map(|session| session.user.clone());
+        let tokens: Vec<_> = tokens
+            .into_iter()
+            .filter(|(user, _)| Some(user) != live.as_ref())
+            .collect();
+        let Ok(runtime) = RuntimeHandle::try_current() else {
+            return;
+        };
+        if let Some(session) = session {
+            runtime.spawn(async move {
+                let _ = session.client.sign_out().await;
+            });
+        }
+        if tokens.is_empty() {
+            return;
+        }
+        // A server never reached in this run has no provider yet: one over its last saved addresses, for these requests only.
+        let provider = match provider {
+            Some(provider) => provider,
+            None => {
+                let identity = JellyfinIdentity::new(saved.id.clone());
+                match self.build_provider(saved, &identity, &runtime).await {
+                    Ok(provider) => {
+                        self.register(&provider);
+                        provider
+                    }
+                    Err(_) => return,
+                }
+            }
+        };
+        for (_, token) in tokens {
+            let Ok(client) = JellyfinClient::new(
+                saved.server.clone(),
+                provider.clone(),
+                self.identity.clone(),
+                self.request_log.clone(),
+            ) else {
+                return;
+            };
+            client.set_token(AccessToken::new(token.expose()));
+            runtime.spawn(async move {
+                let _ = client.sign_out().await;
+            });
+        }
+    }
+}
+
+/// Reads and deletes each user's token on `server`. Returns the tokens found, and whether any could not be deleted. A keyring
+/// that is unavailable (none on this platform, locked, refused) counts as holding nothing: it could not have stored a token this
+/// run, and one stored while it worked stays until it works again (said in ADR 0015). Blocking.
+fn forget_tokens(
+    secrets: &dyn Secrets,
+    server: &ServerRef,
+    users: &[UserId],
+) -> (Vec<(UserId, Secret)>, bool) {
+    let mut tokens = Vec::new();
+    let mut left = false;
+    for user in users {
+        let key = SecretKey::new(server.clone(), user.clone());
+        if let Ok(Some(token)) = secrets.get(&key) {
+            tokens.push((user.clone(), token));
+        }
+        match secrets.delete(&key) {
+            Ok(()) | Err(SecretsError::Unavailable) => {}
+            Err(SecretsError::TooLong | SecretsError::Failed) => left = true,
+        }
+    }
+    (tokens, left)
 }
 
 /// Copies a provider's status into the capabilities state on every change, until the provider or the app is gone or the link is
@@ -850,6 +1027,7 @@ fn record(
     servers: &mut Vec<SavedServer>,
     target: &Target,
     user: &User,
+    last_key: u64,
 ) -> Option<(SavedServer, Option<String>)> {
     let (index, version) = match target {
         Target::Saved(server) => (
@@ -876,7 +1054,7 @@ fn record(
                 }
                 None => {
                     servers.push(SavedServer {
-                        server: ServerRef::new(ServiceType::JELLYFIN, next_key(servers)),
+                        server: ServerRef::new(ServiceType::JELLYFIN, next_key(servers, last_key)),
                         id: id.clone(),
                         name: name.clone(),
                         addresses: vec![address.clone()],
@@ -902,15 +1080,20 @@ fn upsert_user(saved: &mut SavedServer, id: UserId, name: String) {
     }
 }
 
-/// The next server key: one more than the highest number in use. Keys of servers added by a newer version that are not numbers
-/// are left alone.
-fn next_key(servers: &[SavedServer]) -> ServerKey {
-    let highest = servers
+/// The next server key: one more than the highest number in use or ever given out (`last_key`), so a removed server's key is
+/// never given to another server. Keys of servers added by a newer version that are not numbers are left alone.
+fn next_key(servers: &[SavedServer], last_key: u64) -> ServerKey {
+    let highest = highest_key(servers).max(last_key);
+    ServerKey::new(highest.saturating_add(1).to_string())
+}
+
+/// The highest numeric key in `servers`, 0 if none.
+fn highest_key(servers: &[SavedServer]) -> u64 {
+    servers
         .iter()
         .filter_map(|saved| saved.server.key.as_str().parse::<u64>().ok())
         .max()
-        .unwrap_or(0);
-    ServerKey::new((highest + 1).to_string())
+        .unwrap_or(0)
 }
 
 /// A saved server's status before its session is checked: signed in if a user is active, reachability unknown.
@@ -974,9 +1157,12 @@ mod tests {
 
     #[test]
     fn keys_are_one_more_than_the_highest_number() {
-        assert_eq!(next_key(&[]), ServerKey::new("1"));
+        assert_eq!(next_key(&[], 0), ServerKey::new("1"));
         let servers = [saved("1", "a"), saved("7", "b"), saved("x", "c")];
-        assert_eq!(next_key(&servers), ServerKey::new("8"));
+        assert_eq!(next_key(&servers, 0), ServerKey::new("8"));
+        // A removed server's key is never given again.
+        assert_eq!(next_key(&servers, 9), ServerKey::new("10"));
+        assert_eq!(next_key(&[], 3), ServerKey::new("4"));
     }
 
     #[test]
@@ -986,6 +1172,7 @@ mod tests {
             &mut servers,
             &new_target("b", "https://media.example.com"),
             &user("u1", "Example User"),
+            0,
         )
         .unwrap();
         assert_eq!(saved.server.key, ServerKey::new("2"));
@@ -1007,6 +1194,7 @@ mod tests {
             &mut servers,
             &new_target("a", "https://media.example.com"),
             &user("u2", "Another User"),
+            0,
         )
         .unwrap();
         assert_eq!(saved.server.key, ServerKey::new("1"));
@@ -1024,6 +1212,7 @@ mod tests {
             &mut servers,
             &new_target("a", "https://media.example.com"),
             &user("u1", "New Name"),
+            0,
         );
         assert_eq!(servers[0].addresses.len(), 2);
         assert_eq!(servers[0].users.len(), 2);
@@ -1034,7 +1223,8 @@ mod tests {
     fn a_saved_server_keeps_its_record() {
         let mut servers = vec![saved("3", "a")];
         let target = Target::Saved(servers[0].server.clone());
-        let (saved, version) = record(&mut servers, &target, &user("u1", "Example User")).unwrap();
+        let (saved, version) =
+            record(&mut servers, &target, &user("u1", "Example User"), 0).unwrap();
         assert_eq!(saved.server.key, ServerKey::new("3"));
         assert_eq!(saved.addresses, servers[0].addresses);
         assert_eq!(version, None);
@@ -1045,7 +1235,7 @@ mod tests {
         let mut servers = vec![saved("3", "a")];
         let target = Target::Saved(ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("9")));
         assert_eq!(
-            record(&mut servers, &target, &user("u1", "Example User")),
+            record(&mut servers, &target, &user("u1", "Example User"), 0),
             None
         );
         assert_eq!(servers, [saved("3", "a")]);
@@ -1072,6 +1262,7 @@ mod tests {
             None,
             ClientIdentity::current("Test", "device"),
             servers,
+            0,
         ))
     }
 
@@ -1096,7 +1287,7 @@ mod tests {
 
         // A sign-in adds an address: the next caller gets a provider over both, whatever list it read earlier.
         shared
-            .commit(|servers| {
+            .commit(|servers, _| {
                 servers[0].addresses.push(ServerAddress {
                     url: "https://media.example.com".into(),
                     plain_http_confirmed: false,
@@ -1129,6 +1320,40 @@ mod tests {
             shared.provider(&server).await,
             Err(LinkError::Removed)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_removed_server_gets_no_status_back_and_its_key_is_not_reused() {
+        let shared = shared_with(vec![saved("1", "a"), saved("2", "b")]);
+        let second = ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("2"));
+        assert_eq!(
+            shared.remove_server(&second).await,
+            Ok(Removal::Removed {
+                credentials_left: false
+            })
+        );
+        assert_eq!(shared.servers().len(), 1);
+        assert_eq!(shared.capabilities.borrow().servers.len(), 1);
+        // Late work for the removed server (a restore's status, say) writes nothing.
+        shared.update_status(&second, |status| {
+            status.reachability = Reachability::Unreachable;
+        });
+        assert!(shared.capabilities.borrow().server(&second).is_none());
+        // Removing it again does nothing.
+        assert_eq!(shared.remove_server(&second).await, Ok(Removal::NotSaved));
+        // The next new server gets key 3, not 2.
+        let (saved, _) = shared
+            .commit(|servers, last_key| {
+                record(
+                    servers,
+                    &new_target("c", "https://media.example.com"),
+                    &user("u1", "Example User"),
+                    last_key,
+                )
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.server.key, ServerKey::new("3"));
     }
 
     #[test]
