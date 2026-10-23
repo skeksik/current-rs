@@ -37,7 +37,7 @@
                 </StackPanel>
                 <StackPanel x:Name="SigningInPanel" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
                     <ProgressRing x:Name="SigningInRing" Width="20" Height="20" IsActive="False" />
-                    <TextBlock VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" Text="Signing in…" />
+                    <TextBlock x:Name="SigningInText" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" Text="Signing in…" />
                 </StackPanel>
 
                 <StackPanel x:Name="QuickConnectOffer" Margin="0,16,0,0" Spacing="8" Visibility="Collapsed">
@@ -63,7 +63,7 @@
                     IsTextSelectionEnabled="True" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <ProgressRing x:Name="WaitingRing" Width="20" Height="20" IsActive="False" />
-                    <TextBlock VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" Text="Waiting for approval…" />
+                    <TextBlock x:Name="WaitingText" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" Text="Waiting for approval…" />
                 </StackPanel>
                 <Button x:Name="QuickConnectCancel" Content="Cancel" Click="OnCancel" />
             </StackPanel>

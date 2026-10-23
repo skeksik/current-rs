@@ -12,6 +12,9 @@ namespace Current.Shell.Pages;
 /// <param name="UserName">The user to fill in, for signing in again; null for a new server.</param>
 internal sealed record SignInRequest(SignInFlow Flow, string ServerName, bool HttpsFailedTls, string? UserName)
 {
+    /// <summary>Set by the page that took the flow: a request is used once, even if the Frame offers it again.</summary>
+    public bool Taken { get; set; }
+
     /// <summary>Opens the sign-in page for a saved server that is signed out. Shows a notice if the core refuses.</summary>
     public static void SignInAgain(Frame frame, CoreHost core, ServerRow row)
     {

@@ -45,9 +45,14 @@
       2026-10-23). 8.3.260402-preview2 is a preview: the stable 8.2.251219 depends on the whole Microsoft.WindowsAppSDK package, this one
       only on Microsoft.WindowsAppSDK.WinUI (>= 1.8.260204000), which the 2.3.9 above satisfies. It brings Triggers, Helpers and
       Extensions at the same version and CommunityToolkit.Common 8.2.1, all MIT (docs/notes/windows-shell.md). Move to 8.3 stable when
-      it ships (docs/roadmap.md).
+      it ships (docs/roadmap.md). Each is pinned exactly with NuGet's bracket form, the transitive ones too, so a restore can never pick
+      another version. (The WinUI references above remain minimums, with NU1603 as a warning: a follow-up, docs/roadmap.md.)
     -->
-    <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.3.260402-preview2" />
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="[8.3.260402-preview2]" />
+    <PackageReference Include="CommunityToolkit.WinUI.Triggers" Version="[8.3.260402-preview2]" />
+    <PackageReference Include="CommunityToolkit.WinUI.Helpers" Version="[8.3.260402-preview2]" />
+    <PackageReference Include="CommunityToolkit.WinUI.Extensions" Version="[8.3.260402-preview2]" />
+    <PackageReference Include="CommunityToolkit.Common" Version="[8.2.1]" />
   </ItemGroup>
 
   <ItemGroup>

@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using Current.Bindings;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
@@ -24,6 +25,7 @@ public sealed partial class AddServerPage : Page
     private ValueSubscription<DiscoveryState>? _search;
     private CancellationTokenSource? _probe;
     private CancellationTokenSource? _searching;
+    private AddServerState? _shown;
     private bool _confirming;
     private bool _leaving;
 
@@ -31,6 +33,7 @@ public sealed partial class AddServerPage : Page
     {
         InitializeComponent();
         FoundList.ItemsSource = _found;
+        Loaded += (_, _) => AddressBox.Focus(FocusState.Programmatic);
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -51,7 +54,6 @@ public sealed partial class AddServerPage : Page
         RenderSearch(_search.Value);
         // Searching starts by itself (manager, 2026-10-23).
         StartSearch();
-        AddressBox.Focus(FocusState.Programmatic);
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -96,6 +98,8 @@ public sealed partial class AddServerPage : Page
 
     private void Render(AddServerState state)
     {
+        var before = _shown;
+        _shown = state;
         var probing = state is AddServerState.Probing;
         // Read-only rather than disabled, so the box keeps focus while the probe runs.
         AddressBox.IsReadOnly = probing;
@@ -104,6 +108,15 @@ public sealed partial class AddServerPage : Page
         ProbingPanel.Visibility = probing ? Visibility.Visible : Visibility.Collapsed;
         ProbingRing.IsActive = probing;
         FoundList.IsEnabled = !probing;
+        if (probing && before is not AddServerState.Probing)
+        {
+            Announce.Shown(ProbingText);
+        }
+        else if (before is AddServerState.Probing && state is AddServerState.Idle or AddServerState.Failed)
+        {
+            // Cancel had focus and is now hidden: back to the address.
+            DispatcherQueue.TryEnqueue(() => AddressBox.Focus(FocusState.Programmatic));
+        }
 
         switch (state)
         {
@@ -232,8 +245,16 @@ public sealed partial class AddServerPage : Page
             return false;
         }
         _probe.Cancel();
-        AddressBox.Focus(FocusState.Keyboard);
         return true;
+    }
+
+    /// <summary>Names each found server for Narrator, which would otherwise read the item's type.</summary>
+    private void OnFoundContainerChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.Item is DiscoveredServer server)
+        {
+            AutomationProperties.SetName(args.ItemContainer, server.Name);
+        }
     }
 
     private void OnPickServer(object sender, ItemClickEventArgs e)

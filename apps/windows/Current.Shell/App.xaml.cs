@@ -24,7 +24,8 @@ public partial class App : Application
         // which logs and keeps the app running (Application.UnhandledException, Handled).
         UnhandledException += (_, args) =>
         {
-            Trace.TraceError($"Current: unhandled exception on the UI thread: {args.Exception}");
+            // The type only, as everywhere: a message could carry a server's answer.
+            Trace.TraceError($"Current: unhandled exception on the UI thread: {args.Exception.GetType().Name}");
             args.Handled = true;
         };
     }
@@ -58,9 +59,17 @@ public partial class App : Application
         _ = OpenCoreAsync(_ui);
     }
 
-    /// <summary>A notice above every page: closed by the user. Called on the UI thread.</summary>
-    internal static void ShowNotice(InfoBarSeverity severity, string title, string message) =>
-        _window?.ShowNotice(severity, title, message);
+    /// <summary>A notice above every page: closed by the user. Called on the UI thread; dropped once the window has closed.</summary>
+    internal static void ShowNotice(InfoBarSeverity severity, string title, string message)
+    {
+        if (!_closed)
+        {
+            _window?.ShowNotice(severity, title, message);
+        }
+    }
+
+    /// <summary>Drops the back and forward history (after a finished sign-in). Called on the UI thread.</summary>
+    internal static void ClearNavigationHistory() => _window?.ClearHistory();
 
     /// <summary>
     /// Opens the core on the data folder (ADR 0013), off the UI thread inside the adapter, then reports the network and restores the
@@ -72,7 +81,6 @@ public partial class App : Application
         try
         {
             core = await CoreHost.OpenAsync(AppIdentity.DataFolder, DeviceName.Get(), SecretStore.Keyring);
-            ShowLoadReport(core.LoadReport);
         }
         catch (CoreStoreException error)
         {
@@ -90,6 +98,17 @@ public partial class App : Application
             core = TryCreateInMemory();
         }
 
+        if (core is not null && !_closed)
+        {
+            try
+            {
+                ShowLoadReport(core.LoadReport);
+            }
+            catch (Exception error)
+            {
+                Trace.TraceError($"Current: reading the load report failed: {error.GetType().Name}");
+            }
+        }
         if (core is not null && _closed)
         {
             // The window closed while the core was opening.

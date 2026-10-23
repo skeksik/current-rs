@@ -95,8 +95,35 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>Drops the back and forward history, after a finished sign-in, and keeps the title bar's back button in step.</summary>
+    internal void ClearHistory()
+    {
+        ContentFrame.BackStack.Clear();
+        ContentFrame.ForwardStack.Clear();
+        AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack;
+    }
+
+    /// <summary>
+    /// A sign-in page owns the flow it was opened with and disposes it when left, so it is never returned to: its entries leave the back
+    /// and forward stacks as soon as it is left. Back from a sign-in goes to the page before it; starting again opens a new one.
+    /// </summary>
+    private void DropSignInHistory()
+    {
+        foreach (var stack in new[] { ContentFrame.BackStack, ContentFrame.ForwardStack })
+        {
+            for (var i = stack.Count - 1; i >= 0; i--)
+            {
+                if (stack[i].SourcePageType == typeof(SignInPage))
+                {
+                    stack.RemoveAt(i);
+                }
+            }
+        }
+    }
+
     private void OnNavigated(object sender, NavigationEventArgs e)
     {
+        DropSignInHistory();
         AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack;
         if (ContentFrame.SourcePageType == typeof(SettingsPage))
         {

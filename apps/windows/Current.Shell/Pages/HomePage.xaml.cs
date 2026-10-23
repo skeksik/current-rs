@@ -55,7 +55,7 @@ public sealed partial class HomePage : Page
         }
         catch (Exception error)
         {
-            Trace.TraceError($"Current: the home page failed to load: {error}");
+            Trace.TraceError($"Current: the home page failed to load: {error.GetType().Name}");
         }
     }
 

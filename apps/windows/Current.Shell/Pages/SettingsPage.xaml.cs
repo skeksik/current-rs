@@ -43,7 +43,7 @@ public sealed partial class SettingsPage : Page
         }
         catch (Exception error)
         {
-            Trace.TraceError($"Current: the settings page failed to load: {error}");
+            Trace.TraceError($"Current: the settings page failed to load: {error.GetType().Name}");
         }
     }
 
@@ -119,7 +119,7 @@ public sealed partial class SettingsPage : Page
         }
         catch (Exception error)
         {
-            Trace.TraceError($"Current: copying diagnostics failed: {error}");
+            Trace.TraceError($"Current: copying diagnostics failed: {error.GetType().Name}");
             copied = false;
         }
         CopiedInfo.IsOpen = false;

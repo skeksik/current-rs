@@ -43,6 +43,7 @@ public sealed class ServersViewModel(CoreHost core, IUiDispatcher ui) : INotifyP
         }
         _servers = core.ObserveServers(ui);
         _servers.Items.CollectionChanged += OnServersChanged;
+        _servers.PropertyChanged += OnServersFaulted;
         _capabilities = core.ObserveCapabilities(ui);
         _capabilities.PropertyChanged += OnCapabilitiesChanged;
         Sync();
@@ -53,6 +54,7 @@ public sealed class ServersViewModel(CoreHost core, IUiDispatcher ui) : INotifyP
         if (_servers is not null)
         {
             _servers.Items.CollectionChanged -= OnServersChanged;
+            _servers.PropertyChanged -= OnServersFaulted;
             _servers.Dispose();
             _servers = null;
         }
@@ -78,6 +80,9 @@ public sealed class ServersViewModel(CoreHost core, IUiDispatcher ui) : INotifyP
         Loaded = true;
         Sync();
     }
+
+    /// <summary>The mirror stopped (ListSubscription.IsFaulted): show the reload state at once.</summary>
+    private void OnServersFaulted(object? sender, PropertyChangedEventArgs e) => Sync();
 
     private void OnCapabilitiesChanged(object? sender, PropertyChangedEventArgs e) => Sync();
 
@@ -149,9 +154,6 @@ public sealed class ServerRow : INotifyPropertyChanged
 
     public string UserName { get; private set; } = "";
 
-    /// <summary>What Narrator reads for the row: every line in one.</summary>
-    public string Description { get; private set; } = "";
-
     /// <summary>The buttons' names for Narrator, which a list of "Sign in" buttons would not tell apart.</summary>
     public string SignInLabel => $"Sign in to {Name}";
 
@@ -179,10 +181,9 @@ public sealed class ServerRow : INotifyPropertyChanged
         Connection = status?.AddressPosition is { } position && saved.AddressCount > 1
             ? $"{reachability}, address {position} of {saved.AddressCount}"
             : reachability;
-        Description = $"{Name}, {Product}, {Account}, {Connection}";
         foreach (var name in new[]
         {
-            nameof(Name), nameof(Product), nameof(Account), nameof(Connection), nameof(SignedIn), nameof(UserName), nameof(Description),
+            nameof(Name), nameof(Product), nameof(Account), nameof(Connection), nameof(SignedIn), nameof(UserName),
             nameof(SignInVisibility), nameof(SignOutVisibility), nameof(SignInLabel), nameof(SignOutLabel),
         })
         {

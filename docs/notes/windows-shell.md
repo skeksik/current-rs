@@ -138,7 +138,7 @@ actions; nothing is decided in C#.
   "Add a server" button. With servers, a card per saved server: name, "Signed in as …" or "Signed out", "Jellyfin <version>", and
   "Connected", "Can't reach the server" or "Checking…" (plus "address N of M" with more than one address); a signed-out server has a
   "Sign in" button (sign in again), and "Add another server" follows. Browse is M2. `ServersViewModel` joins `ObserveServers` with
-  `ObserveCapabilities` and updates rows in place. If the list mirror faults (`ListSubscription.IsFaulted`), the page says
+  `ObserveCapabilities` and updates rows in place. If the list mirror faults (`ListSubscription.IsFaulted`, which the adapter reports through `PropertyChanged`), the page says
   "Couldn't refresh the server list." with "Reload", which subscribes anew.
 - **Add a server** (`AddServerPage`, one `AddServerFlow` and one `DiscoveryFlow` from `OnNavigatedTo` to `OnNavigatedFrom`):
   - "Server address" box (`InputScope="Url"`, placeholder `192.168.1.10:8096 or media.example.com`); Enter or "Connect" probes.
@@ -168,7 +168,11 @@ actions; nothing is decided in C#.
     Connect code 1 2 3 4 5 6"), with "Waiting for approval…" and "Cancel" (Esc too).
   - `SigningIn`: a ring with "Signing in…" (the progress page's example of a ring); Cancel or Esc.
   - Each `SignInProblem` in plain words (`ProblemText.SignIn`) in an error `InfoBar`.
-  - `SignedIn`: back to Home and the back stack cleared, so Back does not return into a finished sign-in (manager, 2026-10-23).
+  - `SignedIn`: back to Home and the back and forward history cleared (`MainWindow.ClearHistory`, which also updates the title
+    bar's back button), so Back does not return into a finished sign-in (manager, 2026-10-23).
+  - The page owns and disposes its flow, so it is never returned to: `MainWindow.OnNavigated` removes sign-in entries from the
+    back and forward stacks, and the page ignores a Back/Forward navigation or a request already taken. Back from a sign-in goes to
+    the page before it.
     `Remembered: false` adds a notice: "Signed in for this session only. Windows Credential Manager isn't available, so you'll need
     to sign in again next time."
 - **Settings** (`SettingsPage`), laid out as "Guidelines for app settings" says: one scrollable column of at most 1000 px,
@@ -182,9 +186,13 @@ actions; nothing is decided in C#.
   - **About:** a `SettingsExpander` "Current" with the version, and "© 2026 Skeksik" inside.
 - **Keyboard and Narrator:** every input has a `Header` that names it; buttons in lists carry `AutomationProperties.Name` with the
   server ("Sign in to <name>"); page titles and section headers have `AutomationProperties.HeadingLevel`; progress texts are
-  `LiveSetting="Polite"`; an error `InfoBar` is closed and opened again when its message changes, because "Once the control is
+  `LiveSetting="Polite"`, and because "Connecting…", "Signing in…" and "Waiting for approval…" never change, their peer raises
+  `LiveRegionChanged` when they appear (`Announce.Shown`), else Narrator would have nothing to read; found servers are named by
+  their server's name on the list item (`ContainerContentChanging`); an error `InfoBar` is closed and opened again when its message changes, because "Once the control is
   open, any changes made to the various properties … will not raise a notification event … we recommend you close and re-open the
-  control" (InfoBar). Focus goes to the address box, and to the user name box (the password box when signing in again). Enter
+  control" (InfoBar). Focus goes to the address box, and to the user name box (the password box when signing in again), once the page is
+  loaded. While signing in, the disabled password box (it has no read-only mode) hands focus to "Cancel"; after a cancel or a
+  failure focus returns to the form. The address box is read-only, not disabled, while probing, so it keeps focus. Enter
   submits; Esc cancels a running probe, sign-in or Quick Connect (a page `KeyboardAccelerator`) and closes the dialog.
 
 ## Windows Community Toolkit: SettingsControls
@@ -207,6 +215,9 @@ owner chose this exact set. Read on nuget.org (registration API and nuspecs) on 
   CommunityToolkit/Windows at the package's commit 39c45efe) and `CommunityToolkit-dotnet-License.md` (CommunityToolkit/dotnet at
   `CommunityToolkit.Common`'s commit 2258fd31) ship in `licences\` (`build.ps1`). Both: MIT, "Copyright © .NET Foundation and
   Contributors".
+- All five are pinned exactly with NuGet's bracket form (`[8.3.260402-preview2]`, `[8.2.1]`), the transitive ones as direct
+  references. The WinUI and InteractiveExperiences references stay minimums, with NuGet's NU1603 notice a warning (Layout): pinning
+  them exactly is a follow-up (docs/roadmap.md).
 - What ships (`out/files.txt`, CI run 39884007811, 2026-10-23): the five `.dll` files only (34,952 + 106,320 + 129,360 + 76,624 +
   31,568 bytes); the packages' `.pri` files are merged into `Current.pri` and their `.pdb` and `.xml` files are not published. The two
   licence texts ship in `licences\`.
@@ -314,7 +325,7 @@ matched by name against the contents of the restored packages. The installer add
 | Windows SDK projection: `Microsoft.Windows.SDK.NET.dll`, `WinRT.Runtime.dll` | `Microsoft.Windows.SDK.NET.Ref` 10.0.26100.57 | 2 | 26.9 MB | Microsoft Software License Terms, Windows SDK for Windows 10; on its redist list | platform runtime (owner) |
 | WebView2: `WebView2Loader.dll`, `Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.Core.Projection.dll` | `Microsoft.Web.WebView2` 1.0.3719.77 (a WinUI dependency) | 3 | 1.6 MB | BSD-3-Clause | allowed (BSD) |
 | Windows Community Toolkit: `CommunityToolkit.WinUI.Controls.SettingsControls.dll`, `…Triggers.dll`, `…Helpers.dll`, `…Extensions.dll`, `CommunityToolkit.Common.dll` (added in M1, CI run 39884007811; their `.pri` resources merge into `Current.pri`) | `CommunityToolkit.WinUI.*` 8.3.260402-preview2, `CommunityToolkit.Common` 8.2.1 | 5 | 0.4 MB | MIT | allowed (MIT; Microsoft's platform packages pre-approved, owner 2026-10-23) |
-| Licence and notice files | (from the packages above, plus `apps/windows/licences/WindowsSDK-projection.txt`) | 11 | 0.5 MB | | |
+| Licence and notice files | (from the packages above, plus `apps/windows/licences/WindowsSDK-projection.txt` and the two Community Toolkit texts) | 13 | 0.5 MB | | |
 | Uninstaller: `unins000.exe`, `unins000.dat`, `InnoSetup-license.txt` | Inno Setup 7.1.0 | 3 | | Inno Setup License | allowed (owner, ADR 0009) |
 
 - No AI, ML (onnxruntime), Widgets or Search files ship (they came with the metapackage, see Layout).

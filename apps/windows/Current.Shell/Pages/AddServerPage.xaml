@@ -51,10 +51,11 @@
                 AutomationProperties.Name="Servers on your network"
                 SelectionMode="None"
                 IsItemClickEnabled="True"
-                ItemClick="OnPickServer">
+                ItemClick="OnPickServer"
+                ContainerContentChanging="OnFoundContainerChanging">
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="bindings:DiscoveredServer">
-                        <StackPanel Padding="0,8" AutomationProperties.Name="{x:Bind Name}">
+                        <StackPanel Padding="0,8">
                             <TextBlock Text="{x:Bind Name}" />
                             <TextBlock
                                 Style="{StaticResource CaptionTextBlockStyle}"
