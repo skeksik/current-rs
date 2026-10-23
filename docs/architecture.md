@@ -67,19 +67,21 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
     UI awaits it from its UI thread. `SecretStore::Keyring` in the apps, `Memory` for tests only. `Core::load_report` says what the
     store found. `Core::new` is the core that stores nothing (tests, the smoke run).
   - The M1 flows are objects: `AddServerFlow`, `DiscoveryFlow` and `SignInFlow`, each with `subscribe_state` (a value) and actions;
-    long actions are async with a `CancelToken`, and a cancelled one puts its flow back unless a newer action started. Sessions are on
-    `Core`: `sign_in_again`, `restore_sessions`, `sign_out` (not cancellable; reports whether the server heard), `network_changed`,
-    `returned_to_foreground`. The saved servers are a diff list (`subscribe_servers`), kept in step with `App::saved_servers` by
+    long actions are async with a `CancelToken`, and a cancelled one puts its flow back unless a newer action started. A sign-in is
+    cancelled through the app flow's own `cancel`, never dropped halfway; one the server already accepted is saved and wins.
+    Sessions are on `Core`: `sign_in_again`, `restore_sessions` (cancelling stops the waiting; each server's check runs to its
+    end), `sign_out` (not cancellable; reports whether the server heard), `network_changed`, `returned_to_foreground`. The saved servers are a diff list (`subscribe_servers`), kept in step with `App::saved_servers` by
     server key.
   - Nothing secret crosses in a state: no address, token, password, Quick Connect secret or network key. Records carry ids, names,
     versions and counts; failures are flat enums (`ProbeProblem`, `SignInProblem`, `NetProblem`, `StoreProblem`, ...) without
-    server messages or redirect targets. The password goes in only as an argument, the network key only inside `NetworkFacts`.
+    server messages or redirect targets. The password goes in only as an argument, the network key only inside `NetworkFacts`,
+    whose Debug, C# `ToString()` and Swift description redact it.
   - `export_diagnostics` is what "copy diagnostics" copies: the version, platform, architecture and the settings' load report, then
     the redacted request log.
 - **`bindings/csharp`** (`Current.Bindings`, net10.0-windows): the generated C# (internal) plus public adapters: `CoreHost`
   (`Create`, `OpenAsync`), `AddServerFlow`, `DiscoveryFlow`, `SignInFlow`, public records for every state and problem,
   `ValueSubscription<T>` (weak listener, catch-all, hop through `IUiDispatcher`), `ListSubscription<T>` over
-  `DiffObservableCollection<T>`, cancellable calls that take a `CancellationToken`, and one public exception per `CoreError`
+  `DiffObservableCollection<T>` (it re-subscribes after a lost or bad batch), cancellable calls that take a `CancellationToken`, and one public exception per `CoreError`
   variant. The WinUI app implements `IUiDispatcher` over `DispatcherQueue`. Tests run against the Jellyfin stand-in process.
 - **`bindings/swift`** (SwiftPM, Swift 6): the XCFramework and generated Swift plus adapters: `@MainActor @Observable`
   `ObservedValue` and `ObservedList` pumped by one `AsyncStream` each, `observeState()`/`observeServers()` helpers, and async

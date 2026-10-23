@@ -33,6 +33,12 @@ var tests = new (string Name, Func<Task> Run)[]
     ("discovery ends", FlowTests.DiscoveryEnds),
     ("flow subscriptions are released", FlowTests.FlowSubscriptionsAreReleased),
     ("network reports are accepted", FlowTests.NetworkReportsAreAccepted),
+    ("diagnostics after a sign-in hold nothing private", FlowTests.DiagnosticsAfterASignInHoldNothingPrivate),
+    ("cancelling while signing in returns to Ready", FlowTests.CancellingWhileSigningInReturnsToReady),
+    ("cancelling while Quick Connect waits stops polling", FlowTests.CancellingWhileQuickConnectWaitsStopsPolling),
+    ("the server list recovers from a bad batch", FlowTests.ServerListRecoversFromABadBatch),
+    ("the server list recovers from a lost batch", FlowTests.ServerListRecoversFromALostBatch),
+    ("network facts hide the key", FlowTests.NetworkFactsHideTheKey),
 };
 
 var failed = 0;

@@ -54,16 +54,14 @@ public sealed class CoreHost : IDisposable
         return subscription;
     }
 
-    /// <summary>The saved servers now, in the order they were added.</summary>
+    /// <summary>
+    /// The saved servers now, in the order they were added, read from the core: a change shows here as soon as its call returns.
+    /// </summary>
     public IReadOnlyList<SavedServer> Servers => Array.ConvertAll(_core.Servers(), saved => Map.From(saved));
 
     /// <summary>The saved servers, mirrored on the UI thread with diffs. Dispose it when the page goes away.</summary>
-    public ListSubscription<SavedServer> ObserveServers(IUiDispatcher ui)
-    {
-        var subscription = new ListSubscription<SavedServer>();
-        subscription.Attach(_core.SubscribeServers(new SavedServersForwarder(subscription, ui)));
-        return subscription;
-    }
+    public ListSubscription<SavedServer> ObserveServers(IUiDispatcher ui) =>
+        new((subscription, generation) => _core.SubscribeServers(new SavedServersForwarder(subscription, ui, generation)));
 
     /// <summary>A new "add a server" flow.</summary>
     public AddServerFlow AddServer() => new(_core.AddServer());
@@ -73,6 +71,7 @@ public sealed class CoreHost : IDisposable
 
     /// <summary>A sign-in to a saved server, after its session ended.</summary>
     /// <exception cref="UnknownServerException">No such server is saved.</exception>
+    /// <exception cref="ServerHasNoAddressException">The saved server has no address.</exception>
     public SignInFlow SignInAgain(ServerRef server) => new(CoreCall.Run(() => _core.SignInAgain(Map.ToFfi(server))));
 
     /// <summary>Checks every saved session; the capabilities state shows the outcome per server.</summary>

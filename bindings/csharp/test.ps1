@@ -7,13 +7,17 @@ $ErrorActionPreference = 'Stop'
 $standIn = Resolve-Path "$PSScriptRoot/../../target/x86_64-pc-windows-msvc/release/jellyfin-stand-in.exe"
 $env:CURRENT_STAND_IN = $standIn.Path
 
+# Stand-ins already running belong to someone else: only those this run started are stopped below.
+$before = @(Get-Process -Name 'jellyfin-stand-in' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
 try {
     $output = dotnet run --no-build -c Release --project (Join-Path $PSScriptRoot 'Current.Bindings.Tests/Current.Bindings.Tests.csproj')
     $code = $LASTEXITCODE
 }
 finally {
-    # A backstop: a stand-in still running here would keep the CI step from ending.
-    Get-Process -Name 'jellyfin-stand-in' -ErrorAction SilentlyContinue | Stop-Process -Force
+    # A backstop: a stand-in of this run still running here would keep the CI step from ending.
+    Get-Process -Name 'jellyfin-stand-in' -ErrorAction SilentlyContinue |
+        Where-Object { $before -notcontains $_.Id -and $_.Path -eq $standIn.Path } |
+        Stop-Process -Force
 }
 $output | ForEach-Object { Write-Host $_ }
 if ($code -ne 0) { throw "adapter tests failed (exit code $code)" }

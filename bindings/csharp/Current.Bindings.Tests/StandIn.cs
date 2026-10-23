@@ -53,11 +53,26 @@ internal sealed class StandIn : IDisposable
         }
     }
 
-    /// <summary>Sends a command: <c>revoke</c>, <c>quick-connect off</c> or <c>quick-connect on</c>.</summary>
+    /// <summary>
+    /// Sends a command: <c>revoke</c>; <c>quick-connect off</c>, <c>on</c> or <c>hold</c> (requests stay unapproved);
+    /// <c>hold &lt;path&gt;</c>, <c>release &lt;path&gt;</c> (requests to the path wait, unanswered, until released).
+    /// </summary>
     public void Send(string command)
     {
         _process.StandardInput.WriteLine(command);
         _process.StandardInput.Flush();
+    }
+
+    /// <summary>How many requests to <paramref name="path"/> the stand-in received so far.</summary>
+    public int Count(string path)
+    {
+        Send($"count {path}");
+        var read = _process.StandardOutput.ReadLineAsync();
+        if (!read.Wait(TimeSpan.FromSeconds(10)) || read.Result is not { } line || !line.StartsWith("count ", StringComparison.Ordinal))
+        {
+            throw new Exception("the stand-in did not answer the count");
+        }
+        return int.Parse(line["count ".Length..], System.Globalization.CultureInfo.InvariantCulture);
     }
 
     public void Dispose() => Stop(_process);

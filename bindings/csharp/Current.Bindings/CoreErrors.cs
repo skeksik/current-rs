@@ -24,6 +24,9 @@ public sealed class FlowNotReadyException() : Exception("the flow is not ready f
 /// <summary>No saved server matches.</summary>
 public sealed class UnknownServerException() : Exception("no such server is saved");
 
+/// <summary>The saved server has no address to reach it at.</summary>
+public sealed class ServerHasNoAddressException() : Exception("the server has no saved address");
+
 /// <summary>The server's address cannot take requests. Setup never saves such an address, so this points to a bug.</summary>
 public sealed class InvalidServerAddressException() : Exception("the server's address cannot be used");
 
@@ -96,6 +99,7 @@ internal static class CoreCall
         Ffi.CoreException.Store store => new CoreStoreException(MapProblems.From(store.@problem)),
         Ffi.CoreException.NotReady => new FlowNotReadyException(),
         Ffi.CoreException.UnknownServer => new UnknownServerException(),
+        Ffi.CoreException.NoAddress => new ServerHasNoAddressException(),
         Ffi.CoreException.InvalidAddress => new InvalidServerAddressException(),
         _ => new CoreRuntimeException(error.Message),
     };

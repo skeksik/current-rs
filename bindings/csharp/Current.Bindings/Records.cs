@@ -81,14 +81,25 @@ public enum SecretStore
     Memory,
 }
 
-/// <summary>The platform's report of the network (ADR 0014). <c>NetworkKey</c> is opaque and goes into the core only.</summary>
+/// <summary>
+/// The platform's report of the network (ADR 0014). <c>NetworkKey</c> is opaque and goes into the core only; <c>ToString()</c>
+/// shows it as <c>[redacted]</c>, since it can name the Wi-Fi network.
+/// </summary>
 public sealed record NetworkFacts(
     Connectivity Connectivity,
     bool? Metered,
     bool? Constrained,
     InterfaceKind Interface,
     bool? Vpn,
-    string? NetworkKey);
+    string? NetworkKey)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append($"Connectivity = {Connectivity}, Metered = {Metered}, Constrained = {Constrained}, Interface = {Interface}, ");
+        builder.Append($"Vpn = {Vpn}, NetworkKey = {(NetworkKey is null ? "null" : "[redacted]")}");
+        return true;
+    }
+}
 
 public enum Connectivity
 {
@@ -154,10 +165,12 @@ internal static class Map
         _ => throw new ArgumentException($"unknown load report {report.GetType().Name}", nameof(report)),
     };
 
+    /// <summary>Both values explicitly: an unknown one must never fall back to memory and lose the user's sign-ins.</summary>
     public static Ffi.SecretStore ToFfi(SecretStore store) => store switch
     {
         SecretStore.Keyring => Ffi.SecretStore.Keyring,
-        _ => Ffi.SecretStore.Memory,
+        SecretStore.Memory => Ffi.SecretStore.Memory,
+        _ => throw new ArgumentOutOfRangeException(nameof(store), store, "unknown secret store"),
     };
 
     public static Ffi.NetworkFacts ToFfi(NetworkFacts facts) => new(

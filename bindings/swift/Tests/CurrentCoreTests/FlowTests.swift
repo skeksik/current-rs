@@ -9,6 +9,15 @@ import Testing
 
 private let firstServer = ServerRef(service: "jellyfin", key: "1")
 
+/// Waits, off the main actor, until `done` holds.
+private func waitFor(_ what: String, _ done: () throws -> Bool) async throws {
+    for _ in 0..<1000 {
+        if try done() { return }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    Issue.record("timed out waiting for \(what)")
+}
+
 /// Waits on the main actor until `done` holds.
 @MainActor
 private func eventually(_ what: String, _ done: () -> Bool) async throws {
@@ -251,5 +260,80 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         core.networkChanged(facts: NetworkFacts(
             connectivity: .full, metered: false, constrained: nil, interface: .wifi, vpn: nil, networkKey: "home"))
         core.returnedToForeground()
+    }
+
+    @Test func diagnosticsAfterASignInHoldNothingPrivate() async throws {
+        let standIn = try StandIn()
+        defer { standIn.stop() }
+        let folder = try DataFolder()
+        defer { folder.remove() }
+        let core = try await openCore(dataDir: folder.path, deviceName: "Example PC", secrets: .memory)
+        try await signIn(core, standIn)
+        let report = try await core.exportDiagnostics()
+        #expect(report.contains("/Users/AuthenticateByName"))
+        let port = String(standIn.address.split(separator: ":").last ?? "")
+        // The device name goes to the server in every request's header; it must not reach the report.
+        for secret in ["Example PC", StandIn.password, StandIn.userName, "127.0.0.1", port, folder.path] {
+            #expect(!report.contains(secret), "\(secret) in the report")
+        }
+    }
+
+    @Test func cancellingWhileSigningInReturnsToReady() async throws {
+        let path = "/Users/AuthenticateByName"
+        let standIn = try StandIn()
+        defer { standIn.stop() }
+        let core = try Core()
+        let add = core.addServer()
+        _ = try await ready(add, standIn)
+        let flow = try add.signIn()
+        standIn.send("hold \(path)")
+        let call = Task { try await flow.withPassword(username: StandIn.userName, password: StandIn.password) }
+        try await waitFor("the request waits at the server") { try standIn.count(path) == 1 && flow.state() == .signingIn }
+        call.cancel()
+        await #expect(throws: CancellationError.self) { try await call.value }
+        guard case .ready = flow.state() else {
+            Issue.record("not ready: \(flow.state())")
+            return
+        }
+
+        // The server answers after all: too late, nothing is saved.
+        standIn.send("release \(path)")
+        try await Task.sleep(for: .milliseconds(300))
+        if case .ready = flow.state() {} else { Issue.record("not ready after the answer: \(flow.state())") }
+        #expect(core.servers().isEmpty)
+    }
+
+    @Test func cancellingWhileQuickConnectWaitsStopsPolling() async throws {
+        let path = "/QuickConnect/Connect"
+        let standIn = try StandIn()
+        defer { standIn.stop() }
+        standIn.send("quick-connect hold")
+        let core = try Core()
+        let add = core.addServer()
+        _ = try await ready(add, standIn)
+        let flow = try add.signIn()
+        let call = Task { try await flow.withQuickConnect() }
+        try await waitFor("waiting for approval") {
+            try flow.state() == .quickConnectWaiting(code: StandIn.quickConnectCode) && standIn.count(path) >= 1
+        }
+        call.cancel()
+        await #expect(throws: CancellationError.self) { try await call.value }
+        guard case .ready = flow.state() else {
+            Issue.record("not ready: \(flow.state())")
+            return
+        }
+        // The core asks every 5 s (Jellyfin's interval): a poll would show within 6 s.
+        let polls = try standIn.count(path)
+        try await Task.sleep(for: .seconds(6))
+        #expect(try standIn.count(path) == polls)
+    }
+
+    @Test func networkFactsHideTheKey() {
+        let facts = NetworkFacts(
+            connectivity: .full, metered: nil, constrained: nil, interface: .wifi, vpn: nil, networkKey: "home-wifi-192.168.1.10")
+        for text in [String(describing: facts), "\(facts)", String(reflecting: facts)] {
+            #expect(text.contains("[redacted]"))
+            #expect(!text.contains("home-wifi"))
+        }
     }
 }

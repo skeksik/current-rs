@@ -367,11 +367,27 @@ The M1 flows went onto the bridge in `feat/ffi-sign-in`. What it added to the pa
   Swift's `openCore(dataDir:deviceName:secrets:)` and as C#'s `CurrentFfiMethods.OpenCore(...)` (`internal static class
   <Namespace>Methods` in uniffi-bindgen-cs's `wrapper.cs`, read 2026-10-22). It has no `CancelToken`: it is short, and an abandoned
   open would leave a store half-opened.
-- **Flows are objects** that the core hands out (`Core::add_server`, `AddServerFlow::sign_in`, ...). Each async action wraps
-  `run_cancellable`. On `Cancelled` it also undoes the flow's state (reset, or the sign-in's own cancel), but only if no newer action
-  started on the same flow since. A counter per flow tracks that (tested in `a_cancel_leaves_a_newer_probe_alone`).
-- **Sign-out takes no token.** Aborting it halfway, between forgetting the user and updating the status, would leave the state
-  inconsistent. It is bounded by its own 10 s timeout instead.
+- **Flows are objects** that the core hands out (`Core::add_server`, `AddServerFlow::sign_in`, ...).
+  - Probing and searching write nothing and are generation-checked, so their cancel may drop the work. They wrap
+    `run_cancellable`, and on `Cancelled` they also reset the flow, but only if no newer action has started on it since. A
+    counter per flow tracks that (tested in `a_cancel_leaves_a_newer_probe_alone`).
+  - A sign-in is never dropped halfway. Its attempt runs detached on the runtime. A cancelled token calls the app flow's own,
+    generation-based `cancel`, and the call waits for the attempt to notice it. Once the server has accepted the sign-in, it is
+    saved in full and the cancel no longer applies: the call then succeeds, signed in (`SignIn` keeps a "saving" mark under its
+    generation lock). Tested by cancelling while the stand-in holds `/Users/AuthenticateByName`, and while Quick Connect waits;
+    the polling stops.
+- **Restoring is never dropped halfway either.** `App::restore_sessions` spawns each server's check on its own, so dropping the
+  call stops only the waiting. Before, dropping it aborted a check that might hold the session lock while a settings write still
+  ran. Tested by cancelling while the stand-in holds `/Users/Me`: the check still confirms the user.
+- **Sign-out takes no token.** It is bounded by its own 10 s timeout, and it reports `server_told: false` when the server did not
+  answer.
+- **Redaction outside states.** `NetworkFacts` carries the network key into the core.
+  - Its Rust `Debug` and its C# record's `ToString()` print the key as `[redacted]`.
+  - In Swift, `CustomStringConvertible` and `CustomDebugStringConvertible` do the same, but `dump` and `Mirror` still read the
+    stored property.
+- **Lists heal in C#.** A batch that cannot be applied, or that never reached the UI thread, makes `ListSubscription` subscribe
+  again, which starts with a fresh `Reset`. It also drops what the old subscription still had queued. Swift's `ObservedList`
+  drops a bad batch and asserts in debug builds; the owner re-subscribes (not automatic yet).
 - **The saved-server list** is an `ObservableList` in `current-ffi`, synced from `App::saved_servers()` (a `watch` of the whole list)
   by server key. Removals, inserts and in-place changes become `Remove`, `Insert` and `Set`; a reorder becomes a `Reset`.
 - **Shapes in the generated code** (uniffi-bindgen-cs `v0.11.1+v0.31.0` and uniffi 0.31.0 Swift, generated in a Linux container on
@@ -386,8 +402,8 @@ The M1 flows went onto the bridge in `feat/ffi-sign-in`. What it added to the pa
 - **Testing against a server.** `tools/jellyfin-stand-in` answers setup, sign-in, Quick Connect, `/Users/Me` and logout on 127.0.0.1
   with a fake account (`stand-in-user` / `not-a-real-password`).
   - Rust tests use it as a library.
-  - The C# and Swift tests start its binary and read `listening <address>` from its first line. They send `revoke` and
-    `quick-connect off|on` on stdin. It exits when stdin closes, so a crashed test run cannot leave it behind; test.ps1 also stops
+  - The C# and Swift tests start its binary and read `listening <address>` from its first line. On stdin they send `revoke`,
+    `quick-connect off|on|hold`, `hold <path>` and `release <path>`; `count <path>` prints how many requests to the path arrived. It exits when stdin closes, so a crashed test run cannot leave it behind; test.ps1 also stops
     any leftover one.
 - **Keyrings in CI.** The C# tests use Windows Credential Manager once (`KeyringKeepsTheSession`) and sign out in a `finally` so the
   entry is deleted. The macOS keychain is not tested: CI's login keychain may prompt or be locked (not verified), so the Swift tests

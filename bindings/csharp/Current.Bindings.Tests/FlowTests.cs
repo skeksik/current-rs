@@ -154,6 +154,15 @@ internal static class FlowTests
         var status = await Status(core, status => status.SignedIn);
         Check(status.Reachability == Reachability.Reachable, "reachable");
         Check(status.AddressPosition is null or 1, "the first address or none");
+
+        // Nothing that crossed the bridge holds the address or the password, as the UI or a log would print it.
+        var port = standIn.Address[(standIn.Address.LastIndexOf(':') + 1)..];
+        var seen = string.Join("\n", addState.Value, signInState.Value, saved, status, add.State, flow.State,
+            string.Join(",", saved.Users));
+        foreach (var secret in new[] { "127.0.0.1", port, StandIn.Password })
+        {
+            Check(!seen.Contains(secret, StringComparison.Ordinal), $"{secret} in {seen}");
+        }
     }
 
     public static async Task WrongPasswordFails()
@@ -330,6 +339,141 @@ internal static class FlowTests
         using var core = CoreHost.Create();
         core.NetworkChanged(new NetworkFacts(Connectivity.Full, false, null, InterfaceKind.Wifi, null, "home"));
         core.ReturnedToForeground();
+        return Task.CompletedTask;
+    }
+
+    public static async Task DiagnosticsAfterASignInHoldNothingPrivate()
+    {
+        using var standIn = StandIn.Start();
+        using var folder = new DataFolder();
+        using var core = await CoreHost.OpenAsync(folder.Path, "Example PC", SecretStore.Memory);
+        await SignIn(core, standIn);
+        var report = await core.ExportDiagnosticsAsync();
+        Check(report.Contains("/Users/AuthenticateByName", StringComparison.Ordinal), report);
+        var port = standIn.Address[(standIn.Address.LastIndexOf(':') + 1)..];
+        // The device name goes to the server in every request's header; it must not reach the report.
+        foreach (var secret in new[] { "Example PC", StandIn.Password, StandIn.UserName, "127.0.0.1", port, folder.Path })
+        {
+            Check(!report.Contains(secret, StringComparison.OrdinalIgnoreCase), $"{secret} in the report");
+        }
+    }
+
+    public static async Task CancellingWhileSigningInReturnsToReady()
+    {
+        const string signInPath = "/Users/AuthenticateByName";
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        using var add = core.AddServer();
+        await Ready(add, standIn);
+        using var flow = add.SignIn();
+        standIn.Send($"hold {signInPath}");
+        using var cts = new CancellationTokenSource();
+        var call = flow.WithPasswordAsync(StandIn.UserName, StandIn.Password, cts.Token);
+        var ui = new ManualDispatcher();
+        await Eventually("the request waits at the server", ui, () => standIn.Count(signInPath) == 1 && flow.State is SignInState.SigningIn);
+        cts.Cancel();
+        try
+        {
+            await call;
+            Check(false, "cancelled");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        Check(flow.State is SignInState.Ready, $"{flow.State}");
+
+        // The server answers after all: too late, nothing is saved.
+        standIn.Send($"release {signInPath}");
+        await Task.Delay(300);
+        Check(flow.State is SignInState.Ready, $"still ready, not {flow.State}");
+        Check(core.Servers.Count == 0, "nothing saved");
+    }
+
+    public static async Task CancellingWhileQuickConnectWaitsStopsPolling()
+    {
+        const string connectPath = "/QuickConnect/Connect";
+        using var standIn = StandIn.Start();
+        standIn.Send("quick-connect hold");
+        using var core = CoreHost.Create();
+        using var add = core.AddServer();
+        await Ready(add, standIn);
+        using var flow = add.SignIn();
+        using var cts = new CancellationTokenSource();
+        var call = flow.WithQuickConnectAsync(cts.Token);
+        var ui = new ManualDispatcher();
+        await Eventually("waiting for approval", ui, () =>
+            flow.State is SignInState.QuickConnectWaiting { Code: StandIn.QuickConnectCode } && standIn.Count(connectPath) >= 1);
+        cts.Cancel();
+        try
+        {
+            await call;
+            Check(false, "cancelled");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        Check(flow.State is SignInState.Ready, $"{flow.State}");
+        // The core asks every 5 s (Jellyfin's interval): a poll would show within 6 s.
+        var polls = standIn.Count(connectPath);
+        await Task.Delay(TimeSpan.FromSeconds(6));
+        Check(standIn.Count(connectPath) == polls, "no polling after the cancel");
+    }
+
+    public static async Task ServerListRecoversFromABadBatch()
+    {
+        using var core = CoreHost.Create();
+        var ui = new ManualDispatcher();
+        using var servers = core.ObserveServers(ui);
+        await Eventually("the first Reset", ui, () => servers.Generation == 1 && ui.Pending == 0);
+        // A batch the mirror cannot apply: it subscribes again and gets a fresh Reset.
+        servers.Apply([new ListDiff<SavedServer>.Remove(5)], servers.Generation);
+        Check(servers.Recoveries == 1 && servers.Generation == 2, "recovering");
+        await Eventually("the core holds one listener", ui, () => core.LiveListeners == 1);
+        // A batch still queued from the old subscription is dropped.
+        servers.Apply([new ListDiff<SavedServer>.Remove(9)], 1);
+        Check(servers.Recoveries == 1, "the old subscription's batch is ignored");
+    }
+
+    public static async Task ServerListRecoversFromALostBatch()
+    {
+        using var standIn = StandIn.Start();
+        using var folder = new DataFolder();
+        using var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory);
+        var ui = new RefusingDispatcher();
+        using var servers = core.ObserveServers(ui);
+        await Eventually("the first Reset", ui.Queue, () => ui.Accepted >= 1);
+        // The batch with the new server is refused (the queue was shutting down): the mirror must not miss it.
+        ui.RefuseNext = true;
+        await SignIn(core, standIn);
+        await Eventually("the mirror recovers with the server", ui.Queue, () =>
+            servers.Items.Count == 1 && servers.Items[0].ActiveUser == StandIn.UserId);
+        Check(servers.Recoveries >= 1, "it recovered");
+    }
+
+    /// <summary>A dispatcher that refuses one enqueue on request, then works again.</summary>
+    private sealed class RefusingDispatcher : IUiDispatcher
+    {
+        public ManualDispatcher Queue { get; } = new();
+        public volatile bool RefuseNext;
+        public int Accepted;
+
+        public bool TryEnqueue(Action work)
+        {
+            if (RefuseNext)
+            {
+                RefuseNext = false;
+                return false;
+            }
+            Interlocked.Increment(ref Accepted);
+            return Queue.TryEnqueue(work);
+        }
+    }
+
+    public static Task NetworkFactsHideTheKey()
+    {
+        var facts = new NetworkFacts(Connectivity.Full, null, null, InterfaceKind.Wifi, null, "home-wifi-192.168.1.10");
+        var text = facts.ToString();
+        Check(text.Contains("[redacted]", StringComparison.Ordinal) && !text.Contains("home-wifi", StringComparison.Ordinal), text);
         return Task.CompletedTask;
     }
 }
