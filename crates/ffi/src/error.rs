@@ -21,6 +21,9 @@ pub enum CoreError {
     /// No saved server matches.
     #[error("no such server is saved")]
     UnknownServer,
+    /// The saved server has no address to reach it at.
+    #[error("the server has no saved address")]
+    NoAddress,
     /// The server's address cannot take requests. Setup never saves such an address, so this points to a bug.
     #[error("the server's address cannot be used")]
     InvalidAddress,

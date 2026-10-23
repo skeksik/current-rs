@@ -607,3 +607,124 @@ fn signing_out_of_a_server_that_is_gone_still_signs_out_here() {
         core.servers()[0].active_user.is_none()
     });
 }
+
+#[test]
+fn cancelling_while_signing_in_returns_to_ready_and_saves_nothing() {
+    const SIGN_IN: &str = "/Users/AuthenticateByName";
+    let stand_in = stand_in();
+    let core = Core::new().unwrap();
+    let add = core.add_server();
+    ready(&add, stand_in.address());
+    let flow = add.sign_in().unwrap();
+    stand_in.hold(SIGN_IN);
+    let token = CancelToken::new();
+    let call = {
+        let (flow, token) = (Arc::clone(&flow), Arc::clone(&token));
+        thread::spawn(move || {
+            block_on(flow.with_password(USER_NAME.into(), PASSWORD.into(), token))
+        })
+    };
+    eventually("the request waits at the server", || {
+        stand_in.count(SIGN_IN) == 1 && flow.state() == SignInState::SigningIn
+    });
+    token.cancel();
+    assert_eq!(call.join().unwrap(), Err(CoreError::Cancelled));
+    assert!(
+        matches!(flow.state(), SignInState::Ready { .. }),
+        "{:?}",
+        flow.state()
+    );
+
+    // The server answers after all: too late, nothing is saved.
+    stand_in.release(SIGN_IN);
+    thread::sleep(Duration::from_millis(200));
+    assert!(matches!(flow.state(), SignInState::Ready { .. }));
+    assert!(core.servers().is_empty());
+}
+
+#[test]
+fn cancelling_while_quick_connect_waits_stops_polling() {
+    const CONNECT: &str = "/QuickConnect/Connect";
+    let stand_in = stand_in();
+    stand_in.set_quick_connect_pending(true);
+    let core = Core::new().unwrap();
+    let add = core.add_server();
+    ready(&add, stand_in.address());
+    let flow = add.sign_in_polling_every(Duration::from_millis(20));
+    let token = CancelToken::new();
+    let call = {
+        let (flow, token) = (Arc::clone(&flow), Arc::clone(&token));
+        thread::spawn(move || block_on(flow.with_quick_connect(token)))
+    };
+    eventually("polling", || {
+        stand_in.count(CONNECT) >= 2
+            && flow.state()
+                == SignInState::QuickConnectWaiting {
+                    code: QUICK_CONNECT_CODE.into(),
+                }
+    });
+    token.cancel();
+    assert_eq!(call.join().unwrap(), Err(CoreError::Cancelled));
+    assert!(
+        matches!(flow.state(), SignInState::Ready { .. }),
+        "{:?}",
+        flow.state()
+    );
+    let polls = stand_in.count(CONNECT);
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        stand_in.count(CONNECT),
+        polls,
+        "no polling after the cancel"
+    );
+}
+
+#[test]
+fn a_cancelled_restore_still_finishes_its_check() {
+    const ME: &str = "/Users/Me";
+    let stand_in = stand_in();
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let core = core_on(temp.path(), &secrets);
+    signed_in(&core, &stand_in);
+    drop(core);
+
+    stand_in.hold(ME);
+    let core = core_on(temp.path(), &secrets);
+    let token = CancelToken::new();
+    let call = {
+        let (core, token) = (Arc::clone(&core), Arc::clone(&token));
+        thread::spawn(move || block_on(core.restore_sessions(token)))
+    };
+    eventually("the user check waits at the server", || {
+        stand_in.count(ME) == 1
+    });
+    token.cancel();
+    assert_eq!(call.join().unwrap(), Err(CoreError::Cancelled));
+
+    // Cancelling stopped only the waiting: the check gets its answer and confirms the user (the server's policy, not the saved
+    // name only).
+    stand_in.release(ME);
+    eventually("the user is confirmed", || {
+        status(&core)
+            .user
+            .is_some_and(|user| user.permissions.contains(&"EnableMediaPlayback".to_owned()))
+    });
+    assert_eq!(stand_in.count(ME), 1);
+}
+
+#[test]
+fn diagnostics_after_a_sign_in_hold_nothing_private() {
+    let stand_in = stand_in();
+    let temp = tempfile::tempdir().unwrap();
+    let core = core_on(temp.path(), &Arc::new(MemorySecrets::new()));
+    signed_in(&core, &stand_in);
+    let report = block_on(core.export_diagnostics(CancelToken::new())).unwrap();
+    assert!(report.contains("/Users/AuthenticateByName"), "{report}");
+    let port = stand_in.address().rsplit(':').next().unwrap();
+    let dir = temp.path().to_str().unwrap();
+    // The device name goes to the server in every request's header; it must not reach the report.
+    for private in ["Example PC", PASSWORD, "127.0.0.1", port, dir, USER_NAME] {
+        assert!(!report.contains(private), "{private} in {report}");
+    }
+}

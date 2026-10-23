@@ -1,6 +1,11 @@
 //! The stand-in as a process, for the C# and Swift tests. It prints `listening <address>` on its first line, then reads commands
-//! from stdin, one per line: `revoke` (end every session), `quick-connect off`, `quick-connect on`. It exits when stdin closes, so
-//! a test that dies cannot leave it running.
+//! from stdin, one per line:
+//! - `revoke`: end every session;
+//! - `quick-connect off`, `quick-connect on`, `quick-connect hold` (requests stay unapproved; `on` approves them again);
+//! - `hold <path>`, `release <path>`: requests to the path wait, unanswered, until released;
+//! - `count <path>`: prints `count <n>`, how many requests to the path arrived.
+//!
+//! It exits when stdin closes, so a test that dies cannot leave it running.
 
 use std::io::{BufRead, Write};
 
@@ -27,11 +32,27 @@ fn main() -> std::io::Result<()> {
     drop(out);
 
     for line in std::io::stdin().lock().lines() {
-        match line?.trim() {
+        let line = line?;
+        let line = line.trim();
+        match line {
             "revoke" => controls.revoke_all(),
             "quick-connect off" => controls.set_quick_connect(false),
-            "quick-connect on" => controls.set_quick_connect(true),
-            _ => {}
+            "quick-connect on" => {
+                controls.set_quick_connect(true);
+                controls.set_quick_connect_pending(false);
+            }
+            "quick-connect hold" => controls.set_quick_connect_pending(true),
+            _ => {
+                if let Some(path) = line.strip_prefix("hold ") {
+                    controls.hold(path);
+                } else if let Some(path) = line.strip_prefix("release ") {
+                    controls.release(path);
+                } else if let Some(path) = line.strip_prefix("count ") {
+                    let mut out = std::io::stdout().lock();
+                    writeln!(out, "count {}", controls.count(path))?;
+                    out.flush()?;
+                }
+            }
         }
     }
     let _ = stop.send(());

@@ -193,8 +193,8 @@ pub trait SignInStateListener: Send + Sync {
 }
 
 /// Counts the actions started on one flow, so that a cancelled action undoes its state only while no newer one has started.
-#[derive(Debug, Default)]
-struct Attempts(AtomicU64);
+#[derive(Clone, Debug, Default)]
+struct Attempts(Arc<AtomicU64>);
 
 impl Attempts {
     fn begin(&self) -> u64 {
@@ -206,7 +206,9 @@ impl Attempts {
     }
 }
 
-/// Runs `work` as a cancellable call on the flow; if `token` cancels it while it is the flow's latest action, runs `undo`.
+/// Runs `work` as a cancellable call on the flow; if `token` cancels it while it is the flow's latest action, runs `undo`. The work is
+/// dropped on cancel, so this is only for actions that hold no lock and write nothing (a probe, a search): their states are
+/// generation-checked, and a dropped one changes nothing. Sign-ins use [`SignInFlow::attempt`].
 async fn attempt<F>(
     runtime: &Handle,
     attempts: &Attempts,
@@ -335,6 +337,24 @@ impl AddServerFlow {
     }
 }
 
+#[cfg(test)]
+impl AddServerFlow {
+    /// [`AddServerFlow::sign_in`] with Quick Connect polling every `interval`, so tests need not wait 5 s.
+    pub(crate) fn sign_in_polling_every(&self, interval: std::time::Duration) -> Arc<SignInFlow> {
+        let current_app::AddServerState::Ready { server } = self.flow.state().borrow().clone()
+        else {
+            panic!("not ready")
+        };
+        let mut flow = self.app.sign_in(server).unwrap();
+        flow.set_quick_connect_timing(interval, std::time::Duration::from_secs(60));
+        Arc::new(SignInFlow::new(
+            flow,
+            self.runtime.clone(),
+            self.listeners.clone(),
+        ))
+    }
+}
+
 /// Finding Jellyfin servers on the local network (ADR 0016). One per "add a server" screen.
 #[derive(uniffi::Object)]
 pub struct DiscoveryFlow {
@@ -403,6 +423,45 @@ pub struct SignInFlow {
 }
 
 impl SignInFlow {
+    /// Runs one sign-in attempt on the core's runtime. A cancelled `token` goes to the app flow's own cancel, which the attempt
+    /// notices at its next step; the attempt is never dropped halfway. A sign-in the server already accepted is saved in full
+    /// and wins over the cancel: the call then succeeds, signed in.
+    async fn attempt<F>(&self, token: Arc<CancelToken>, work: F) -> Result<(), CoreError>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let attempt = self.attempts.begin();
+        let flow = self.flow.clone();
+        let attempts = self.attempts.clone();
+        // Detached: dropping this call's future does not abort the attempt.
+        let task = self.runtime.spawn(async move {
+            let mut work = std::pin::pin!(work);
+            tokio::select! {
+                // The work first, so that its first step (which starts the attempt in the app flow) runs before a cancel can.
+                biased;
+                () = &mut work => return false,
+                () = token.cancelled() => {}
+            }
+            if attempts.is_latest(attempt) {
+                flow.cancel();
+            }
+            work.await;
+            true
+        });
+        let cancelled = task.await.map_err(|error| CoreError::Runtime {
+            message: error.to_string(),
+        })?;
+        let signed_in = matches!(
+            *self.flow.state().borrow(),
+            current_app::SignInState::SignedIn { .. }
+        );
+        if cancelled && !signed_in {
+            Err(CoreError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn new(
         flow: current_app::SignIn,
         runtime: Handle,
@@ -448,7 +507,8 @@ impl SignInFlow {
     /// Signs in with a user name and password. The password is used for this request only and is kept nowhere.
     ///
     /// # Errors
-    /// [`CoreError::Cancelled`] if `token` is cancelled first: the flow is back to `Ready`.
+    /// [`CoreError::Cancelled`] if `token` is cancelled first: the flow is back to `Ready`. If the server had already accepted the
+    /// sign-in, it is saved and the call succeeds instead.
     pub async fn with_password(
         &self,
         username: String,
@@ -456,13 +516,9 @@ impl SignInFlow {
         token: Arc<CancelToken>,
     ) -> Result<(), CoreError> {
         let flow = self.flow.clone();
-        attempt(
-            &self.runtime,
-            &self.attempts,
-            token,
-            async move { flow.with_password(&username, &password).await },
-            || self.flow.cancel(),
-        )
+        self.attempt(token, async move {
+            flow.with_password(&username, &password).await;
+        })
         .await
     }
 
@@ -470,16 +526,13 @@ impl SignInFlow {
     /// expires after 10 minutes).
     ///
     /// # Errors
-    /// [`CoreError::Cancelled`] if `token` is cancelled first: polling stops and the flow is back to `Ready`.
+    /// [`CoreError::Cancelled`] if `token` is cancelled first: polling stops and the flow is back to `Ready`. If the server had
+    /// already accepted the sign-in, it is saved and the call succeeds instead.
     pub async fn with_quick_connect(&self, token: Arc<CancelToken>) -> Result<(), CoreError> {
         let flow = self.flow.clone();
-        attempt(
-            &self.runtime,
-            &self.attempts,
-            token,
-            async move { flow.with_quick_connect().await },
-            || self.flow.cancel(),
-        )
+        self.attempt(token, async move {
+            flow.with_quick_connect().await;
+        })
         .await
     }
 

@@ -2,11 +2,13 @@
 //! sign-in, restoring a session and sign-out ask, with the shapes `current-jellyfin` reads. Every name, id and credential in it is
 //! fake. Test code only: nothing shipped depends on it.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 /// The stand-in's server id.
@@ -23,10 +25,9 @@ pub const QUICK_CONNECT_CODE: &str = "123456";
 const QUICK_CONNECT_SECRET: &str =
     "57a2d1e0000000000000000000000000000000000000000000000000000000ff";
 
-/// A running stand-in. It stops when dropped.
+/// A running stand-in. It stops when dropped. Its controls ([`Controls`]) are reachable through it.
 pub struct StandIn {
-    address: String,
-    state: Arc<State>,
+    controls: Controls,
     task: JoinHandle<()>,
 }
 
@@ -42,6 +43,11 @@ struct State {
     tokens: Mutex<Vec<String>>,
     issued: AtomicUsize,
     quick_connect_off: AtomicBool,
+    /// Quick Connect requests stay unapproved.
+    quick_connect_pending: AtomicBool,
+    /// Paths whose requests wait until released.
+    held: Mutex<HashSet<String>>,
+    released: Notify,
     /// The path of every request, in order.
     paths: Mutex<Vec<String>>,
 }
@@ -67,45 +73,22 @@ impl StandIn {
             }
         });
         Ok(Self {
-            address,
-            state,
+            controls: Controls { state, address },
             task,
         })
     }
 
-    /// Where it listens, e.g. `http://127.0.0.1:49152`.
-    pub fn address(&self) -> &str {
-        &self.address
-    }
-
-    /// Ends every session, as an administrator revoking the device would: the next authenticated request gets 401.
-    pub fn revoke_all(&self) {
-        revoke_all(&self.state);
-    }
-
-    /// A handle that can revoke sessions from another thread.
+    /// A handle that changes the stand-in from another thread.
     pub fn controls(&self) -> Controls {
-        Controls {
-            state: self.state.clone(),
-            address: self.address.clone(),
-        }
+        self.controls.clone()
     }
+}
 
-    /// Turns Quick Connect off or on.
-    pub fn set_quick_connect(&self, enabled: bool) {
-        self.state
-            .quick_connect_off
-            .store(!enabled, Ordering::SeqCst);
-    }
+impl std::ops::Deref for StandIn {
+    type Target = Controls;
 
-    /// The paths of the requests received so far, oldest first.
-    pub fn paths(&self) -> Vec<String> {
-        lock(&self.state.paths).clone()
-    }
-
-    /// How many sessions are live.
-    pub fn live_sessions(&self) -> usize {
-        lock(&self.state.tokens).len()
+    fn deref(&self) -> &Controls {
+        &self.controls
     }
 }
 
@@ -115,7 +98,7 @@ impl Drop for StandIn {
     }
 }
 
-/// Changes a running stand-in from outside its runtime.
+/// Changes a running stand-in and reads what it received, from any thread.
 #[derive(Clone)]
 pub struct Controls {
     state: Arc<State>,
@@ -129,18 +112,57 @@ impl std::fmt::Debug for Controls {
 }
 
 impl Controls {
+    /// Where it listens, e.g. `http://127.0.0.1:49152`.
     pub fn address(&self) -> &str {
         &self.address
     }
 
+    /// Ends every session, as an administrator revoking the device would: the next authenticated request gets 401.
     pub fn revoke_all(&self) {
         revoke_all(&self.state);
     }
 
+    /// Turns Quick Connect off or on.
     pub fn set_quick_connect(&self, enabled: bool) {
         self.state
             .quick_connect_off
             .store(!enabled, Ordering::SeqCst);
+    }
+
+    /// While set, Quick Connect requests stay unapproved: the app keeps waiting and polling.
+    pub fn set_quick_connect_pending(&self, pending: bool) {
+        self.state
+            .quick_connect_pending
+            .store(pending, Ordering::SeqCst);
+    }
+
+    /// Requests to `path` (e.g. `/Users/AuthenticateByName`) wait, unanswered, until [`Controls::release`].
+    pub fn hold(&self, path: &str) {
+        lock(&self.state.held).insert(path.to_owned());
+    }
+
+    /// Lets held requests to `path` answer.
+    pub fn release(&self, path: &str) {
+        lock(&self.state.held).remove(path);
+        self.state.released.notify_waiters();
+    }
+
+    /// The paths of the requests received so far, oldest first.
+    pub fn paths(&self) -> Vec<String> {
+        lock(&self.state.paths).clone()
+    }
+
+    /// How many requests to `path` arrived so far.
+    pub fn count(&self, path: &str) -> usize {
+        lock(&self.state.paths)
+            .iter()
+            .filter(|seen| *seen == path)
+            .count()
+    }
+
+    /// How many sessions are live.
+    pub fn live_sessions(&self) -> usize {
+        lock(&self.state.tokens).len()
     }
 }
 
@@ -160,6 +182,14 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
         return;
     };
     lock(&state.paths).push(received.path.clone());
+    loop {
+        // Registered before the check, so a release between the two is not missed.
+        let released = state.released.notified();
+        if !lock(&state.held).contains(&received.path) {
+            break;
+        }
+        released.await;
+    }
     let (status, body) = answer(&state, &received);
     let response = format!(
         "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -187,7 +217,10 @@ fn answer(state: &State, received: &Received) -> (u16, String) {
             (401, String::new())
         }
         "/QuickConnect/Initiate" => (200, quick_connect(false)),
-        "/QuickConnect/Connect" => (200, quick_connect(true)),
+        "/QuickConnect/Connect" => (
+            200,
+            quick_connect(!state.quick_connect_pending.load(Ordering::SeqCst)),
+        ),
         "/Users/AuthenticateWithQuickConnect" if received.body.contains(QUICK_CONNECT_SECRET) => {
             (200, issue(state))
         }

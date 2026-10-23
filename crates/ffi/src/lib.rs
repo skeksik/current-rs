@@ -174,9 +174,10 @@ impl Core {
         )
     }
 
-    /// The saved servers now, in the order they were added.
+    /// The saved servers now, in the order they were added: read from the app, so a change shows here as soon as the call that made
+    /// it returns. A subscription's mirror follows a moment later.
     pub fn servers(&self) -> Vec<SavedServerSnapshot> {
-        self.servers.snapshot()
+        self.app.servers().iter().map(Into::into).collect()
     }
 
     /// Subscribes to the saved servers. Keep the handle while listening; cancel it when the view goes away.
@@ -211,11 +212,25 @@ impl Core {
     /// still answers as that server.
     ///
     /// # Errors
-    /// [`CoreError::UnknownServer`] if no such server is saved; [`CoreError::InvalidAddress`] if its address cannot take requests.
+    /// [`CoreError::UnknownServer`] if no such server is saved; [`CoreError::NoAddress`] if it has no address left;
+    /// [`CoreError::InvalidAddress`] if an address cannot take requests.
     pub fn sign_in_again(&self, server: ServerRef) -> Result<Arc<SignInFlow>, CoreError> {
+        let server: current_model::ServerRef = (&server).into();
+        let Some(saved) = self
+            .app
+            .servers()
+            .into_iter()
+            .find(|saved| saved.server == server)
+        else {
+            return Err(CoreError::UnknownServer);
+        };
+        if saved.addresses.is_empty() {
+            return Err(CoreError::NoAddress);
+        }
         let flow = self
             .app
-            .sign_in_again(&(&server).into())
+            .sign_in_again(&server)
+            // Removed since the check above.
             .ok_or(CoreError::UnknownServer)?
             .map_err(|_| CoreError::InvalidAddress)?;
         Ok(Arc::new(SignInFlow::new(
@@ -229,7 +244,8 @@ impl Core {
     /// returns. The capabilities state shows the outcome per server.
     ///
     /// # Errors
-    /// [`CoreError::Cancelled`] if `token` is cancelled first. Servers not checked yet stay as they were.
+    /// [`CoreError::Cancelled`] if `token` is cancelled first. Cancelling stops only the waiting: each server's check runs to its
+    /// end, so none is left halfway.
     pub async fn restore_sessions(&self, token: Arc<CancelToken>) -> Result<(), CoreError> {
         let app = self.app.clone();
         cancel::run_cancellable(&self.runtime, token, async move {
