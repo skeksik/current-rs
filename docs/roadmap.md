@@ -39,15 +39,17 @@ before merging, and its PR carries only the record.
       docs/notes/linux-gtk.md. HDR, hardware decoding, MPRIS, the keyring and Orca need native Linux later
 
 ## Follow-ups from phase D
-- [ ] "Copy diagnostics" copies an empty text until a server exists: include the app version (the core's diagnostics export) in M1.
-      The core side is done (`export_diagnostics`: version, platform, settings state, then the log; PR feat/ffi-sign-in); the
-      Windows app switches its button to it with the M1 screens
+- [x] "Copy diagnostics" copies an empty text until a server exists: include the app version (the core's diagnostics export) in M1.
+      The core side is done (`export_diagnostics`: version, platform, settings state, then the log; PR 25); the Windows app's button
+      uses it since the M1 screens (feat/windows-sign-in)
 - [ ] Shipping libmpv in the app (`current-mpv`) brings the Visual C++ runtime (vcruntime140, msvcp140) under Microsoft's
       redistributable terms: record them in ADR 0003 with the owner first
 - [ ] The libmpv build installs unpinned MSYS2 make/diffutils at build time (build-only; docs/notes/windows-mpv-build.md)
 - [ ] A `cargo test --workspace` run in a cloud container once had 3 failures in one test binary (unidentified; 28 later runs passed).
       If it recurs, capture the test names and fix the flake
 - [ ] Linux: choose how to ship (Flatpak, per-distro packages, AppImage or tarball; ADR 0011) before M5's release work
+- [ ] Windows: move `CommunityToolkit.WinUI.Controls.SettingsControls` from 8.3.260402-preview2 to 8.3 stable when it ships with the
+      same component-package dependency (docs/notes/windows-shell.md, "Windows Community Toolkit")
 - [ ] Linux HDR: revisit when GTK enables Wayland colour management by default or mpv's render API gains HDR output (ADR 0011)
 
 ## M1: Jellyfin sign-in and server setup (Windows)
@@ -55,7 +57,7 @@ Each item starts with our own research (the server's API and source, the platfor
 recorded with sources and dates, and a decision record where it decides something.
 - [ ] Server setup: add a Jellyfin server by URL, check it is the same server on every address, warn about plain HTTP except locally
       (core done 2026-10-22, ADR 0012: address parsing, probe, identity, plain-HTTP rule, the in-memory flow; servers are stored with
-      sign-in, ADR 0015; the Windows screen is still to do)
+      sign-in, ADR 0015; the Windows screen done 2026-10-23, feat/windows-sign-in; the owner's check on a real server is still to do)
 - [ ] Several addresses per server with roaming (local and internet, the user's order)
   - [x] Spike: research and design (2026-10-22, PR 17, ADR 0014, docs/notes/roaming.md; OS trust only for
         TLS in M1)
@@ -63,14 +65,14 @@ recorded with sources and dates, and a decision record where it decides somethin
         request log's address position (2026-10-22, ADR 0014)
   - [x] Wire the providers into signed-in servers: one provider per saved Jellyfin server for its session, restore and
         sign-in again; the capabilities state follows its status (2026-10-22, ADR 0015)
-  - [ ] `NetworkFacts` from the Windows UI (wave 3)
+  - [x] `NetworkFacts` from the Windows UI (2026-10-23, feat/windows-sign-in: `NetworkObserver`, docs/notes/windows-shell.md)
 - [ ] Secrets in the OS keyring and a device identity per install
 - [ ] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out
-      (core done 2026-10-22, ADR 0015: `current-jellyfin` auth, saved servers and users, the `SignIn` flow, restore, sign out; the bridge
-      and the Windows screens are still to do)
+      (core done 2026-10-22, ADR 0015: `current-jellyfin` auth, saved servers and users, the `SignIn` flow, restore, sign out; the
+      bridge 2026-10-23, PR 25; the Windows screens 2026-10-23, feat/windows-sign-in; the owner's check on a real server is still to do)
 - [ ] Local server discovery
       (core done 2026-10-22, ADR 0016: UDP discovery, probe and id check, the discovery state, picking into "add a server"; the
-      Windows screen and the local check on a real network are still to do)
+      Windows screen done 2026-10-23, feat/windows-sign-in; the local check on a real network is still to do)
 
 Done when: sign in and out of Jellyfin on Windows, and the app restarts signed in.
 

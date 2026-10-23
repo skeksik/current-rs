@@ -11,8 +11,11 @@ apps/windows/
     AppIdentity.cs        AppUserModelID, single-instance key, data folder
     App.xaml(.cs)         owns the CoreHost (one per process) and the main window
     MainWindow.xaml(.cs)  Mica, TitleBar, NavigationView over one Frame, back navigation
-    Pages/                HomePage (empty state), SettingsPage
-    ViewModels/           SettingsViewModel (version, capabilities, diagnostics)
+    Pages/                HomePage, AddServerPage, SignInPage (+ SignInRequest), SettingsPage
+    ViewModels/           ServersViewModel and ServerRow (saved servers joined with their status, for Home and Settings)
+    DeviceName.cs         the device name Jellyfin shows (GetComputerNameExW, DNS host name)
+    NetworkObserver.cs    NetworkFacts from Windows.Networking.Connectivity (ADR 0014)
+    ProblemText.cs        the core's problems in plain words
     DispatcherQueueUi.cs  IUiDispatcher over DispatcherQueue (ADR 0004)
     SmokeRun.cs           Current.exe --smoke
   build.ps1               dotnet publish -c Release -r win-x64 -p:Platform=x64 into apps/windows/out/app, plus licences\ and
@@ -67,20 +70,145 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   is the Frame's own: it drops it on a new navigation; nothing custom is added (manager, 2026-10-22). There is no forward button, as in
   the NavigationView's design. Windows+Backspace and the gamepad B button come through `SystemNavigationManager`, which a desktop
   window does not have.
-- **Home:** the empty state before any server exists: "No servers yet". Server setup is M1.
-- **Settings:** the core's version (`CoreHost.AppInfo`) with "© 2026 Skeksik" under it (plain text; the Windows SDK licence asks for a
-  copyright notice; no licences screen), the capabilities state through `ObserveCapabilities` (empty: "No servers are
-  set up."), and "Copy diagnostics", which puts `DiagnosticsText()` on the clipboard (`Clipboard.SetContent`, then `Flush` so it
-  stays after the app exits) and shows a success `InfoBar`. The clipboard is shared, and Windows refuses it with
-  `CLIPBRD_E_CANT_OPEN` while another process has it open ("OpenClipboard fails if another window has the clipboard open",
-  OpenClipboard, learn.microsoft.com, read 2026-10-22); the owner's run hit that in `Flush` with clipboard history on, and the
-  unguarded call ended the app. `ClipboardText.TryCopyAsync` now retries `SetContent` and `Flush` up to 5 times, 100 ms apart (our
+- **Home:** see "Screens" below.
+- **Settings:** see "Screens" below. The clipboard behaviour of "Copy diagnostics" is unchanged: the clipboard is shared, and Windows
+  refuses it with `CLIPBRD_E_CANT_OPEN` while another process has it open ("OpenClipboard fails if another window has the clipboard
+  open", OpenClipboard, learn.microsoft.com, read 2026-10-22); the owner's run hit that in `Flush` with clipboard history on, and the
+  unguarded call ended the app. `ClipboardText.TryCopyAsync` retries `SetContent` and `Flush` up to 5 times, 100 ms apart (our
   choice: Microsoft's `Clipboard.Flush` page gives no retry guidance), and the page shows an error `InfoBar` if the clipboard stays
-  busy. The handler is `async void` and catches everything itself; `Application.UnhandledException` logs and marks handled any
+  busy. Handlers are `async void` and catch everything themselves; `Application.UnhandledException` logs and marks handled any
   exception that still escapes a UI event handler, so none ends the process. The smoke run copies a marker and reads it back; the
-  refused-clipboard case itself cannot be produced in CI. The subscription starts on the page's `Loaded` and is disposed on
-  `Unloaded` (ADR 0004 lifetimes).
-- **Core lifetime:** one `CoreHost` per process, created in `OnLaunched` and disposed when the main window closes.
+  refused-clipboard case itself cannot be produced in CI.
+- **Core lifetime:** one `CoreHost` per process, opened in `OnLaunched` (see "Start") and disposed when the main window closes, after
+  the network observer.
+
+## Start (M1)
+- The window shows at once; `App.OpenCoreAsync` then awaits `CoreHost.OpenAsync(AppIdentity.DataFolder, DeviceName.Get(),
+  SecretStore.Keyring)` on the UI thread (the adapter runs the file and keyring work on the core's threads). Pages wait for
+  `App.CoreReady`; Home shows a `ProgressRing` only if opening takes more than 0.5 s.
+- The load report shows as a notice above every page only when the user should know: `ResetCorrupt` ("Your settings couldn't be
+  read and were reset", with the backup file's name) and `NewerVersion` (update Current to sign in or save changes), both Warning.
+- If the data folder cannot be opened (`CoreStoreException`), the app runs on `CoreHost.Create()` (nothing stored) with an Error
+  notice: "Current couldn't open its settings folder. Sign-ins won't be saved this time.", plus the step and kind of the error and
+  never the path (manager, 2026-10-23).
+- Then the network observer starts, and `RestoreSessionsAsync` runs in the background; the capabilities state shows each server's
+  outcome.
+- Notices are `InfoBar`s in a stack above the `Frame` (`MainWindow.ShowNotice`); the user closes them. Also used for a sign-in that
+  is not remembered.
+
+## Device name (ADR 0015)
+ADR 0015's Windows rule is what Jellyfin's desktop client sends: Qt's `QHostInfo::localHostName()`, which on Windows is
+`QSysInfo::machineHostName()`, which calls `GetComputerNameEx(ComputerNameDnsHostname, …)` (qtbase `src/corelib/global/qsysinfo.cpp`,
+read 2026-10-23). `DeviceName.Get` calls `GetComputerNameExW(ComputerNameDnsHostname)` through `DllImport` (no `unsafe`), with a
+256-character buffer and one retry at the size Windows asks for on `ERROR_MORE_DATA` ("GetComputerNameExW", learn.microsoft.com,
+ms.date 2018-12-05, read 2026-10-23). `Environment.MachineName` is not used: it "Gets the NetBIOS name" (learn.microsoft.com, read
+2026-10-23), which "may be a truncated version of the DNS host name" (COMPUTER_NAME_FORMAT, same date). A failure passes "" and the
+core uses `Windows`. The name is never logged or printed (the smoke run checks only that it is not empty).
+
+## Network observer (ADR 0014)
+`NetworkObserver` reports `NetworkFacts` once at start and on every `NetworkInformation.NetworkStatusChanged` ("Occurs when the
+network status changes for a connection"; the page does not say on which thread, so each report hops to the UI thread, which also
+keeps `NetworkChanged` on one thread). Sources: the Windows.Networking.Connectivity reference pages on learn.microsoft.com
+(ms.date 2017-02-08, updated 2025-11, read 2026-10-23).
+- Profile: `GetInternetConnectionProfile()`, re-read on every event ("Re-query the profile when you receive a network status change
+  event", ConnectionProfile). Without one, the connected profile with the most access, because "Apps should attempt to connect to
+  their services whenever `LocalAccess` or higher connectivity is reported" (NetworkConnectivityLevel) and a server on a LAN
+  without internet is still reachable. No profile at all: offline.
+- `connectivity`: `GetNetworkConnectivityLevel()`: None → offline, LocalAccess → local only, ConstrainedInternetAccess ("possibly
+  due to a captive portal") → captive portal, InternetAccess → full.
+- `metered`: `GetConnectionCost()`, by the ConnectionProfile page's own example: `NetworkCostType != Unrestricted || Roaming ||
+  OverDataLimit`; an `Unknown` cost type is unknown.
+- `constrained`: unknown (Windows has no such fact; ADR 0014).
+- `interface`: `NetworkAdapter.IanaInterfaceType`: 6 Ethernet, 71 Wi-Fi, 243 WWAN (NetworkAdapter page) and 244 (the IANA
+  registry's other WWAN type) → cellular, anything else → other.
+- `vpn`: unknown. ADR 0014 marks the Windows tunnel type "not verified"; the interface type alone would be a guess.
+- `network_key`: `NetworkAdapter.NetworkItem.NetworkId` ("Gets the network ID", a GUID) and `NetworkAdapterId`, joined. Stable on
+  one network, different between networks, and the same network through Wi-Fi and Ethernet stays apart. That `NetworkId` is the
+  NLM network GUID ADR 0014 names is not verified. The key goes into the core only: never logged, traced or printed, and the
+  bridge's `NetworkFacts.ToString()` redacts it. No Wi-Fi name (`WlanConnectionProfileDetails`), which needs location access.
+- Foreground: `MainWindow.Activated` with `Deactivated` sets a flag; the next activation calls `ReturnedToForeground()`, so
+  unreachable servers race again at once. Restoring from minimised and a redirected second launch both activate the window.
+
+## Screens (M1)
+Sources, read 2026-10-23 on learn.microsoft.com: "Dialog controls" (ms.date 2026-07-15), "Guidelines for password boxes" (ms.date
+2025-02-26), "InfoBar" (ms.date 2025-02-26), "Guidelines for progress controls" (ms.date 2026-07-08), "Guidelines for app settings"
+(ms.date 2026-04-08), "Keyboard accessibility" (ms.date 2026-10-04). Each screen renders the core's state and sends the user's
+actions; nothing is decided in C#.
+- **Home** (`HomePage`): before any server, "No servers yet", "Add a Jellyfin server to browse and play your media." and an accent
+  "Add a server" button. With servers, a card per saved server: name, "Signed in as …" or "Signed out", "Jellyfin <version>", and
+  "Connected", "Can't reach the server" or "Checking…" (plus "address N of M" with more than one address); a signed-out server has a
+  "Sign in" button (sign in again), and "Add another server" follows. Browse is M2. `ServersViewModel` joins `ObserveServers` with
+  `ObserveCapabilities` and updates rows in place. If the list mirror faults (`ListSubscription.IsFaulted`), the page says
+  "Couldn't refresh the server list." with "Reload", which subscribes anew.
+- **Add a server** (`AddServerPage`, one `AddServerFlow` and one `DiscoveryFlow` from `OnNavigatedTo` to `OnNavigatedFrom`):
+  - "Server address" box (`InputScope="Url"`, placeholder `192.168.1.10:8096 or media.example.com`); Enter or "Connect" probes.
+    While probing, the box is read-only (it keeps focus), a 20 px `ProgressRing` with "Connecting…" shows (the progress page's own
+    keyword for a ring), and "Cancel" or Esc stops it.
+  - Every `ProbeProblem` in plain words (`ProblemText.Probe`), in an error `InfoBar` under the box, on the page and not in a dialog:
+    "Don't use dialogs for errors that are contextual to a specific place on the page, such as validation errors … use the app's
+    canvas itself to show inline errors" (Dialog controls). `Tls` reads "The secure connection failed. The server's certificate may
+    not be trusted by this PC."
+  - "Servers on your network": the search starts by itself (manager, 2026-10-23); an indeterminate `ProgressBar` while searching
+    (it does not block the page, so a bar, not a ring); a `ListView` of servers in the order they answered, appended so the list
+    stays put; clicking one picks it. Done with none: "No servers found on this network. Enter the address instead."; each
+    `DiscoveryProblem` in words; "Search again".
+  - `ConfirmPlainHttp`: a `ContentDialog`, "Connect without encryption?", "<name> answered over http. Your password and everything
+    you watch would cross the internet unencrypted. Use https if the server offers it.", primary "Connect anyway", close "Cancel".
+    The close button is the safe action and answers Esc (Dialog controls); `DefaultButton = Close`, so Enter does the safe thing too.
+  - `Ready` → the sign-in page with `AddServerFlow.SignIn()`.
+- **Sign in** (`SignInPage`, owns the `SignInFlow` it is navigated with): "Sign in to <name>"; when setup fell back from https
+  (`HttpsFailedTls`), a Warning: "This server offers https, but its certificate isn't trusted by this PC, so Current is using
+  http."
+  - "User name" box, then "Password" (`PasswordBox`, the default reveal button) on its own row, then "Sign in". One password box,
+    nothing right next to it (PasswordBox page: "Don't put another control right next to a password input box"). Enter in either
+    box submits. The password is read from `PasswordBox.Password` into `WithPasswordAsync` at the call and kept in no field; the box
+    is cleared when the page is left.
+  - "Use Quick Connect" below the form: shown once `CheckQuickConnectAsync` says the server offers it (disabled while unknown,
+    hidden when off). Waiting shows the code in `TitleLargeTextBlockStyle`, selectable, named for Narrator digit by digit ("Quick
+    Connect code 1 2 3 4 5 6"), with "Waiting for approval…" and "Cancel" (Esc too).
+  - `SigningIn`: a ring with "Signing in…" (the progress page's example of a ring); Cancel or Esc.
+  - Each `SignInProblem` in plain words (`ProblemText.SignIn`) in an error `InfoBar`.
+  - `SignedIn`: back to Home and the back stack cleared, so Back does not return into a finished sign-in (manager, 2026-10-23).
+    `Remembered: false` adds a notice: "Signed in for this session only. Windows Credential Manager isn't available, so you'll need
+    to sign in again next time."
+- **Settings** (`SettingsPage`), laid out as "Guidelines for app settings" says: one scrollable column of at most 1000 px,
+  BodyStrong section headers, `SettingsCard` and `SettingsExpander` from the Windows Community Toolkit (below), "Accounts" (its
+  example of a one-word label), and About last:
+  - **Accounts:** a card per saved server (name; user, version and reachability as above) with "Sign out", or "Sign in" when signed
+    out. Signing out asks nothing (manager, 2026-10-23): signing in again undoes it. `ServerTold: false` (the server did not answer)
+    shows "Signed out of <name> on this PC. The server couldn't be told, so the session may still show in its dashboard."
+  - **Diagnostics:** "Copy diagnostics" now copies `ExportDiagnosticsAsync()` (version, platform, settings state, then the
+    redacted request log).
+  - **About:** a `SettingsExpander` "Current" with the version, and "© 2026 Skeksik" inside.
+- **Keyboard and Narrator:** every input has a `Header` that names it; buttons in lists carry `AutomationProperties.Name` with the
+  server ("Sign in to <name>"); page titles and section headers have `AutomationProperties.HeadingLevel`; progress texts are
+  `LiveSetting="Polite"`; an error `InfoBar` is closed and opened again when its message changes, because "Once the control is
+  open, any changes made to the various properties … will not raise a notification event … we recommend you close and re-open the
+  control" (InfoBar). Focus goes to the address box, and to the user name box (the password box when signing in again). Enter
+  submits; Esc cancels a running probe, sign-in or Quick Connect (a page `KeyboardAccelerator`) and closes the dialog.
+
+## Windows Community Toolkit: SettingsControls
+Owner, 2026-10-23: Microsoft's Windows platform packages, the Windows Community Toolkit included, are approved in advance, and the
+owner chose this exact set. Read on nuget.org (registration API and nuspecs) on 2026-10-23.
+| Package | Version | Licence | Ships |
+|---|---|---|---|
+| `CommunityToolkit.WinUI.Controls.SettingsControls` | 8.3.260402-preview2 (preview) | MIT | `.dll` (106 KB), `.pri` (36 KB) |
+| `CommunityToolkit.WinUI.Triggers` | 8.3.260402-preview2 | MIT | `.dll` (32 KB), `.pri` |
+| `CommunityToolkit.WinUI.Helpers` | 8.3.260402-preview2 | MIT | `.dll` (77 KB), `.pri` |
+| `CommunityToolkit.WinUI.Extensions` | 8.3.260402-preview2 | MIT | `.dll` (129 KB), `.pri` |
+| `CommunityToolkit.Common` | 8.2.1 | MIT | `.dll` (35 KB) |
+- Why a preview: the stable 8.2.251219 (and 8.3.260211-preview1) depend on `Microsoft.WindowsAppSDK >= 1.6.250108002`, the whole
+  SDK package, which would resolve to the old all-in-one 1.6 package next to our 2.x components and bring back what the component
+  packages left out (Layout). 8.3.260402-preview2 depends only on `Microsoft.WindowsAppSDK.WinUI >= 1.8.260204000`, which our 2.3.9
+  satisfies, so NuGet adds no platform package. It was built against WinUI 1.8; the smoke run builds the settings page, so CI shows
+  whether it loads with 2.3.9. If it does not, the fallback is hand-built cards (manager, 2026-10-23). Move to 8.3 stable when it
+  ships (docs/roadmap.md).
+- The packages carry only the SPDX expression, no licence file: `apps/windows/licences/CommunityToolkit-Windows-License.md` (from
+  CommunityToolkit/Windows at the package's commit 39c45efe) and `CommunityToolkit-dotnet-License.md` (CommunityToolkit/dotnet at
+  `CommunityToolkit.Common`'s commit 2258fd31) ship in `licences\` (`build.ps1`). Both: MIT, "Copyright © .NET Foundation and
+  Contributors".
+- Whether the toolkit's `.pri` files ship next to the app or merge into `Current.pri` is shown by `out/files.txt` in CI (not
+  verified here).
 
 ## Identity: the AppUserModelID
 - `Skeksik.Current` (owner's choice, 2026-10-22). "Application User Model IDs" (learn.microsoft.com/windows/win32/shell/appids, updated
@@ -156,7 +284,13 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
 4. it has no servers;
 5. disposing the subscription brings `LiveListeners` back to where it was (within 10 s);
 6. the diagnostics text can be read;
-7. the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes.
+7. the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes;
+8. on a temporary data folder with secrets in memory: a first `OpenAsync` reports `Created`, a second `Loaded`; the saved servers
+   arrive on the UI thread, empty; probing an empty address fails with `InvalidAddress(Empty)` without a request; the folder is
+   deleted after;
+9. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`);
+10. the network facts and the device name can be read (neither is printed beyond the connectivity level).
+No check sends anything over the network; discovery (UDP) is left out.
 `smoke.ps1` fails on a non-zero exit code, a missing "smoke run passed" line or a run longer than 120 s.
 
 ## Licences of what ships
@@ -174,6 +308,7 @@ matched by name against the contents of the restored packages. The installer add
 | Runtime, lifecycle and resources: `Microsoft.WindowsAppRuntime*.dll`, `MRM.dll`, `RestartAgent.exe`, `Microsoft.Windows.*.winmd` and projections | `Microsoft.WindowsAppSDK.Foundation` 2.3.12 | 47 | 5.0 MB | same | platform runtime (owner) |
 | Windows SDK projection: `Microsoft.Windows.SDK.NET.dll`, `WinRT.Runtime.dll` | `Microsoft.Windows.SDK.NET.Ref` 10.0.26100.57 | 2 | 26.9 MB | Microsoft Software License Terms, Windows SDK for Windows 10; on its redist list | platform runtime (owner) |
 | WebView2: `WebView2Loader.dll`, `Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.Core.Projection.dll` | `Microsoft.Web.WebView2` 1.0.3719.77 (a WinUI dependency) | 3 | 1.6 MB | BSD-3-Clause | allowed (BSD) |
+| Windows Community Toolkit: `CommunityToolkit.WinUI.Controls.SettingsControls.dll`, `…Triggers.dll`, `…Helpers.dll`, `…Extensions.dll`, `CommunityToolkit.Common.dll` and their `.pri` files (added in M1, not in the CI run above; see "Windows Community Toolkit") | `CommunityToolkit.WinUI.*` 8.3.260402-preview2, `CommunityToolkit.Common` 8.2.1 | 5-9 | 0.4 MB | MIT | allowed (MIT; Microsoft's platform packages pre-approved, owner 2026-10-23) |
 | Licence and notice files | (from the packages above, plus `apps/windows/licences/WindowsSDK-projection.txt`) | 11 | 0.5 MB | | |
 | Uninstaller: `unins000.exe`, `unins000.dat`, `InnoSetup-license.txt` | Inno Setup 7.1.0 | 3 | | Inno Setup License | allowed (owner, ADR 0009) |
 
@@ -211,6 +346,29 @@ upload-artifact step in `ci.yml`), or `apps/windows/out/app/Current.exe`:
 5. Keyboard only: Tab reaches the back button, the pane and the settings controls; Narrator reads them by name.
 6. Start a second copy (from Start or the exe): no second window; the first one comes to the front, also when minimised.
 7. Taskbar and Start show "Current" with the app's name (not "Current.exe"); pin to the taskbar and start from the pin.
+
+## M1 screens: what the owner checks
+With a Jellyfin server on the owner's network (nothing about it goes into the repo), on an installer or `out/app` build from the M1
+PR, starting with no `%LOCALAPPDATA%\Current` folder:
+1. First start: Home says "No servers yet" with "Add a server". Settings → Accounts says "No servers are set up.".
+2. Add a server: the server appears under "Servers on your network" within about 2 s. Note whether Windows Defender Firewall shows a
+   prompt when the search starts (ADR 0016 leaves this not verified).
+3. Pick it: the sign-in page opens ("Sign in to <name>"). First a wrong password: "The user name or password is incorrect." Then the
+   right one with Enter: Home shows the server with "Signed in as <user>", the version and "Connected".
+4. Quit and start again: Home shows it signed in without asking; Settings → Accounts the same.
+5. Settings → Accounts → Sign out: "Signed out" at once; the server's dashboard (Devices) no longer lists this PC. The device name
+   there is the PC's name.
+6. Sign in again from the card with Quick Connect: the code is large and readable; approve it from another Jellyfin client: signed
+   in. Try once more and press Cancel (and Esc): it stops and the form is back.
+7. Type the address instead of picking: an address that does not answer (wording), `https://` to a server whose certificate this PC
+   does not trust (wording), and, if available, a plain `http://` address from outside the LAN (the "Connect without encryption?"
+   dialog; Enter and Esc both cancel).
+8. With the app open, turn Wi-Fi off or unplug the network: the card shows "Can't reach the server"; reconnect: "Connected" again.
+   Minimise, change network, restore: it re-checks at once.
+9. Narrator (Win+Ctrl+Enter) through add-server and sign-in: every box and button is read by name, errors are read when they
+   appear, the Quick Connect code is read digit by digit. Keyboard only: Tab order follows the page, Enter submits, Esc cancels.
+10. Settings: the cards look like Windows Settings' cards (SettingsCard); About opens to show "© 2026 Skeksik". "Copy diagnostics"
+    now copies the version, platform and settings state even without requests.
 
 ## Windows shell: owner's run
 2026-10-22, head 4e56bcd, Windows 11 Pro 25H2 (build 26200.9711), x64. Built locally as above, since CI keeps no installer artifact:
