@@ -1,4 +1,5 @@
 using Current.Bindings;
+using Current.Shell.Pages;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Windows.ApplicationModel.DataTransfer;
@@ -61,7 +62,22 @@ internal static class SmokeRun
             var pasted = copied ? await Clipboard.GetContent().GetTextAsync() : null;
             Check(copied && pasted == marker, "the clipboard holds the copied text");
 
-            // The window's XAML, Mica and title bar load without being shown.
+            await StorageChecksAsync(ui, Check);
+
+            // The pages' XAML loads; Settings uses the Community Toolkit's SettingsCard, so this also shows the toolkit loads.
+            _ = new HomePage();
+            _ = new AddServerPage();
+            _ = new SignInPage();
+            _ = new SettingsPage();
+            Check(true, "home, add-server, sign-in and settings pages built");
+
+            // The network observer reads the facts without asking for anything; the facts themselves are not printed.
+            var facts = NetworkObserver.Read();
+            Check(true, $"network facts read (connectivity {facts.Connectivity})");
+            Check(DeviceName.Get().Length > 0, "device name read");
+
+            // Last: closing the only window ends XAML's message loop, so nothing may be awaited after it (seen in CI: the run stopped at
+            // the next await and exited without a result).
             var window = new MainWindow();
             window.Close();
             Check(true, "main window built");
@@ -75,6 +91,51 @@ internal static class SmokeRun
         Console.Out.Flush();
         Program.SetExitCode(failures == 0 ? 0 : 1);
         Application.Current.Exit();
+    }
+
+    /// <summary>
+    /// The core on a data folder of its own, with secrets in memory and no network: a first open creates the settings, a second loads
+    /// them, the saved servers arrive on the UI thread, and an empty address fails as the core says. The folder is deleted after.
+    /// </summary>
+    private static async Task StorageChecksAsync(DispatcherQueue ui, Action<bool, string> check)
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"current-smoke-{Guid.NewGuid():N}");
+        try
+        {
+            using (var first = await CoreHost.OpenAsync(folder, "smoke", SecretStore.Memory))
+            {
+                check(first.LoadReport is LoadReport.Created, $"a new data folder is created ({first.LoadReport?.GetType().Name})");
+            }
+            using var core = await CoreHost.OpenAsync(folder, "smoke", SecretStore.Memory);
+            check(core.LoadReport is LoadReport.Loaded, $"it is loaded again ({core.LoadReport?.GetType().Name})");
+
+            var listed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (var servers = core.ObserveServers(new DispatcherQueueUi(ui)))
+            {
+                // The first delivery is a Reset, even of an empty list.
+                servers.Items.CollectionChanged += (_, _) => listed.TrySetResult(ui.HasThreadAccess);
+                var arrived = await Task.WhenAny(listed.Task, Task.Delay(Timeout)) == listed.Task;
+                check(arrived && listed.Task.Result, "the saved servers arrived on the UI thread");
+                check(servers.Items.Count == 0, "no saved servers");
+            }
+
+            using var flow = core.AddServer();
+            await flow.ProbeAsync("");
+            check(
+                flow.State is AddServerState.Failed { Problem: ProbeProblem.InvalidAddress { Reason: AddressProblem.Empty } },
+                "an empty address fails without a request");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(folder, true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // A file the core still closes; the temp folder is the system's to clean.
+            }
+        }
     }
 
     private static async Task<bool> WaitUntilAsync(Func<bool> condition)

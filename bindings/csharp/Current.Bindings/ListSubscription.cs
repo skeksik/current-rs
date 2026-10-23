@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 
 namespace Current.Bindings;
@@ -13,7 +14,7 @@ namespace Current.Bindings;
 /// cannot loop: after <see cref="MaxRecoveries"/> recoveries within <see cref="RecoveryWindow"/> the mirror stops, traces an error
 /// and reports <see cref="IsFaulted"/>; the owner may subscribe anew.
 /// </remarks>
-public sealed class ListSubscription<T> : IDisposable
+public sealed class ListSubscription<T> : INotifyPropertyChanged, IDisposable
 {
     /// <summary>At most this many recoveries within <see cref="RecoveryWindow"/>; one more faults the mirror.</summary>
     public const int MaxRecoveries = 3;
@@ -40,8 +41,14 @@ public sealed class ListSubscription<T> : IDisposable
     /// <summary>How often the mirror fell out of step and subscribed again. A diagnostic: it stays 0 in normal use.</summary>
     public int Recoveries { get; private set; }
 
-    /// <summary>The mirror fell out of step too often and stopped: <see cref="Items"/> no longer follows the core.</summary>
+    /// <summary>
+    /// The mirror fell out of step too often and stopped: <see cref="Items"/> no longer follows the core. <see cref="PropertyChanged"/>
+    /// reports it, on the UI thread.
+    /// </summary>
     public bool IsFaulted { get; private set; }
+
+    /// <summary>Raised on the UI thread when <see cref="IsFaulted"/> becomes true.</summary>
+    public event PropertyChangedEventHandler? PropertyChanged;
 
     /// <summary>The current subscription's generation: batches from an older one are dropped.</summary>
     internal int Generation => Volatile.Read(ref _generation);
@@ -83,6 +90,7 @@ public sealed class ListSubscription<T> : IDisposable
             // Batches still queued from the released subscription are dropped.
             Interlocked.Increment(ref _generation);
             Trace.TraceError($"Current: a core list fell out of step {MaxRecoveries + 1} times within {RecoveryWindow}; it stopped");
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFaulted)));
             return;
         }
         _recent.Enqueue(now);
