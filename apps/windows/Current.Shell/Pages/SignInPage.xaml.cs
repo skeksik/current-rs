@@ -110,7 +110,7 @@ public sealed partial class SignInPage : Page
                 HideError();
                 CodeText.Text = code.Code;
                 // Narrator reads the digits one by one.
-                AutomationProperties.SetName(CodeText, $"Quick Connect code {string.Join(' ', code.Code.ToCharArray())}");
+                AutomationProperties.SetName(CodeText, $"Quick Connect code {string.Join(" ", code.Code.Select(digit => digit.ToString()))}");
                 QuickConnectCancel.Focus(FocusState.Programmatic);
                 break;
             case SignInState.Failed failed:
