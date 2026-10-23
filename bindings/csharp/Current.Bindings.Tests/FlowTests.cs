@@ -253,6 +253,28 @@ internal static class FlowTests
         }
     }
 
+    public static async Task RemovingAServerForgetsIt()
+    {
+        using var standIn = StandIn.Start();
+        using var folder = new DataFolder();
+        using (var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory))
+        {
+            await SignIn(core, standIn);
+            var result = await core.RemoveServerAsync(FirstServer);
+            Check(result == new RemoveServerResult(true, false), $"{result}");
+            Check(core.Servers.Count == 0, "no saved server");
+            var ui = new ManualDispatcher();
+            using var capabilities = core.ObserveCapabilities(ui);
+            await Eventually("no status", ui, () => capabilities.Value.Servers.Count == 0);
+            await Eventually("the server is told", ui, () => standIn.Count("/Sessions/Logout") == 1);
+            Check(!(await core.RemoveServerAsync(FirstServer)).Removed, "a second removal does nothing");
+        }
+        using (var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory))
+        {
+            Check(core.Servers.Count == 0, "the next start does not bring it back");
+        }
+    }
+
     public static async Task WithoutTheTokenRestoreSignsOut()
     {
         using var standIn = StandIn.Start();

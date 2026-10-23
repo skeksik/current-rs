@@ -123,6 +123,12 @@ public enum InterfaceKind
 /// <summary>How a sign-out went. The app is signed out either way; <c>ServerTold</c> false means the server did not hear of it.</summary>
 public sealed record SignOutResult(bool ServerTold);
 
+/// <summary>
+/// How removing a saved server went. <c>Removed</c> false: no such server was saved, nothing changed. <c>CredentialsLeft</c>: a saved
+/// sign-in could not be deleted from Credential Manager; the UI says so.
+/// </summary>
+public sealed record RemoveServerResult(bool Removed, bool CredentialsLeft);
+
 /// <summary>Maps generated types to the public ones.</summary>
 internal static class Map
 {
