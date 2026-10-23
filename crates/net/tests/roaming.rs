@@ -17,8 +17,10 @@ use current_net::{
     RequestLog, RoamingAddresses, RoamingConfig, RuntimeHandle, ServerClient,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+
+mod ports;
+use ports::Ports;
 
 const SECRET: &str = "s3cret-token-value";
 const SERVER_ID: &str = "0123456789abcdef0123456789abcdef";
@@ -50,7 +52,7 @@ struct StandIn {
 
 impl StandIn {
     async fn start(mode: Mode) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = ports::bind().await;
         let port = listener.local_addr().unwrap().port();
         let mode = Arc::new(Mutex::new(mode));
         let received = Arc::new(Mutex::new(Vec::new()));
@@ -106,20 +108,12 @@ impl StandIn {
         }
     }
 
-    /// A port where nothing listens, so connections are refused: a listener's port after it is dropped. Another test could take
-    /// the port meanwhile, which is unlikely; a socket bound but not listening would reserve it, but connections to one hung on the
-    /// macOS runner instead of being refused.
-    async fn refused() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        listener.local_addr().unwrap().port()
-    }
-
     fn set(&self, mode: Mode) {
         *self.mode.lock().unwrap() = mode;
     }
 
-    /// Stops listening: new connections are refused.
-    async fn stop(&self) {
+    /// Stops listening: new connections are refused for as long as `_ports` is held.
+    async fn stop(&self, _ports: &Ports) {
         self.accept.abort();
         while !self.accept.is_finished() {
             tokio::task::yield_now().await;
@@ -237,10 +231,11 @@ fn position(roaming: &RoamingAddresses) -> Option<u8> {
 
 #[tokio::test]
 async fn the_race_skips_dead_and_wrong_addresses() {
-    let refused = StandIn::refused().await;
     let silent = StandIn::start(Mode::Silent).await;
     let other = StandIn::start(Mode::Serve(OTHER_ID)).await;
     let right = StandIn::start(Mode::Serve(SERVER_ID)).await;
+    let ports = Ports::hold().await;
+    let refused = ports.refused().await;
     let (roaming, client, log) = setup(&[refused, silent.port, other.port, right.port]);
 
     client.send(Request::get("/Items")).await.unwrap();
@@ -286,7 +281,8 @@ async fn a_get_is_retried_once_on_the_new_address_after_a_connect_failure() {
     client.send(Request::get("/Items")).await.unwrap();
     assert_eq!(position(&roaming), Some(1));
 
-    first.stop().await;
+    let ports = Ports::hold().await;
+    first.stop(&ports).await;
     client.send(Request::get("/Items")).await.unwrap();
     assert_eq!(position(&roaming), Some(2));
     assert_eq!(second.count("GET", "/Items"), 1);
@@ -306,7 +302,8 @@ async fn a_post_that_was_never_sent_is_retried() {
     client.send(Request::get("/Items")).await.unwrap();
 
     // Refused: the request never left, so even a POST may go to the new address.
-    first.stop().await;
+    let ports = Ports::hold().await;
+    first.stop(&ports).await;
     client.send(Request::post("/Items")).await.unwrap();
     assert_eq!(first.count("POST", "/Items"), 0);
     assert_eq!(second.count("POST", "/Items"), 1);
@@ -400,8 +397,9 @@ async fn no_retry_when_the_race_picks_the_same_address() {
 
 #[tokio::test]
 async fn no_log_line_error_or_debug_output_names_an_address_or_the_network() {
-    let refused = StandIn::refused().await;
     let right = StandIn::start(Mode::Serve(SERVER_ID)).await;
+    let ports = Ports::hold().await;
+    let refused = ports.refused().await;
     let (roaming, client, log) = setup(&[refused, right.port]);
     roaming.network_changed(&NetworkFacts {
         connectivity: Connectivity::Full,
@@ -409,7 +407,7 @@ async fn no_log_line_error_or_debug_output_names_an_address_or_the_network() {
         ..NetworkFacts::default()
     });
     client.send(Request::get("/Items")).await.unwrap();
-    right.stop().await;
+    right.stop(&ports).await;
     let error = client.send(Request::get("/Items")).await.unwrap_err();
     let selected = roaming.current();
 
