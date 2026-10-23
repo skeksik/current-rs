@@ -187,7 +187,9 @@ actions; nothing is decided in C#.
 - **Keyboard and Narrator:** every input has a `Header` that names it; buttons in lists carry `AutomationProperties.Name` with the
   server ("Sign in to <name>"); page titles and section headers have `AutomationProperties.HeadingLevel`; progress texts are
   `LiveSetting="Polite"`, and because "Connecting…", "Signing in…" and "Waiting for approval…" never change, their peer raises
-  `LiveRegionChanged` when they appear (`Announce.Shown`), else Narrator would have nothing to read; found servers are named by
+  `LiveRegionChanged` when they appear (`Announce.Shown`), else Narrator would have nothing to read; the Quick Connect code is an
+  assertive live region announced by its digit-by-digit name when it appears and when a new code replaces it (instead of "Waiting
+  for approval…", so the two do not cut each other off; the owner's run found the code unread); found servers are named by
   their server's name on the list item (`ContainerContentChanging`); an error `InfoBar` is closed and opened again when its message changes, because "Once the control is
   open, any changes made to the various properties … will not raise a notification event … we recommend you close and re-open the
   control" (InfoBar). Focus goes to the address box, and to the user name box (the password box when signing in again), once the page is

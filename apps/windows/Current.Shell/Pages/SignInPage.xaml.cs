@@ -134,13 +134,19 @@ public sealed partial class SignInPage : Page
                 break;
             case SignInState.QuickConnectWaiting code:
                 HideError();
+                var newCode = before is not SignInState.QuickConnectWaiting { Code: var shownCode } || shownCode != code.Code;
                 CodeText.Text = code.Code;
                 // Narrator reads the digits one by one.
                 AutomationProperties.SetName(CodeText, $"Quick Connect code {string.Join(" ", code.Code.Select(digit => digit.ToString()))}");
                 if (before is not SignInState.QuickConnectWaiting)
                 {
                     FocusLater(QuickConnectCancel);
-                    Announce.Shown(WaitingText);
+                }
+                if (newCode)
+                {
+                    // The code itself is what the user needs to hear, when it appears and when a new one replaces it (owner's run,
+                    // 2026-10-23: only "Waiting for approval…" was read). One announcement, so the two do not cut each other off.
+                    Announce.Shown(CodeText);
                 }
                 break;
             case SignInState.Failed failed:
