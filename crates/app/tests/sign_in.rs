@@ -1,5 +1,5 @@
-//! Sign-in, restore, the 401 rule, sign out and removing a server, end to end through `App`, against a hand-written Jellyfin stand-in on 127.0.0.1
-//! (ADR 0015). Settings go to a temporary folder, secrets to memory.
+//! Sign-in, restore, the 401 rule, sign out and removing a server, end to end through `App`, against a hand-written Jellyfin
+//! stand-in on 127.0.0.1 (ADR 0015). Settings go to a temporary folder, secrets to memory.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -1631,7 +1631,11 @@ async fn settings_from_a_newer_version_refuse_a_removal() {
     std::fs::write(
         temp.path().join("settings.json"),
         format!(
-            r#"{{"version": 99, "device_id": "abc", "servers": [{{"service": "jellyfin", "key": "1", "server_id": "{SERVER_ID}", "addresses": [{{"url": "http://127.0.0.1:1"}}]}}]}}"#
+            concat!(
+                r#"{{"version": 99, "device_id": "abc", "servers": [{{"service": "jellyfin", "key": "1", "#,
+                r#""server_id": "{}", "addresses": [{{"url": "http://127.0.0.1:1"}}]}}]}}"#
+            ),
+            SERVER_ID
         ),
     )
     .unwrap();
@@ -1644,4 +1648,123 @@ async fn settings_from_a_newer_version_refuse_a_removal() {
     );
     assert_eq!(app.servers().len(), 1);
     assert_eq!(app.capabilities().borrow().servers.len(), 1);
+}
+
+/// A keyring whose first read waits until the test lets it go, then answers `Unavailable` (locked) or what it holds.
+#[derive(Debug, Default)]
+struct GatedKeyring {
+    inner: MemorySecrets,
+    gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    entered: AtomicBool,
+    locked: AtomicBool,
+}
+
+impl GatedKeyring {
+    fn close(&self) -> std::sync::mpsc::Sender<()> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        *self.gate.lock().unwrap() = Some(rx);
+        tx
+    }
+}
+
+impl Secrets for GatedKeyring {
+    fn get(&self, key: &SecretKey) -> Result<Option<Secret>, SecretsError> {
+        let gate = self.gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            self.entered.store(true, Ordering::SeqCst);
+            let _ = gate.recv();
+        }
+        if self.locked.load(Ordering::SeqCst) {
+            return Err(SecretsError::Unavailable);
+        }
+        self.inner.get(key)
+    }
+    fn set(&self, key: &SecretKey, secret: &Secret) -> Result<(), SecretsError> {
+        self.inner.set(key, secret)
+    }
+    fn delete(&self, key: &SecretKey) -> Result<(), SecretsError> {
+        self.inner.delete(key)
+    }
+}
+
+/// Signs in, then opens the folder again and starts a restore that waits in its keyring read while the server is removed. The
+/// read then answers (a token, or `Unavailable` when `locked`) and the restore goes on against a server that is gone.
+async fn restore_racing_removal(locked: bool) {
+    let (_server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let keyring = Arc::new(GatedKeyring::default());
+    let secrets: Arc<dyn Secrets> = keyring.clone();
+    let (app, _) = App::open(temp.path(), secrets.clone(), "Office PC").unwrap();
+    signed_in_with_password(&app, &address).await;
+    drop(app);
+
+    let release = keyring.close();
+    let app = Arc::new(App::open(temp.path(), secrets, "Office PC").unwrap().0);
+    let restore = tokio::spawn({
+        let app = app.clone();
+        async move { app.restore_sessions().await }
+    });
+    eventually(|| keyring.entered.load(Ordering::SeqCst)).await;
+    assert_eq!(app.remove_server(&jellyfin("1")).await, Ok(REMOVED));
+    keyring.locked.store(locked, Ordering::SeqCst);
+    release.send(()).unwrap();
+    restore.await.unwrap();
+    settle().await;
+
+    assert!(app.servers().is_empty());
+    assert!(app.capabilities().borrow().servers.is_empty());
+    assert!(app.jellyfin(&jellyfin("1")).is_none());
+    keyring.locked.store(false, Ordering::SeqCst);
+    assert!(keyring.get(&secret_key()).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_restore_that_read_the_token_before_the_removal_does_not_bring_the_server_back() {
+    // The restore goes on to build its client, finds the server gone and would mark it unreachable.
+    restore_racing_removal(false).await;
+}
+
+#[tokio::test]
+async fn a_restore_whose_keyring_read_fails_after_the_removal_does_not_bring_the_server_back() {
+    // The keyring answers `Unavailable`: the restore would mark the server signed out.
+    restore_racing_removal(true).await;
+}
+
+/// A keyring with no backend on this platform: nothing was ever stored.
+#[derive(Debug)]
+struct NoBackend;
+
+impl Secrets for NoBackend {
+    fn get(&self, _: &SecretKey) -> Result<Option<Secret>, SecretsError> {
+        Err(SecretsError::Unavailable)
+    }
+    fn set(&self, _: &SecretKey, _: &Secret) -> Result<(), SecretsError> {
+        Err(SecretsError::Unavailable)
+    }
+    fn delete(&self, _: &SecretKey) -> Result<(), SecretsError> {
+        Err(SecretsError::Unavailable)
+    }
+    fn has_backend(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn an_unavailable_keyring_reports_credentials_left_only_where_there_is_a_backend() {
+    let (_server, address) = start(SERVER_ID).await;
+    for (secrets, left) in [
+        (Arc::new(NoKeyring) as Arc<dyn Secrets>, true),
+        (Arc::new(NoBackend) as Arc<dyn Secrets>, false),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let (app, _) = App::open(temp.path(), secrets, "Office PC").unwrap();
+        signed_in_with_password(&app, &address).await;
+        assert_eq!(
+            app.remove_server(&jellyfin("1")).await,
+            Ok(Removal::Removed {
+                credentials_left: left
+            })
+        );
+        assert!(app.servers().is_empty());
+    }
 }

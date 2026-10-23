@@ -220,7 +220,8 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         let capabilities = core.observeCapabilities()
         defer { capabilities.cancel() }
         try await eventually("no status") { capabilities.value.servers.isEmpty }
-        try await waitFor("the server is told") { try standIn.count("/Sessions/Logout") == 1 }
+        // On the main actor, as the capabilities wait above: `waitFor` runs off it.
+        try await eventually("the server is told") { (try? standIn.count("/Sessions/Logout")) == 1 }
         let again = try await core.removeServer(server: firstServer)
         #expect(!again.removed)
         let next = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)

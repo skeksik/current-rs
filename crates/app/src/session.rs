@@ -5,9 +5,8 @@
 //! need a tokio runtime, as the HTTP client does anyway.
 //!
 //! Every change to a server's session (saving a sign-in, signing out, removing the server, the 401 rule, restoring) runs under
-//! one async lock and
-//! checks under it that the session it acts on is still the current one, so a late answer to an old session never touches a newer
-//! one.
+//! one async lock and checks under it that the session it acts on is still the current one, so a late answer to an old session
+//! never touches a newer one.
 //!
 //! Each saved Jellyfin server has one address provider ([`RoamingAddresses`], ADR 0014) over all its addresses, shared by its
 //! session and its sign-ins. The provider serves an address only after it passed the identity check (the server's id) in the race
@@ -963,9 +962,9 @@ impl Shared {
     }
 }
 
-/// Reads and deletes each user's token on `server`. Returns the tokens found, and whether any could not be deleted. A keyring
-/// that is unavailable (none on this platform, locked, refused) counts as holding nothing: it could not have stored a token this
-/// run, and one stored while it worked stays until it works again (said in ADR 0015). Blocking.
+/// Reads and deletes each user's token on `server`. Returns the tokens found, and whether any may be left: a delete that failed,
+/// or a keyring that is unavailable (locked, refused) on a platform with a backend, where a token stored while it worked may
+/// still be there. Without a backend (Linux until its app task) nothing was ever stored, so nothing is left. Blocking.
 fn forget_tokens(
     secrets: &dyn Secrets,
     server: &ServerRef,
@@ -975,11 +974,14 @@ fn forget_tokens(
     let mut left = false;
     for user in users {
         let key = SecretKey::new(server.clone(), user.clone());
-        if let Ok(Some(token)) = secrets.get(&key) {
-            tokens.push((user.clone(), token));
+        match secrets.get(&key) {
+            Ok(Some(token)) => tokens.push((user.clone(), token)),
+            Err(SecretsError::Unavailable) if secrets.has_backend() => left = true,
+            Ok(None) | Err(_) => {}
         }
         match secrets.delete(&key) {
-            Ok(()) | Err(SecretsError::Unavailable) => {}
+            Ok(()) => {}
+            Err(SecretsError::Unavailable) => left |= secrets.has_backend(),
             Err(SecretsError::TooLong | SecretsError::Failed) => left = true,
         }
     }

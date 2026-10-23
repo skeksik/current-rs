@@ -74,6 +74,11 @@ pub trait Secrets: Send + Sync + std::fmt::Debug {
     fn set(&self, key: &SecretKey, secret: &Secret) -> Result<(), SecretsError>;
     /// Removes the secret. Removing one that is not there succeeds.
     fn delete(&self, key: &SecretKey) -> Result<(), SecretsError>;
+    /// Whether this platform has a keyring backend at all. When it does, [`SecretsError::Unavailable`] means locked or refused,
+    /// and secrets stored earlier may still be there; when it does not (Linux until its app task), nothing was ever stored.
+    fn has_backend(&self) -> bool {
+        true
+    }
 }
 
 /// Secrets kept in memory for the life of the process: for tests.
@@ -250,6 +255,10 @@ impl Secrets for KeyringSecrets {
 
     fn delete(&self, _: &SecretKey) -> Result<(), SecretsError> {
         Err(SecretsError::Unavailable)
+    }
+
+    fn has_backend(&self) -> bool {
+        false
     }
 }
 

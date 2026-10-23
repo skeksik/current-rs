@@ -1,6 +1,6 @@
 //! The M1 flows end to end through the bridge, against the Jellyfin stand-in on 127.0.0.1: opening, adding a server, signing in
-//! with a password and with Quick Connect, failures, cancelling, the saved-server list, restoring, the 401 rule, signing out and removing a server.
-//! Settings go to a temporary folder, secrets to memory.
+//! with a password and with Quick Connect, failures, cancelling, the saved-server list, restoring, the 401 rule, signing out and
+//! removing a server. Settings go to a temporary folder, secrets to memory.
 
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -566,7 +566,11 @@ fn removing_a_server_with_settings_from_a_newer_version_fails() {
     std::fs::write(
         temp.path().join("settings.json"),
         format!(
-            r#"{{"version": 99, "device_id": "abc", "servers": [{{"service": "jellyfin", "key": "1", "server_id": "{SERVER_ID}"}}]}}"#
+            concat!(
+                r#"{{"version": 99, "device_id": "abc", "#,
+                r#""servers": [{{"service": "jellyfin", "key": "1", "server_id": "{}"}}]}}"#
+            ),
+            SERVER_ID
         ),
     )
     .unwrap();
