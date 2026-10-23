@@ -61,6 +61,9 @@ PR and let CI build them.
   approval. Every crate is declared once in the root `Cargo.toml` `[workspace.dependencies]` with an exact version (`=x.y.z`); member
   crates use `name.workspace = true`. Licences per ADR 0003, checked by `cargo deny check`. Actions are pinned by commit SHA with the
   tag in a comment.
+  Standing exception (owner, 2026-10-23): on Windows, Microsoft's own platform packages (the Windows SDK, the Windows App SDK and its
+  component packages, the Windows Community Toolkit) are preferred and approved in advance. Pin exact versions, check their licences
+  and their dependencies under ADR 0003 (licence texts shipped with the app), and report what was added in the PR.
 - **Do not assert API or platform facts without a source.** Quote the source and the date read; mark anything unchecked "not verified".
 - **The repo is public.** No hostnames, IPs, keys, tokens, user names, server names or library titles in code, tests, fixtures, docs or
   commits. Example addresses only: `192.168.1.10`, `media.example.com`, `127.0.0.1`. Describe private server forks only generically.

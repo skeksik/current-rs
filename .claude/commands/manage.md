@@ -14,7 +14,8 @@ first.
 - Merge PRs that have nothing to check by hand (docs, CI, tests, refactors) once reviewed and green, without asking; tell the owner after.
 - A PR that needs a hands-on or device check needs the owner's explicit approval to merge, asked with AskUserQuestion after the check
   passes, "Merge (Recommended)" first.
-- Dependencies, version bumps, new decision records and changed decisions need the owner's approval. The manager approves plans that
+- Dependencies, version bumps, new decision records and changed decisions need the owner's approval. Microsoft's own Windows platform
+  packages are approved in advance (CLAUDE.md): workers report them; the manager checks versions and licences in review. The manager approves plans that
   stay inside the task and the existing decisions.
 - Native behaviour by default (ADR 0001): a plan that departs from a platform's behaviour goes to the owner.
 - Keep a batch to about 6 workers: 9 parallel workers reached the warning zone of the owner's weekly usage limit before.
