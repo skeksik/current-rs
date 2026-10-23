@@ -9,70 +9,75 @@
     </Page.KeyboardAccelerators>
 
     <ScrollViewer>
-        <StackPanel MaxWidth="640" Padding="{StaticResource PageColumnPadding}" Spacing="12" HorizontalAlignment="Left">
-            <TextBlock
-                Style="{StaticResource BodyTextBlockStyle}"
-                TextWrapping="Wrap"
-                Text="Enter the address of your Jellyfin server, or pick one found on your network." />
-
-            <!-- The address. Enter connects; the error shows on the page, not in a dialog (Dialogs page, learn.microsoft.com). -->
-            <TextBox
-                x:Name="AddressBox"
-                Header="Server address"
-                PlaceholderText="192.168.1.10:8096 or media.example.com"
-                InputScope="Url"
-                IsSpellCheckEnabled="False"
-                IsTextPredictionEnabled="False"
-                KeyDown="OnAddressKeyDown"
-                TextChanged="OnAddressChanged" />
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button x:Name="ConnectButton" Style="{StaticResource AccentButtonStyle}" Content="Connect" Click="OnConnect" />
-                <Button x:Name="CancelButton" Content="Cancel" Visibility="Collapsed" Click="OnCancel" />
-            </StackPanel>
-            <StackPanel x:Name="ProbingPanel" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
-                <ProgressRing x:Name="ProbingRing" Width="20" Height="20" IsActive="False" />
+        <Grid Padding="{StaticResource PageColumnPadding}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MaxWidth="560" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Spacing="12">
                 <TextBlock
-                    x:Name="ProbingText"
-                    VerticalAlignment="Center"
-                    AutomationProperties.LiveSetting="Polite"
-                    Text="Connecting…" />
-            </StackPanel>
-            <InfoBar x:Name="ProbeError" Severity="Error" IsClosable="False" IsOpen="False" />
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    TextWrapping="Wrap"
+                    Text="Enter the address of your Jellyfin server, or pick one found on your network." />
 
-            <TextBlock
-                Style="{StaticResource BodyStrongTextBlockStyle}"
-                Margin="0,16,0,0"
-                AutomationProperties.HeadingLevel="Level2"
-                Text="Servers on your network" />
-            <!-- Searching does not block the page: a bar, not a ring (progress controls page, learn.microsoft.com). -->
-            <ProgressBar x:Name="SearchingBar" IsIndeterminate="True" Visibility="Collapsed" AutomationProperties.Name="Searching" />
-            <ListView
-                x:Name="FoundList"
-                AutomationProperties.Name="Servers on your network"
-                SelectionMode="None"
-                IsItemClickEnabled="True"
-                ItemClick="OnPickServer"
-                ContainerContentChanging="OnFoundContainerChanging">
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="bindings:DiscoveredServer">
-                        <StackPanel Padding="0,8">
-                            <TextBlock Text="{x:Bind Name}" />
-                            <TextBlock
-                                Style="{StaticResource CaptionTextBlockStyle}"
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="{x:Bind Version}" />
-                        </StackPanel>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
-            <TextBlock
-                x:Name="SearchStatus"
-                Style="{StaticResource BodyTextBlockStyle}"
-                TextWrapping="Wrap"
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                AutomationProperties.LiveSetting="Polite"
-                Visibility="Collapsed" />
-            <Button x:Name="SearchAgainButton" Content="Search again" Visibility="Collapsed" Click="OnSearchAgain" />
-        </StackPanel>
+                <!-- The address. Enter connects; the error shows on the page, not in a dialog (Dialogs page, learn.microsoft.com). -->
+                <TextBox
+                    x:Name="AddressBox"
+                    Header="Server address"
+                    PlaceholderText="192.168.1.10:8096 or media.example.com"
+                    InputScope="Url"
+                    IsSpellCheckEnabled="False"
+                    IsTextPredictionEnabled="False"
+                    KeyDown="OnAddressKeyDown"
+                    TextChanged="OnAddressChanged" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="ConnectButton" Style="{StaticResource AccentButtonStyle}" Content="Connect" Click="OnConnect" />
+                    <Button x:Name="CancelButton" Content="Cancel" Visibility="Collapsed" Click="OnCancel" />
+                </StackPanel>
+                <StackPanel x:Name="ProbingPanel" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                    <ProgressRing x:Name="ProbingRing" Width="20" Height="20" IsActive="False" />
+                    <TextBlock
+                        x:Name="ProbingText"
+                        VerticalAlignment="Center"
+                        AutomationProperties.LiveSetting="Polite"
+                        Text="Connecting…" />
+                </StackPanel>
+                <InfoBar x:Name="ProbeError" Severity="Error" IsClosable="False" IsOpen="False" />
+
+                <TextBlock
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                    Margin="0,16,0,0"
+                    AutomationProperties.HeadingLevel="Level2"
+                    Text="Servers on your network" />
+                <!-- Searching does not block the page: a bar, not a ring (progress controls page, learn.microsoft.com). -->
+                <ProgressBar x:Name="SearchingBar" IsIndeterminate="True" Visibility="Collapsed" AutomationProperties.Name="Searching" />
+                <ListView
+                    x:Name="FoundList"
+                    AutomationProperties.Name="Servers on your network"
+                    SelectionMode="None"
+                    IsItemClickEnabled="True"
+                    ItemClick="OnPickServer"
+                    ContainerContentChanging="OnFoundContainerChanging">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="bindings:DiscoveredServer">
+                            <StackPanel Padding="0,8">
+                                <TextBlock Text="{x:Bind Name}" />
+                                <TextBlock
+                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="{x:Bind Version}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+                <TextBlock
+                    x:Name="SearchStatus"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    TextWrapping="Wrap"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    AutomationProperties.LiveSetting="Polite"
+                    Visibility="Collapsed" />
+                <Button x:Name="SearchAgainButton" Content="Search again" Visibility="Collapsed" Click="OnSearchAgain" />
+            </StackPanel>
+        </Grid>
     </ScrollViewer>
 </Page>
