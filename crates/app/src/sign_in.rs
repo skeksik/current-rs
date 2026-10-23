@@ -73,9 +73,17 @@ pub struct SignIn {
     expected: ServerId,
     state: watch::Sender<SignInState>,
     generation: watch::Sender<u64>,
+    /// The attempt whose accepted sign-in is being saved. From then on [`SignIn::cancel`] cannot undo it: the server made the
+    /// session, so the attempt ends signed in. Changed only under the `generation` lock.
+    saving: Mutex<Option<u64>>,
     quick_connect: Mutex<Option<bool>>,
     quick_connect_interval: Duration,
     quick_connect_lifetime: Duration,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    // Each value behind these locks is replaced whole, so a poisoned lock still holds a usable one.
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl std::fmt::Debug for SignIn {
@@ -128,6 +136,7 @@ impl SignIn {
                 quick_connect: None,
             }),
             generation: watch::Sender::new(0),
+            saving: Mutex::new(None),
             quick_connect: Mutex::new(None),
             quick_connect_interval: QUICK_CONNECT_INTERVAL,
             quick_connect_lifetime: QUICK_CONNECT_LIFETIME,
@@ -217,9 +226,20 @@ impl SignIn {
         }
     }
 
-    /// Stops a running sign-in and goes back to `Ready`. A finished sign-in stays saved.
+    /// Stops a running sign-in and goes back to `Ready`. A finished sign-in stays saved, and so does one the server already
+    /// accepted that is being saved: the attempt then ends `SignedIn`, as if the cancel came too late.
     pub fn cancel(&self) {
-        self.generation.send_modify(|generation| *generation += 1);
+        let cancelled = self.generation.send_if_modified(|generation| {
+            if *lock(&self.saving) == Some(*generation) {
+                false
+            } else {
+                *generation += 1;
+                true
+            }
+        });
+        if !cancelled {
+            return;
+        }
         let quick_connect = *self
             .quick_connect
             .lock()
@@ -357,7 +377,17 @@ impl SignIn {
             );
             return;
         }
-        if *self.generation.borrow() != generation {
+        // Claimed under the generation lock, so that a cancel either comes first (and this attempt is not saved) or finds it
+        // saving (and leaves it alone).
+        let mut claimed = false;
+        self.generation.send_if_modified(|current| {
+            if *current == generation {
+                *lock(&self.saving) = Some(generation);
+                claimed = true;
+            }
+            false
+        });
+        if !claimed {
             return;
         }
         let user = signed_in.user.clone();
@@ -377,6 +407,10 @@ impl SignIn {
             },
             Err(error) => SignInState::Failed { error },
         };
+        self.generation.send_if_modified(|_| {
+            *lock(&self.saving) = None;
+            false
+        });
         self.set_if_current(generation, next);
     }
 }

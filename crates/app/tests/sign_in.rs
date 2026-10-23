@@ -228,10 +228,12 @@ async fn listen(server: &Arc<Server>) -> (Arc<Endpoint>, String) {
                     return;
                 }
                 state.received.lock().unwrap().push(received.clone());
-                if at.hang.load(Ordering::SeqCst)
-                    || (received.path == "/Users/Me" && at.hang_me.load(Ordering::SeqCst))
-                {
+                if at.hang.load(Ordering::SeqCst) {
                     std::future::pending::<()>().await;
+                }
+                // `/Users/Me` waits while `hang_me` is set, then answers.
+                while received.path == "/Users/Me" && at.hang_me.load(Ordering::SeqCst) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
                 if received.path == "/Sessions/Logout" {
                     let hold = state.hold_logout.lock().unwrap().clone();
@@ -1329,7 +1331,7 @@ async fn signing_in_again_waits_for_an_address_in_signing_in_and_can_be_cancelle
 }
 
 #[tokio::test]
-async fn a_cancelled_restore_checks_the_user_again_later() {
+async fn a_dropped_restore_still_confirms_the_user() {
     let (_server, [(first_at, first), _]) = two_addresses().await;
     let temp = tempfile::tempdir().unwrap();
     let secrets = Arc::new(MemorySecrets::new());
@@ -1353,10 +1355,12 @@ async fn a_cancelled_restore_checks_the_user_again_later() {
             .count()
     };
     let before = me();
+    assert!(before >= 1, "the check asked before the drop");
 
-    // Running restore again checks the user that was never confirmed.
-    first_at.hang_me.store(false, Ordering::SeqCst);
+    // Dropping the restore stopped only the waiting: the check it started gets the answer and confirms the user, with no new
+    // request. A restore run meanwhile does not start a second check.
     app.restore_sessions().await;
+    first_at.hang_me.store(false, Ordering::SeqCst);
     eventually(|| {
         app.capabilities().borrow().servers[0]
             .user
@@ -1364,7 +1368,7 @@ async fn a_cancelled_restore_checks_the_user_again_later() {
             .is_some_and(|user| user.has_permission(&Permission::ADMIN))
     })
     .await;
-    assert_eq!(me(), before + 1);
+    assert_eq!(me(), before);
 }
 
 #[tokio::test]

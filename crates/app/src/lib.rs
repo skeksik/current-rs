@@ -215,7 +215,7 @@ impl App {
     /// address that passed the identity check (ADR 0014). Signed in with the user when the server answers, signed out when the
     /// token is gone or the server answers 401, still signed in and unreachable when no address answers as the server; such a
     /// session checks its user once the provider reaches the server. Running it again checks sessions whose user is not yet
-    /// confirmed.
+    /// confirmed. Each server's check runs to its end even if this future is dropped: dropping it only stops the waiting.
     pub async fn restore_sessions(&self) {
         self.shared.restore_all().await;
     }
