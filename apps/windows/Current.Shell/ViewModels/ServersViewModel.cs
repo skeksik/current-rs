@@ -95,6 +95,15 @@ public sealed class ServersViewModel(CoreHost core, IUiDispatcher ui) : INotifyP
         Faulted = _servers.IsFaulted;
         var saved = _servers.Items;
         var statuses = _capabilities.Value.Servers;
+        // Rows of servers no longer saved go first, by key: the rows after a removed one stay the same objects, so their expanders
+        // stay open or closed and focus stays where it is.
+        for (var i = Rows.Count - 1; i >= 0; i--)
+        {
+            if (!saved.Any(s => s.Server == Rows[i].Server))
+            {
+                Rows.RemoveAt(i);
+            }
+        }
         // Keep rows that still stand for the same server, so a status change does not rebuild the list under the user.
         for (var i = 0; i < saved.Count; i++)
         {
@@ -139,6 +148,28 @@ public sealed class ServerRow : INotifyPropertyChanged
 
     public ServerRef Server { get; }
 
+    /// <summary>The row itself, for a button to carry explicitly (its Tag) rather than through an inherited DataContext.</summary>
+    public ServerRow Self => this;
+
+    /// <summary>A removal of this server is running: its buttons are disabled until it ends.</summary>
+    public bool Removing
+    {
+        get => _removing;
+        set
+        {
+            if (_removing != value)
+            {
+                _removing = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Removing)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Idle)));
+            }
+        }
+    }
+
+    public bool Idle => !Removing;
+
+    private bool _removing;
+
     public string Name { get; private set; } = "";
 
     /// <summary>"Jellyfin 10.11.2", or "Jellyfin" before the version is known.</summary>
@@ -158,6 +189,8 @@ public sealed class ServerRow : INotifyPropertyChanged
     public string SignInLabel => $"Sign in to {Name}";
 
     public string SignOutLabel => $"Sign out of {Name}";
+
+    public string RemoveLabel => $"Remove {Name}";
 
     public Visibility SignInVisibility => SignedIn ? Visibility.Collapsed : Visibility.Visible;
 
@@ -184,7 +217,7 @@ public sealed class ServerRow : INotifyPropertyChanged
         foreach (var name in new[]
         {
             nameof(Name), nameof(Product), nameof(Account), nameof(Connection), nameof(SignedIn), nameof(UserName),
-            nameof(SignInVisibility), nameof(SignOutVisibility), nameof(SignInLabel), nameof(SignOutLabel),
+            nameof(SignInVisibility), nameof(SignOutVisibility), nameof(SignInLabel), nameof(SignOutLabel), nameof(RemoveLabel),
         })
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
