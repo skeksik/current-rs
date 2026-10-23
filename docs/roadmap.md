@@ -73,6 +73,9 @@ recorded with sources and dates, and a decision record where it decides somethin
 - [ ] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out
       (core done 2026-10-22, ADR 0015: `current-jellyfin` auth, saved servers and users, the `SignIn` flow, restore, sign out; the
       bridge 2026-10-23, PR 25; the Windows screens 2026-10-23, feat/windows-sign-in; the owner's check on a real server is still to do)
+- [ ] Remove a saved server (owner, 2026-10-23): signs out every user there, deletes their tokens, forgets the server; the
+      server is told in the background (feat/remove-server: core, bridge, Settings → Accounts "Remove" with a confirmation;
+      ADR 0015 amended 2026-10-23; the owner's check on Windows is still to do)
 - [ ] Local server discovery
       (core done 2026-10-22, ADR 0016: UDP discovery, probe and id check, the discovery state, picking into "add a server"; the
       Windows screen done 2026-10-23, feat/windows-sign-in; the local check on a real network is still to do)
