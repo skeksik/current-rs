@@ -1,7 +1,8 @@
 # 0015: Jellyfin sign-in, sessions and saved servers
 
 Status: proposed (2026-10-22), from M1; accepted when its PR merges. The device name rule and the tokio features were decided by the
-owner (2026-10-22, marked **Decided by the owner**).
+owner (2026-10-22, marked **Decided by the owner**). Amended 2026-10-23: removing a saved server (owner's request; manager's answers
+on the design), below under "Remove a server" and in "Saved servers".
 
 ## Context
 After setup finds a server (ADR 0012), the user signs in with a password or Quick Connect. The app must remember the server and user,
@@ -95,8 +96,13 @@ built now (manager, 2026-10-22).
   newer version that adds one must raise the format if an older one dropping it matters.
 - The token lives only in the keyring under `SecretKey { server, user }` (ADR 0013).
 - A sign-in to a server whose id is already saved reuses its key, adds the address if new and adds or updates the user. Otherwise
-  the server gets the next numeric key. Signing in as another user makes that user active; the earlier user's token stays in the
-  keyring for user switching later (not built).
+  the server gets the next numeric key: one more than the highest ever given out, kept as `last_server_key` in `settings.json`
+  (added 2026-10-23, defaulted, no migration; ADR 0013). A removed server's key is never given to another server, so a keyring
+  entry that outlived its server can never be read for a different one. An older file without the field starts from the highest
+  key in its list. A downgrade keeps the field (an older build writes unknown top-level fields back, ADR 0013) but ignores it
+  when it picks a key, so an older build may give a removed server's key again; accepted, since those builds cannot remove a
+  server and the removed server's keyring entries were deleted, or reported as left. Signing in as another user makes that user
+  active; the earlier user's token stays in the keyring for user switching later (not built).
 
 ### `current-app`
 - **`SignIn`** flow, from `App::sign_in(NewServer)` (setup's `Ready`) or `App::sign_in_again(&ServerRef)`: `Ready { quick_connect }`,
@@ -128,9 +134,39 @@ built now (manager, 2026-10-22).
   token the old client still holds in memory, and returns the server's answer for the UI to mention. The user stays saved. A restore
   while the server answers finds nothing to restore, and a sign-in that completes meanwhile is a new session and is kept (both
   tested).
-- **Ordering:** saving a sign-in, signing out, the 401 rule and restoring each change a server's session under one async lock and
-  check under it that the session or active user they act on is still current. Restore installs its client only if no sign-in or
-  sign-out happened during its probe, and writes the status only while its session is current.
+- **Remove a server** (amended 2026-10-23): `App::remove_server(&ServerRef)` returns `Removal::{NotSaved, Removed {
+  credentials_left }}`. Local first, as sign-out:
+  - Under the session lock, kept short (no keyring I/O under it): the list without the server is saved (the atomic save; the
+    observable list and the settings file change together), then its session, its address provider (the follow task stops) and
+    its status in the capabilities state are dropped.
+  - After the lock: each saved user's token for the server (all of `users`, not only the active one) is read from the keyring
+    and deleted. Reading after the commit is safe: from then on nothing writes a token under that key (a sign-in to it finds no
+    saved server, `ServerRemoved`; one saved earlier has already stored its token, which is read and deleted here; the key is
+    never given out again).
+  - Then, in the background, best effort and never awaited, the server is told: `POST /Sessions/Logout` (10 s timeout) with the
+    live session's client and with each other token read, all through the server's `RoamingAddresses`, so only to an address that
+    passed the identity check (a server not reached in this run gets a provider over its last saved addresses for this). Its
+    answer changes nothing. A sign-in whose save finds the server removed logs its new token out the same way, so no device
+    record lingers on the server.
+  - Removing a server that is not saved is a no-op (`NotSaved`), not an error. Settings from a newer version (or a failed write)
+    fail the removal before anything changes: the server stays saved and signed in.
+  - **A keyring that fails** does not stop the removal: the settings entry goes, and `credentials_left: true` lets the UI say
+    that a saved sign-in may still be in Credential Manager or the keychain. That is a delete that fails (`Failed`, `TooLong`),
+    or a read or delete answering `Unavailable` on a platform with a keyring backend, where it means locked or refused and an
+    entry stored while it worked may still be there (manager, 2026-10-23). Only without a backend (`Secrets::has_backend`
+    false: Linux until its app task) does `Unavailable` mean nothing was ever stored. The key is never reused, so a leftover
+    entry is dead weight, not a risk; a token that was read is also logged out on the server.
+  - **Races:** only a saved server has a status: `update_status` writes nothing for a server that is not in the saved list, checked
+    under the capabilities state's lock, which the removal takes after its commit. So a restore that ends after the removal
+    (its `signed_out`, `Unreachable` or user check) cannot bring the status back, and its install is refused because the server
+    has no active user. A provider being built for it is dropped (the existing "saved list changed" check). The 401 hook and a
+    user check on the old client find no session. Tested: a removal with two users signed in (both tokens deleted and logged
+    out), unknown and repeated removals, a removal that does not wait for the server, a restore waiting on `/Users/Me` while
+    the server is removed, a sign-in again racing the removal and one saved just before it, a keyring that cannot delete, and
+    settings from a newer version.
+- **Ordering:** saving a sign-in, signing out, removing a server, the 401 rule and restoring each change a server's session under
+  one async lock and check under it that the session or active user they act on is still current. Restore installs its client
+  only if no sign-in or sign-out happened during its probe, and writes the status only while its session is current.
 - **Address** (wave 3, ADR 0014): each saved Jellyfin server has one `RoamingAddresses` over all its addresses with
   `JellyfinIdentity` (its `ServerId`). It is kept in the shared state with the addresses it was built from, and it hears network
   facts (`App::network_changed`, `App::returned_to_foreground`). Its session and its sign-ins use it. It is made when first needed

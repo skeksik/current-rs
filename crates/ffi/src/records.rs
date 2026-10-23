@@ -313,6 +313,15 @@ pub struct SignOutResult {
     pub server_told: bool,
 }
 
+/// How removing a saved server went. The server is told in the background; its answer is not waited for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct RemoveServerResult {
+    /// False when no such server was saved (unknown, or removed already): nothing changed.
+    pub removed: bool,
+    /// A saved sign-in could not be deleted from the keyring (Credential Manager, the keychain); the UI says so.
+    pub credentials_left: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -185,6 +185,24 @@ actions; nothing is decided in C#.
   - **Accounts:** a card per saved server (name; user, version and reachability as above) with "Sign out", or "Sign in" when signed
     out. Signing out asks nothing (manager, 2026-10-23): signing in again undoes it. `ServerTold: false` (the server did not answer)
     shows "Signed out of <name> on this PC. The server couldn't be told, so the session may still show in its dashboard."
+    Each server is a `SettingsExpander` (2026-10-23): "Sign out" / "Sign in" stay in its header, and expanding it shows a card
+    "Remove this server" ("Signs out every user here and forgets the server's addresses on this PC.") with "Remove", named
+    "Remove <name>" for Narrator. This follows Windows Settings' own account removal: "Under Other users, select the flyout for
+    the account you want to remove. Next to Account and data, select Remove." ("Manage User Accounts in Windows",
+    support.microsoft.com, read 2026-10-23). "Remove" asks first, in a `ContentDialog` like the plain-http one: "Remove <name>?",
+    "This signs out every user on this PC and forgets the server's addresses. You can add it again later.", primary "Remove",
+    close "Cancel" (the default, so Enter and Esc cancel). Whether Windows Settings itself asks before removing an account, and
+    with what words, is not verified. Unlike sign-out it asks, because signing in again does not undo it. Nothing is disabled
+    while the dialog is open (a page flag keeps a second one from opening): a disabled Remove button lost focus, so Cancel left
+    it on "Add another server" (the owner's run, 2026-10-23). After Cancel, Esc or Enter focus goes back to the Remove button,
+    set by the page, since whether ContentDialog gives focus back to its opener by itself is not verified (no Microsoft source
+    found, 2026-10-23). Only after "Remove" are the row's buttons disabled, until the removal ends. `CredentialsLeft` shows a
+    warning: "Removed <name>, but its saved sign-in may still be in Credential Manager. Current no longer uses it. You can
+    delete the entries ending in ".Current" under Windows Credentials."
+    A settings error shows `ProblemText.Store`. Home and the list update from the saved-server list; rows are removed by key,
+    so the other servers' expanders keep their state, and focus moves to "Add another server" (or "Add a server" when none is
+    left) once the row is gone. The Remove button carries its row in `Tag` rather than relying on the DataContext the
+    expander's items inherit.
   - **Diagnostics:** "Copy diagnostics" now copies `ExportDiagnosticsAsync()` (version, platform, settings state, then the
     redacted request log).
   - **About:** a `SettingsExpander` "Current" with the version, and "© 2026 Skeksik" inside.
@@ -516,6 +534,45 @@ Home "Connected, address 1 of 3" at once and still address 1 after 6 minutes, un
 requests, both to address 1; no address, user name, server id, device id or token in the text. Reading: with the LAN IP first
 and nothing cached for this network, the app connects to address 1 and stays there. The earlier "address 2 of 4" did not come
 back, but its saved order and cached winner were gone, so moving off a cached worse address after 5 minutes was not exercised.
+
+## Remove a server: what the owner checks
+To run with the discovery re-check, on a build from feat/remove-server, with the server signed in (and ideally a second user
+signed in to it from this PC too, via "Sign in" after a sign-out):
+1. Settings → Accounts: the server's card expands (chevron) and shows "Remove this server" with "Remove". Narrator reads the
+   button as "Remove <name>"; Tab reaches it.
+2. "Remove": the dialog "Remove <name>?" opens. Esc and Enter both cancel and nothing changes; "Cancel" too. After each,
+   focus is back on the Remove button.
+3. "Remove" again, then the dialog's "Remove": the card disappears from Settings and from Home at once (Home shows "No servers
+   yet" if it was the only one). No warning appears. Focus lands on "Add another server" (or "Add a server"), and with two
+   servers the other one's expander stays as it was.
+4. Credential Manager (Control Panel → Credential Manager → Windows Credentials): no entry ending in `.Current` is left for that
+   server (`jellyfin/<key>/<user id>.Current`).
+5. `%LOCALAPPDATA%\Current\settings.json`: no entry for the server in `servers`; `last_server_key` holds its key.
+6. The server's dashboard (Devices): this PC's device for each user is gone within a few seconds.
+7. Quit and start again: the server does not come back. Add it again: it is added under a new key and signs in normally.
+8. Optional: remove a server while it is unreachable (network off): it is removed at once all the same; the dashboard keeps the
+   device until the server's own clean-up (nothing could tell it).
+
+### Windows run (2026-10-23)
+Heads feat/remove-server a1467f6 and fix/discovery-per-interface bea8ac9, merged in a throwaway local worktree (never pushed) and
+built with the four scripts: binding tests 34 passed, smoke run passed. Windows 10.0.26200.9711, x64, the multi-adapter PC of the
+M1 run; the cases ran `out/app/Current.exe`. The earlier run's data was no longer on the PC, so the server was added from
+discovery first (key 1) and two users were saved: the first signed out, the second signed in from the card (one credential).
+1. **Pass.** The card expands and shows "Remove this server" with "Remove"; Tab reaches it and Narrator reads "Remove <name>"
+   (its UI Automation name is "Remove " plus the server's name).
+2. **Pass.** "Remove <name>?" opens with "Cancel" as the default; Esc, Enter and "Cancel" each close it and nothing changes
+   (same `settings.json`, same credentials). Minor: after Esc or Enter the focus ring is on "Add another server", not back on
+   the "Remove" button that opened the dialog. Fixed afterwards (f3b4060): the button stays enabled while the
+   dialog is open and gets focus back on a cancel.
+3. **Pass.** Gone from Settings ("No servers are set up.") and Home ("No servers yet") at once, no warning; focus on "Add a
+   server".
+4. **Pass.** No entry ending in `.Current` left (`cmdkey /list`, the same Windows Credentials store).
+5. **Pass.** `settings.json` has no `servers` (left out when empty); `last_server_key` is 1, the removed server's key.
+6. **Pass.** The owner saw this PC's device gone from Devices for both users.
+7. **Pass.** Quit and start: "No servers yet". Added again from discovery: key 2 (`last_server_key` 2), signed in normally, one
+   credential under `jellyfin/2/`.
+8. **Pass.** The owner removed it with wired and Wi-Fi off: gone at once, no warning; `settings.json` and the credential were
+   cleared. The device stays in the dashboard's list, as expected.
 
 ## Quick Connect code and Narrator: owner's check
 For fix/narrator-quick-connect-code (the code announced by a notification, see "Keyboard and Narrator" under Screens), on a build

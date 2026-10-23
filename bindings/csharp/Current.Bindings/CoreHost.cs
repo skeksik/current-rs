@@ -90,6 +90,18 @@ public sealed class CoreHost : IDisposable
         return new SignOutResult(result.ServerTold);
     }
 
+    /// <summary>
+    /// Removes a saved server: this device signs out every user there, deletes their tokens and forgets the server and its addresses
+    /// at once; the server is told in the background. Removing a server that is not saved does nothing. Not cancellable, as
+    /// sign-out.
+    /// </summary>
+    /// <exception cref="CoreStoreException">The settings could not be saved; nothing changed.</exception>
+    public async Task<RemoveServerResult> RemoveServerAsync(ServerRef server)
+    {
+        var result = await CoreCall.RunUncancellableAsync(() => _core.RemoveServer(Map.ToFfi(server))).ConfigureAwait(false);
+        return new RemoveServerResult(result.Removed, result.CredentialsLeft);
+    }
+
     /// <summary>The platform's report of the network, on start and on every change (ADR 0014). Call it from one thread.</summary>
     public void NetworkChanged(NetworkFacts facts) => _core.NetworkChanged(Map.ToFfi(facts));
 

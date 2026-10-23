@@ -7,12 +7,15 @@ using Microsoft.UI.Xaml.Controls;
 namespace Current.Shell.Pages;
 
 /// <summary>
-/// Settings: the saved servers under Accounts (sign out, sign in again), diagnostics, and About. It waits for the core to open
+/// Settings: the saved servers under Accounts (sign out, sign in again, remove), diagnostics, and About. It waits for the core to open
 /// (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
 /// </summary>
 public sealed partial class SettingsPage : Page
 {
     private bool _loaded;
+
+    /// <summary>A Remove confirmation is open: a second one is not started.</summary>
+    private bool _confirmingRemoval;
 
     public SettingsPage()
     {
@@ -98,6 +101,111 @@ public sealed partial class SettingsPage : Page
         {
             button.IsEnabled = true;
         }
+    }
+
+    /// <summary>
+    /// Removes a server after a confirmation (Dialogs page, learn.microsoft.com, ms.date 2026-07-15, read 2026-10-23): the close
+    /// button is the safe action, the default, and answers Esc, as the plain-http dialog. Unlike sign-out, removing cannot be undone
+    /// by signing in again: the server would have to be added again. Home and this list update from the saved-server list. async
+    /// void, as event handlers are: it catches everything itself.
+    /// </summary>
+    private async void OnRemove(object sender, RoutedEventArgs e)
+    {
+        if (App.Core is not { } core || sender is not Button { Tag: ServerRow row } button || row.Removing || _confirmingRemoval
+            || XamlRoot is null)
+        {
+            return;
+        }
+        AccountsInfo.IsOpen = false;
+        // Only one dialog at a time, and nothing is disabled while it is open: a disabled Remove button would lose focus, and
+        // Cancel would leave it elsewhere (the owner's run, 2026-10-23).
+        _confirmingRemoval = true;
+        ContentDialogResult answer;
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = $"Remove {row.Name}?",
+                Content = "This signs out every user on this PC and forgets the server's addresses. You can add it again later.",
+                PrimaryButtonText = "Remove",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            answer = await dialog.ShowAsync();
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: the remove confirmation failed: {error.GetType().Name}");
+            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemText.Unexpected);
+            return;
+        }
+        finally
+        {
+            _confirmingRemoval = false;
+        }
+        if (answer != ContentDialogResult.Primary)
+        {
+            // Whether ContentDialog itself gives focus back to the element that opened it is not verified (no Microsoft source
+            // found, 2026-10-23), so it is given back here.
+            button.Focus(FocusState.Programmatic);
+            return;
+        }
+        row.Removing = true;
+        try
+        {
+            var result = await core.RemoveServerAsync(row.Server);
+            FocusAfterRemoval(row);
+            if (result.CredentialsLeft)
+            {
+                ShowAccountsInfo(
+                    InfoBarSeverity.Warning,
+                    $"Removed {row.Name}, but its saved sign-in may still be in Credential Manager.",
+                    "Current no longer uses it. You can delete the entries ending in \".Current\" under Windows Credentials.");
+            }
+        }
+        catch (CoreStoreException error)
+        {
+            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemText.Store(error.Problem));
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: removing a server failed: {error.GetType().Name}");
+            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemText.Unexpected);
+        }
+        finally
+        {
+            // A row that stays (the removal failed) works again; a removed one is gone with its buttons.
+            row.Removing = false;
+        }
+    }
+
+    /// <summary>
+    /// The removed row took the focused button with it: once the row has left the list, focus goes to "Add another server", or to
+    /// "Add a server" when no server is left. Queued, so the list's visibility has changed first.
+    /// </summary>
+    private void FocusAfterRemoval(ServerRow row)
+    {
+        if (Servers is not { } servers)
+        {
+            return;
+        }
+        void MoveFocus() => DispatcherQueue.TryEnqueue(() =>
+            (servers.HasServers ? AddAnotherServerButton : AddFirstServerButton).Focus(FocusState.Programmatic));
+        if (!servers.Rows.Contains(row))
+        {
+            MoveFocus();
+            return;
+        }
+        void OnRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            if (!servers.Rows.Contains(row))
+            {
+                servers.Rows.CollectionChanged -= OnRowsChanged;
+                MoveFocus();
+            }
+        }
+        servers.Rows.CollectionChanged += OnRowsChanged;
     }
 
     private void ShowAccountsInfo(InfoBarSeverity severity, string title, string message)

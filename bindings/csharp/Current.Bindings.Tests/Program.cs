@@ -28,6 +28,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("Quick Connect turned off fails", FlowTests.QuickConnectTurnedOffFails),
     ("a cancelled sign-in returns to Ready", FlowTests.CancelledSignInReturnsToReady),
     ("signing out clears the user", FlowTests.SignOutClearsTheUser),
+    ("removing a server forgets it", FlowTests.RemovingAServerForgetsIt),
     ("without the token, restoring signs out", FlowTests.WithoutTheTokenRestoreSignsOut),
     ("the keyring keeps the session for the next start", FlowTests.KeyringKeepsTheSession),
     ("discovery ends", FlowTests.DiscoveryEnds),

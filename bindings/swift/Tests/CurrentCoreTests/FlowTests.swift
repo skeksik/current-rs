@@ -207,6 +207,27 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         }
     }
 
+    @MainActor @Test func removingAServerForgetsIt() async throws {
+        let standIn = try StandIn()
+        defer { standIn.stop() }
+        let folder = try DataFolder()
+        defer { folder.remove() }
+        let core = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        try await signIn(core, standIn)
+        let result = try await core.removeServer(server: firstServer)
+        #expect(result.removed && !result.credentialsLeft)
+        #expect(core.servers().isEmpty)
+        let capabilities = core.observeCapabilities()
+        defer { capabilities.cancel() }
+        try await eventually("no status") { capabilities.value.servers.isEmpty }
+        // On the main actor, as the capabilities wait above: `waitFor` runs off it.
+        try await eventually("the server is told") { (try? standIn.count("/Sessions/Logout")) == 1 }
+        let again = try await core.removeServer(server: firstServer)
+        #expect(!again.removed)
+        let next = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        #expect(next.servers().isEmpty)
+    }
+
     @MainActor @Test func withoutTheTokenRestoringSignsOut() async throws {
         let standIn = try StandIn()
         defer { standIn.stop() }

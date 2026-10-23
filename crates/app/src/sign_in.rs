@@ -6,10 +6,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use current_jellyfin::{
-    AuthError, JellyfinClient, ProbeError, QUICK_CONNECT_INTERVAL, QUICK_CONNECT_LIFETIME, SignedIn,
+    AccessToken, AuthError, JellyfinClient, ProbeError, QUICK_CONNECT_INTERVAL,
+    QUICK_CONNECT_LIFETIME, SignedIn,
 };
 use current_model::{SavedServer, ServerId, ServerRef, User};
-use current_net::{AddressProvider, NetError, RoamingAddresses};
+use current_net::{AddressProvider, NetError, RoamingAddresses, RuntimeHandle};
 use current_store::StoreError;
 use tokio::sync::{OnceCell, watch};
 
@@ -394,6 +395,7 @@ impl SignIn {
         // every later cancel() inert.
         let saving = Saving(self);
         let user = signed_in.user.clone();
+        let token = signed_in.token.clone();
         // Saved in full even if this future is dropped or the attempt cancelled meanwhile: the server already made the session.
         let next = match self
             .shared
@@ -408,13 +410,46 @@ impl SignIn {
                 server,
                 remembered,
             },
-            Err(error) => SignInState::Failed { error },
+            Err(error) => {
+                if error == SignInError::ServerRemoved {
+                    self.log_out_unsaved(token);
+                }
+                SignInState::Failed { error }
+            }
         };
         // The state first, the mark after: while the mark is set no cancel() can bump the generation, so `set_if_current` is sure to
         // see this attempt's generation and the saved sign-in shows as SignedIn. Cleared first, a cancel() landing in between would
         // leave the flow Ready over a saved session.
         self.set_if_current(generation, next);
         drop(saving);
+    }
+}
+
+impl SignIn {
+    /// The saved server was removed while this sign-in completed: its token is not kept, so the server is told to end the session
+    /// it just made, in the background and best effort, through the same identity-checked provider the attempt used.
+    fn log_out_unsaved(&self, token: AccessToken) {
+        let (Target::Saved(server), Some(provider)) = (
+            &self.target,
+            self.link.get().and_then(|link| link.provider.clone()),
+        ) else {
+            return;
+        };
+        let Ok(runtime) = RuntimeHandle::try_current() else {
+            return;
+        };
+        let Ok(client) = JellyfinClient::new(
+            server.clone(),
+            provider,
+            self.shared.identity.clone(),
+            self.shared.request_log.clone(),
+        ) else {
+            return;
+        };
+        client.set_token(token);
+        runtime.spawn(async move {
+            let _ = client.sign_out().await;
+        });
     }
 }
 
