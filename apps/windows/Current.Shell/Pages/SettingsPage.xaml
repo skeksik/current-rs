@@ -29,14 +29,17 @@
                 Visibility="{x:Bind Servers.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:ServerRow">
-                        <toolkit:SettingsCard Margin="0,0,0,4" Header="{x:Bind Name, Mode=OneWay}">
-                            <toolkit:SettingsCard.Description>
+                        <!-- An expander per server, Remove inside it, as Windows Settings removes an account: "Under Other users,
+                             select the flyout for the account you want to remove. Next to Account and data, select Remove." ("Manage
+                             User Accounts in Windows", support.microsoft.com, read 2026-10-23). -->
+                        <toolkit:SettingsExpander Margin="0,0,0,4" Header="{x:Bind Name, Mode=OneWay}">
+                            <toolkit:SettingsExpander.Description>
                                 <StackPanel>
                                     <TextBlock Text="{x:Bind Account, Mode=OneWay}" />
                                     <TextBlock Text="{x:Bind Product, Mode=OneWay}" />
                                     <TextBlock Text="{x:Bind Connection, Mode=OneWay}" />
                                 </StackPanel>
-                            </toolkit:SettingsCard.Description>
+                            </toolkit:SettingsExpander.Description>
                             <Grid>
                                 <Button
                                     Content="Sign out"
@@ -49,7 +52,17 @@
                                     Visibility="{x:Bind SignInVisibility, Mode=OneWay}"
                                     Click="OnSignInAgain" />
                             </Grid>
-                        </toolkit:SettingsCard>
+                            <toolkit:SettingsExpander.Items>
+                                <toolkit:SettingsCard
+                                    Header="Remove this server"
+                                    Description="Signs out every user here and forgets the server's addresses on this PC.">
+                                    <Button
+                                        Content="Remove"
+                                        AutomationProperties.Name="{x:Bind RemoveLabel, Mode=OneWay}"
+                                        Click="OnRemove" />
+                                </toolkit:SettingsCard>
+                            </toolkit:SettingsExpander.Items>
+                        </toolkit:SettingsExpander>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>

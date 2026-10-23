@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 namespace Current.Shell.Pages;
 
 /// <summary>
-/// Settings: the saved servers under Accounts (sign out, sign in again), diagnostics, and About. It waits for the core to open
+/// Settings: the saved servers under Accounts (sign out, sign in again, remove), diagnostics, and About. It waits for the core to open
 /// (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
 /// </summary>
 public sealed partial class SettingsPage : Page
@@ -96,6 +96,56 @@ public sealed partial class SettingsPage : Page
         }
         finally
         {
+            button.IsEnabled = true;
+        }
+    }
+
+    /// <summary>
+    /// Removes a server after a confirmation (Dialogs page, learn.microsoft.com, ms.date 2026-07-15, read 2026-10-23): the close
+    /// button is the safe action, the default, and answers Esc, as the plain-http dialog. Unlike sign-out, removing cannot be undone
+    /// by signing in again: the server would have to be added again. Home and this list update from the saved-server list. async
+    /// void, as event handlers are: it catches everything itself.
+    /// </summary>
+    private async void OnRemove(object sender, RoutedEventArgs e)
+    {
+        if (App.Core is not { } core || sender is not Button { DataContext: ServerRow row } button || XamlRoot is null)
+        {
+            return;
+        }
+        button.IsEnabled = false;
+        AccountsInfo.IsOpen = false;
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = $"Remove {row.Name}?",
+                Content = "This signs out every user on this PC and forgets the server's addresses. You can add it again later.",
+                PrimaryButtonText = "Remove",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+            var result = await core.RemoveServerAsync(row.Server);
+            if (result.CredentialsLeft)
+            {
+                ShowAccountsInfo(
+                    InfoBarSeverity.Warning,
+                    $"Removed {row.Name}, but its saved sign-in is still in Credential Manager.",
+                    "Current no longer uses it. You can delete the entries ending in \".Current\" under Windows Credentials.");
+            }
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: removing a server failed: {error.GetType().Name}");
+            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemText.Unexpected);
+        }
+        finally
+        {
+            // The row goes away with the server; when it stays (cancelled, failed) the button works again.
             button.IsEnabled = true;
         }
     }

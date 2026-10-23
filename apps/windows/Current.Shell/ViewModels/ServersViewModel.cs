@@ -159,6 +159,8 @@ public sealed class ServerRow : INotifyPropertyChanged
 
     public string SignOutLabel => $"Sign out of {Name}";
 
+    public string RemoveLabel => $"Remove {Name}";
+
     public Visibility SignInVisibility => SignedIn ? Visibility.Collapsed : Visibility.Visible;
 
     public Visibility SignOutVisibility => SignedIn ? Visibility.Visible : Visibility.Collapsed;
@@ -184,7 +186,7 @@ public sealed class ServerRow : INotifyPropertyChanged
         foreach (var name in new[]
         {
             nameof(Name), nameof(Product), nameof(Account), nameof(Connection), nameof(SignedIn), nameof(UserName),
-            nameof(SignInVisibility), nameof(SignOutVisibility), nameof(SignInLabel), nameof(SignOutLabel),
+            nameof(SignInVisibility), nameof(SignOutVisibility), nameof(SignInLabel), nameof(SignOutLabel), nameof(RemoveLabel),
         })
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
