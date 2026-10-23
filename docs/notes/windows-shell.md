@@ -192,8 +192,9 @@ actions; nothing is decided in C#.
     while the dialog is open (a page flag keeps a second one from opening): a disabled Remove button lost focus, so Cancel left
     it on "Add another server" (the owner's run, 2026-10-23). After Cancel, Esc or Enter focus goes back to the Remove button,
     set by the page, since whether ContentDialog gives focus back to its opener by itself is not verified (no Microsoft source
-    found, 2026-10-23). Only after "Remove" are the row's buttons disabled, until the removal ends. `CredentialsLeft` shows a warning: "Removed <name>, but its saved sign-in may still be in
-    Credential Manager. Current no longer uses it. You can delete the entries ending in ".Current" under Windows Credentials."
+    found, 2026-10-23). Only after "Remove" are the row's buttons disabled, until the removal ends. `CredentialsLeft` shows a
+    warning: "Removed <name>, but its saved sign-in may still be in Credential Manager. Current no longer uses it. You can
+    delete the entries ending in ".Current" under Windows Credentials."
     A settings error shows `ProblemText.Store`. Home and the list update from the saved-server list; rows are removed by key,
     so the other servers' expanders keep their state, and focus moves to "Add another server" (or "Add a server" when none is
     left) once the row is gone. The Remove button carries its row in `Tag` rather than relying on the DataContext the
