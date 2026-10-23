@@ -284,12 +284,13 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
 4. it has no servers;
 5. disposing the subscription brings `LiveListeners` back to where it was (within 10 s);
 6. the diagnostics text can be read;
-7. the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes;
-8. on a temporary data folder with secrets in memory: a first `OpenAsync` reports `Created`, a second `Loaded`; the saved servers
+7. on a temporary data folder with secrets in memory: a first `OpenAsync` reports `Created`, a second `Loaded`; the saved servers
    arrive on the UI thread, empty; probing an empty address fails with `InvalidAddress(Empty)` without a request; the folder is
    deleted after;
-9. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`);
-10. the network facts and the device name can be read (neither is printed beyond the connectivity level).
+8. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`);
+9. the network facts and the device name can be read (neither is printed beyond the connectivity level);
+10. last, the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes: closing the only window ends XAML's message
+    loop, so nothing can be awaited after it (CI run 39883272147 stopped at the next await and exited 0 without a result).
 No check sends anything over the network; discovery (UDP) is left out.
 `smoke.ps1` fails on a non-zero exit code, a missing "smoke run passed" line or a run longer than 120 s.
 

@@ -62,11 +62,6 @@ internal static class SmokeRun
             var pasted = copied ? await Clipboard.GetContent().GetTextAsync() : null;
             Check(copied && pasted == marker, "the clipboard holds the copied text");
 
-            // The window's XAML, Mica and title bar load without being shown.
-            var window = new MainWindow();
-            window.Close();
-            Check(true, "main window built");
-
             await StorageChecksAsync(ui, Check);
 
             // The pages' XAML loads; Settings uses the Community Toolkit's SettingsCard, so this also shows the toolkit loads.
@@ -80,6 +75,12 @@ internal static class SmokeRun
             var facts = NetworkObserver.Read();
             Check(true, $"network facts read (connectivity {facts.Connectivity})");
             Check(DeviceName.Get().Length > 0, "device name read");
+
+            // Last: closing the only window ends XAML's message loop, so nothing may be awaited after it (seen in CI: the run stopped at
+            // the next await and exited without a result).
+            var window = new MainWindow();
+            window.Close();
+            Check(true, "main window built");
         }
         catch (Exception error)
         {
