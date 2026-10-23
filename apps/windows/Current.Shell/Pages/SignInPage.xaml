@@ -8,7 +8,7 @@
     </Page.KeyboardAccelerators>
 
     <ScrollViewer>
-        <StackPanel MaxWidth="480" Padding="24,0,24,24" Spacing="12" HorizontalAlignment="Left">
+        <StackPanel MaxWidth="480" Padding="{StaticResource PageColumnPadding}" Spacing="12" HorizontalAlignment="Left">
             <TextBlock
                 x:Name="Heading"
                 Style="{StaticResource SubtitleTextBlockStyle}"

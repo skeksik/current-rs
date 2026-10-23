@@ -67,7 +67,7 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <!-- Notices about the app's state that every page shows (App.ShowNotice): settings reset, a sign-in not remembered. -->
-                <StackPanel x:Name="Notices" Margin="24,0,24,0" Spacing="8" />
+                <StackPanel x:Name="Notices" Margin="{StaticResource PageNoticesMargin}" Spacing="8" />
                 <Frame x:Name="ContentFrame" Grid.Row="1" IsTabStop="True" Navigated="OnNavigated" />
             </Grid>
         </NavigationView>

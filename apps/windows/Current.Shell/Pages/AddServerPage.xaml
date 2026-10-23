@@ -9,7 +9,7 @@
     </Page.KeyboardAccelerators>
 
     <ScrollViewer>
-        <StackPanel MaxWidth="640" Padding="24,0,24,24" Spacing="12" HorizontalAlignment="Left">
+        <StackPanel MaxWidth="640" Padding="{StaticResource PageColumnPadding}" Spacing="12" HorizontalAlignment="Left">
             <TextBlock
                 Style="{StaticResource BodyTextBlockStyle}"
                 TextWrapping="Wrap"
