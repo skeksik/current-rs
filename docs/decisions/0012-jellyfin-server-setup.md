@@ -66,6 +66,8 @@ end; "Jellyfin" means the server at tag `v12.2`.
   says to finish setup in a browser, or wait if the server is still starting), and `DifferentServer` for `probe_expecting`. When
   every candidate fails, the most telling error wins (Unavailable, then Redirected, Tls, NotJellyfin or Status, Timeout,
   Unreachable); `TooOld` and `SetupIncomplete` end the search, since a Jellyfin server answered. No error holds an address.
+  Amended 2026-10-23: a `Tls` from https on a host and port where plain http then answered (`NotJellyfin`, `Status`, `Redirected`,
+  `Unavailable`) does not count, since that port speaks plain http.
 - **Identity:** `ServerId` (model) is the server's `Id`, compared byte for byte; `same_server` compares two answers and
   `probe_expecting` checks an address leads to a known server; it is the identity check roaming runs on every address (ADR 0014),
   and credentials go only to addresses that passed it. Probes carry no credentials. The id is public, so it catches mistakes (another

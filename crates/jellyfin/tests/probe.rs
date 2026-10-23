@@ -370,6 +370,23 @@ async fn the_most_telling_error_is_reported() {
 }
 
 #[tokio::test]
+async fn a_web_app_on_a_port_without_a_scheme_is_not_jellyfin() {
+    // A plain-http web app: https on its port fails the handshake (Tls), http answers with a page. The http answer says more.
+    let page = StandIn::start(vec![("/System/Info/Public", html(200))]).await;
+    let (prober, _) = prober();
+    assert_eq!(
+        prober.probe(&format!("127.0.0.1:{}", page.port)).await,
+        Err(ProbeError::NotJellyfin)
+    );
+    // The same with nothing at the endpoint (404).
+    let empty = StandIn::start(Vec::new()).await;
+    assert_eq!(
+        prober.probe(&format!("127.0.0.1:{}", empty.port)).await,
+        Err(ProbeError::NotJellyfin)
+    );
+}
+
+#[tokio::test]
 async fn a_name_that_does_not_resolve_is_tried_once() {
     let (prober, log) = prober();
     // `.invalid` never resolves (RFC 6761). Whatever the first candidate ends with (a proxy may answer for it), no other is tried.
