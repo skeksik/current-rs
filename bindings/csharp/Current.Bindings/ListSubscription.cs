@@ -9,11 +9,19 @@ namespace Current.Bindings;
 /// <remarks>
 /// The mirror heals itself. If a batch cannot be applied (an index out of range) or never reached the UI thread (the dispatcher
 /// refused it, or mapping it failed), the mirror is out of step with the core. It then subscribes again, which starts with a fresh
-/// Reset, and drops whatever the old subscription still had queued. <see cref="Recoveries"/> counts these.
+/// Reset, and drops whatever the old subscription still had queued. <see cref="Recoveries"/> counts these. A failure that repeats
+/// cannot loop: after <see cref="MaxRecoveries"/> recoveries within <see cref="RecoveryWindow"/> the mirror stops, traces an error
+/// and reports <see cref="IsFaulted"/>; the owner may subscribe anew.
 /// </remarks>
 public sealed class ListSubscription<T> : IDisposable
 {
+    /// <summary>At most this many recoveries within <see cref="RecoveryWindow"/>; one more faults the mirror.</summary>
+    public const int MaxRecoveries = 3;
+
+    public static readonly TimeSpan RecoveryWindow = TimeSpan.FromSeconds(10);
+
     private readonly Func<ListSubscription<T>, int, uniffi.current_ffi.TaskHandle> _subscribe;
+    private readonly Queue<DateTime> _recent = new();
     private uniffi.current_ffi.TaskHandle? _handle;
     private int _generation;
 
@@ -32,13 +40,16 @@ public sealed class ListSubscription<T> : IDisposable
     /// <summary>How often the mirror fell out of step and subscribed again. A diagnostic: it stays 0 in normal use.</summary>
     public int Recoveries { get; private set; }
 
+    /// <summary>The mirror fell out of step too often and stopped: <see cref="Items"/> no longer follows the core.</summary>
+    public bool IsFaulted { get; private set; }
+
     /// <summary>The current subscription's generation: batches from an older one are dropped.</summary>
     internal int Generation => Volatile.Read(ref _generation);
 
     /// <summary>Runs on the UI thread. A batch from an older subscription, or after <see cref="Dispose"/>, is dropped.</summary>
     internal void Apply(IReadOnlyList<ListDiff<T>> batch, int generation)
     {
-        if (IsDisposed || generation != Generation)
+        if (IsDisposed || IsFaulted || generation != Generation)
         {
             return;
         }
@@ -56,12 +67,26 @@ public sealed class ListSubscription<T> : IDisposable
     /// <summary>Runs on the UI thread: the subscription of <paramref name="generation"/> lost a batch; subscribe again.</summary>
     internal void Recover(int generation)
     {
-        if (IsDisposed || generation != Generation)
+        if (IsDisposed || IsFaulted || generation != Generation)
         {
             return;
         }
-        Recoveries++;
+        var now = DateTime.UtcNow;
+        while (_recent.Count > 0 && now - _recent.Peek() > RecoveryWindow)
+        {
+            _recent.Dequeue();
+        }
         Release();
+        if (_recent.Count >= MaxRecoveries)
+        {
+            IsFaulted = true;
+            // Batches still queued from the released subscription are dropped.
+            Interlocked.Increment(ref _generation);
+            Trace.TraceError($"Current: a core list fell out of step {MaxRecoveries + 1} times within {RecoveryWindow}; it stopped");
+            return;
+        }
+        _recent.Enqueue(now);
+        Recoveries++;
         Subscribe();
     }
 

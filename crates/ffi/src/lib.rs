@@ -68,6 +68,10 @@ pub trait SavedServersListener: Send + Sync {
 /// saved servers. The file and keyring work runs on the core's own blocking pool, so the UI may await this from its UI thread. Then
 /// call [`Core::restore_sessions`] in the background.
 ///
+/// Open one core per data folder per process: two would each keep their own copy of the saved servers and overwrite each other's
+/// settings. Dropping a core does not stop a restore check it started: that check runs until its requests end (their timeouts
+/// bound it).
+///
 /// `device_name` is what Jellyfin shows for this device: the platform's name for the computer; an empty one becomes the platform's
 /// name. `secrets` is [`SecretStore::Keyring`] in the apps.
 ///

@@ -476,4 +476,20 @@ internal static class FlowTests
         Check(text.Contains("[redacted]", StringComparison.Ordinal) && !text.Contains("home-wifi", StringComparison.Ordinal), text);
         return Task.CompletedTask;
     }
+
+    public static async Task ServerListStopsAfterRepeatedFailures()
+    {
+        using var core = CoreHost.Create();
+        var ui = new ManualDispatcher();
+        using var servers = core.ObserveServers(ui);
+        // One bad batch more than the mirror recovers from within the window.
+        for (var i = 0; i <= ListSubscription<SavedServer>.MaxRecoveries; i++)
+        {
+            await Eventually("the Reset of the current subscription", ui, () => ui.Pending == 0);
+            servers.Apply([new ListDiff<SavedServer>.Remove(5)], servers.Generation);
+        }
+        Check(servers.IsFaulted, "faulted");
+        Check(servers.Recoveries == ListSubscription<SavedServer>.MaxRecoveries, $"{servers.Recoveries} recoveries");
+        await Eventually("the core drops the listener", ui, () => core.LiveListeners == 0);
+    }
 }

@@ -390,6 +390,9 @@ impl SignIn {
         if !claimed {
             return;
         }
+        // Clears the mark however this ends, also if a caller drops this future while it saves: a mark left behind would make
+        // every later cancel() inert.
+        let saving = Saving(self);
         let user = signed_in.user.clone();
         // Saved in full even if this future is dropped or the attempt cancelled meanwhile: the server already made the session.
         let next = match self
@@ -407,10 +410,22 @@ impl SignIn {
             },
             Err(error) => SignInState::Failed { error },
         };
-        self.generation.send_if_modified(|_| {
-            *lock(&self.saving) = None;
+        // The state first, the mark after: while the mark is set no cancel() can bump the generation, so `set_if_current` is sure to
+        // see this attempt's generation and the saved sign-in shows as SignedIn. Cleared first, a cancel() landing in between would
+        // leave the flow Ready over a saved session.
+        self.set_if_current(generation, next);
+        drop(saving);
+    }
+}
+
+/// Clears [`SignIn`]'s `saving` mark when dropped, under the generation lock as it was set.
+struct Saving<'a>(&'a SignIn);
+
+impl Drop for Saving<'_> {
+    fn drop(&mut self) {
+        self.0.generation.send_if_modified(|_| {
+            *lock(&self.0.saving) = None;
             false
         });
-        self.set_if_current(generation, next);
     }
 }

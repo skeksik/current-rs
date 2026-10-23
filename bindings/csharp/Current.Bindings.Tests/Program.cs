@@ -38,6 +38,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("cancelling while Quick Connect waits stops polling", FlowTests.CancellingWhileQuickConnectWaitsStopsPolling),
     ("the server list recovers from a bad batch", FlowTests.ServerListRecoversFromABadBatch),
     ("the server list recovers from a lost batch", FlowTests.ServerListRecoversFromALostBatch),
+    ("the server list stops after repeated failures", FlowTests.ServerListStopsAfterRepeatedFailures),
     ("network facts hide the key", FlowTests.NetworkFactsHideTheKey),
 };
 
