@@ -427,3 +427,43 @@ normal setup. Only cases 4 and 9.
    Start. After closing Current, OK: the program folder (the folder itself too), the Start entry and the Apps entry are gone.
    `%LOCALAPPDATA%\Current` did not exist (nothing writes there yet), so its staying was not seen here (the install test checks it).
    Running the setup with Current open gives "Setup has detected that Current is currently running."; Cancel exits it.
+
+## M1 Windows run (2026-10-23)
+Head a10652a, Windows 10.0.26200.9711, x64, the same PC and tools as the owner's run (Rust 1.99.1, .NET SDK 10.0.402,
+uniffi-bindgen-cs 0.11.1+v0.31.0, Inno Setup 7.1.0). Built locally with the three scripts; smoke run passed; setup 47.1 MB, built
+but not installed: the cases ran `out/app/Current.exe`. No `%LOCALAPPDATA%\Current` before the first start. The owner's server, on
+the LAN; the owner looked and typed, Claude guided and read the data folder, firewall state and the network from a shell.
+
+M1's "done when" (sign in and out, restart signed in) **holds**: cases 3, 4 and 5 pass. Cases 2 and 9 each found a defect.
+1. Fresh start: **pass.** "No servers yet" with "Add a server"; Settings → Accounts "No servers are set up.".
+2. Add a server: **fail.** The first search found nothing ("No servers found on this network. Enter the address instead."). Search
+   again found the server while the PC was on Wi-Fi, never while on the wired network (same LAN). No firewall prompt: no rule for
+   `Current.exe` exists afterwards and the firewall log since start has only Windows' own Teredo rule changes. Cause, from a shell
+   sending the same `who is JellyfinServer?` datagram: from an unbound socket to `255.255.255.255:7359`, 1 reply in 9 tries; bound
+   to the wired or the Wi-Fi address, 1 reply every time. This PC has Wi-Fi and wired on the same LAN plus WSL/Hyper-V and two VPN
+   adapters; the lowest-metric route for `255.255.255.255` is a Hyper-V virtual adapter, so the one limited broadcast
+   does not reliably leave on the LAN. Suggested: send the request from each up interface (or to each subnet broadcast), as ADR
+   0016 anticipates for per-interface addresses from the platform.
+3. Sign in: **pass.** Wrong password: "The user name or password is incorrect."; right one with Enter: "Signed in as …", the
+   version and "Connected". The data folder then holds only `settings.json`, with no token or password in it.
+4. Quit and restart: **pass.** Closing the window ended the process; started again: signed in, no prompt.
+5. Sign out: **pass.** "Signed out" at once. While signed in the dashboard's Devices showed this PC's name and "Current" + version;
+   after sign-out the device was gone.
+6. Quick Connect: **pass.** Code readable, approval from another client signs in; Cancel and Esc both stop it.
+7. Typed addresses: **pass, with a finding.** No answer, an untrusted https certificate and plain http from outside the LAN (Enter
+   and Esc both cancel the dialog) all as expected. Finding: `host:port` without a scheme, for a port where another, non-Jellyfin
+   web app speaks plain http, says "The secure connection failed. The server's certificate may not be trusted by this PC."; with
+   `https://` it correctly says it isn't a Jellyfin server. Without a scheme both https and http are tried on that port
+   (`address.rs`); https fails its handshake (`Tls`) and http gets `NotJellyfin`, and `ProbeError::rank` puts `Tls` (4) above
+   `NotJellyfin` (3). Suggested (core): when plain http on the same port answered, prefer its result over the https handshake
+   failure.
+8. Network changes: **pass.** Network dropped: "Can't reach the server"; back: "Connected"; minimise, change network (phone
+   hotspot), restore: re-checked at once. Four addresses were saved by the end (1: LAN IP, 2: DNS name, 3: LAN IP, all http;
+   4: DNS name, https, added during the run). On the LAN Home showed "address 2 of 4", on the hotspot "address 4 of 4". Worth a look:
+   on the LAN it used the DNS name, not one of the LAN IPs.
+9. Narrator and keyboard: **fail (one part).** Field names and errors are read, Tab order, Enter and Esc work, Alt+Left/Right after
+   sign-in never land on a dead sign-in page. The Quick Connect code is not read: `CodeText` gets the digit-by-digit name
+   (`SignInPage.xaml.cs`), but only `WaitingText` is announced when the panel shows, and the code itself is never announced.
+   Suggested: announce the code (by its digit-by-digit name) when it appears.
+10. Settings: **pass.** Windows Settings-style cards; About "© 2026 Skeksik"; Copy diagnostics copies text with the version; pasted
+    into Notepad (not saved) it had no address, user name or token.
