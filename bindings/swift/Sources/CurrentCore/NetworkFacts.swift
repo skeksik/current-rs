@@ -3,7 +3,7 @@
 
 import CurrentFFIBindings
 
-extension NetworkFacts: @retroactive CustomStringConvertible, @retroactive CustomDebugStringConvertible {
+extension NetworkFacts: CustomStringConvertible, CustomDebugStringConvertible {
     public var description: String {
         "NetworkFacts(connectivity: \(connectivity), metered: \(String(describing: metered)), "
             + "constrained: \(String(describing: constrained)), interface: \(interface), vpn: \(String(describing: vpn)), "

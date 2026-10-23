@@ -384,7 +384,8 @@ The M1 flows went onto the bridge in `feat/ffi-sign-in`. What it added to the pa
 - **Redaction outside states.** `NetworkFacts` carries the network key into the core.
   - Its Rust `Debug` and its C# record's `ToString()` print the key as `[redacted]`.
   - In Swift, `CustomStringConvertible` and `CustomDebugStringConvertible` do the same, but `dump` and `Mirror` still read the
-    stored property.
+    stored property. The conformance needs no `@retroactive`: Swift 6.3 rejects it for a type declared in the same SwiftPM package
+    (CI, 2026-10-23).
 - **Lists heal in C#.** A batch that cannot be applied, or that never reached the UI thread, makes `ListSubscription` subscribe
   again, which starts with a fresh `Reset`. It also drops what the old subscription still had queued. Swift's `ObservedList`
   drops a bad batch and asserts in debug builds; the owner re-subscribes (not automatic yet).
