@@ -10,7 +10,9 @@ use current_net::{
     RequestLog, ServerClient, Url,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+
+mod ports;
+use ports::Ports;
 
 const SECRET: &str = "s3cret-token-value";
 
@@ -35,7 +37,7 @@ struct StandIn {
 
 impl StandIn {
     async fn start(reply: Reply) -> Self {
-        let listener = ok(TcpListener::bind("127.0.0.1:0").await);
+        let listener = ports::bind().await;
         let port = ok(listener.local_addr()).port();
         let received = Arc::new(Mutex::new(Vec::new()));
         let log = received.clone();
@@ -417,13 +419,11 @@ async fn the_client_timeout_applies_without_a_request_timeout() {
 
 #[tokio::test]
 async fn a_closed_port_is_unreachable() {
-    // Bind to get a free port, then close it.
-    let listener = ok(TcpListener::bind("127.0.0.1:0").await);
+    let ports = Ports::hold().await;
     let address = ok(Url::parse(&format!(
         "http://127.0.0.1:{}/",
-        ok(listener.local_addr()).port()
+        ports.refused().await
     )));
-    drop(listener);
     let log = Arc::new(RequestLog::default());
     let error = client(&address, &log, Duration::from_secs(5))
         .send(Request::get("/Items"))
