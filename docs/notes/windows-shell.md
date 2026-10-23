@@ -501,3 +501,23 @@ signed in to it from this PC too, via "Sign in" after a sign-out):
 8. Optional: remove a server while it is unreachable (network off): it is removed at once all the same; the dashboard keeps the
    device until the server's own clean-up (nothing could tell it).
 
+### Windows run (2026-10-23)
+Heads feat/remove-server a1467f6 and fix/discovery-per-interface bea8ac9, merged in a throwaway local worktree (never pushed) and
+built with the four scripts: binding tests 34 passed, smoke run passed. Windows 10.0.26200.9711, x64, the multi-adapter PC of the
+M1 run; the cases ran `out/app/Current.exe`. The earlier run's data was no longer on the PC, so the server was added from
+discovery first (key 1) and two users were saved: the first signed out, the second signed in from the card (one credential).
+1. **Pass.** The card expands and shows "Remove this server" with "Remove"; Tab reaches it and Narrator reads "Remove <name>"
+   (its UI Automation name is "Remove " plus the server's name).
+2. **Pass.** "Remove <name>?" opens with "Cancel" as the default; Esc, Enter and "Cancel" each close it and nothing changes
+   (same `settings.json`, same credentials). Minor: after Esc or Enter the focus ring is on "Add another server", not back on
+   the "Remove" button that opened the dialog.
+3. **Pass.** Gone from Settings ("No servers are set up.") and Home ("No servers yet") at once, no warning; focus on "Add a
+   server".
+4. **Pass.** No entry ending in `.Current` left (`cmdkey /list`, the same Windows Credentials store).
+5. **Pass.** `settings.json` has no `servers` (left out when empty); `last_server_key` is 1, the removed server's key.
+6. **Pass.** The owner saw this PC's device gone from Devices for both users.
+7. **Pass.** Quit and start: "No servers yet". Added again from discovery: key 2 (`last_server_key` 2), signed in normally, one
+   credential under `jellyfin/2/`.
+8. **Pass.** The owner removed it with wired and Wi-Fi off: gone at once, no warning; `settings.json` and the credential were
+   cleared. The device stays in the dashboard's list, as expected.
+
