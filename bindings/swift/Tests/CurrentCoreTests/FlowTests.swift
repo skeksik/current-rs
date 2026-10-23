@@ -337,4 +337,12 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
             #expect(!text.contains("home-wifi"))
         }
     }
+
+    @Test func localInterfacesHideTheAddress() {
+        let interface = LocalInterface(address: "192.168.1.10", prefixLength: 24)
+        for text in [String(describing: interface), "\(interface)", String(reflecting: interface)] {
+            #expect(text.contains("[redacted]"))
+            #expect(!text.contains("192.168"))
+        }
+    }
 }

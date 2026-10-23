@@ -15,6 +15,8 @@ namespace Current.Shell;
 /// <item><c>OperationalStatus.Up</c>: "The network interface is up; it can transmit data packets."</item>
 /// <item><c>NetworkInterfaceType.Loopback</c>: "no traffic is sent over the wire"; <c>Tunnel</c>: "The network interface uses a
 /// tunnel connection." Both are skipped: neither reaches a LAN by broadcast.</item>
+/// <item><c>NetworkInterfaceType.Ethernet</c>: "The network interface uses an Ethernet connection"; <c>Wireless80211</c>: "uses a
+/// wireless LAN connection (IEEE 802.11 standard)". These, and the faster Ethernet types, are listed first.</item>
 /// <item><c>UnicastIPAddressInformation.PrefixLength</c>: "The length, in bits, of the prefix or network part of the IP
 /// address."</item>
 /// </list>
@@ -36,7 +38,9 @@ internal static class LocalInterfaces
             Trace.TraceWarning($"Current: listing network interfaces failed: {error.GetType().Name}");
             return found;
         }
-        foreach (var adapter in adapters)
+        // Wired and Wi-Fi adapters first (a stable sort keeps the system's order within each group), so the core's cap of 16
+        // interfaces cuts virtual and other adapters before a physical one. Virtual switches may also report Ethernet (not verified).
+        foreach (var adapter in adapters.OrderBy(adapter => IsWiredOrWifi(adapter.NetworkInterfaceType) ? 0 : 1))
         {
             if (adapter.OperationalStatus != OperationalStatus.Up
                 || adapter.NetworkInterfaceType is NetworkInterfaceType.Loopback or NetworkInterfaceType.Tunnel)
@@ -61,4 +65,8 @@ internal static class LocalInterfaces
         }
         return found;
     }
+
+    private static bool IsWiredOrWifi(NetworkInterfaceType type) => type is NetworkInterfaceType.Ethernet
+        or NetworkInterfaceType.GigabitEthernet or NetworkInterfaceType.FastEthernetT or NetworkInterfaceType.FastEthernetFx
+        or NetworkInterfaceType.Ethernet3Megabit or NetworkInterfaceType.Wireless80211;
 }

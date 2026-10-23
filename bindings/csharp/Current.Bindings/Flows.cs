@@ -118,9 +118,11 @@ public sealed class DiscoveryFlow : IDisposable
     /// The device's up IPv4 interfaces, listed just before the call: the request goes out from each of them as well as from an
     /// unbound socket (ADR 0016). Empty searches from the unbound socket only. Other address families are skipped.
     /// </param>
+    /// <exception cref="ArgumentNullException"><paramref name="interfaces"/> is null: pass an empty list instead.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled; the flow is back to Idle.</exception>
     public Task SearchAsync(IReadOnlyList<LocalInterface> interfaces, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(interfaces);
         var native = Map.ToFfi(interfaces);
         return CoreCall.RunVoidAsync(token => Native.Search(native, token), ct);
     }

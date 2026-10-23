@@ -132,6 +132,8 @@ were read on 2026-10-22 from the sources at the end. "Jellyfin" means the server
 ## Consequences
 - A search takes about 2 s plus the probes, which run while results already show.
 - A search sends from up to 17 sockets, two datagrams each (plus the resend), on a device with many adapters. Small, and bounded.
+- A server answers every socket that reaches it, up to four times each (two targets, two sends). With several sockets on one LAN
+  the shared 256-datagram limit can end a search after about 25 servers instead of 32. Acceptable for a home network.
 - A shell that passes no interfaces (the macOS app until its task) still misses servers on interfaces other than the one the OS
   picks for the limited broadcast.
 - A server that publishes an address unreachable from this device is still found through the reply's source IP when that IP is

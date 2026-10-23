@@ -664,7 +664,7 @@ mod tests {
     fn each_interface_adds_a_source_to_its_subnet_and_the_limited_broadcast() {
         let config = DiscoveryConfig::default().with_interfaces(&[
             interface([192, 168, 1, 10], 24),
-            interface([10, 1, 2, 3], 8),
+            interface([198, 51, 100, 7], 22),
         ]);
         assert_eq!(
             config.sources,
@@ -675,8 +675,8 @@ mod tests {
                     vec![port([192, 168, 1, 255]), limited()]
                 ),
                 source(
-                    Ipv4Addr::new(10, 1, 2, 3),
-                    vec![port([10, 255, 255, 255]), limited()]
+                    Ipv4Addr::new(198, 51, 100, 7),
+                    vec![port([198, 51, 103, 255]), limited()]
                 ),
             ]
         );
@@ -723,8 +723,8 @@ mod tests {
     fn links_without_a_subnet_broadcast_send_to_the_limited_one_only() {
         let config = DiscoveryConfig::default().with_interfaces(&[
             interface([192, 168, 1, 10], 32),
-            interface([192, 168, 2, 10], 31),
-            interface([192, 168, 3, 10], 0),
+            interface([198, 51, 100, 10], 31),
+            interface([203, 0, 113, 10], 0),
             // Its subnet broadcast is the limited one, sent once.
             interface([255, 255, 255, 1], 24),
         ]);
@@ -736,12 +736,12 @@ mod tests {
 
     #[test]
     fn interfaces_are_capped() {
-        let many: Vec<LocalInterface> = (0..40).map(|n| interface([10, 0, n, 1], 24)).collect();
+        let many: Vec<LocalInterface> = (1..=40).map(|n| interface([203, 0, 113, n], 24)).collect();
         let config = DiscoveryConfig::default().with_interfaces(&many);
         assert_eq!(config.sources.len(), 1 + MAX_INTERFACES);
         assert_eq!(
             config.sources.last().unwrap().bind,
-            Ipv4Addr::new(10, 0, 15, 1)
+            Ipv4Addr::new(203, 0, 113, 16)
         );
     }
 
@@ -758,17 +758,51 @@ mod tests {
 
     #[tokio::test]
     async fn replies_on_every_source_are_collected_and_merged() {
-        let (target, requests) =
+        // Each source reaches only its own stand-in, so every id found proves its socket was read.
+        let mut stand_ins = Vec::new();
+        for id in ["a", "b", "c"] {
+            stand_ins.push(stand_in(vec![reply("http://127.0.0.1:8096", id, id)], 0).await);
+        }
+        let (again, _) = stand_in(vec![reply("http://127.0.0.1:8097", "a", "a")], 0).await;
+        let mut list: Vec<Source> = stand_ins
+            .iter()
+            .map(|(target, _)| source(Ipv4Addr::LOCALHOST, vec![*target]))
+            .collect();
+        list[2].bind = Ipv4Addr::UNSPECIFIED;
+        list.push(source(Ipv4Addr::LOCALHOST, vec![again]));
+        let found = discover(&sources(list)).await.unwrap();
+        for (_, requests) in &stand_ins {
+            assert_eq!(requests.load(Ordering::SeqCst), 1);
+        }
+        let mut ids: Vec<&str> = found.iter().map(|c| c.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["a", "b", "c"], "{found:?}");
+        let a = found.iter().find(|c| c.id == ServerId::new("a")).unwrap();
+        assert_eq!(
+            addresses(a),
+            ["http://127.0.0.1:8096/", "http://127.0.0.1:8097/"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_source_whose_every_send_fails_does_not_fail_the_search() {
+        let (target, _) =
             stand_in(vec![reply("http://127.0.0.1:8096", ID, "Test Server")], 0).await;
+        // An IPv6 target from an IPv4 socket: every system rejects the send.
+        let unsendable = SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, DISCOVERY_PORT));
         let found = discover(&sources(vec![
+            source(Ipv4Addr::LOCALHOST, vec![unsendable]),
             source(Ipv4Addr::LOCALHOST, vec![target]),
-            source(Ipv4Addr::LOCALHOST, vec![target]),
-            source(Ipv4Addr::UNSPECIFIED, vec![target]),
         ]))
         .await
         .unwrap();
-        assert_eq!(requests.load(Ordering::SeqCst), 3);
         assert_eq!(found.len(), 1, "{found:?}");
+        let alone = discover(&sources(vec![source(
+            Ipv4Addr::LOCALHOST,
+            vec![unsendable],
+        )]))
+        .await;
+        assert!(alone.is_err(), "{alone:?}");
     }
 
     #[tokio::test]
