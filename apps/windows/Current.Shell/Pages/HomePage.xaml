@@ -73,7 +73,7 @@
 
         <!-- Signed-in servers: the server and user for now; browsing comes with M2 (docs/roadmap.md). -->
         <ScrollViewer Visibility="{x:Bind ViewModel.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}">
-            <StackPanel MaxWidth="1000" Padding="24,0,24,24" Spacing="4">
+            <StackPanel MaxWidth="1000" Padding="{StaticResource PageColumnPadding}" HorizontalAlignment="Left" Spacing="4">
                 <ItemsControl ItemsSource="{x:Bind ViewModel.Rows, Mode=OneWay}" IsTabStop="False">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:ServerRow">
