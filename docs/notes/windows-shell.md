@@ -188,8 +188,11 @@ actions; nothing is decided in C#.
     support.microsoft.com, read 2026-10-23). "Remove" asks first, in a `ContentDialog` like the plain-http one: "Remove <name>?",
     "This signs out every user on this PC and forgets the server's addresses. You can add it again later.", primary "Remove",
     close "Cancel" (the default, so Enter and Esc cancel). Whether Windows Settings itself asks before removing an account, and
-    with what words, is not verified. Unlike sign-out it asks, because signing in again does not undo it. While the removal runs
-    the row's buttons are disabled. `CredentialsLeft` shows a warning: "Removed <name>, but its saved sign-in may still be in
+    with what words, is not verified. Unlike sign-out it asks, because signing in again does not undo it. Nothing is disabled
+    while the dialog is open (a page flag keeps a second one from opening): a disabled Remove button lost focus, so Cancel left
+    it on "Add another server" (the owner's run, 2026-10-23). After Cancel, Esc or Enter focus goes back to the Remove button,
+    set by the page, since whether ContentDialog gives focus back to its opener by itself is not verified (no Microsoft source
+    found, 2026-10-23). Only after "Remove" are the row's buttons disabled, until the removal ends. `CredentialsLeft` shows a warning: "Removed <name>, but its saved sign-in may still be in
     Credential Manager. Current no longer uses it. You can delete the entries ending in ".Current" under Windows Credentials."
     A settings error shows `ProblemText.Store`. Home and the list update from the saved-server list; rows are removed by key,
     so the other servers' expanders keep their state, and focus moves to "Add another server" (or "Add a server" when none is
@@ -489,7 +492,8 @@ To run with the discovery re-check, on a build from feat/remove-server, with the
 signed in to it from this PC too, via "Sign in" after a sign-out):
 1. Settings → Accounts: the server's card expands (chevron) and shows "Remove this server" with "Remove". Narrator reads the
    button as "Remove <name>"; Tab reaches it.
-2. "Remove": the dialog "Remove <name>?" opens. Esc and Enter both cancel and nothing changes; "Cancel" too.
+2. "Remove": the dialog "Remove <name>?" opens. Esc and Enter both cancel and nothing changes; "Cancel" too. After each,
+   focus is back on the Remove button.
 3. "Remove" again, then the dialog's "Remove": the card disappears from Settings and from Home at once (Home shows "No servers
    yet" if it was the only one). No warning appears. Focus lands on "Add another server" (or "Add a server"), and with two
    servers the other one's expander stays as it was.

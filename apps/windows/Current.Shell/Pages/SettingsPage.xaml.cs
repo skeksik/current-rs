@@ -14,6 +14,9 @@ public sealed partial class SettingsPage : Page
 {
     private bool _loaded;
 
+    /// <summary>A Remove confirmation is open: a second one is not started.</summary>
+    private bool _confirmingRemoval;
+
     public SettingsPage()
     {
         InitializeComponent();
@@ -108,12 +111,16 @@ public sealed partial class SettingsPage : Page
     /// </summary>
     private async void OnRemove(object sender, RoutedEventArgs e)
     {
-        if (App.Core is not { } core || sender is not Button { Tag: ServerRow row } || row.Removing || XamlRoot is null)
+        if (App.Core is not { } core || sender is not Button { Tag: ServerRow row } button || row.Removing || _confirmingRemoval
+            || XamlRoot is null)
         {
             return;
         }
-        row.Removing = true;
         AccountsInfo.IsOpen = false;
+        // Only one dialog at a time, and nothing is disabled while it is open: a disabled Remove button would lose focus, and
+        // Cancel would leave it elsewhere (the owner's run, 2026-10-23).
+        _confirmingRemoval = true;
+        ContentDialogResult answer;
         try
         {
             var dialog = new ContentDialog
@@ -125,10 +132,28 @@ public sealed partial class SettingsPage : Page
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Close,
             };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-            {
-                return;
-            }
+            answer = await dialog.ShowAsync();
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: the remove confirmation failed: {error.GetType().Name}");
+            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemText.Unexpected);
+            return;
+        }
+        finally
+        {
+            _confirmingRemoval = false;
+        }
+        if (answer != ContentDialogResult.Primary)
+        {
+            // Whether ContentDialog itself gives focus back to the element that opened it is not verified (no Microsoft source
+            // found, 2026-10-23), so it is given back here.
+            button.Focus(FocusState.Programmatic);
+            return;
+        }
+        row.Removing = true;
+        try
+        {
             var result = await core.RemoveServerAsync(row.Server);
             FocusAfterRemoval(row);
             if (result.CredentialsLeft)
@@ -150,7 +175,7 @@ public sealed partial class SettingsPage : Page
         }
         finally
         {
-            // A row that stays (cancelled, failed) works again; a removed one is gone with its buttons.
+            // A row that stays (the removal failed) works again; a removed one is gone with its buttons.
             row.Removing = false;
         }
     }
