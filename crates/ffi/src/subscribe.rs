@@ -39,8 +39,6 @@ where
 }
 
 /// Sends `[Reset]`, then batches of diffs, until the handle is cancelled or dropped or the list goes away.
-// Used by the first exported list; the tests use it now.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn watch_list<T, F>(
     runtime: &Handle,
     mut subscription: ListSubscription<T>,

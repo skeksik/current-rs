@@ -15,7 +15,7 @@ use current_model::{Capabilities, ServerKey, ServerRef, ServerStatus, ServiceTyp
 use super::*;
 use crate::diff::list_diff;
 
-const WAIT: Duration = Duration::from_secs(5);
+pub(crate) const WAIT: Duration = Duration::from_secs(5);
 
 /// Records every value with the name of the thread it arrived on, and counts its own drops.
 struct Recorder {
@@ -63,7 +63,7 @@ fn one_server(key: &str) -> Capabilities {
 }
 
 /// Waits until `done` holds, failing the test after [`WAIT`].
-fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+pub(crate) fn eventually(what: &str, mut done: impl FnMut() -> bool) {
     let start = Instant::now();
     while !done() {
         assert!(start.elapsed() < WAIT, "timed out waiting for: {what}");
@@ -72,7 +72,7 @@ fn eventually(what: &str, mut done: impl FnMut() -> bool) {
 }
 
 /// Polls a future to completion on this thread, with no tokio context: as the foreign side does.
-fn block_on<F: Future>(future: F) -> F::Output {
+pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
     struct Unpark(Thread);
     impl Wake for Unpark {
         fn wake(self: Arc<Self>) {
@@ -378,7 +378,14 @@ fn apply(list: &mut Vec<String>, diff: TextDiff) {
 fn export_diagnostics_completes_without_a_tokio_context() {
     let core = Core::new().unwrap();
     let report = block_on(core.export_diagnostics(CancelToken::new())).unwrap();
-    assert_eq!(report, "Current 0.1.0\n\nRequests, oldest first:\n");
+    assert_eq!(
+        report,
+        format!(
+            "Current 0.1.0\nPlatform: {} {}\nSettings: not stored\n\nRequests, oldest first:\n",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+    );
 }
 
 #[test]

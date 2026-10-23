@@ -39,7 +39,9 @@ before merging, and its PR carries only the record.
       docs/notes/linux-gtk.md. HDR, hardware decoding, MPRIS, the keyring and Orca need native Linux later
 
 ## Follow-ups from phase D
-- [ ] "Copy diagnostics" copies an empty text until a server exists: include the app version (the core's diagnostics export) in M1
+- [ ] "Copy diagnostics" copies an empty text until a server exists: include the app version (the core's diagnostics export) in M1.
+      The core side is done (`export_diagnostics`: version, platform, settings state, then the log; PR feat/ffi-sign-in); the
+      Windows app switches its button to it with the M1 screens
 - [ ] Shipping libmpv in the app (`current-mpv`) brings the Visual C++ runtime (vcruntime140, msvcp140) under Microsoft's
       redistributable terms: record them in ADR 0003 with the owner first
 - [ ] The libmpv build installs unpinned MSYS2 make/diffutils at build time (build-only; docs/notes/windows-mpv-build.md)

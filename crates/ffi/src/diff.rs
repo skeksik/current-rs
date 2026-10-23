@@ -2,8 +2,6 @@
 //! per item type, converting from `current_app::VectorDiff`.
 
 /// An index as the bindings carry it. A UI list never holds four billion rows; a larger index saturates rather than wrapping.
-// Used by the first exported list; the tests use it now.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn ffi_index(index: usize) -> u32 {
     u32::try_from(index).unwrap_or(u32::MAX)
 }
@@ -11,7 +9,6 @@ pub(crate) fn ffi_index(index: usize) -> u32 {
 /// Declares `pub enum $name` with the variants `Append`, `Insert`, `Set`, `Remove` and `Reset` over `$item`, and
 /// `$name::from_core`, which converts a `VectorDiff<T>` for any `T` that `$item` converts from. Indices refer to the list after the
 /// diffs before it in the same batch; UIs apply a batch in order.
-#[allow(unused_macros)] // No list is exported yet; the first one uses it.
 macro_rules! list_diff {
     ($(#[$meta:meta])* $name:ident, $item:ty) => {
         $(#[$meta])*
@@ -25,7 +22,6 @@ macro_rules! list_diff {
         }
 
         impl $name {
-            #[allow(dead_code)]
             pub(crate) fn from_core<T>(diff: current_app::VectorDiff<T>) -> Self
             where
                 $item: From<T>,
@@ -56,5 +52,4 @@ macro_rules! list_diff {
     };
 }
 
-#[allow(unused_imports)]
 pub(crate) use list_diff;

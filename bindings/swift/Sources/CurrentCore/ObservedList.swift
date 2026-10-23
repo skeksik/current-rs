@@ -61,6 +61,24 @@ public final class ListForwarder<Item: Sendable>: Sendable {
     deinit { continuation.finish() }
 }
 
+extension ListForwarder: SavedServersListener where Item == SavedServerSnapshot {
+    public func onDiffs(diffs: [SavedServerDiff]) {
+        forward(diffs.map { ListDiff<SavedServerSnapshot>($0) })
+    }
+}
+
+extension ListDiff where Item == SavedServerSnapshot {
+    init(_ diff: SavedServerDiff) {
+        switch diff {
+        case .append(let values): self = .append(values)
+        case .insert(let index, let value): self = .insert(index: Int(index), item: value)
+        case .set(let index, let value): self = .set(index: Int(index), item: value)
+        case .remove(let index): self = .remove(index: Int(index))
+        case .reset(let values): self = .reset(values)
+        }
+    }
+}
+
 /// A list the core owns, mirrored on the main actor. Every batch is kept (unlike values, diffs cannot be skipped).
 @MainActor
 @Observable

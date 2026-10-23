@@ -31,7 +31,6 @@ use current_net::{
 };
 use current_store::{Secret, SecretKey, Secrets, SettingsStore, StoreError};
 use tokio::sync::watch;
-use tokio::task::JoinSet;
 
 use crate::sign_in::SignInError;
 
@@ -638,14 +637,19 @@ impl Shared {
     }
 
     /// Checks every saved Jellyfin session, all servers at once. See [`App::restore_sessions`](crate::App::restore_sessions).
+    ///
+    /// Each server's check is spawned on its own and runs to its end even if the caller stops waiting: it takes the session lock,
+    /// writes the settings and deletes tokens, and aborting it halfway could leave the lock released while a write still runs.
+    /// Dropping this future only stops the waiting.
     pub(crate) async fn restore_all(self: &Arc<Self>) {
-        let mut tasks = JoinSet::new();
+        let mut tasks = Vec::new();
         for saved in self.servers() {
             if saved.server.service != ServiceType::JELLYFIN {
                 continue;
             }
             let shared = self.clone();
-            tasks.spawn(async move {
+            // Detached: dropping a JoinHandle does not abort its task.
+            tasks.push(tokio::spawn(async move {
                 // Every saved server gets its provider, signed in or not, so that it hears network facts. An invalid address
                 // leaves the server without one; its restore below says unreachable.
                 let _ = shared.provider(&saved.server).await;
@@ -655,9 +659,11 @@ impl Shared {
                 } else if saved.active_user.is_some() {
                     shared.restore(saved).await;
                 }
-            });
+            }));
         }
-        while tasks.join_next().await.is_some() {}
+        for task in tasks {
+            let _ = task.await;
+        }
     }
 
     /// Restores one session: the token from the keyring, then the session over the server's provider, then the current user.

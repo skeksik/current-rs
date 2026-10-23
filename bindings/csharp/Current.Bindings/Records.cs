@@ -24,6 +24,8 @@ public sealed record ServerStatus(
     string Key,
     bool SignedIn,
     Reachability Reachability,
+    /// <summary>Which saved address answers, counted from 1 in the user's order; null while none does.</summary>
+    int? AddressPosition,
     UserInfo? User,
     string? Version,
     IReadOnlyList<string> Features);
@@ -39,6 +41,88 @@ public enum Reachability
 /// <summary>A user on one server.</summary>
 public sealed record UserInfo(string Id, string Name, IReadOnlyList<string> Permissions);
 
+/// <summary>A server as calls name it: its service and the key the app gave it. Never an address.</summary>
+public sealed record ServerRef(string Service, string Key);
+
+/// <summary>A saved server. Its addresses stay in the core: only how many there are.</summary>
+public sealed record SavedServer(
+    ServerRef Server,
+    string Id,
+    string Name,
+    int AddressCount,
+    IReadOnlyList<SavedUser> Users,
+    string? ActiveUser);
+
+/// <summary>A user who signed in on a saved server.</summary>
+public sealed record SavedUser(string Id, string Name);
+
+/// <summary>What the settings store found when the core opened.</summary>
+public abstract record LoadReport
+{
+    private LoadReport() { }
+
+    /// <summary>First start: new settings were written.</summary>
+    public sealed record Created : LoadReport;
+    public sealed record Loaded : LoadReport;
+    /// <summary>The settings were in an older format, migrated and saved.</summary>
+    public sealed record Migrated(ulong From) : LoadReport;
+    /// <summary>The settings could not be read: kept as <c>BackupFile</c> (a file name in the data folder) and reset.</summary>
+    public sealed record ResetCorrupt(string BackupFile) : LoadReport;
+    /// <summary>From a newer version of Current: used read-only, and signing in fails until it is updated.</summary>
+    public sealed record NewerVersion(ulong Found) : LoadReport;
+}
+
+/// <summary>Where the core keeps sign-in tokens.</summary>
+public enum SecretStore
+{
+    /// <summary>Windows Credential Manager. What the app uses.</summary>
+    Keyring,
+    /// <summary>Memory only, for tests: tokens are lost when the process ends.</summary>
+    Memory,
+}
+
+/// <summary>
+/// The platform's report of the network (ADR 0014). <c>NetworkKey</c> is opaque and goes into the core only; <c>ToString()</c>
+/// shows it as <c>[redacted]</c>, since it can name the Wi-Fi network.
+/// </summary>
+public sealed record NetworkFacts(
+    Connectivity Connectivity,
+    bool? Metered,
+    bool? Constrained,
+    InterfaceKind Interface,
+    bool? Vpn,
+    string? NetworkKey)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append($"Connectivity = {Connectivity}, Metered = {Metered}, Constrained = {Constrained}, Interface = {Interface}, ");
+        builder.Append($"Vpn = {Vpn}, NetworkKey = {(NetworkKey is null ? "null" : "[redacted]")}");
+        return true;
+    }
+}
+
+public enum Connectivity
+{
+    /// <summary>No network at all.</summary>
+    Offline,
+    LocalOnly,
+    CaptivePortal,
+    Full,
+    Unknown,
+}
+
+public enum InterfaceKind
+{
+    Wifi,
+    Ethernet,
+    Cellular,
+    Other,
+    Unknown,
+}
+
+/// <summary>How a sign-out went. The app is signed out either way; <c>ServerTold</c> false means the server did not hear of it.</summary>
+public sealed record SignOutResult(bool ServerTold);
+
 /// <summary>Maps generated types to the public ones.</summary>
 internal static class Map
 {
@@ -52,9 +136,77 @@ internal static class Map
         status.Key,
         status.SignedIn,
         From(status.Reachability),
-        status.User is { } user ? new UserInfo(user.Id, user.Name, user.Permissions) : null,
+        status.AddressPosition,
+        status.User is { } user ? From(user) : null,
         status.Version,
         status.Features);
+
+    public static UserInfo From(Ffi.UserSnapshot user) => new(user.Id, user.Name, user.Permissions);
+
+    public static ServerRef From(Ffi.ServerRef server) => new(server.Service, server.Key);
+
+    public static Ffi.ServerRef ToFfi(ServerRef server) => new(server.Service, server.Key);
+
+    public static SavedServer From(Ffi.SavedServerSnapshot saved) => new(
+        From(saved.Server),
+        saved.Id,
+        saved.Name,
+        (int)Math.Min(saved.AddressCount, int.MaxValue),
+        Array.ConvertAll(saved.Users, user => new SavedUser(user.Id, user.Name)),
+        saved.ActiveUser);
+
+    public static LoadReport From(Ffi.LoadReport report) => report switch
+    {
+        Ffi.LoadReport.Created => new LoadReport.Created(),
+        Ffi.LoadReport.Loaded => new LoadReport.Loaded(),
+        Ffi.LoadReport.Migrated migrated => new LoadReport.Migrated(migrated.From),
+        Ffi.LoadReport.ResetCorrupt reset => new LoadReport.ResetCorrupt(reset.BackupFile),
+        Ffi.LoadReport.NewerVersion newer => new LoadReport.NewerVersion(newer.Found),
+        _ => throw new ArgumentException($"unknown load report {report.GetType().Name}", nameof(report)),
+    };
+
+    /// <summary>Both values explicitly: an unknown one must never fall back to memory and lose the user's sign-ins.</summary>
+    public static Ffi.SecretStore ToFfi(SecretStore store) => store switch
+    {
+        SecretStore.Keyring => Ffi.SecretStore.Keyring,
+        SecretStore.Memory => Ffi.SecretStore.Memory,
+        _ => throw new ArgumentOutOfRangeException(nameof(store), store, "unknown secret store"),
+    };
+
+    public static Ffi.NetworkFacts ToFfi(NetworkFacts facts) => new(
+        facts.Connectivity switch
+        {
+            Connectivity.Offline => Ffi.Connectivity.Offline,
+            Connectivity.LocalOnly => Ffi.Connectivity.LocalOnly,
+            Connectivity.CaptivePortal => Ffi.Connectivity.CaptivePortal,
+            Connectivity.Full => Ffi.Connectivity.Full,
+            _ => Ffi.Connectivity.Unknown,
+        },
+        facts.Metered,
+        facts.Constrained,
+        facts.Interface switch
+        {
+            InterfaceKind.Wifi => Ffi.InterfaceKind.Wifi,
+            InterfaceKind.Ethernet => Ffi.InterfaceKind.Ethernet,
+            InterfaceKind.Cellular => Ffi.InterfaceKind.Cellular,
+            InterfaceKind.Other => Ffi.InterfaceKind.Other,
+            _ => Ffi.InterfaceKind.Unknown,
+        },
+        facts.Vpn,
+        facts.NetworkKey);
+
+    public static ListDiff<SavedServer> From(Ffi.SavedServerDiff diff) => diff switch
+    {
+        Ffi.SavedServerDiff.Append append => new ListDiff<SavedServer>.Append(Array.ConvertAll(append.Values, value => From(value))),
+        Ffi.SavedServerDiff.Insert insert => new ListDiff<SavedServer>.Insert(Index(insert.Index), From(insert.Value)),
+        Ffi.SavedServerDiff.Set set => new ListDiff<SavedServer>.Set(Index(set.Index), From(set.Value)),
+        Ffi.SavedServerDiff.Remove remove => new ListDiff<SavedServer>.Remove(Index(remove.Index)),
+        Ffi.SavedServerDiff.Reset reset => new ListDiff<SavedServer>.Reset(Array.ConvertAll(reset.Values, value => From(value))),
+        _ => throw new ArgumentException($"unknown diff {diff.GetType().Name}", nameof(diff)),
+    };
+
+    /// <summary>The core saturates indices at <c>uint.MaxValue</c>; one that does not fit is out of range for any list.</summary>
+    private static int Index(uint index) => (int)Math.Min(index, int.MaxValue);
 
     public static Reachability From(Ffi.Reachability reachability) => reachability switch
     {

@@ -1,5 +1,5 @@
-// Tests for the adapters, against the real core. A plain runner: no test framework package. Prints one line per test and
-// "<n> passed, <m> failed"; exits non-zero on any failure.
+// Tests for the adapters, against the real core (FlowTests: also against the Jellyfin stand-in). A plain runner: no test framework
+// package. Prints one line per test and "<n> passed, <m> failed"; exits non-zero on any failure.
 
 using System.Collections.Specialized;
 using System.Runtime.CompilerServices;
@@ -19,6 +19,27 @@ var tests = new (string Name, Func<Task> Run)[]
     ("export diagnostics completes", Tests.ExportDiagnosticsCompletes),
     ("a cancelled token cancels the call", Tests.CancelledTokenCancelsTheCall),
     ("a cancel the caller did not ask for is not an OperationCanceledException", Tests.UnrequestedCancelIsItsOwnException),
+    ("opening creates, then loads the settings", FlowTests.OpenCreatesThenLoads),
+    ("opening reports a folder it cannot use", FlowTests.OpenReportsAFolderItCannotUse),
+    ("adding a server and signing in with a password", FlowTests.PasswordSignInEndToEnd),
+    ("a wrong password fails and saves nothing", FlowTests.WrongPasswordFails),
+    ("a bad address fails with its reason", FlowTests.BadAddressFailsWithItsReason),
+    ("Quick Connect signs in", FlowTests.QuickConnectSignsIn),
+    ("Quick Connect turned off fails", FlowTests.QuickConnectTurnedOffFails),
+    ("a cancelled sign-in returns to Ready", FlowTests.CancelledSignInReturnsToReady),
+    ("signing out clears the user", FlowTests.SignOutClearsTheUser),
+    ("without the token, restoring signs out", FlowTests.WithoutTheTokenRestoreSignsOut),
+    ("the keyring keeps the session for the next start", FlowTests.KeyringKeepsTheSession),
+    ("discovery ends", FlowTests.DiscoveryEnds),
+    ("flow subscriptions are released", FlowTests.FlowSubscriptionsAreReleased),
+    ("network reports are accepted", FlowTests.NetworkReportsAreAccepted),
+    ("diagnostics after a sign-in hold nothing private", FlowTests.DiagnosticsAfterASignInHoldNothingPrivate),
+    ("cancelling while signing in returns to Ready", FlowTests.CancellingWhileSigningInReturnsToReady),
+    ("cancelling while Quick Connect waits stops polling", FlowTests.CancellingWhileQuickConnectWaitsStopsPolling),
+    ("the server list recovers from a bad batch", FlowTests.ServerListRecoversFromABadBatch),
+    ("the server list recovers from a lost batch", FlowTests.ServerListRecoversFromALostBatch),
+    ("the server list stops after repeated failures", FlowTests.ServerListStopsAfterRepeatedFailures),
+    ("network facts hide the key", FlowTests.NetworkFactsHideTheKey),
 };
 
 var failed = 0;

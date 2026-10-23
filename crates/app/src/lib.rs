@@ -84,7 +84,8 @@ impl App {
     /// and the saved servers, each signed in if it has an active user until [`App::restore_sessions`] checks. `secrets` is the OS
     /// keyring in the apps and memory in tests. `device_name` is what Jellyfin shows for this device: the UI passes the platform's
     /// name for the computer (ADR 0015); an empty one becomes the platform's name. Blocking file I/O: call it at start, off the
-    /// async runtime.
+    /// async runtime. One `App` per data folder per process is assumed: two would each keep their own copy of the saved servers
+    /// and overwrite each other's settings.
     pub fn open(
         data_dir: &Path,
         secrets: Arc<dyn Secrets>,
@@ -215,7 +216,9 @@ impl App {
     /// address that passed the identity check (ADR 0014). Signed in with the user when the server answers, signed out when the
     /// token is gone or the server answers 401, still signed in and unreachable when no address answers as the server; such a
     /// session checks its user once the provider reaches the server. Running it again checks sessions whose user is not yet
-    /// confirmed.
+    /// confirmed. Each server's check runs to its end even if this future is dropped: dropping it only stops the waiting. Such a
+    /// check holds the app's shared state, so it can outlive the `App` until its requests end (their timeouts bound it); it changes
+    /// only that state and the settings file, never another `App`'s.
     pub async fn restore_sessions(&self) {
         self.shared.restore_all().await;
     }
