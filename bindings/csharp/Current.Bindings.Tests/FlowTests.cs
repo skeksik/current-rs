@@ -482,6 +482,8 @@ internal static class FlowTests
         using var core = CoreHost.Create();
         var ui = new ManualDispatcher();
         using var servers = core.ObserveServers(ui);
+        var reported = new List<string?>();
+        servers.PropertyChanged += (_, e) => reported.Add(e.PropertyName);
         // One bad batch more than the mirror recovers from within the window.
         for (var i = 0; i <= ListSubscription<SavedServer>.MaxRecoveries; i++)
         {
@@ -489,6 +491,7 @@ internal static class FlowTests
             servers.Apply([new ListDiff<SavedServer>.Remove(5)], servers.Generation);
         }
         Check(servers.IsFaulted, "faulted");
+        Check(reported.SequenceEqual([nameof(ListSubscription<SavedServer>.IsFaulted)]), $"reported once: {string.Join(", ", reported)}");
         Check(servers.Recoveries == ListSubscription<SavedServer>.MaxRecoveries, $"{servers.Recoveries} recoveries");
         await Eventually("the core drops the listener", ui, () => core.LiveListeners == 0);
     }
