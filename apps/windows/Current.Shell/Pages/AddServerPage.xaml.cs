@@ -284,7 +284,8 @@ public sealed partial class AddServerPage : Page
         _searching = searching;
         try
         {
-            await _discovery.SearchAsync(searching.Token);
+            // Read at each search: adapters come and go (ADR 0016).
+            await _discovery.SearchAsync(LocalInterfaces.Read(), searching.Token);
         }
         catch (OperationCanceledException)
         {

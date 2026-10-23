@@ -24,6 +24,6 @@ pub use client::{
 };
 pub use discovery::{
     Candidate, DISCOVERY_PORT, DiscoveryConfig, DiscoveryError, MAX_ADDRESSES_PER_SERVER,
-    MAX_REPLY_BYTES, MAX_SERVERS, discover,
+    MAX_INTERFACES, MAX_REPLY_BYTES, MAX_SERVERS, Source, discover,
 };
 pub use probe::{FoundServer, JellyfinIdentity, MINIMUM_VERSION, ProbeError, Prober, same_server};

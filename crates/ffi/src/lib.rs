@@ -31,7 +31,7 @@ pub use cancel::CancelToken;
 pub use error::CoreError;
 pub use flows::{
     AddServerFlow, AddServerState, AddServerStateListener, DiscoveredServerInfo, DiscoveryFlow,
-    DiscoveryState, DiscoveryStateListener, NewServerInfo, SignInFlow, SignInState,
+    DiscoveryState, DiscoveryStateListener, LocalInterface, NewServerInfo, SignInFlow, SignInState,
     SignInStateListener,
 };
 pub use problems::{

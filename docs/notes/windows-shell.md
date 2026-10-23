@@ -152,6 +152,10 @@ actions; nothing is decided in C#.
     (it does not block the page, so a bar, not a ring); a `ListView` of servers in the order they answered, appended so the list
     stays put; clicking one picks it. Done with none: "No servers found on this network. Enter the address instead."; each
     `DiscoveryProblem` in words; "Search again".
+    Each search (the first and "Search again") passes the up IPv4 interfaces (`LocalInterfaces.Read`, read just before): .NET's
+    `NetworkInterface.GetAllNetworkInterfaces`, `OperationalStatus.Up` only, Loopback and Tunnel types skipped, each IPv4 unicast
+    address with its `PrefixLength`. The core sends from each of them as well as from an unbound socket (ADR 0016, amended
+    2026-10-23 after case 2 of the M1 Windows run). The addresses go into the core only and are never logged.
   - `ConfirmPlainHttp`: a `ContentDialog`, "Connect without encryption?", "<name> answered over http. Your password and everything
     you watch would cross the internet unencrypted. Use https if the server offers it.", primary "Connect anyway", close "Cancel".
     The close button is the safe action and answers Esc (Dialog controls); `DefaultButton = Close`, so Enter does the safe thing too.
@@ -305,7 +309,7 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
    arrive on the UI thread, empty; probing an empty address fails with `InvalidAddress(Empty)` without a request; the folder is
    deleted after;
 8. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`);
-9. the network facts and the device name can be read (neither is printed beyond the connectivity level);
+9. the network facts, the device name and the local interfaces can be read (none is printed beyond the connectivity level);
 10. last, the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes: closing the only window ends XAML's message
     loop, so nothing can be awaited after it (CI run 39883272147 stopped at the next await and exited 0 without a result).
 No check sends anything over the network; discovery (UDP) is left out.
@@ -469,3 +473,37 @@ M1's "done when" (sign in and out, restart signed in) **holds**: cases 3, 4 and 
    Suggested: announce the code (by its digit-by-digit name) when it appears.
 10. Settings: **pass.** Windows Settings-style cards; About "© 2026 Skeksik"; Copy diagnostics copies text with the version; pasted
     into Notepad (not saved) it had no address, user name or token.
+
+### Re-check of case 2 (fix/discovery-per-interface)
+On the same multi-adapter PC, start with no `%LOCALAPPDATA%\Current`:
+1. Wired, Wi-Fi off: Add a server lists the server on the first search, within about 2 s. "Search again" three times: listed each
+   time.
+2. Wi-Fi only: the same.
+3. Both on: the server is listed once, not twice.
+4. Still no firewall prompt, and no rule for `Current.exe` afterwards.
+
+#### Windows run (2026-10-23)
+Heads fix/discovery-per-interface bea8ac9 and feat/remove-server a1467f6, merged in a throwaway local worktree (never pushed) and
+built with the four scripts: binding tests 34 passed, smoke run passed. Windows 10.0.26200.9711, x64, the same multi-adapter PC
+(wired and Wi-Fi on the same /24, WSL/Hyper-V, two VPN adapters); the cases ran `out/app/Current.exe`. The earlier run's
+`%LOCALAPPDATA%\Current` and its credentials were no longer on the PC, so the order changed: discovery first from no data, then
+the Quick Connect sign-in, then the address check after re-adding the addresses, then feat/remove-server's removal cases.
+1. Wired, Wi-Fi off: **pass.** Listed on the first search within 2 s; "Search again" three times (each showed "Searching…" with
+   the list cleared): listed each time, within 2 s.
+2. Wi-Fi only (wired adapter disabled): **pass.** The same.
+3. Both on: **pass.** Listed once, on the first search and on four "Search again".
+4. **Pass.** No firewall prompt at any point; no rule for `Current.exe` (`Get-NetFirewallApplicationFilter`) after the discovery
+   cases or at the end.
+
+Quick Connect with Narrator (M1 case 9, with the fix from main): **fail.** Sign-in passes ("Signed in as …"), and Narrator now
+speaks the code when it appears, but as a number ("six hundred ninety-seven …"), not digit by digit. `SignInPage.xaml.cs` sets the
+digit-by-digit `AutomationProperties.Name` on `CodeText` and `Announce.Shown` raises `LiveRegionChanged`; what Narrator spoke
+was the visible text read as a number, so that name is not what the live-region announcement reads here. Suggested: announce the
+code with `RaiseNotificationEvent` carrying the digit-by-digit text, and check it by ear.
+
+Address in use (M1 case 8): the server had 1: LAN IP (http, from discovery), 2: DNS name (http), 3: DNS name (https), added in
+that order by signing in from typed addresses (no second LAN IP this time). Started on the wired LAN (Wi-Fi on too, same LAN):
+Home "Connected, address 1 of 3" at once and still address 1 after 6 minutes, untouched. Copy diagnostics: only the start-up
+requests, both to address 1; no address, user name, server id, device id or token in the text. Reading: with the LAN IP first
+and nothing cached for this network, the app connects to address 1 and stays there. The earlier "address 2 of 4" did not come
+back, but its saved order and cached winner were gone, so moving off a cached worse address after 5 minutes was not exercised.
