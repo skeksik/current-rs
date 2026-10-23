@@ -58,7 +58,6 @@
                     Text="Enter this code under Quick Connect in a Jellyfin app where you're already signed in." />
                 <TextBlock
                     x:Name="CodeText"
-                    AutomationProperties.LiveSetting="Assertive"
                     Style="{StaticResource TitleLargeTextBlockStyle}"
                     CharacterSpacing="200"
                     IsTextSelectionEnabled="True" />

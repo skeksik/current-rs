@@ -136,8 +136,9 @@ public sealed partial class SignInPage : Page
                 HideError();
                 var newCode = before is not SignInState.QuickConnectWaiting { Code: var shownCode } || shownCode != code.Code;
                 CodeText.Text = code.Code;
-                // Narrator reads the digits one by one.
-                AutomationProperties.SetName(CodeText, $"Quick Connect code {string.Join(" ", code.Code.Select(digit => digit.ToString()))}");
+                // Narrator reads the digits one by one, when the code is announced and when the user reaches it.
+                var spoken = $"Quick Connect code {string.Join(" ", code.Code.Select(digit => digit.ToString()))}";
+                AutomationProperties.SetName(CodeText, spoken);
                 if (before is not SignInState.QuickConnectWaiting)
                 {
                     FocusLater(QuickConnectCancel);
@@ -145,8 +146,10 @@ public sealed partial class SignInPage : Page
                 if (newCode)
                 {
                     // The code itself is what the user needs to hear, when it appears and when a new one replaces it (owner's run,
-                    // 2026-10-23: only "Waiting for approval…" was read). One announcement, so the two do not cut each other off.
-                    Announce.Shown(CodeText);
+                    // 2026-10-23: only "Waiting for approval…" was read). One announcement, so the two do not cut each other off. A
+                    // notification, not a live region: Narrator read the live region's text, the code as one number (owner's run,
+                    // 2026-10-23), not its digit-by-digit name.
+                    Announce.Say(CodeText, spoken, "QuickConnectCode");
                 }
                 break;
             case SignInState.Failed failed:
