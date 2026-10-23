@@ -26,13 +26,19 @@ were read on 2026-10-22 from the sources at the end. "Jellyfin" means the server
   IP. The TypeScript SDK 1.0.1 has no discovery (a browser cannot send UDP).
 
 ## Decision
-- **Request:** `who is JellyfinServer?` from a socket bound to `0.0.0.0:0` with `SO_BROADCAST`. It goes to
-  **`255.255.255.255:7359` only** in M1, and is sent once more after 500 ms in case a datagram was lost.
+- **Request:** `who is JellyfinServer?`, with `SO_BROADCAST`, from several sockets (amended 2026-10-23, below):
+  - one bound to `0.0.0.0:0`, sending to `255.255.255.255:7359`, as before;
+  - one bound to each local interface address the platform lists (`<address>:0`), sending to that interface's subnet broadcast
+    address and to `255.255.255.255`, both on port 7359.
+
+  Every socket sends once more after 500 ms in case a datagram was lost. Replies are read from all sockets, in turn so a busy
+  one cannot starve the others, in the same window and under the same limits.
 - **Collection window: 2 s.** Windows Firewall accepts unicast replies to a broadcast for about 3 s (below), so the window and
   the resend stay inside that.
 - **Limits** (constants in `current-jellyfin`'s `discovery.rs`, next to the Windows note):
   - a reply of more than 2048 bytes is dropped whole;
-  - at most 32 servers and 256 datagrams per search.
+  - at most 32 servers and 256 datagrams per search, across all sockets;
+  - at most 16 interfaces, counted after the unusable and repeated ones are dropped.
 - **Strict parsing:**
   - the reply must be one JSON object (hence UTF-8);
   - `Id` must be 1 to 64 ASCII letters, digits or hyphens;
@@ -63,16 +69,32 @@ were read on 2026-10-22 from the sources at the end. "Jellyfin" means the server
   - `NotPermitted`: the OS refused;
   - `NoNetwork`: unreachable or no address;
   - `Failed`: anything else.
-  These are sorted by the I/O error's kind only. A new search or a reset supersedes one still running. Nothing in the state, its
-  Debug output or an error holds an address.
+  These are sorted by the I/O error's kind only. A socket that cannot be bound, or whose every send fails, is left out; the search
+  fails only when every socket failed, with `NotPermitted` if any of them was refused that way (the reason the user can act on),
+  otherwise the first failure. A new search or a reset supersedes one still running. Nothing in the state, its Debug output or an
+  error holds an address, including the interfaces' own.
 - **No IPv6:** the server does not listen on it.
-- **Interfaces:** Rust's standard library (and tokio) cannot list interfaces or their netmasks. Listing them would take `unsafe`
-  calls to `getifaddrs` (forbidden here) or a new dependency.
-  - The limited broadcast leaves through the interface the OS routes it to. On a device with several networks (Ethernet and
-    Wi-Fi, a VPN) servers on the others may be missed (not verified per OS).
-  - `DiscoveryConfig::targets` already takes a list. A later task may let each shell pass per-interface broadcast addresses
-    as a platform fact, with ADR 0014's `NetworkFacts`.
+- **Interfaces** (amended 2026-10-23):
+  - Rust's standard library (and tokio) cannot list interfaces or their netmasks. Listing them would take `unsafe` calls to
+    `getifaddrs` (forbidden here) or a new dependency. So each shell lists its up IPv4 interfaces, address and prefix length, as
+    a platform fact (`LocalInterface`, like ADR 0014's `NetworkFacts`) and passes them to each search, read just before it. The
+    core decides what to do with them.
+  - Not part of `NetworkFacts`: those feed the roaming "same network" comparison, and the list must be fresh at each search.
+  - Dropped: loopback (127/8), unspecified, multicast and broadcast addresses, prefixes over 32, then repeated addresses, then any
+    after the first 16.
+  - Kept: link-local 169.254/16. Jellyfin listens on every address, and on a link without DHCP (a direct cable) it is the only
+    address there is. A shell passes only up interfaces, so the cost is two datagrams per such adapter.
+  - Targets: the subnet broadcast address (none for /31, /32 or /0) and `255.255.255.255`, without repeats. Both, because the
+    platforms differ in where a limited broadcast from a bound socket goes:
+    - on Windows it leaves on the interface the socket is bound to: in the owner's run (below), a socket bound to the wired or
+      the Wi-Fi address got a reply every time;
+    - on Linux, the route for `255.255.255.255` may pick the interface whatever the bound address (**not verified**), so the
+      subnet broadcast is the one that reaches that network there.
+  - The unbound socket stays next to them: it costs one socket and covers an adapter the shell filtered out or one that came up
+    between listing and sending. Replies to it and to an interface's socket merge by `Id`.
   - Apple's TN3179 advises running a broadcast discovery "on *all* broadcast-capable interfaces".
+  - The Windows app lists them with .NET's `NetworkInterface`; the macOS app (`getifaddrs` in Swift) is a later task and passes an
+    empty list until then, which is the unbound socket alone.
 - **No mDNS or DNS-SD:** Jellyfin does not advertise itself that way. A search of the v12.2 source for mDNS, DNS-SD, Bonjour and
   zeroconf finds nothing.
 
@@ -87,6 +109,8 @@ were read on 2026-10-22 from the sources at the end. "Jellyfin" means the server
   click. Whether a UDP socket bound to `0.0.0.0:0`, used only to send and read replies, raises that prompt is **not verified**.
 - **Proposed:** no rule, and no installer change. If the owner's local check shows a prompt, try binding to a specific local
   address first. Revisit a rule (in a machine-wide install only) if that fails.
+- 2026-10-23: the owner's run (Amendment, below) showed no prompt and created no rule, from unbound sockets or sockets bound
+  to an interface address.
 
 ### Platforms
 - **macOS 15+ and iOS 14+:** sending a UDP broadcast is a local network operation, and the first one shows the Local Network
@@ -107,8 +131,11 @@ were read on 2026-10-22 from the sources at the end. "Jellyfin" means the server
 
 ## Consequences
 - A search takes about 2 s plus the probes, which run while results already show.
-- Servers on another interface than the one the OS picks for the limited broadcast are missed until the shells pass interface
-  targets.
+- A search sends from up to 17 sockets, two datagrams each (plus the resend), on a device with many adapters. Small, and bounded.
+- A server answers every socket that reaches it, up to four times each (two targets, two sends). With several sockets on one LAN
+  the shared 256-datagram limit can end a search after about 25 servers instead of 32. Acceptable for a home network.
+- A shell that passes no interfaces (the macOS app until its task) still misses servers on interfaces other than the one the OS
+  picks for the limited broadcast.
 - A server that publishes an address unreachable from this device is still found through the reply's source IP when that IP is
   reachable.
 - Not tested in CI: a real LAN, the Windows firewall's behaviour and the Apple prompt. The tests use UDP and HTTP stand-ins on
@@ -116,6 +143,13 @@ were read on 2026-10-22 from the sources at the end. "Jellyfin" means the server
   - whether Windows shows a firewall prompt;
   - whether replies arrive with the default profile;
   - macOS's Local Network prompt.
+
+## Amendment (2026-10-23)
+The owner's run of the Windows app on a PC with Wi-Fi and wired on the same LAN, plus virtual (WSL/Hyper-V) and VPN adapters,
+found nothing on the first search, and never while wired: the lowest-metric route for `255.255.255.255` was a virtual adapter. From
+a shell with the same request, an unbound socket sending to `255.255.255.255:7359` got 1 reply in 9 tries; a socket bound to the
+wired or the Wi-Fi address got a reply every time. No firewall prompt appeared and no rule was created. The owner approved the
+per-interface rule above (2026-10-23), as the Interfaces bullets of the first version anticipated.
 
 ## Sources (read 2026-10-22)
 - Jellyfin server, tag `v12.2` (commit ca0f16eb), https://github.com/jellyfin/jellyfin:

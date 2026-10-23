@@ -312,7 +312,14 @@ internal static class FlowTests
     {
         using var core = CoreHost.Create();
         using var discovery = core.DiscoverServers();
-        await discovery.SearchAsync();
+        // Loopback is dropped by the core and IPv6 by the adapter, so only the unbound socket sends.
+        var interfaces = new[]
+        {
+            new LocalInterface(System.Net.IPAddress.Loopback, 8),
+            new LocalInterface(System.Net.IPAddress.IPv6Loopback, 128),
+        };
+        Check(!interfaces[0].ToString().Contains("127.0.0.1"), "ToString hides the address");
+        await discovery.SearchAsync(interfaces);
         // Whether the runner may broadcast, and whether anything answers, depends on the machine: only the shape is checked.
         Check(discovery.State is DiscoveryState.Done or DiscoveryState.Failed, $"{discovery.State}");
         using var add = core.AddServer();

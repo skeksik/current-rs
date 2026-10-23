@@ -75,6 +75,9 @@ internal static class SmokeRun
             var facts = NetworkObserver.Read();
             Check(true, $"network facts read (connectivity {facts.Connectivity})");
             Check(DeviceName.Get().Length > 0, "device name read");
+            // Listed as each search does; neither the count nor the addresses are printed, since a runner may have none.
+            _ = LocalInterfaces.Read();
+            Check(true, "local interfaces read");
 
             // Last: closing the only window ends XAML's message loop, so nothing may be awaited after it (seen in CI: the run stopped at
             // the next await and exited without a result).
