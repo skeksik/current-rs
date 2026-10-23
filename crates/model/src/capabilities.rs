@@ -27,6 +27,8 @@ pub struct ServerStatus {
     pub server: ServerRef,
     pub signed_in: bool,
     pub reachability: Reachability,
+    /// The 1-based place, in the user's list, of the address in use, for the server's settings screen. Never the address itself.
+    pub address: Option<u8>,
     /// The signed-in user, once known.
     pub user: Option<User>,
     /// The server's version as it reports it.
@@ -41,6 +43,7 @@ impl ServerStatus {
             server,
             signed_in: false,
             reachability: Reachability::Unknown,
+            address: None,
             user: None,
             version: None,
             features: Vec::new(),

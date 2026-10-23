@@ -52,10 +52,23 @@ before merging, and its PR carries only the record.
 Each item starts with our own research (the server's API and source, the platform's documentation, how existing clients behave),
 recorded with sources and dates, and a decision record where it decides something.
 - [ ] Server setup: add a Jellyfin server by URL, check it is the same server on every address, warn about plain HTTP except locally
+      (core done 2026-10-22, ADR 0012: address parsing, probe, identity, plain-HTTP rule, the in-memory flow; servers are stored with
+      sign-in, ADR 0015; the Windows screen is still to do)
 - [ ] Several addresses per server with roaming (local and internet, the user's order)
+  - [x] Spike: research and design (2026-10-22, PR 17, ADR 0014, docs/notes/roaming.md; OS trust only for
+        TLS in M1)
+  - [x] Core: `RoamingAddresses` in `current-net`, Jellyfin's identity check, `NetworkFacts`, `App::network_changed` and the
+        request log's address position (2026-10-22, ADR 0014)
+  - [x] Wire the providers into signed-in servers: one provider per saved Jellyfin server for its session, restore and
+        sign-in again; the capabilities state follows its status (2026-10-22, ADR 0015)
+  - [ ] `NetworkFacts` from the Windows UI (wave 3)
 - [ ] Secrets in the OS keyring and a device identity per install
 - [ ] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out
+      (core done 2026-10-22, ADR 0015: `current-jellyfin` auth, saved servers and users, the `SignIn` flow, restore, sign out; the bridge
+      and the Windows screens are still to do)
 - [ ] Local server discovery
+      (core done 2026-10-22, ADR 0016: UDP discovery, probe and id check, the discovery state, picking into "add a server"; the
+      Windows screen and the local check on a real network are still to do)
 
 Done when: sign in and out of Jellyfin on Windows, and the app restarts signed in.
 
@@ -67,6 +80,11 @@ Done when: sign in and out of Jellyfin on Windows, and the app restarts signed i
       playback controller (resume, progress reporting, tracks, quality, next episode, intro skip, fallback on engine errors)
 - [ ] The libmpv engine and the Windows player UI, media keys and the media flyout
 - [ ] Playback information (route, codecs, reasons for the choice) and remembered track choices
+- [ ] Servers behind an authentication gateway (after M1; ADR 0017): a password prompt for Basic gateways, a sign-in
+      window that hands the gateway's cookies to the core, advanced extra headers, per address; the 401 rule amended so that a
+      gateway's 401 keeps the Jellyfin session. Choices decided by the owner (2026-10-22); the player and image parts follow the
+      libmpv engine and the image path
+  - [x] Spike: research and design (2026-10-22, PR 24, ADR 0017, docs/notes/gateway-auth.md)
 
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
