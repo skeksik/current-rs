@@ -254,7 +254,8 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
     @Test func discoveryEnds() async throws {
         let core = try Core()
         let discovery = core.discoverServers()
-        try await discovery.search()
+        // Loopback is dropped by the core, so only the unbound socket sends.
+        try await discovery.search(interfaces: [LocalInterface(address: "127.0.0.1", prefixLength: 8)])
         // Whether the runner may broadcast, and whether anything answers, depends on the machine: only the shape is checked.
         switch discovery.state() {
         case .done, .failed: break
@@ -355,6 +356,14 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         for text in [String(describing: facts), "\(facts)", String(reflecting: facts)] {
             #expect(text.contains("[redacted]"))
             #expect(!text.contains("home-wifi"))
+        }
+    }
+
+    @Test func localInterfacesHideTheAddress() {
+        let interface = LocalInterface(address: "192.168.1.10", prefixLength: 24)
+        for text in [String(describing: interface), "\(interface)", String(reflecting: interface)] {
+            #expect(text.contains("[redacted]"))
+            #expect(!text.contains("192.168"))
         }
     }
 }

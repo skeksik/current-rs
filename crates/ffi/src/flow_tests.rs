@@ -620,7 +620,15 @@ fn discovery_ends_and_a_pick_needs_a_listed_server() {
     let discovery = core.discover_servers();
     let (listener, rx) = recorder();
     let _state = discovery.subscribe_state(listener);
-    block_on(discovery.search(CancelToken::new())).unwrap();
+    // Loopback is dropped and the others are not IPv4 text, so only the unbound socket sends.
+    let interfaces = ["127.0.0.1", "not an address", "fe80::1"]
+        .into_iter()
+        .map(|address| LocalInterface {
+            address: address.into(),
+            prefix_length: 8,
+        })
+        .collect();
+    block_on(discovery.search(interfaces, CancelToken::new())).unwrap();
     // Whether the container may broadcast, and whether a server answers, depends on the machine: only the shape is checked.
     // The first delivery may already be `Searching`: values are latest-only.
     until(&rx, "the search ends", |state| {
@@ -644,7 +652,7 @@ fn a_cancelled_search_returns_to_idle() {
     let token = CancelToken::new();
     let canceller = Arc::clone(&token);
     let flow = Arc::clone(&discovery);
-    let search = thread::spawn(move || block_on(flow.search(token)));
+    let search = thread::spawn(move || block_on(flow.search(Vec::new(), token)));
     thread::sleep(Duration::from_millis(100));
     canceller.cancel();
     let result = search.join().unwrap();
@@ -807,4 +815,22 @@ fn diagnostics_after_a_sign_in_hold_nothing_private() {
     for private in ["Example PC", PASSWORD, "127.0.0.1", port, dir, USER_NAME] {
         assert!(!report.contains(private), "{private} in {report}");
     }
+}
+
+#[test]
+fn local_interfaces_need_ipv4_text() {
+    let interface = |address: &str| LocalInterface {
+        address: address.into(),
+        prefix_length: 24,
+    };
+    assert_eq!(
+        interface("192.168.1.10").parse(),
+        Some(current_model::LocalInterface {
+            address: std::net::Ipv4Addr::new(192, 168, 1, 10),
+            prefix_len: 24,
+        })
+    );
+    assert_eq!(interface("fe80::1").parse(), None);
+    assert_eq!(interface("media.example.com").parse(), None);
+    assert_eq!(interface(" 192.168.1.10").parse(), None);
 }

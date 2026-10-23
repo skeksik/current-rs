@@ -63,6 +63,22 @@ pub struct NetworkFacts {
     pub network_key: Option<NetworkKey>,
 }
 
+/// An IPv4 address of one of the device's up network interfaces, with its prefix length (24 for a netmask of 255.255.255.0), as
+/// the platform lists it before a local search (ADR 0016). It is the device's own address, so it is never shown or logged: its
+/// Debug output is redacted.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalInterface {
+    pub address: std::net::Ipv4Addr,
+    /// 0 to 32; anything larger is not a valid IPv4 prefix and is ignored by its users.
+    pub prefix_len: u8,
+}
+
+impl std::fmt::Debug for LocalInterface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LocalInterface([redacted])")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +104,15 @@ mod tests {
         let debug = format!("{facts:?}");
         assert!(debug.contains("NetworkKey([redacted])"), "{debug}");
         assert!(!debug.contains("192.168"), "{debug}");
+    }
+
+    #[test]
+    fn debug_hides_a_local_interface() {
+        let interface = LocalInterface {
+            address: std::net::Ipv4Addr::new(192, 168, 1, 10),
+            prefix_len: 24,
+        };
+        let debug = format!("{interface:?}");
+        assert_eq!(debug, "LocalInterface([redacted])");
     }
 }
