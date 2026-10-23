@@ -187,9 +187,16 @@ actions; nothing is decided in C#.
 - **Keyboard and Narrator:** every input has a `Header` that names it; buttons in lists carry `AutomationProperties.Name` with the
   server ("Sign in to <name>"); page titles and section headers have `AutomationProperties.HeadingLevel`; progress texts are
   `LiveSetting="Polite"`, and because "Connecting…", "Signing in…" and "Waiting for approval…" never change, their peer raises
-  `LiveRegionChanged` when they appear (`Announce.Shown`), else Narrator would have nothing to read; the Quick Connect code is an
-  assertive live region announced by its digit-by-digit name when it appears and when a new code replaces it (instead of "Waiting
-  for approval…", so the two do not cut each other off; the owner's run found the code unread); found servers are named by
+  `LiveRegionChanged` when they appear (`Announce.Shown`), else Narrator would have nothing to read; the Quick Connect code is
+  announced by a UI Automation notification carrying its digit-by-digit text ("Quick Connect code 1 2 3 4 5 6", `Announce.Say`:
+  `RaiseNotificationEvent` with `AutomationNotificationKind.Other` and `ImportantMostRecent`, "ImportantMostRecent: … the most
+  recent notification supersedes all of the other notifications", AutomationNotificationProcessing; the method is listed for
+  Windows App SDK 0.8 to 2.0, AutomationPeer.RaiseNotificationEvent; both learn.microsoft.com, read 2026-10-23) when it appears and
+  when a new code replaces it, once each, instead of "Waiting for approval…", so the two do not cut each other off. It is not a
+  live region: the owner's runs found the code first unread, then, as a live region, read by its visible text as one number
+  ("six hundred ninety-seven …"), not by its name. The same text stays its `AutomationProperties.Name`, for when the user reaches
+  it. Not verified by ear: whether Narrator says "6 9 7" as single digits (if not, commas between the digits are the next try),
+  and whether focus moving to "Cancel" at the same moment cuts the notification short; found servers are named by
   their server's name on the list item (`ContainerContentChanging`); an error `InfoBar` is closed and opened again when its message changes, because "Once the control is
   open, any changes made to the various properties … will not raise a notification event … we recommend you close and re-open the
   control" (InfoBar). Focus goes to the address box, and to the user name box (the password box when signing in again), once the page is
@@ -387,6 +394,8 @@ PR, starting with no `%LOCALAPPDATA%\Current` folder:
    appear, the Quick Connect code is read digit by digit. Keyboard only: Tab order follows the page, Enter submits, Esc cancels.
 10. Settings: the cards look like Windows Settings' cards (SettingsCard); About opens to show "© 2026 Skeksik". "Copy diagnostics"
     now copies the version, platform and settings state even without requests.
+11. Narrator on, start Quick Connect: the code is read once, digit by digit ("Quick Connect code 6 9 7 …", not "six hundred
+    ninety-seven"); Cancel and start it again: the new code is read once more (see "Quick Connect code and Narrator" below).
 
 ## Windows shell: owner's run
 2026-10-22, head 4e56bcd, Windows 11 Pro 25H2 (build 26200.9711), x64. Built locally as above, since CI keeps no installer artifact:
@@ -469,3 +478,11 @@ M1's "done when" (sign in and out, restart signed in) **holds**: cases 3, 4 and 
    Suggested: announce the code (by its digit-by-digit name) when it appears.
 10. Settings: **pass.** Windows Settings-style cards; About "© 2026 Skeksik"; Copy diagnostics copies text with the version; pasted
     into Notepad (not saved) it had no address, user name or token.
+
+## Quick Connect code and Narrator: owner's check
+For fix/narrator-quick-connect-code (the code announced by a notification, see "Keyboard and Narrator" under Screens), on a build
+of that branch, signed out of a server that offers Quick Connect:
+1. Narrator on (Win+Ctrl+Enter); open the sign-in page and press "Use Quick Connect". The code is read digit by digit, once, and
+   not again as a number. Note whether "Cancel, button" is also read and whether it cuts the code short.
+2. Press Cancel, then "Use Quick Connect" again: the new code is read digit by digit, once.
+3. In scan mode (Caps Lock+Space), arrow to the code: Narrator reads "Quick Connect code" and the digits.
