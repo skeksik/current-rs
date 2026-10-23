@@ -55,7 +55,8 @@ Each item starts with our own research (the server's API and source, the platfor
 recorded with sources and dates, and a decision record where it decides something.
 - [ ] Server setup: add a Jellyfin server by URL, check it is the same server on every address, warn about plain HTTP except locally
       (core done 2026-10-22, ADR 0012: address parsing, probe, identity, plain-HTTP rule, the in-memory flow; servers are stored with
-      sign-in, ADR 0015; the Windows screen is still to do)
+      sign-in, ADR 0015; the Windows screen is still to do; a web app on a typed port without a scheme is reported as not Jellyfin,
+      not as a TLS failure, 2026-10-23)
 - [ ] Several addresses per server with roaming (local and internet, the user's order)
   - [x] Spike: research and design (2026-10-22, PR 17, ADR 0014, docs/notes/roaming.md; OS trust only for
         TLS in M1)
