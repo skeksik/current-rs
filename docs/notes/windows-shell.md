@@ -152,6 +152,10 @@ actions; nothing is decided in C#.
     (it does not block the page, so a bar, not a ring); a `ListView` of servers in the order they answered, appended so the list
     stays put; clicking one picks it. Done with none: "No servers found on this network. Enter the address instead."; each
     `DiscoveryProblem` in words; "Search again".
+    Each search (the first and "Search again") passes the up IPv4 interfaces (`LocalInterfaces.Read`, read just before): .NET's
+    `NetworkInterface.GetAllNetworkInterfaces`, `OperationalStatus.Up` only, Loopback and Tunnel types skipped, each IPv4 unicast
+    address with its `PrefixLength`. The core sends from each of them as well as from an unbound socket (ADR 0016, amended
+    2026-10-23 after case 2 of the M1 Windows run). The addresses go into the core only and are never logged.
   - `ConfirmPlainHttp`: a `ContentDialog`, "Connect without encryption?", "<name> answered over http. Your password and everything
     you watch would cross the internet unencrypted. Use https if the server offers it.", primary "Connect anyway", close "Cancel".
     The close button is the safe action and answers Esc (Dialog controls); `DefaultButton = Close`, so Enter does the safe thing too.
@@ -305,7 +309,7 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
    arrive on the UI thread, empty; probing an empty address fails with `InvalidAddress(Empty)` without a request; the folder is
    deleted after;
 8. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`);
-9. the network facts and the device name can be read (neither is printed beyond the connectivity level);
+9. the network facts, the device name and the local interfaces can be read (none is printed beyond the connectivity level);
 10. last, the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes: closing the only window ends XAML's message
     loop, so nothing can be awaited after it (CI run 39883272147 stopped at the next await and exited 0 without a result).
 No check sends anything over the network; discovery (UDP) is left out.
@@ -469,3 +473,11 @@ M1's "done when" (sign in and out, restart signed in) **holds**: cases 3, 4 and 
    Suggested: announce the code (by its digit-by-digit name) when it appears.
 10. Settings: **pass.** Windows Settings-style cards; About "© 2026 Skeksik"; Copy diagnostics copies text with the version; pasted
     into Notepad (not saved) it had no address, user name or token.
+
+### Re-check of case 2 (fix/discovery-per-interface)
+On the same multi-adapter PC, start with no `%LOCALAPPDATA%\Current`:
+1. Wired, Wi-Fi off: Add a server lists the server on the first search, within about 2 s. "Search again" three times: listed each
+   time.
+2. Wi-Fi only: the same.
+3. Both on: the server is listed once, not twice.
+4. Still no firewall prompt, and no rule for `Current.exe` afterwards.
