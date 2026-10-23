@@ -114,9 +114,16 @@ public sealed class DiscoveryFlow : IDisposable
     }
 
     /// <summary>Searches once (a few seconds): Searching lists servers as they answer, then Done.</summary>
+    /// <param name="interfaces">
+    /// The device's up IPv4 interfaces, listed just before the call: the request goes out from each of them as well as from an
+    /// unbound socket (ADR 0016). Empty searches from the unbound socket only. Other address families are skipped.
+    /// </param>
     /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled; the flow is back to Idle.</exception>
-    public Task SearchAsync(CancellationToken ct = default) =>
-        CoreCall.RunVoidAsync(token => Native.Search(token), ct);
+    public Task SearchAsync(IReadOnlyList<LocalInterface> interfaces, CancellationToken ct = default)
+    {
+        var native = Map.ToFfi(interfaces);
+        return CoreCall.RunVoidAsync(token => Native.Search(native, token), ct);
+    }
 
     /// <summary>Back to Idle, dropping a running search.</summary>
     public void Reset() => Native.Reset();

@@ -73,10 +73,12 @@ extension AddServerFlow {
 }
 
 extension DiscoveryFlow {
-    /// Searches the local network once. Cancelled with the calling task, which returns the flow to idle.
-    public func search() async throws {
+    /// Searches the local network once, from an unbound socket and from each of `interfaces`, the device's up IPv4 interfaces
+    /// listed just before (ADR 0016; the macOS app lists them in a later task). Cancelled with the calling task, which returns
+    /// the flow to idle.
+    public func search(interfaces: [LocalInterface] = []) async throws {
         try await withCoreCancellation { token in
-            try await self.search(token: token)
+            try await self.search(interfaces: interfaces, token: token)
         }
     }
 

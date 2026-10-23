@@ -233,7 +233,8 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
     @Test func discoveryEnds() async throws {
         let core = try Core()
         let discovery = core.discoverServers()
-        try await discovery.search()
+        // Loopback is dropped by the core, so only the unbound socket sends.
+        try await discovery.search(interfaces: [LocalInterface(address: "127.0.0.1", prefixLength: 8)])
         // Whether the runner may broadcast, and whether anything answers, depends on the machine: only the shape is checked.
         switch discovery.state() {
         case .done, .failed: break

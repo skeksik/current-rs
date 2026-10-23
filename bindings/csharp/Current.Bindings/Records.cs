@@ -101,6 +101,20 @@ public sealed record NetworkFacts(
     }
 }
 
+/// <summary>
+/// One of the device's up IPv4 interfaces, as the app lists it just before a search (ADR 0016): its address and the prefix length
+/// of its subnet (24 for a netmask of 255.255.255.0). It is the device's own address, so <c>ToString()</c> shows it as
+/// <c>[redacted]</c>.
+/// </summary>
+public sealed record LocalInterface(System.Net.IPAddress Address, int PrefixLength)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append($"Address = [redacted], PrefixLength = {PrefixLength}");
+        return true;
+    }
+}
+
 public enum Connectivity
 {
     /// <summary>No network at all.</summary>
@@ -172,6 +186,12 @@ internal static class Map
         SecretStore.Memory => Ffi.SecretStore.Memory,
         _ => throw new ArgumentOutOfRangeException(nameof(store), store, "unknown secret store"),
     };
+
+    /// <summary>Only IPv4 addresses with a prefix of 0 to 32: the core searches over IPv4 only.</summary>
+    public static Ffi.LocalInterface[] ToFfi(IReadOnlyList<LocalInterface> interfaces) => interfaces
+        .Where(i => i.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && i.PrefixLength is >= 0 and <= 32)
+        .Select(i => new Ffi.LocalInterface(i.Address.ToString(), (byte)i.PrefixLength))
+        .ToArray();
 
     public static Ffi.NetworkFacts ToFfi(NetworkFacts facts) => new(
         facts.Connectivity switch
