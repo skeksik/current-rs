@@ -61,6 +61,12 @@ impl CapabilitiesListener for Recorder<CapabilitiesSnapshot> {
     }
 }
 
+impl AppThemeListener for Recorder<AppTheme> {
+    fn on_value(&self, value: AppTheme) {
+        self.send(value);
+    }
+}
+
 /// Every value received so far, without waiting.
 fn drain<T>(rx: &Receiver<T>) -> Vec<T> {
     rx.try_iter().collect()
@@ -170,6 +176,54 @@ fn open_core_creates_then_loads_the_settings() {
     let core = block_on(open_core(dir, String::new(), SecretStore::Memory)).unwrap();
     assert_eq!(core.load_report(), Some(LoadReport::Loaded));
     assert_eq!(Core::new().unwrap().load_report(), None);
+}
+
+#[test]
+fn the_app_theme_is_saved_at_once_and_read_at_the_next_open() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().to_str().unwrap().to_owned();
+    let core = block_on(open_core(dir.clone(), String::new(), SecretStore::Memory)).unwrap();
+    assert_eq!(core.app_theme(), AppTheme::System);
+    let (listener, themes) = recorder();
+    let handle = core.subscribe_app_theme(listener);
+    assert_eq!(themes.recv_timeout(WAIT).unwrap(), AppTheme::System);
+
+    block_on(core.set_app_theme(AppTheme::Dark)).unwrap();
+    // Read back at once, and the subscription follows.
+    assert_eq!(core.app_theme(), AppTheme::Dark);
+    assert_eq!(themes.recv_timeout(WAIT).unwrap(), AppTheme::Dark);
+    // The same theme again notifies no one.
+    block_on(core.set_app_theme(AppTheme::Dark)).unwrap();
+    block_on(core.set_app_theme(AppTheme::Light)).unwrap();
+    assert_eq!(themes.recv_timeout(WAIT).unwrap(), AppTheme::Light);
+    handle.cancel();
+    drop(core);
+
+    let core = block_on(open_core(dir, String::new(), SecretStore::Memory)).unwrap();
+    assert_eq!(core.app_theme(), AppTheme::Light);
+}
+
+#[test]
+fn an_app_theme_that_cannot_be_saved_is_refused_and_unchanged() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join(current_store::SETTINGS_FILE),
+        r#"{"version": 99, "device_id": "abc"}"#,
+    )
+    .unwrap();
+    let dir = temp.path().to_str().unwrap().to_owned();
+    let core = block_on(open_core(dir, String::new(), SecretStore::Memory)).unwrap();
+    let result = block_on(core.set_app_theme(AppTheme::Dark));
+    assert!(
+        matches!(
+            result,
+            Err(CoreError::Store {
+                problem: StoreProblem::NewerVersion { found: 99 }
+            })
+        ),
+        "{result:?}"
+    );
+    assert_eq!(core.app_theme(), AppTheme::System);
 }
 
 #[test]

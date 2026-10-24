@@ -221,6 +221,34 @@ impl LoadReport {
     }
 }
 
+/// The theme the app shows. `System` follows the system's theme, including a change while the app runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum AppTheme {
+    System,
+    Light,
+    Dark,
+}
+
+impl From<model::AppTheme> for AppTheme {
+    fn from(theme: model::AppTheme) -> Self {
+        match theme {
+            model::AppTheme::System => Self::System,
+            model::AppTheme::Light => Self::Light,
+            model::AppTheme::Dark => Self::Dark,
+        }
+    }
+}
+
+impl From<AppTheme> for model::AppTheme {
+    fn from(theme: AppTheme) -> Self {
+        match theme {
+            AppTheme::System => Self::System,
+            AppTheme::Light => Self::Light,
+            AppTheme::Dark => Self::Dark,
+        }
+    }
+}
+
 /// Where the core keeps secrets (sign-in tokens).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum SecretStore {
