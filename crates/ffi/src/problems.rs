@@ -194,6 +194,10 @@ impl From<&AuthError> for SignInProblem {
             AuthError::QuickConnectExpired => Self::QuickConnectExpired,
             AuthError::SessionRevoked => Self::SessionRevoked,
             AuthError::NotSignedIn => Self::NotSignedIn,
+            // Mid-session only, never from a sign-in; its own variant comes with the gateway states (ADR 0017).
+            AuthError::Unconfirmed => Self::Network {
+                problem: NetProblem::Auth { status: 401 },
+            },
             AuthError::Network(error) => Self::Network {
                 problem: error.into(),
             },

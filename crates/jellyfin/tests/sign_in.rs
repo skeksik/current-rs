@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use current_jellyfin::{
-    AccessToken, AuthError, ClientIdentity, JellyfinClient, QuickConnectSecret,
+    AccessToken, AuthError, ClientIdentity, JellyfinClient, QuickConnectSecret, SessionEvent,
 };
 use current_model::{Permission, ServerId, ServerKey, ServerRef, ServiceType, UserId};
 use current_net::{FixedAddress, NetError, Request, RequestLog, Url};
@@ -427,7 +427,7 @@ async fn the_current_user_needs_a_valid_token() {
 }
 
 #[tokio::test]
-async fn a_401_forgets_the_token_and_runs_the_hook_but_a_403_does_not() {
+async fn without_a_hook_a_401_forgets_the_token_but_a_403_does_not() {
     let status = Arc::new(Mutex::new(403));
     let server = StandIn::start({
         let status = status.clone();
@@ -436,29 +436,101 @@ async fn a_401_forgets_the_token_and_runs_the_hook_but_a_403_does_not() {
     .await;
     let log = Arc::new(RequestLog::default());
     let client = client(&server, &log);
-    let revoked = Arc::new(AtomicUsize::new(0));
-    client.on_revoked({
-        let revoked = revoked.clone();
-        Arc::new(move || {
-            revoked.fetch_add(1, Ordering::SeqCst);
-        })
-    });
     client.set_token(AccessToken::new(TOKEN));
 
     assert_eq!(client.current_user().await, Err(AuthError::Refused));
     assert!(client.has_token());
-    assert_eq!(revoked.load(Ordering::SeqCst), 0);
 
     *status.lock().unwrap() = 401;
     let result = client.current_user().await;
     assert_eq!(result, Err(AuthError::SessionRevoked));
     assert!(!client.has_token());
-    assert_eq!(revoked.load(Ordering::SeqCst), 1);
     assert_no_secret(&log, &format!("{result:?} {client:?}"));
 
-    // Without a token, nothing is sent and the hook does not run again.
+    // Without a token, nothing is sent.
     assert_eq!(client.current_user().await, Err(AuthError::NotSignedIn));
-    assert_eq!(revoked.load(Ordering::SeqCst), 1);
+    assert_eq!(server.received().len(), 2);
+}
+
+/// A hook that records the events it hears.
+fn recorder(client: &JellyfinClient) -> Arc<Mutex<Vec<SessionEvent>>> {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    client.on_event({
+        let events = events.clone();
+        Arc::new(move |event| events.lock().unwrap().push(event))
+    });
+    events
+}
+
+#[tokio::test]
+async fn with_a_hook_a_401_keeps_the_token_until_the_app_decides() {
+    let server = StandIn::start(|_: &Received| (401, String::new())).await;
+    let log = Arc::new(RequestLog::default());
+    let client = client(&server, &log);
+    let events = recorder(&client);
+    client.set_token(AccessToken::new(TOKEN));
+
+    let result = client.current_user().await;
+    assert_eq!(result, Err(AuthError::Unconfirmed));
+    assert!(client.has_token());
+    assert_eq!(
+        *events.lock().unwrap(),
+        [SessionEvent::Unconfirmed {
+            token: AccessToken::new(TOKEN)
+        }]
+    );
+    assert_no_secret(&log, &format!("{result:?} {client:?} {events:?}"));
+
+    // While the app checks, requests join the check: nothing is sent and the hook does not run again.
+    assert_eq!(client.current_user().await, Err(AuthError::Unconfirmed));
+    assert_eq!(server.received().len(), 1);
+    assert_eq!(events.lock().unwrap().len(), 1);
+
+    // Resumed (a gateway's answer): requests go out again and a new answer starts a new check.
+    client.resume();
+    assert_eq!(client.current_user().await, Err(AuthError::Unconfirmed));
+    assert_eq!(server.received().len(), 2);
+    assert_eq!(events.lock().unwrap().len(), 2);
+
+    // An older token is never revoked over a newer one.
+    assert!(!client.revoke(&AccessToken::new("an-older-token")));
+    assert!(client.has_token());
+    // Confirmed as Jellyfin's 401: the token is forgotten.
+    assert!(client.revoke(&AccessToken::new(TOKEN)));
+    assert!(!client.has_token());
+    assert_eq!(client.current_user().await, Err(AuthError::NotSignedIn));
+}
+
+#[tokio::test]
+async fn a_page_or_a_redirect_where_json_was_expected_is_checked_too() {
+    for (status, body) in [(200, "<html>sign in</html>"), (403, "<html>sign in</html>")] {
+        let server = StandIn::start(move |_: &Received| (status, body.to_owned())).await;
+        let client = client(&server, &Arc::new(RequestLog::default()));
+        let events = recorder(&client);
+        client.set_token(AccessToken::new(TOKEN));
+        assert_eq!(
+            client.current_user().await,
+            Err(AuthError::Unconfirmed),
+            "{status}"
+        );
+        assert!(client.has_token());
+        assert_eq!(events.lock().unwrap().len(), 1);
+        // A new token ends the check.
+        client.set_token(AccessToken::new("a-newer-token"));
+        assert_eq!(
+            client.current_user().await,
+            Err(AuthError::Unconfirmed),
+            "{status}"
+        );
+        assert_eq!(server.received().len(), 2);
+    }
+    // A plain 403 is Jellyfin refusing one request: no check.
+    let server = StandIn::start(|_: &Received| (403, String::new())).await;
+    let client = client(&server, &Arc::new(RequestLog::default()));
+    let events = recorder(&client);
+    client.set_token(AccessToken::new(TOKEN));
+    assert_eq!(client.current_user().await, Err(AuthError::Refused));
+    assert!(events.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -476,17 +548,11 @@ async fn sign_out_tells_the_server_and_forgets_the_token_whatever_it_answers() {
     ] {
         let server = StandIn::start(move |_: &Received| (status, String::new())).await;
         let client = client(&server, &Arc::new(RequestLog::default()));
-        let revoked = Arc::new(AtomicUsize::new(0));
-        client.on_revoked({
-            let revoked = revoked.clone();
-            Arc::new(move || {
-                revoked.fetch_add(1, Ordering::SeqCst);
-            })
-        });
+        let events = recorder(&client);
         client.set_token(AccessToken::new(TOKEN));
         assert_eq!(client.sign_out().await, expected, "{status}");
         assert!(!client.has_token());
-        assert_eq!(revoked.load(Ordering::SeqCst), 0);
+        assert!(events.lock().unwrap().is_empty());
         let request = &server.received()[0];
         assert_eq!(
             (request.method.as_str(), request.path.as_str()),

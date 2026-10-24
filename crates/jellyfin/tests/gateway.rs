@@ -3,12 +3,11 @@
 //! a header gate, a Negotiate-only gateway and a gate that refuses `Authorization: MediaBrowser ...`. Each gateway stand-in runs the
 //! Jellyfin stand-in on the request it would forward, so what Jellyfin received is checked as well.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use current_jellyfin::{
     AccessToken, AuthError, ClientIdentity, GatewayAnswer, HeaderPlacement, JellyfinClient,
-    JellyfinIdentity, ProbeError, Prober, Realm,
+    JellyfinIdentity, ProbeError, Prober, Realm, SessionEvent,
 };
 use current_model::{ServerId, ServerKey, ServerRef, ServiceType};
 use current_net::{
@@ -724,20 +723,26 @@ async fn a_gateway_challenge_mid_session_keeps_the_token() {
     // A Basic gateway whose password stopped working answers every request with its challenge.
     let expired = StandIn::start(|_| basic_challenge()).await;
     let log = Arc::new(RequestLog::default());
-    let revoked = Arc::new(AtomicUsize::new(0));
+    let events = Arc::new(Mutex::new(Vec::new()));
     let gated = client(Arc::new(FixedAddress(expired.url())), &log);
     gated.set_token(AccessToken::new(TOKEN));
-    let count = revoked.clone();
-    gated.on_revoked(Arc::new(move || {
-        count.fetch_add(1, Ordering::SeqCst);
-    }));
+    let heard = events.clone();
+    gated.on_event(Arc::new(move |event| heard.lock().unwrap().push(event)));
     let error = gated.current_user().await.unwrap_err();
     assert!(
         matches!(error, AuthError::Gateway(GatewayAnswer::Password { .. })),
         "{error:?}"
     );
     assert!(gated.has_token());
-    assert_eq!(revoked.load(Ordering::SeqCst), 0);
+    // The hook hears the challenge; nothing waits for a check.
+    assert!(matches!(
+        events.lock().unwrap().as_slice(),
+        [SessionEvent::Gateway(GatewayAnswer::Password { .. })]
+    ));
+    assert!(matches!(
+        gated.current_user().await,
+        Err(AuthError::Gateway(_))
+    ));
     // A sign-in's challenge is the gateway's too, not a wrong password.
     let sign_in = gated
         .sign_in_by_name("Example User", PASSWORD)
@@ -756,14 +761,9 @@ async fn a_gateway_challenge_mid_session_keeps_the_token() {
     let direct = StandIn::start(|request| jellyfin(request, false)).await;
     let session = client(Arc::new(FixedAddress(direct.url())), &log);
     session.set_token(AccessToken::new("not-the-token"));
-    let count = revoked.clone();
-    session.on_revoked(Arc::new(move || {
-        count.fetch_add(1, Ordering::SeqCst);
-    }));
     assert_eq!(
         session.current_user().await.unwrap_err(),
         AuthError::SessionRevoked
     );
     assert!(!session.has_token());
-    assert_eq!(revoked.load(Ordering::SeqCst), 1);
 }

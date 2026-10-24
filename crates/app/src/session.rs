@@ -19,7 +19,8 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use current_jellyfin::{
-    AccessToken, AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, SignedIn,
+    AccessToken, AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, SessionEvent,
+    SignedIn,
 };
 use current_model::{
     Capabilities, NetworkFacts, Reachability, SavedServer, SavedUser, ServerAddress, ServerId,
@@ -547,8 +548,12 @@ impl Shared {
         let server = client.server().clone();
         let shared: Weak<Self> = Arc::downgrade(self);
         let hooked = server.clone();
-        client.on_revoked(Arc::new(move || {
-            if let Some(shared) = shared.upgrade() {
+        let weak_client = Arc::downgrade(&client);
+        client.on_event(Arc::new(move |event| {
+            if let (SessionEvent::Unconfirmed { token }, Some(shared), Some(client)) =
+                (event, shared.upgrade(), weak_client.upgrade())
+                && client.revoke(&token)
+            {
                 shared.revoked(&hooked, id);
             }
         }));
