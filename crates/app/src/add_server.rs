@@ -604,4 +604,77 @@ mod tests {
         probe.await.unwrap();
         assert_eq!(*flow.state().borrow(), AddServerState::Idle);
     }
+
+    #[tokio::test]
+    async fn no_gateway_credential_goes_over_unconfirmed_public_http() {
+        let flow = flow();
+        *flow.lock_pending() = Some(Pending {
+            input: "media.example.com".into(),
+            base: Url::parse("http://media.example.com:8096/").unwrap(),
+            credentials: GatewayCredentials::default(),
+            confirmed: false,
+        });
+        flow.state.send_replace(AddServerState::GatewayPassword {
+            input: "media.example.com".into(),
+            origin: "http://media.example.com:8096".into(),
+            realm: None,
+            wrong: false,
+            plain_http: true,
+        });
+        assert_eq!(
+            flow.submit_password("gate-user", "gate-password", false)
+                .await,
+            Err(GatewaySubmitError::PlainHttpNotConfirmed)
+        );
+        // Nothing was probed: the state is as it was.
+        assert!(matches!(
+            *flow.state().borrow(),
+            AddServerState::GatewayPassword { .. }
+        ));
+        flow.reset();
+        assert!(flow.lock_pending().is_none());
+        assert_eq!(
+            flow.submit_password("gate-user", "gate-password", true)
+                .await,
+            Err(GatewaySubmitError::NotAsked)
+        );
+    }
+
+    #[test]
+    fn gateway_states_show_no_realm_location_or_credential() {
+        let base = Url::parse("https://media.example.com/").unwrap();
+        let pending = Pending {
+            input: "media.example.com".into(),
+            base: base.clone(),
+            credentials: gateway::merge(
+                &GatewayCredentials::default(),
+                Some(gateway::basic("gate-user", "gate-password").unwrap()),
+                None,
+                None,
+            )
+            .unwrap(),
+            confirmed: false,
+        };
+        let mut text = format!("{pending:?}");
+        for error in [
+            ProbeError::GatewayPassword {
+                realm: Realm::new("Private Realm Text"),
+            },
+            ProbeError::GatewaySignIn,
+            ProbeError::Redirected {
+                status: 302,
+                location: None,
+            },
+            ProbeError::GatewayRefused,
+            ProbeError::UnsupportedChallenge,
+        ] {
+            text.push_str(&format!("{:?}", gateway_state(&pending, error, false)));
+        }
+        let mut server = NewServer::from_found(&found("https://media.example.com/"));
+        server.gateway = pending.credentials.clone();
+        text.push_str(&format!("{:?}", AddServerState::Ready { server }));
+        for secret in ["Private Realm Text", "gate-password"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+    }
 }
