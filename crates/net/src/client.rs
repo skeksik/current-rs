@@ -13,7 +13,9 @@ use url::Url;
 
 use crate::address::{AddressOutcome, AddressProvider, Selected};
 use crate::error::{Location, NetError};
+use crate::gateway::Gateway;
 use crate::log::{LogEntry, Outcome, RequestLog, redact_query};
+use crate::scope::transport;
 
 /// Adds credentials to a request; implemented by the service crates. It runs after the request log entry is built, so nothing it adds
 /// can reach the log.
@@ -115,6 +117,8 @@ pub struct Response {
     /// Where the response came from: the request's address after any followed redirects, without the credentials `RequestAuth`
     /// adds. Server setup reads it to adopt an http to https upgrade or find a base path. Redacted from Debug and never logged.
     pub url: Location,
+    /// Whether a redirect was followed on the way: gateway classification (ADR 0017) treats the final answer like any other.
+    pub redirected: bool,
 }
 
 impl std::fmt::Debug for Request {
@@ -137,6 +141,7 @@ impl std::fmt::Debug for Response {
             .field("headers", &HeaderNames(&self.headers))
             .field("body_bytes", &self.body.len())
             .field("url", &self.url)
+            .field("redirected", &self.redirected)
             .finish()
     }
 }
@@ -256,9 +261,7 @@ impl ServerClient {
         retry: bool,
     ) -> (Result<Response, NetError>, bool) {
         let started = Instant::now();
-        let (result, sent, expired) = match self
-            .execute(request.clone(), selected.url(), deadline)
-            .await
+        let (result, sent, expired) = match self.execute(request.clone(), selected, deadline).await
         {
             Ok(response) => (Ok(response), true, false),
             Err(failure) => (Err(failure.error), failure.sent, failure.expired),
@@ -309,8 +312,11 @@ impl ServerClient {
         self.send(request).await?.json()
     }
 
-    /// Fresh copies of `url` and `headers` with the credentials added. Runs on every hop, so a followed redirect keeps them.
-    fn authorize(&self, url: &Url, headers: &HeaderMap) -> (Url, HeaderMap) {
+    /// Fresh copies of `url` and `headers` with the credentials added: the service's, then the selected address's gateway
+    /// credentials (ADR 0017). Runs on every hop, so a followed redirect keeps them, and cookies are matched against each hop's URL.
+    /// Gateway credentials follow the token's transport rule: https, plain HTTP to the local network, or plain HTTP the user
+    /// confirmed for the address (ADR 0012, ADR 0014).
+    fn authorize(&self, url: &Url, headers: &HeaderMap, selected: &Selected) -> (Url, HeaderMap) {
         let (mut url, mut headers) = (url.clone(), headers.clone());
         if let Some(auth) = &self.auth {
             let mut query: Vec<(String, String)> = url.query_pairs().into_owned().collect();
@@ -320,15 +326,18 @@ impl ServerClient {
                 url.query_pairs_mut().extend_pairs(&query);
             }
         }
+        if let Some(gateway) = gateway_for(selected, &url) {
+            gateway.apply(&url, &mut headers, SystemTime::now());
+        }
         (url, headers)
     }
 
-    /// Sends `request` to `base`, following redirects on the same host, until `deadline` (one deadline for the whole request,
-    /// redirects included).
+    /// Sends `request` to `selected`, following redirects on the same host, until `deadline` (one deadline for the whole request,
+    /// redirects included). Every answer's `Set-Cookie` updates the address's gateway cookies.
     async fn execute(
         &self,
         request: Request,
-        base: &Url,
+        selected: &Selected,
         deadline: Instant,
     ) -> Result<Response, Failure> {
         let Request {
@@ -339,7 +348,7 @@ impl ServerClient {
             mut body,
             timeout: _,
         } = request;
-        let original = join(base, &path, &query).map_err(Failure::unsent)?;
+        let original = join(selected.url(), &path, &query).map_err(Failure::unsent)?;
         let mut url = original.clone();
         let mut hops = 0;
         loop {
@@ -351,7 +360,7 @@ impl ServerClient {
                     sent: hops > 0,
                     expired: hops == 0,
                 })?;
-            let (authorized_url, authorized_headers) = self.authorize(&url, &headers);
+            let (authorized_url, authorized_headers) = self.authorize(&url, &headers, selected);
             let mut builder = self
                 .http
                 .request(method.clone(), authorized_url)
@@ -370,6 +379,9 @@ impl ServerClient {
             })?;
             let status = response.status().as_u16();
             let response_headers = response.headers().clone();
+            if let Some(gateway) = gateway_for(selected, &url) {
+                gateway.update(&url, &response_headers, SystemTime::now());
+            }
 
             if let Some(next) = redirect_target(status, &response_headers, &url) {
                 if hops >= MAX_REDIRECTS || !may_follow(&original, &next) {
@@ -409,7 +421,7 @@ impl ServerClient {
                 .to_vec();
             if !(200..300).contains(&status) {
                 return Err(Failure {
-                    error: NetError::from_status(status, &body),
+                    error: NetError::from_status(status, &response_headers, &body),
                     sent: true,
                     expired: false,
                 });
@@ -419,9 +431,18 @@ impl ServerClient {
                 headers: response_headers,
                 body,
                 url: Location(url),
+                redirected: hops > 0,
             });
         }
     }
+}
+
+/// The selected address's gateway, if its credentials may go to `url` (a hop on that address): https, plain HTTP to the local
+/// network, or plain HTTP the user confirmed for the address. The same rule decides whether an answer from `url` may update them.
+fn gateway_for<'a>(selected: &'a Selected, url: &Url) -> Option<&'a Arc<Gateway>> {
+    selected
+        .gateway()
+        .filter(|_| !transport(url).needs_confirmation() || selected.plain_http_confirmed())
 }
 
 /// A failed attempt, and whether the request may have reached a server.
@@ -570,6 +591,7 @@ mod tests {
             headers,
             body: br#"{"AccessToken":"token-value"}"#.to_vec(),
             url: Location(url("http://192.168.1.10:8096/Users/AuthenticateByName")),
+            redirected: false,
         };
         let text = format!("{response:?}");
         for secret in ["token-value", "cookie-value", "192.168.1.10"] {
@@ -692,6 +714,44 @@ mod tests {
             Ok(url) => url,
             Err(error) => panic!("{error}"),
         }
+    }
+
+    #[test]
+    fn gateway_credentials_follow_the_token_transport_rule() {
+        let gateway = Arc::new(Gateway::new(crate::gateway::GatewayCredentials::default()));
+        let allowed = |address: &str, confirmed: bool, hop: &str| {
+            let selected =
+                Selected::new(url(address), None, 0).with_gateway(Some(gateway.clone()), confirmed);
+            gateway_for(&selected, &url(hop)).is_some()
+        };
+        assert!(allowed(
+            "https://media.example.com/",
+            false,
+            "https://media.example.com/a"
+        ));
+        assert!(allowed(
+            "http://192.168.1.10:8096/",
+            false,
+            "http://192.168.1.10:8096/a"
+        ));
+        assert!(!allowed(
+            "http://media.example.com/",
+            false,
+            "http://media.example.com/a"
+        ));
+        assert!(allowed(
+            "http://media.example.com/",
+            true,
+            "http://media.example.com/a"
+        ));
+        // An upgrade hop is https: allowed even before a confirmation.
+        assert!(allowed(
+            "http://media.example.com/",
+            false,
+            "https://media.example.com/a"
+        ));
+        let none = Selected::new(url("https://media.example.com/"), None, 0);
+        assert!(gateway_for(&none, &url("https://media.example.com/")).is_none());
     }
 
     #[test]

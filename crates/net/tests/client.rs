@@ -203,7 +203,9 @@ async fn auth_statuses_carry_the_server_message_but_the_log_does_not() {
         error.as_ref().err(),
         Some(&NetError::Auth {
             status: 401,
-            message: Some("Token expired".into())
+            message: Some("Token expired".into()),
+            challenges: Vec::new(),
+            page: false,
         })
     );
     let text = log.to_text();
@@ -457,6 +459,8 @@ async fn every_error_displays_without_the_address() {
         NetError::Auth {
             status: 403,
             message: None,
+            challenges: Vec::new(),
+            page: false,
         },
         NetError::Status {
             status: 500,

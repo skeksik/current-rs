@@ -219,6 +219,12 @@ merge):
   reported, and neither is a retry's timeout (the retry has only what is left of the deadline), so a short request does not knock
   out a healthy address.
 
+## Amendment (2026-10-24, from ADR 0017)
+Approved by the owner as ADR 0017's "Proposed amendments" lists it:
+- Gateway credentials are per address and follow the same transport rule as the token (verified https, or plain http the user
+  accepted under ADR 0012).
+- The identity probe carries that address's gateway credentials (never the service's credentials, never another address's).
+
 ## Consequences
 - A dead preferred address costs one stagger (250 ms) after a network change, not a timeout.
 - The `Id` check keeps credentials away from wrong servers and portal pages, but on plain HTTP nothing stops an attacker on the path;
