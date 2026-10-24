@@ -64,32 +64,45 @@ before merging, and its PR carries only the record.
 ## M1: Jellyfin sign-in and server setup (Windows)
 Each item starts with our own research (the server's API and source, the platform's documentation, how existing clients behave),
 recorded with sources and dates, and a decision record where it decides something.
-- [ ] Server setup: add a Jellyfin server by URL, check it is the same server on every address, warn about plain HTTP except locally
-      (core done 2026-10-22, ADR 0012: address parsing, probe, identity, plain-HTTP rule, the in-memory flow; servers are stored with
-      sign-in, ADR 0015; the Windows screen done 2026-10-23, feat/windows-sign-in; the owner's check on a real server is still to do;
-      a web app on a typed port without a scheme is reported as not Jellyfin, not as a TLS failure, 2026-10-23)
-- [ ] Several addresses per server with roaming (local and internet, the user's order)
+- [x] Server setup: add a Jellyfin server by URL, check it is the same server on every address, warn about plain HTTP except locally
+      (core 2026-10-22, ADR 0012; the Windows screen, PR 27; a web app on a typed port without a scheme is reported as not
+      Jellyfin, PR 28; the owner's runs on a real server, 2026-10-23)
+- [x] Several addresses per server with roaming (local and internet, the user's order)
   - [x] Spike: research and design (2026-10-22, PR 17, ADR 0014, docs/notes/roaming.md; OS trust only for
         TLS in M1)
   - [x] Core: `RoamingAddresses` in `current-net`, Jellyfin's identity check, `NetworkFacts`, `App::network_changed` and the
         request log's address position (2026-10-22, ADR 0014)
   - [x] Wire the providers into signed-in servers: one provider per saved Jellyfin server for its session, restore and
         sign-in again; the capabilities state follows its status (2026-10-22, ADR 0015)
-  - [x] `NetworkFacts` from the Windows UI (2026-10-23, feat/windows-sign-in: `NetworkObserver`, docs/notes/windows-shell.md)
-- [ ] Secrets in the OS keyring and a device identity per install
-- [ ] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out
-      (core done 2026-10-22, ADR 0015: `current-jellyfin` auth, saved servers and users, the `SignIn` flow, restore, sign out; the
-      bridge 2026-10-23, PR 25; the Windows screens 2026-10-23, feat/windows-sign-in; the owner's check on a real server is still to do)
-- [ ] Remove a saved server (owner, 2026-10-23): signs out every user there, deletes their tokens, forgets the server; the
-      server is told in the background (feat/remove-server: core, bridge, Settings → Accounts "Remove" with a confirmation;
-      ADR 0015 amended 2026-10-23; the owner's check on Windows is still to do)
-- [ ] Local server discovery
-      (core done 2026-10-22, ADR 0016: UDP discovery, probe and id check, the discovery state, picking into "add a server"; the
-      Windows screen done 2026-10-23, feat/windows-sign-in; the local check on a real network is still to do)
-  - [ ] Search from each up interface (2026-10-23, ADR 0016 amended after the owner's Windows run): core, bridge and the
-        Windows app's interface list; the owner re-runs the multi-adapter case
+  - [x] `NetworkFacts` from the Windows UI (2026-10-23, PR 27: `NetworkObserver`, docs/notes/windows-shell.md; the owner's
+        network-change case passed 2026-10-23)
+- [x] Secrets in the OS keyring and a device identity per install (ADR 0013; Credential Manager checked in the owner's runs)
+- [x] Sign-in with a password or Quick Connect; sessions restored at start and dropped on a 401; sign out
+      (core 2026-10-22, ADR 0015; the bridge, PR 25; the Windows screens, PR 27; Narrator reads the Quick Connect code digit by
+      digit, the sign-in is announced and the code can be copied, PR 32; the owner's runs 2026-10-23 and 2026-10-24)
+- [x] Remove a saved server (owner, 2026-10-23): signs out every user there, deletes their tokens, forgets the server; the
+      server is told in the background (PR 31, ADR 0015 amended; the owner's run 2026-10-23)
+- [x] Local server discovery (core 2026-10-22, ADR 0016; the Windows screen, PR 27)
+  - [x] Search from each up interface (PR 29, ADR 0016 amended; the owner's multi-adapter run passed 2026-10-23)
+- [ ] Windows window and page layout, matched to Windows Settings and Task Manager (owner, 2026-10-23 and 2026-10-24)
+  - [x] Transparent disabled back button; page columns left-aligned under the page title (PR 33)
+  - [x] The title bar, the pane and the page backgrounds (PR 35): a 48 px title bar with standard caption buttons; a 500 × 500
+        minimum; the navigation view's three-stage pane with an always-shown "Open/Close Navigation" button, the pane opening
+        over the page on narrower windows in the title bar's colour; an open overlay pane is a back step that Back only closes;
+        the content layer on content pages and Mica behind Settings; "All rights reserved." in About
+  - Open, from the owner's re-check of PR 35 (2026-10-24, docs/notes/windows-shell.md, "Window chrome: owner's re-check"):
+    - [ ] The page title sits 2.7 px under the title bar at every width; Windows Settings has about 5 px on a small window and
+          16 px on a wide one (`PageLayout.PlainHeader`, `apps/windows/Current.Shell/PageLayout.cs`)
+    - [ ] The open overlay pane keeps a 1 px line at its right edge and a shadow, and a 1 px line at its left edge; Windows
+          Settings' pane has neither
+    - [ ] Inside the content layer the title sits about 2.7 px right of and 2 px above Task Manager's Users page heading, and
+          the right gap is 16.7 px against Task Manager's 18
+    - [ ] The content layer's colour is WinUI's layer fill (#272727 dark, #F9F9F9 light); Task Manager's is #191919 / #FFFFFF
+          (the border matches)
+    - [ ] More from the owner (to be added)
 
-Done when: sign in and out of Jellyfin on Windows, and the app restarts signed in.
+Done when: sign in and out of Jellyfin on Windows, and the app restarts signed in; and the owner's open layout items above are
+fixed.
 
 ## M2: First usable version: Jellyfin browse and play (Windows)
 - [ ] `current-jellyfin`: libraries, items (paging, sort, filter), latest, resume, next up, series/seasons/episodes, details, similar,
