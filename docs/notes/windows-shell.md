@@ -59,6 +59,13 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   control's layout root is `TitleBarCompactHeight` (32) and becomes `TitleBarExpandedHeight` (48) only when `Content`, `LeftHeader`
   or `RightHeader` is set (`TitleBar.xaml`, `UpdateHeight` in `TitleBar.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read
   2026-10-24). Ours has none, so `MainWindow.xaml` raises `TitleBarCompactHeight` to 48 on `AppTitleBar` (lightweight styling).
+- **Minimum window size: 500 × 500 effective px** (manager, 2026-10-24): the narrowest page column (Sign in, 400 px plus 24 on
+  each side) and the title bar (back and pane buttons, title, caption buttons) fit. `OverlappedPresenter.PreferredMinimumWidth` and
+  `PreferredMinimumHeight` ("Gets or sets the preferred minimum width for the window", learn.microsoft.com, Windows App SDK 1.7 and
+  later, read 2026-10-24); `Window.MinWidth` exists only in the 2.0 experimental API, so it is not used. The API page names no unit;
+  the WinUI Gallery's `WindowHelper.SetWindowMinSize` multiplies by `XamlRoot.RasterizationScale` (physical pixels), and so does
+  `MainWindow`, again on every `XamlRoot.Changed` so a move to a display with another scale keeps 500 effective px (the unit is not
+  verified beyond that sample). The Gallery itself uses 640 × 500; Windows Settings' own minimum is not verified.
 - **Navigation:** a left `NavigationView` with Home and the built-in Settings item over one `Frame`, as in the NavigationView page's
   example (learn.microsoft.com/windows/apps/develop/ui/controls/navigationview, ms.date 2026-10-02, read 2026-10-22): navigate on
   `ItemInvoked` only when the page differs (no duplicate back stack entries), keep the selection and header in step on

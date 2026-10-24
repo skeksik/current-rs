@@ -26,6 +26,15 @@ public sealed partial class MainWindow : Window
         [typeof(SignInPage)] = "Sign in",
     };
 
+    /// <summary>
+    /// The smallest window, in effective pixels: the narrowest page column (Sign in, 400 plus 24 on each side) and the title bar with
+    /// its back and pane buttons, title and caption buttons fit (manager, 2026-10-24; the WinUI Gallery uses
+    /// 640 by 500, github.com/microsoft/WinUI-Gallery MainWindow.xaml.cs, main at 14061ee, read 2026-10-24).
+    /// </summary>
+    private const double MinWindowWidth = 500;
+
+    private const double MinWindowHeight = 500;
+
     private bool _wasDeactivated;
 
     public MainWindow()
@@ -46,6 +55,7 @@ public sealed partial class MainWindow : Window
         Root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(OnPointerPressed), true);
 
         Activated += OnActivated;
+        Root.Loaded += OnRootLoaded;
 
         NavView.SelectedItem = HomeItem;
         Navigate(typeof(HomePage), new EntranceNavigationTransitionInfo());
@@ -58,6 +68,30 @@ public sealed partial class MainWindow : Window
         var notice = new InfoBar { Severity = severity, Title = title, Message = message, IsOpen = true, Margin = new Thickness(0, 8, 0, 0) };
         notice.Closed += (_, _) => Notices.Children.Remove(notice);
         Notices.Children.Add(notice);
+    }
+
+    private void OnRootLoaded(object sender, RoutedEventArgs e)
+    {
+        Root.Loaded -= OnRootLoaded;
+        ApplyMinimumSize();
+        // The scale changes when the window moves to a display with another scale or the user changes it.
+        Root.XamlRoot.Changed += (_, _) => ApplyMinimumSize();
+    }
+
+    /// <summary>
+    /// Sets the window's minimum size through its presenter (OverlappedPresenter.PreferredMinimumWidth and PreferredMinimumHeight,
+    /// Windows App SDK 1.7 and later, learn.microsoft.com, read 2026-10-24). The API page gives no unit; the WinUI Gallery's
+    /// WindowHelper.SetWindowMinSize multiplies by XamlRoot.RasterizationScale, so these are physical pixels (not verified otherwise).
+    /// </summary>
+    private void ApplyMinimumSize()
+    {
+        if (AppWindow.Presenter is not OverlappedPresenter presenter || Root.XamlRoot is null)
+        {
+            return;
+        }
+        var scale = Root.XamlRoot.RasterizationScale;
+        presenter.PreferredMinimumWidth = (int)Math.Ceiling(MinWindowWidth * scale);
+        presenter.PreferredMinimumHeight = (int)Math.Ceiling(MinWindowHeight * scale);
     }
 
     /// <summary>
