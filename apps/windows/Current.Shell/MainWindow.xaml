@@ -26,7 +26,7 @@
             IsBackButtonVisible="True"
             IsBackButtonEnabled="False"
             BackRequested="OnTitleBarBackRequested"
-            IsPaneToggleButtonVisible="True"
+            IsPaneToggleButtonVisible="False"
             PaneToggleRequested="OnTitleBarPaneToggleRequested">
             <!-- A disabled back button keeps its transparent background and only dims its glyph, as the navigation view's own back
                  button does: its Disabled state sets only the glyph's foreground (NavigationBackButton.xaml), while the title bar's
@@ -55,14 +55,28 @@
             </TitleBar.Resources>
         </TitleBar>
 
+        <!-- The full pane on a wide window; below 1008 px it hides and opens over the content from the title bar's pane button
+             (MainWindow.xaml.cs). Equal thresholds leave out the Compact stage: the NavigationView page's "Minimal" adaptive
+             behaviour (learn.microsoft.com, ms.date 2026-10-02, read 2026-10-24); 1008 is its default for the expanded pane. -->
         <NavigationView
             x:Name="NavView"
             Grid.Row="1"
-            PaneDisplayMode="Left"
+            PaneDisplayMode="Auto"
+            CompactModeThresholdWidth="1008"
+            ExpandedModeThresholdWidth="1008"
             IsBackButtonVisible="Collapsed"
             IsPaneToggleButtonVisible="False"
             IsSettingsVisible="True"
-            ItemInvoked="OnItemInvoked">
+            ItemInvoked="OnItemInvoked"
+            DisplayModeChanged="OnDisplayModeChanged"
+            PaneOpened="OnPaneOpenedOrClosed"
+            PaneClosed="OnPaneOpenedOrClosed">
+            <NavigationView.Resources>
+                <!-- In Minimal the header's margin is -24,44,0,0, which assumes the navigation view's own pane and back buttons to
+                     its left (NavigationView_themeresources.xaml, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24).
+                     Those are hidden here, so the header takes the page's Minimal left inset instead (PageLayout.cs). -->
+                <Thickness x:Key="NavigationViewMinimalHeaderMargin">24,44,0,0</Thickness>
+            </NavigationView.Resources>
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
             </NavigationView.MenuItems>
@@ -72,7 +86,7 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <!-- Notices about the app's state that every page shows (App.ShowNotice): settings reset, a sign-in not remembered. -->
-                <StackPanel x:Name="Notices" Margin="{StaticResource PageNoticesMargin}" Spacing="8" />
+                <StackPanel x:Name="Notices" Spacing="8" />
                 <Frame x:Name="ContentFrame" Grid.Row="1" IsTabStop="True" Navigated="OnNavigated" />
             </Grid>
         </NavigationView>

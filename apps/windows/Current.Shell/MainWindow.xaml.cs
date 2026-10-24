@@ -2,8 +2,10 @@ using Current.Shell.Pages;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
 using Windows.System;
@@ -37,6 +39,8 @@ public sealed partial class MainWindow : Window
 
     private bool _wasDeactivated;
 
+    private FrameworkElement? _paneToggleButton;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -56,6 +60,7 @@ public sealed partial class MainWindow : Window
 
         Activated += OnActivated;
         Root.Loaded += OnRootLoaded;
+        Notices.Margin = PageLayout.NoticesMargin;
 
         NavView.SelectedItem = HomeItem;
         Navigate(typeof(HomePage), new EntranceNavigationTransitionInfo());
@@ -73,6 +78,8 @@ public sealed partial class MainWindow : Window
     private void OnRootLoaded(object sender, RoutedEventArgs e)
     {
         Root.Loaded -= OnRootLoaded;
+        // A window that opens narrow stays in the navigation view's initial Minimal mode, which raises no DisplayModeChanged.
+        ApplyDisplayMode(NavView.DisplayMode);
         ApplyMinimumSize();
         // The scale changes when the window moves to a display with another scale or the user changes it.
         Root.XamlRoot.Changed += (_, _) => ApplyMinimumSize();
@@ -92,6 +99,64 @@ public sealed partial class MainWindow : Window
         var scale = Root.XamlRoot.RasterizationScale;
         presenter.PreferredMinimumWidth = (int)Math.Ceiling(MinWindowWidth * scale);
         presenter.PreferredMinimumHeight = (int)Math.Ceiling(MinWindowHeight * scale);
+    }
+
+    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) =>
+        ApplyDisplayMode(args.DisplayMode);
+
+    /// <summary>
+    /// With the full pane shown there is no pane button, as in Windows Settings (the owner's run, 2026-10-24). On a narrower window the
+    /// pane hides and the title bar's pane button opens it over the content; the page's insets follow (PageLayout).
+    /// </summary>
+    private void ApplyDisplayMode(NavigationViewDisplayMode mode)
+    {
+        var expanded = mode == NavigationViewDisplayMode.Expanded;
+        AppTitleBar.IsPaneToggleButtonVisible = !expanded;
+        PageLayout.SetMinimal(!expanded);
+        Notices.Margin = PageLayout.NoticesMargin;
+        if (!expanded)
+        {
+            // The title bar loads its pane button when it is first shown; name it once it is there.
+            DispatcherQueue.TryEnqueue(NamePaneToggleButton);
+        }
+    }
+
+    private void OnPaneOpenedOrClosed(NavigationView sender, object args) => NamePaneToggleButton();
+
+    /// <summary>
+    /// Names the title bar's pane button as the navigation view names its own: "Open Navigation" while the pane is closed, "Close
+    /// Navigation" while it is open (NavigationButtonClosedName and NavigationButtonOpenName, NavigationView's Resources.resw), with
+    /// the same tooltip. The TitleBar names it "Toggle Navigation" whatever the state and has no property for it, so its template part
+    /// PART_PaneToggleButton is looked up (TitleBar.h and TitleBar.cpp, LoadPaneToggleButton; microsoft-ui-xaml, tag
+    /// winui3/release/2.5.1, read 2026-10-24).
+    /// </summary>
+    private void NamePaneToggleButton()
+    {
+        _paneToggleButton ??= FindDescendant(AppTitleBar, "PART_PaneToggleButton");
+        if (_paneToggleButton is null)
+        {
+            return;
+        }
+        var name = NavView.IsPaneOpen ? "Close Navigation" : "Open Navigation";
+        AutomationProperties.SetName(_paneToggleButton, name);
+        ToolTipService.SetToolTip(_paneToggleButton, name);
+    }
+
+    private static FrameworkElement? FindDescendant(DependencyObject parent, string name)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is FrameworkElement element && element.Name == name)
+            {
+                return element;
+            }
+            if (FindDescendant(child, name) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
     }
 
     /// <summary>

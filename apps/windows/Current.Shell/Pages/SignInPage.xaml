@@ -1,14 +1,15 @@
 <Page
     x:Class="Current.Shell.Pages.SignInPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:shell="using:Current.Shell">
     <!-- Esc stops a running sign-in or Quick Connect (docs/notes/windows-shell.md, "Keyboard and Narrator"). -->
     <Page.KeyboardAccelerators>
         <KeyboardAccelerator Key="Escape" Invoked="OnEscape" />
     </Page.KeyboardAccelerators>
 
     <ScrollViewer>
-        <Grid Padding="{StaticResource PageColumnPadding}">
+        <Grid shell:PageLayout.IsColumn="True">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MaxWidth="400" />
             </Grid.ColumnDefinitions>

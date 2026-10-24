@@ -2,21 +2,22 @@
     x:Class="Current.Shell.Pages.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:shell="using:Current.Shell"
     xmlns:toolkit="using:CommunityToolkit.WinUI.Controls"
     xmlns:vm="using:Current.Shell.ViewModels">
     <!-- Microsoft's settings layout: one scrollable column of about 1000 px, BodyStrong section headers, SettingsCard and
          SettingsExpander, "About" last ("Guidelines for app settings", learn.microsoft.com, ms.date 2026-04-08, read 2026-10-23). The
-         column stretches up to that width, left-aligned under the page title (PageColumnPadding, App.xaml; the owner's run,
-         2026-10-23). -->
+         column stretches up to that width, left-aligned under the page title (PageLayout.cs; the owner's run,
+         2026-10-23). The first section header has no top margin, so it sits as far below the title as every page's first item. -->
     <ScrollViewer>
-        <Grid Padding="{StaticResource PageColumnPadding}">
+        <Grid shell:PageLayout.IsColumn="True">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MaxWidth="920" />
             </Grid.ColumnDefinitions>
             <StackPanel Spacing="4">
                 <TextBlock
                     Style="{StaticResource BodyStrongTextBlockStyle}"
-                    Margin="0,8,0,4"
+                    Margin="0,0,0,4"
                     AutomationProperties.HeadingLevel="Level2"
                     Text="Accounts" />
                 <toolkit:SettingsCard
