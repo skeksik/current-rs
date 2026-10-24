@@ -14,7 +14,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use current_model::{
-    SavedServer, SavedUser, ServerAddress, ServerId, ServerKey, ServerRef, ServiceType, UserId,
+    AppTheme, SavedServer, SavedUser, ServerAddress, ServerId, ServerKey, ServerRef, ServiceType,
+    UserId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -48,6 +49,11 @@ pub struct Settings {
     /// The highest numeric server key ever given out, so a removed server's key is never given to another server (its keyring
     /// entries might have outlived it). Older files have none: the highest key in `servers` stands in.
     pub last_server_key: u64,
+    /// The theme the app shows. A value this version does not know (a newer version's, or not a name at all) reads as
+    /// [`AppTheme::System`] and is written back unchanged until the theme is changed here.
+    pub app_theme: AppTheme,
+    /// The stored `app_theme` this version did not know, kept for the version that wrote it.
+    unknown_app_theme: Option<Value>,
     /// Fields this version does not know, written back unchanged.
     extra: Map<String, Value>,
 }
@@ -58,6 +64,8 @@ impl Settings {
             device_id,
             servers: Vec::new(),
             last_server_key: 0,
+            app_theme: AppTheme::System,
+            unknown_app_theme: None,
             extra: Map::new(),
         }
     }
@@ -89,6 +97,10 @@ struct Stored {
     /// Added with "remove a server" (ADR 0015, 2026-10-23); older files have none.
     #[serde(default, skip_serializing_if = "is_zero")]
     last_server_key: u64,
+    /// Added with the app theme (2026-10-24); older files have none. Any JSON value, so that one this version cannot read is kept
+    /// rather than making the file corrupt: a corrupt file resets the device id, and a theme is not worth that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    app_theme: Option<Value>,
     #[serde(flatten)]
     extra: Map<String, Value>,
 }
@@ -296,6 +308,10 @@ impl SettingsStore {
         }
         let mut next = state.settings.clone();
         change(&mut next);
+        if next.app_theme != state.settings.app_theme {
+            // The theme was picked here: an unknown stored value no longer stands.
+            next.unknown_app_theme = None;
+        }
         if next != state.settings {
             self.write(&next, SETTINGS_VERSION)?;
             state.settings = next;
@@ -314,6 +330,7 @@ impl SettingsStore {
             device_id: Some(settings.device_id.to_string()),
             servers: settings.servers.iter().map(StoredServer::from).collect(),
             last_server_key: settings.last_server_key,
+            app_theme: stored_theme(settings),
             extra: settings.extra.clone(),
         };
         let mut object = Map::new();
@@ -376,13 +393,31 @@ fn from_stored(stored: Stored) -> Result<(Settings, bool), StoreError> {
         Some(id) => (id, false),
         None => (DeviceId::generate()?, true),
     };
+    let (app_theme, unknown_app_theme) = match stored.app_theme {
+        None => (AppTheme::System, None),
+        Some(value) => match value.as_str().and_then(AppTheme::parse) {
+            Some(theme) => (theme, None),
+            None => (AppTheme::System, Some(value)),
+        },
+    };
     let settings = Settings {
         device_id,
         servers: stored.servers.into_iter().map(SavedServer::from).collect(),
         last_server_key: stored.last_server_key,
+        app_theme,
+        unknown_app_theme,
         extra: stored.extra,
     };
     Ok((settings, made))
+}
+
+/// The `app_theme` to write: an unknown value read from the file as it was, else the theme's name. The default is left out.
+fn stored_theme(settings: &Settings) -> Option<Value> {
+    match (&settings.unknown_app_theme, settings.app_theme) {
+        (Some(unknown), _) => Some(unknown.clone()),
+        (None, AppTheme::System) => None,
+        (None, theme) => Some(Value::from(theme.as_str())),
+    }
 }
 
 /// Moves the unreadable file aside and returns the backup's file name.
@@ -731,6 +766,54 @@ mod tests {
         drop(store);
         let (store, _) = SettingsStore::open(temp.path()).unwrap();
         assert_eq!(store.get().last_server_key, 3);
+    }
+
+    #[test]
+    fn the_app_theme_round_trips_and_older_files_read_it_as_system() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path(), r#"{"version": 1, "device_id": "abc"}"#);
+        let (store, report) = SettingsStore::open(temp.path()).unwrap();
+        assert_eq!(report, LoadReport::Loaded);
+        assert_eq!(store.get().app_theme, AppTheme::System);
+        for theme in [AppTheme::Dark, AppTheme::Light] {
+            store.update(|s| s.app_theme = theme).unwrap();
+            assert_eq!(read_json(temp.path())["app_theme"], theme.as_str());
+            assert_eq!(
+                SettingsStore::open(temp.path()).unwrap().0.get().app_theme,
+                theme
+            );
+        }
+        // The default is left out of the file.
+        store.update(|s| s.app_theme = AppTheme::System).unwrap();
+        assert!(read_json(temp.path()).get("app_theme").is_none());
+    }
+
+    #[test]
+    fn an_unknown_app_theme_reads_as_system_and_is_kept_until_changed_here() {
+        for stored in [r#""sepia""#, "5", r#"{"accent": "blue"}"#] {
+            let temp = tempfile::tempdir().unwrap();
+            write_file(
+                temp.path(),
+                &format!(r#"{{"version": 1, "device_id": "abc", "app_theme": {stored}}}"#),
+            );
+            let (store, report) = SettingsStore::open(temp.path()).unwrap();
+            assert_eq!(report, LoadReport::Loaded, "{stored}");
+            assert_eq!(store.get().app_theme, AppTheme::System);
+            let original: Value = serde_json::from_str(stored).unwrap();
+
+            // Saving something else writes it back unchanged.
+            store.update(|s| s.last_server_key = 1).unwrap();
+            assert_eq!(read_json(temp.path())["app_theme"], original);
+            // Setting the theme it already reads as is no change.
+            store.update(|s| s.app_theme = AppTheme::System).unwrap();
+            assert_eq!(read_json(temp.path())["app_theme"], original);
+
+            // Picking a theme here replaces it, and back to the default leaves the field out.
+            store.update(|s| s.app_theme = AppTheme::Dark).unwrap();
+            assert_eq!(read_json(temp.path())["app_theme"], "dark");
+            store.update(|s| s.app_theme = AppTheme::System).unwrap();
+            assert!(read_json(temp.path()).get("app_theme").is_none());
+        }
     }
 
     #[test]

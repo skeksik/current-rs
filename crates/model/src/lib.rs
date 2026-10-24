@@ -3,6 +3,7 @@
 //! The types are plain records and enums with owned fields (no generics or lifetimes in their public shape) so that they can cross the
 //! UniFFI bridge later (ADR 0002, ADR 0005).
 
+mod appearance;
 mod artwork;
 mod capabilities;
 mod identity;
@@ -12,6 +13,7 @@ mod saved;
 mod server;
 mod user;
 
+pub use appearance::AppTheme;
 pub use artwork::{Artwork, AspectRatio, ImageType};
 pub use capabilities::{Capabilities, Feature, Reachability, ServerStatus};
 pub use identity::{
