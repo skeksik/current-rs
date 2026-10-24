@@ -22,7 +22,7 @@ public sealed partial class MainWindow : Window
 {
     private static readonly Dictionary<string, Type> Pages = new() { ["home"] = typeof(HomePage) };
 
-    /// <summary>Pages reached from Home (adding a server, signing in): Home stays selected; the page names the step in its title.</summary>
+    /// <summary>Pages reached from Home (adding a server, signing in): Home stays selected, and the page's title names the step.</summary>
     private static readonly HashSet<Type> HomeSteps = [typeof(AddServerPage), typeof(SignInPage)];
 
     /// <summary>
@@ -38,7 +38,7 @@ public sealed partial class MainWindow : Window
 
     private FrameworkElement? _paneToggleButton;
 
-    /// <summary>The navigation view's content layer: ContentGrid, the content of its template part RootSplitView (the smoke run).</summary>
+    /// <summary>The navigation view's content layer, read by the smoke run: ContentGrid, the content of the part RootSplitView.</summary>
     private Grid? _contentLayer;
 
     private readonly TaskCompletionSource _shown = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -92,7 +92,7 @@ public sealed partial class MainWindow : Window
         _contentLayer = (FindDescendant(NavView, "RootSplitView") as SplitView)?.Content as Grid;
         if (_contentLayer is null)
         {
-            Trace.TraceWarning("Current: NavigationView template part RootSplitView not found; the smoke run cannot read the content layer");
+            Trace.TraceWarning("Current: NavigationView template part RootSplitView not found; the smoke run cannot read its layer");
         }
         DispatcherQueue.TryEnqueue(() =>
         {
