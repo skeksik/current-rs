@@ -914,8 +914,8 @@ the page heading); the mouse Back button was sent as XButton1 with SendInput.
    a shadow at its right edge, and none under its title bar. The opened pane also has a 1.3 px line at its left edge inside the
    window border (#1D1D1D, light #E7E7E7). Wide: the full pane and the rail look as before.
 4. **Pass.** Close's hover box is 46 × 32 px at the top of the 48 px title bar, restored and maximised (69 × 48 physical px);
-   minimise and maximise sit beside it in the same row (not measured one by one). Dragging the title bar moves the window, double-click maximises and restores, and snap layouts show on
-   hovering maximise.
+   minimise and maximise sit beside it in the same row (not measured one by one). Dragging the title bar moves the window,
+   double-click maximises and restores, and snap layouts show on hovering maximise.
 5. **Pass**, at 900 and 600 px.
    - After a start, at Home: Back is disabled. Pane opened over the page: Back enabled; pressed: the pane closed, Home stayed,
      Back disabled again.
