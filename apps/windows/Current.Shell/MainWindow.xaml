@@ -20,15 +20,6 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- The content layer's brushes, which follow the theme: the navigation view's ContentGrid is bound to them on content
-             pages (MainWindow.ApplyContentLayer). The same values as the template's ContentGrid (NavigationView.xaml, tag
-             winui3/release/2.5.1, read 2026-10-24). -->
-        <Border
-            x:Name="ContentLayerBrushes"
-            Visibility="Collapsed"
-            Background="{ThemeResource NavigationViewContentBackground}"
-            BorderBrush="{ThemeResource NavigationViewContentGridBorderBrush}" />
-
         <!-- With a custom title bar, the navigation view's back and pane buttons move into it (the TitleBar control's page). -->
         <TitleBar
             x:Name="AppTitleBar"
@@ -82,28 +73,6 @@
             PaneClosed="OnPaneOpenedOrClosed">
             <NavigationView.Resources>
                 <ResourceDictionary>
-                    <!-- The pane opened over the page has the title bar's colour, as Windows Settings' does (owner's run,
-                         2026-10-24): the overlay pane's NavigationViewDefaultPaneBackground is AcrylicInAppFillColorDefaultBrush, and
-                         SolidBackgroundFillColorBaseBrush (#F3F3F3 light, #202020 dark) is the solid colour of the Mica the title bar
-                         shows (NavigationView_themeresources.xaml, Common_themeresources_any.xaml, microsoft-ui-xaml, tag
-                         winui3/release/2.5.1, read 2026-10-24). The full pane inline is already transparent over Mica
-                         (NavigationViewExpandedPaneBackground). High contrast keeps the control's own value. -->
-                    <ResourceDictionary.ThemeDictionaries>
-                        <ResourceDictionary x:Key="Default">
-                            <StaticResource x:Key="NavigationViewDefaultPaneBackground" ResourceKey="SolidBackgroundFillColorBaseBrush" />
-                        </ResourceDictionary>
-                        <ResourceDictionary x:Key="Light">
-                            <StaticResource x:Key="NavigationViewDefaultPaneBackground" ResourceKey="SolidBackgroundFillColorBaseBrush" />
-                        </ResourceDictionary>
-                        <ResourceDictionary x:Key="HighContrast">
-                            <StaticResource x:Key="NavigationViewDefaultPaneBackground" ResourceKey="SystemControlBackgroundBaseLowBrush" />
-                        </ResourceDictionary>
-                    </ResourceDictionary.ThemeDictionaries>
-                    <!-- The overlay pane's border: the navigation view gives its SplitView a 1 px border on every side
-                         (NavigationViewBorderThickness), which the SplitView draws around its pane (PaneRoot, SplitView_themeresources.xaml,
-                         same tag), so the pane's top edge showed as a line under the title bar. Only the edge towards the page stays,
-                         the SplitView's own default (SplitViewLeftBorderThemeThickness 0,0,1,0). -->
-                    <Thickness x:Key="NavigationViewBorderThickness">0,0,1,0</Thickness>
                     <!-- The header's own margins are 56,44,0,0 and, in Minimal, -24,44,0,0, which assumes the navigation view's own
                          pane and back buttons to its left (NavigationView_themeresources.xaml, same tag). Both are 0 here: the header
                          is placed by PageLayout.cs through the HeaderTemplate, the same in every display mode. -->

@@ -5,7 +5,6 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
@@ -43,10 +42,8 @@ public sealed partial class MainWindow : Window
 
     private FrameworkElement? _paneToggleButton;
 
-    /// <summary>The navigation view's content layer: ContentGrid, the content of its template part RootSplitView.</summary>
+    /// <summary>The navigation view's content layer: ContentGrid, the content of its template part RootSplitView (the smoke run).</summary>
     private Grid? _contentLayer;
-
-    private readonly SolidColorBrush _transparent = new(Microsoft.UI.Colors.Transparent);
 
     private readonly TaskCompletionSource _shown = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -68,9 +65,8 @@ public sealed partial class MainWindow : Window
 
         Activated += OnActivated;
         Root.Loaded += OnRootLoaded;
-        // A handler of its own, so the one that keeps the selection and header in step stays as it is.
-        ContentFrame.Navigated += (_, _) => ApplyContentLayer();
 
+        Notices.Margin = PageLayout.NoticesMargin;
         NavView.SelectedItem = HomeItem;
         Navigate(typeof(HomePage), new EntranceNavigationTransitionInfo());
     }
@@ -96,11 +92,12 @@ public sealed partial class MainWindow : Window
     private void OnRootLoaded(object sender, RoutedEventArgs e)
     {
         Root.Loaded -= OnRootLoaded;
-        // The template is applied by now: a missing part is only traced, and the page keeps the control's default look.
-        ApplyContentLayer();
+        // The template is applied by now. The template's items name parts "ContentGrid" too, so the layer is taken from the SplitView
+        // it is the content of.
+        _contentLayer = (FindDescendant(NavView, "RootSplitView") as SplitView)?.Content as Grid;
         if (_contentLayer is null)
         {
-            Trace.TraceWarning("Current: NavigationView template part RootSplitView not found; every page keeps the content layer");
+            Trace.TraceWarning("Current: NavigationView template part RootSplitView not found; the smoke run cannot read the content layer");
         }
         DispatcherQueue.TryEnqueue(() =>
         {
@@ -130,43 +127,6 @@ public sealed partial class MainWindow : Window
         var scale = Root.XamlRoot.RasterizationScale;
         presenter.PreferredMinimumWidth = (int)Math.Ceiling(MinWindowWidth * scale);
         presenter.PreferredMinimumHeight = (int)Math.Ceiling(MinWindowHeight * scale);
-    }
-
-    /// <summary>
-    /// Shows the content layer behind content pages and Mica behind pages of settings cards (PageLayout.HasContentLayer), and places
-    /// the page's title, notices and column for it. The layer is the template's ContentGrid, whose Background and BorderBrush come
-    /// from ThemeResources (NavigationViewContentBackground, NavigationViewContentGridBorderBrush; NavigationView.xaml,
-    /// microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) and no visual state sets either. Values set by a template are
-    /// local values in WinUI's property system, which knows only default, style and local sources (GetBaseValueSource,
-    /// PropertySystem.cpp, same tag), so ClearValue would leave no brush at all: that hid the layer on every page in the owner's run
-    /// (2026-10-24). Content pages bind both to ContentLayerBrushes (MainWindow.xaml) instead, which follows the theme.
-    /// </summary>
-    private void ApplyContentLayer()
-    {
-        if (ContentFrame.Content is not Page page)
-        {
-            return;
-        }
-        var hasLayer = PageLayout.GetHasContentLayer(page);
-        PageLayout.SetContentLayer(hasLayer);
-        Notices.Margin = PageLayout.NoticesMargin;
-
-        // The template's items name parts "ContentGrid" too, so the layer is taken from the SplitView it is the content of.
-        _contentLayer ??= (FindDescendant(NavView, "RootSplitView") as SplitView)?.Content as Grid;
-        if (_contentLayer is null)
-        {
-            return;
-        }
-        if (hasLayer)
-        {
-            _contentLayer.SetBinding(Panel.BackgroundProperty, new Binding { Source = ContentLayerBrushes, Path = new PropertyPath("Background") });
-            _contentLayer.SetBinding(Grid.BorderBrushProperty, new Binding { Source = ContentLayerBrushes, Path = new PropertyPath("BorderBrush") });
-        }
-        else
-        {
-            _contentLayer.Background = _transparent;
-            _contentLayer.BorderBrush = _transparent;
-        }
     }
 
     private void OnPaneOpenedOrClosed(NavigationView sender, object args)
