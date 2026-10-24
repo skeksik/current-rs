@@ -27,6 +27,7 @@
              2026-10-24), so its glyph sat 14 px from the border and its backplate 2 px. 2 px more puts the glyph at 16. -->
         <TitleBar
             x:Name="AppTitleBar"
+            Canvas.ZIndex="1"
             Margin="2,0,0,0"
             Title="Current"
             IsBackButtonVisible="True"
@@ -80,10 +81,18 @@
              1008 px (the default ExpandedModeThresholdWidth) the title bar's pane button switches between the full pane and the icon
              rail inline; below that the rail shows and the opened pane covers the page.
              OpenPaneLength: Windows Settings' full pane, 300 px (measured by the owner, 2026-10-24; Windows 11 build 26300, 150%). No
-             Microsoft guideline gives a value, and the control's default is 320. -->
+             Microsoft guideline gives a value, and the control's default is 320.
+             The navigation view fills the window, under the title bar, as Windows Settings' does (owner, 2026-10-24): a SplitView
+             whose pane can be light-dismissed covers everything outside its own bounds with a dismiss layer while the pane is open,
+             unless it "takes up the entire window" (SetupOuterDismissLayer, SplitView_Partial.cpp, microsoft-ui-xaml, tag
+             winui3/release/2.5.1, read 2026-10-24). Above the navigation view, the title bar's buttons sat under that layer: no hover,
+             and a click only closed the pane. The pane's items and the content layer start below the title bar through the
+             template's own margins (NavigationViewPaneContentGridMargin, -1,3 by default, and NavigationViewContentMargin, 0;
+             NavigationView_themeresources.xaml, same tag); the control's top padding for a title bar is set only on UWP
+             (UpdateTitleBarPadding in NavigationView.cpp, "null in win32"). -->
         <NavigationView
             x:Name="NavView"
-            Grid.Row="1"
+            Grid.RowSpan="2"
             PaneDisplayMode="Auto"
             CompactModeThresholdWidth="0"
             OpenPaneLength="300"
@@ -95,6 +104,11 @@
             PaneOpening="OnPaneOpenedOrClosed"
             PaneOpened="OnPaneOpenedOrClosed"
             PaneClosed="OnPaneOpenedOrClosed">
+            <NavigationView.Resources>
+                <!-- 48: the title bar's height (TitleBarCompactHeight above). -->
+                <Thickness x:Key="NavigationViewPaneContentGridMargin">-1,51,-1,3</Thickness>
+                <Thickness x:Key="NavigationViewContentMargin">0,48,0,0</Thickness>
+            </NavigationView.Resources>
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
             </NavigationView.MenuItems>
