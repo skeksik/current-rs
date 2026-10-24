@@ -68,14 +68,14 @@
              CompactModeThresholdWidth to 0" (NavigationView page, learn.microsoft.com, ms.date 2026-10-02, read 2026-10-24). From
              1008 px (the default ExpandedModeThresholdWidth) the title bar's pane button switches between the full pane and the icon
              rail inline; below that the rail shows and the opened pane covers the page.
-             OpenPaneLength: Windows Settings' full pane (owner, 2026-10-24). 280 is a placeholder until the owner's measurement; the
-             control's default is 320, and no Microsoft guideline gives a value. -->
+             OpenPaneLength: Windows Settings' full pane, 300 px (measured by the owner, 2026-10-24; Windows 11 build 26300, 150%). No
+             Microsoft guideline gives a value, and the control's default is 320. -->
         <NavigationView
             x:Name="NavView"
             Grid.Row="1"
             PaneDisplayMode="Auto"
             CompactModeThresholdWidth="0"
-            OpenPaneLength="280"
+            OpenPaneLength="300"
             IsBackButtonVisible="Collapsed"
             IsPaneToggleButtonVisible="False"
             IsSettingsVisible="True"
@@ -83,28 +83,6 @@
             DisplayModeChanged="OnDisplayModeChanged"
             PaneOpened="OnPaneOpenedOrClosed"
             PaneClosed="OnPaneOpenedOrClosed">
-            <!-- One content background on every page, Settings included, matched to the Photos app's content area (owner,
-                 2026-10-24). The content layer is the template's ContentGrid with NavigationViewContentBackground, by default
-                 LayerFillColorDefaultBrush, the Mica page's content layer brush ("Mica material", learn.microsoft.com, ms.date
-                 2026-07-22, read 2026-10-24; NavigationView_themeresources.xaml, microsoft-ui-xaml, tag winui3/release/2.5.1); the owner
-                 found it too dark. LayerOnMicaBaseAltFillColorDefaultBrush (#B3FFFFFF light, #733A3A3A dark; about #FBFBFB and #2C2C2C
-                 over Mica's solid colour, against #F9F9F9 and #272727) is a placeholder until the owner's measurement of Photos. High
-                 contrast keeps the control's own value. -->
-            <NavigationView.Resources>
-                <ResourceDictionary>
-                    <ResourceDictionary.ThemeDictionaries>
-                        <ResourceDictionary x:Key="Default">
-                            <StaticResource x:Key="NavigationViewContentBackground" ResourceKey="LayerOnMicaBaseAltFillColorDefaultBrush" />
-                        </ResourceDictionary>
-                        <ResourceDictionary x:Key="Light">
-                            <StaticResource x:Key="NavigationViewContentBackground" ResourceKey="LayerOnMicaBaseAltFillColorDefaultBrush" />
-                        </ResourceDictionary>
-                        <ResourceDictionary x:Key="HighContrast">
-                            <SolidColorBrush x:Key="NavigationViewContentBackground" Color="{ThemeResource SystemColorWindowColor}" />
-                        </ResourceDictionary>
-                    </ResourceDictionary.ThemeDictionaries>
-                </ResourceDictionary>
-            </NavigationView.Resources>
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
             </NavigationView.MenuItems>
