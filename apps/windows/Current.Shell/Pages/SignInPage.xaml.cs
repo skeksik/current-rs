@@ -136,17 +136,21 @@ public sealed partial class SignInPage : Page
                 HideError();
                 var newCode = before is not SignInState.QuickConnectWaiting { Code: var shownCode } || shownCode != code.Code;
                 CodeText.Text = code.Code;
-                // Narrator reads the digits one by one.
-                AutomationProperties.SetName(CodeText, $"Quick Connect code {string.Join(" ", code.Code.Select(digit => digit.ToString()))}");
+                // Narrator reads the digits one by one, when the code is announced and when the user reaches it.
+                var spoken = $"Quick Connect code {string.Join(" ", code.Code.Select(digit => digit.ToString()))}";
+                AutomationProperties.SetName(CodeView, spoken);
                 if (before is not SignInState.QuickConnectWaiting)
                 {
                     FocusLater(QuickConnectCancel);
                 }
                 if (newCode)
                 {
+                    CodeCopiedInfo.IsOpen = false;
                     // The code itself is what the user needs to hear, when it appears and when a new one replaces it (owner's run,
-                    // 2026-10-23: only "Waiting for approval…" was read). One announcement, so the two do not cut each other off.
-                    Announce.Shown(CodeText);
+                    // 2026-10-23: only "Waiting for approval…" was read). One announcement, so the two do not cut each other off. A
+                    // notification, not a live region: Narrator read the live region's text, the code as one number (owner's run,
+                    // 2026-10-23), not its digit-by-digit name.
+                    Announce.Say(CodeView, spoken, "QuickConnectCode");
                 }
                 break;
             case SignInState.Failed failed:
@@ -266,6 +270,28 @@ public sealed partial class SignInPage : Page
 
     private void OnCancel(object sender, RoutedEventArgs e) => Cancel();
 
+    // async void, as event handlers are: it catches everything itself, because an exception escaping it would end the process.
+    private async void OnCopyCode(object sender, RoutedEventArgs e)
+    {
+        bool copied;
+        try
+        {
+            copied = await ClipboardText.TryCopyAsync(CodeText.Text);
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: copying the Quick Connect code failed: {error.GetType().Name}");
+            copied = false;
+        }
+        // As Copy diagnostics does: closed and opened again, so Narrator reads it each time.
+        CodeCopiedInfo.IsOpen = false;
+        CodeCopiedInfo.Severity = copied ? InfoBarSeverity.Success : InfoBarSeverity.Error;
+        CodeCopiedInfo.Message = copied
+            ? "Code copied to the clipboard."
+            : "The clipboard is in use by another app. Try again.";
+        CodeCopiedInfo.IsOpen = true;
+    }
+
     private void OnEscape(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args) => args.Handled = Cancel();
 
     /// <summary>Stops the running attempt; the flow goes back to Ready, and Render puts focus back on the form.</summary>
@@ -297,7 +323,11 @@ public sealed partial class SignInPage : Page
                 "Signed in for this session only.",
                 "Windows Credential Manager isn't available, so you'll need to sign in again next time.");
         }
+        var server = _request?.ServerName ?? "the server";
         Frame.Navigate(typeof(HomePage));
         App.ClearNavigationHistory();
+        // Nothing on Home is read by itself, so the result is announced (owner's run, 2026-10-24: Narrator read the title bar). From
+        // the window, which outlives this page.
+        App.Announce($"Signed in to {server} as {signedIn.User.Name}.", "SignedIn");
     }
 }
