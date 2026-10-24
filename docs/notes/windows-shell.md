@@ -54,9 +54,10 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
 - **Tall title bar (48 px).** The owner found the title bar lower than Windows Settings', which with a back button uses the taller
   one (owner's run, 2026-10-24; its exact height is not verified). "Windows app title bar" (learn.microsoft.com, ms.date 2024-07-31,
   read 2026-10-24): "The standard title bar has a height of 32px", and "Increase the size of the title bar to 48px" when it holds a
-  search box or a person picture. "Title bar customization" (ms.date 2026-10-13, read 2026-10-24): set `PreferredHeightOption` to
-  `Tall` "so the caption buttons are the same height as the title bar"; it needs `ExtendsContentIntoTitleBar` first, as the WinUI
-  Gallery's `MainWindow.xaml.cs` does (github.com/microsoft/WinUI-Gallery, main at 14061ee, read 2026-10-24). The `TitleBar`
+  search box or a person picture. The caption buttons stay standard: "Title bar customization" (ms.date 2026-10-13, read
+  2026-10-24) offers `PreferredHeightOption = Tall` "so the caption buttons are the same height as the title bar", which the first
+  version of this change set; the owner's run (2026-10-24) measured Windows Settings' caption buttons at 46 × 32 px in its 48 px
+  title bar, against 48 × 48 here, so `PreferredHeightOption` is left at its default (Standard). The `TitleBar`
   control's layout root is `TitleBarCompactHeight` (32) and becomes `TitleBarExpandedHeight` (48) only when `Content`, `LeftHeader`
   or `RightHeader` is set (`TitleBar.xaml`, `UpdateHeight` in `TitleBar.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read
   2026-10-24). Ours has none, so `MainWindow.xaml` raises `TitleBarCompactHeight` to 48 on `AppTitleBar` (lightweight styling).
