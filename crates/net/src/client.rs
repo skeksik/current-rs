@@ -717,6 +717,44 @@ mod tests {
     }
 
     #[test]
+    fn gateway_credentials_follow_the_token_transport_rule() {
+        let gateway = Arc::new(Gateway::new(crate::gateway::GatewayCredentials::default()));
+        let allowed = |address: &str, confirmed: bool, hop: &str| {
+            let selected =
+                Selected::new(url(address), None, 0).with_gateway(Some(gateway.clone()), confirmed);
+            gateway_for(&selected, &url(hop)).is_some()
+        };
+        assert!(allowed(
+            "https://media.example.com/",
+            false,
+            "https://media.example.com/a"
+        ));
+        assert!(allowed(
+            "http://192.168.1.10:8096/",
+            false,
+            "http://192.168.1.10:8096/a"
+        ));
+        assert!(!allowed(
+            "http://media.example.com/",
+            false,
+            "http://media.example.com/a"
+        ));
+        assert!(allowed(
+            "http://media.example.com/",
+            true,
+            "http://media.example.com/a"
+        ));
+        // An upgrade hop is https: allowed even before a confirmation.
+        assert!(allowed(
+            "http://media.example.com/",
+            false,
+            "https://media.example.com/a"
+        ));
+        let none = Selected::new(url("https://media.example.com/"), None, 0);
+        assert!(gateway_for(&none, &url("https://media.example.com/")).is_none());
+    }
+
+    #[test]
     fn redirects_stay_on_the_same_host() {
         let follows = |from: &str, to: &str| may_follow(&url(from), &url(to));
         assert!(follows(
