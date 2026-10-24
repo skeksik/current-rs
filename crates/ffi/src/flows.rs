@@ -49,7 +49,7 @@ impl From<&NewServer> for NewServerInfo {
 }
 
 /// Where adding a server stands. The address the user typed is not repeated here: the UI has it.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+#[derive(Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum AddServerState {
     Idle,
     Probing,
@@ -97,6 +97,62 @@ pub enum AddServerState {
     GatewayUnsupported {
         origin: String,
     },
+}
+
+/// Shown in Debug in place of an address (ADR 0006) or a realm (ADR 0017).
+const REDACTED: &str = "<redacted>";
+
+impl std::fmt::Debug for AddServerState {
+    /// Like a derived Debug, with the gateway states' origin, URL and realm redacted.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Idle => f.write_str("Idle"),
+            Self::Probing => f.write_str("Probing"),
+            Self::Failed { problem } => f.debug_struct("Failed").field("problem", problem).finish(),
+            Self::ConfirmPlainHttp { server } => f
+                .debug_struct("ConfirmPlainHttp")
+                .field("server", server)
+                .finish(),
+            Self::Ready { server } => f.debug_struct("Ready").field("server", server).finish(),
+            Self::GatewayPassword {
+                realm,
+                wrong,
+                plain_http,
+                ..
+            } => f
+                .debug_struct("GatewayPassword")
+                .field("origin", &REDACTED)
+                .field("realm", &realm.as_ref().map(|_| REDACTED))
+                .field("wrong", wrong)
+                .field("plain_http", plain_http)
+                .finish(),
+            Self::GatewaySignIn {
+                redirected,
+                location_origin,
+                plain_http,
+                ..
+            } => f
+                .debug_struct("GatewaySignIn")
+                .field("url", &REDACTED)
+                .field("origin", &REDACTED)
+                .field("redirected", redirected)
+                .field(
+                    "location_origin",
+                    &location_origin.as_ref().map(|_| REDACTED),
+                )
+                .field("plain_http", plain_http)
+                .finish(),
+            Self::GatewayRefused { plain_http, .. } => f
+                .debug_struct("GatewayRefused")
+                .field("origin", &REDACTED)
+                .field("plain_http", plain_http)
+                .finish(),
+            Self::GatewayUnsupported { .. } => f
+                .debug_struct("GatewayUnsupported")
+                .field("origin", &REDACTED)
+                .finish(),
+        }
+    }
 }
 
 /// The origin (scheme, host and port when not the default) of `url`: what a prompt or a window title names.
@@ -812,7 +868,7 @@ impl SignInFlow {
 
 /// Where signing in to a saved server's gateway again stands (ADR 0017). The same rules as [`AddServerState`]'s gateway states:
 /// `realm` only as "The site says: ...", no credential ever.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+#[derive(Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum GatewaySignInState {
     /// Asking the address what its gateway wants, or trying what was just given.
     Checking,
@@ -844,6 +900,48 @@ pub enum GatewaySignInState {
     Failed {
         problem: GatewaySignInProblem,
     },
+}
+
+impl std::fmt::Debug for GatewaySignInState {
+    /// Like a derived Debug, with the origin, URL and realm redacted.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Checking => f.write_str("Checking"),
+            Self::Password { realm, wrong, .. } => f
+                .debug_struct("Password")
+                .field("origin", &REDACTED)
+                .field("realm", &realm.as_ref().map(|_| REDACTED))
+                .field("wrong", wrong)
+                .finish(),
+            Self::WebSignIn {
+                redirected,
+                location_origin,
+                ..
+            } => f
+                .debug_struct("WebSignIn")
+                .field("url", &REDACTED)
+                .field("origin", &REDACTED)
+                .field("redirected", redirected)
+                .field(
+                    "location_origin",
+                    &location_origin.as_ref().map(|_| REDACTED),
+                )
+                .finish(),
+            Self::Refused { .. } => f
+                .debug_struct("Refused")
+                .field("origin", &REDACTED)
+                .finish(),
+            Self::Unsupported { .. } => f
+                .debug_struct("Unsupported")
+                .field("origin", &REDACTED)
+                .finish(),
+            Self::Done { remembered } => f
+                .debug_struct("Done")
+                .field("remembered", remembered)
+                .finish(),
+            Self::Failed { problem } => f.debug_struct("Failed").field("problem", problem).finish(),
+        }
+    }
 }
 
 impl From<&current_app::GatewaySignInState> for GatewaySignInState {

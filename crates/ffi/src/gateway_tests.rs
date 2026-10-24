@@ -283,3 +283,63 @@ fn a_network_change_finds_an_ended_portal_session_without_a_restart() {
         !core.app.capabilities().borrow().servers[0].gateway_sign_in_needed
     });
 }
+
+#[test]
+fn gateway_states_show_no_address_or_realm_in_debug() {
+    let origin = "https://media.example.com:8920".to_owned();
+    let realm = Some("Private Realm Text".to_owned());
+    let location = Some("https://login.example.net".to_owned());
+    let text = format!(
+        "{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+        AddServerState::GatewayPassword {
+            origin: origin.clone(),
+            realm: realm.clone(),
+            wrong: true,
+            plain_http: false,
+        },
+        AddServerState::GatewaySignIn {
+            url: format!("{origin}/jellyfin"),
+            origin: origin.clone(),
+            redirected: true,
+            location_origin: location.clone(),
+            plain_http: false,
+        },
+        AddServerState::GatewayRefused {
+            origin: origin.clone(),
+            plain_http: true,
+        },
+        AddServerState::GatewayUnsupported {
+            origin: origin.clone(),
+        },
+        GatewaySignInState::Password {
+            origin: origin.clone(),
+            realm,
+            wrong: false,
+        },
+        GatewaySignInState::WebSignIn {
+            url: origin.clone(),
+            origin: origin.clone(),
+            redirected: false,
+            location_origin: location,
+        },
+        GatewaySignInState::Refused {
+            origin: origin.clone(),
+        },
+        GatewaySignInState::Unsupported { origin },
+    );
+    for secret in [
+        "media.example.com",
+        "8920",
+        "Private Realm",
+        "login.example.net",
+    ] {
+        assert!(!text.contains(secret), "{secret} in {text}");
+    }
+    // The rest of each state still shows.
+    assert!(
+        text.contains(
+            "GatewayPassword { origin: \"<redacted>\", realm: Some(\"<redacted>\"), wrong: true"
+        ),
+        "{text}"
+    );
+}
