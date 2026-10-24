@@ -7,15 +7,16 @@ use std::time::Duration;
 
 use current_model::{PublicServerInfo, ServerAddress, ServerId, ServerRef};
 use current_net::{
-    ClientConfig, FixedAddress, IdentityCheck, IdentityProbe, Location, NetError, Request,
-    RequestLog, ServerClient, Transport, Url,
+    AddressProvider, ClientConfig, FixedAddress, Gateway, GatewayAddress, IdentityCheck,
+    IdentityProbe, Location, NetError, Request, RequestLog, ServerClient, Transport, Url,
 };
 
 use crate::address::{AddressError, parse_address};
+use crate::gateway::{GatewayAnswer, Realm};
 use crate::wire;
 
 /// The unauthenticated endpoint that identifies a Jellyfin server.
-const INFO_PATH: &str = "/System/Info/Public";
+pub(crate) const INFO_PATH: &str = "/System/Info/Public";
 
 /// The oldest server version Current accepts (ADR 0002: the latest releases only; Jellyfin 12.0 broke parts of the 10.11 API).
 pub const MINIMUM_VERSION: &str = "12.0.0";
@@ -43,7 +44,8 @@ pub enum ProbeError {
     #[error("the server is starting or does not accept connections from this network")]
     Unavailable,
     /// The server points elsewhere (another host or port, or from https to http) and the redirect was not followed (ADR 0006).
-    /// `location` is where it points, for the UI to offer.
+    /// `location` is where it points, for the UI to offer. Ambiguous: the server moved, or a gateway sends the user to its sign-in
+    /// portal (ADR 0017), so setup offers both "Sign in" and "use the address it points to" (see [`ProbeError::offers_sign_in`]).
     #[error("the server redirects to another address")]
     Redirected {
         status: u16,
@@ -63,9 +65,40 @@ pub enum ProbeError {
     /// The address leads to another server than the one expected.
     #[error("this address leads to a different server")]
     DifferentServer,
+    /// A password gateway in front of the server: 401 or 403 with a `WWW-Authenticate: Basic` challenge (ADR 0017). Setup asks for
+    /// the gateway's user name and password; `realm` is the server's text for "The site says: ...", never in Display or Debug.
+    #[error("the server's address asks for a password")]
+    GatewayPassword { realm: Option<Realm> },
+    /// A web sign-in gateway: an HTML page where Jellyfin's JSON was expected (also at the end of a followed redirect), or a 401 or 403
+    /// without a Basic challenge (Jellyfin's public endpoint never answers either). Setup offers the sign-in window.
+    #[error("the server's address needs a sign-in in a browser window")]
+    GatewaySignIn,
+    /// A 403 without a challenge and without a page: the gateway wants something else, such as extra headers.
+    #[error("the server's address refused access")]
+    GatewayRefused,
+    /// A 401 whose challenges are all of schemes Current does not support (Digest, NTLM, Negotiate, Bearer, ...).
+    #[error("the server asks for a sign-in method Current does not support")]
+    UnsupportedChallenge,
 }
 
 impl ProbeError {
+    /// Whether setup offers "Sign in" (the web sign-in window, ADR 0017): for a web sign-in gateway, and next to "use the address it
+    /// points to" for a redirect that was not followed, which may be a gateway's portal as well as a moved server.
+    pub fn offers_sign_in(&self) -> bool {
+        matches!(self, Self::GatewaySignIn | Self::Redirected { .. })
+    }
+
+    /// Whether the answer came from an authentication gateway in front of the server.
+    pub fn is_gateway(&self) -> bool {
+        matches!(
+            self,
+            Self::GatewayPassword { .. }
+                | Self::GatewaySignIn
+                | Self::GatewayRefused
+                | Self::UnsupportedChallenge
+        )
+    }
+
     /// Whether a Jellyfin server answered: trying other candidates cannot do better.
     fn is_conclusive(&self) -> bool {
         matches!(self, Self::TooOld { .. } | Self::SetupIncomplete)
@@ -76,10 +109,11 @@ impl ProbeError {
         matches!(
             self,
             Self::NotJellyfin | Self::Status { .. } | Self::Redirected { .. } | Self::Unavailable
-        )
+        ) || self.is_gateway()
     }
 
-    /// How much an error tells the user, when several candidates failed: the most telling one is reported.
+    /// How much an error tells the user, when several candidates failed: the most telling one is reported. A gateway's answer
+    /// beats a redirect and a 503: the user can sign in to it.
     fn rank(&self) -> u8 {
         match self {
             Self::InvalidAddress(_) | Self::DifferentServer => 0,
@@ -89,7 +123,11 @@ impl ProbeError {
             Self::Tls => 4,
             Self::Redirected { .. } => 5,
             Self::Unavailable => 6,
-            Self::TooOld { .. } | Self::SetupIncomplete => 7,
+            Self::GatewayPassword { .. }
+            | Self::GatewaySignIn
+            | Self::GatewayRefused
+            | Self::UnsupportedChallenge => 7,
+            Self::TooOld { .. } | Self::SetupIncomplete => 8,
         }
     }
 }
@@ -107,6 +145,17 @@ impl From<NetError> for ProbeError {
             }
             NetError::Redirected { status, location } => Self::Redirected { status, location },
             NetError::InvalidRequest => Self::InvalidAddress(AddressError::Invalid),
+        }
+    }
+}
+
+impl From<GatewayAnswer> for ProbeError {
+    fn from(answer: GatewayAnswer) -> Self {
+        match answer {
+            GatewayAnswer::Password { realm } => Self::GatewayPassword { realm },
+            GatewayAnswer::SignIn => Self::GatewaySignIn,
+            GatewayAnswer::Refused => Self::GatewayRefused,
+            GatewayAnswer::UnsupportedChallenge => Self::UnsupportedChallenge,
         }
     }
 }
@@ -157,14 +206,7 @@ pub struct Prober {
 impl Prober {
     /// A prober with short timeouts (5 s to connect, 10 s per request), since a dead candidate delays the next one.
     pub fn new(server: ServerRef, log: Arc<RequestLog>) -> Self {
-        Self::with_config(
-            server,
-            log,
-            ClientConfig {
-                timeout: Duration::from_secs(10),
-                connect_timeout: Duration::from_secs(5),
-            },
-        )
+        Self::with_config(server, log, probe_config())
     }
 
     pub fn with_config(server: ServerRef, log: Arc<RequestLog>, config: ClientConfig) -> Self {
@@ -218,11 +260,35 @@ impl Prober {
     /// # Errors
     /// [`ProbeError`] when no usable Jellyfin server answers there.
     pub async fn probe_url(&self, base: &Url) -> Result<FoundServer, ProbeError> {
+        self.probe_url_with(base, None, false).await
+    }
+
+    /// Like [`Prober::probe_url`], with the address's own gateway credentials (ADR 0017, "Order of credentials"): the probe carries
+    /// them, following the token's transport rule (`plain_http_confirmed`, ADR 0012), and never the Jellyfin token. The first probe
+    /// of an address is made without credentials; this one once the user gave the gateway's.
+    ///
+    /// # Errors
+    /// As [`Prober::probe_url`].
+    pub async fn probe_url_with(
+        &self,
+        base: &Url,
+        gateway: Option<Arc<Gateway>>,
+        plain_http_confirmed: bool,
+    ) -> Result<FoundServer, ProbeError> {
         let mut base = base.clone();
         for _ in 0..2 {
+            let address: Arc<dyn AddressProvider> = match &gateway {
+                Some(gateway) => Arc::new(GatewayAddress::new(
+                    base.clone(),
+                    gateway.clone(),
+                    plain_http_confirmed,
+                )),
+                None => Arc::new(FixedAddress(base.clone())),
+            };
+            // No `RequestAuth`: the probe never carries the token.
             let client = ServerClient::new(
                 self.server.clone(),
-                Arc::new(FixedAddress(base.clone())),
+                address,
                 None,
                 self.log.clone(),
                 &self.config,
@@ -245,7 +311,23 @@ impl Prober {
         base: &Url,
         expected: &ServerId,
     ) -> Result<FoundServer, ProbeError> {
-        let found = self.probe_url(base).await?;
+        self.probe_expecting_with(base, expected, None, false).await
+    }
+
+    /// Like [`Prober::probe_expecting`], with the address's own gateway credentials, as [`Prober::probe_url_with`].
+    ///
+    /// # Errors
+    /// As [`Prober::probe_expecting`].
+    pub async fn probe_expecting_with(
+        &self,
+        base: &Url,
+        expected: &ServerId,
+        gateway: Option<Arc<Gateway>>,
+        plain_http_confirmed: bool,
+    ) -> Result<FoundServer, ProbeError> {
+        let found = self
+            .probe_url_with(base, gateway, plain_http_confirmed)
+            .await?;
         if found.info.id == *expected {
             Ok(found)
         } else {
@@ -254,8 +336,16 @@ impl Prober {
     }
 }
 
+/// A probe's timeouts: 5 s to connect, 10 s per request.
+pub(crate) fn probe_config() -> ClientConfig {
+    ClientConfig {
+        timeout: Duration::from_secs(10),
+        connect_timeout: Duration::from_secs(5),
+    }
+}
+
 /// What an address answered to the info request.
-enum Answer {
+pub(crate) enum Answer {
     Found(FoundServer),
     /// The server sent the request to its web client: its base path is this one.
     WebClient(Url),
@@ -284,17 +374,29 @@ fn most_telling(failures: &[(&Url, ProbeError)]) -> ProbeError {
     best.cloned().unwrap_or(ProbeError::Unreachable)
 }
 
-/// Sends the info request on `client` and reads the answer.
-async fn ask(client: &ServerClient) -> Result<Answer, ProbeError> {
-    let response = client.send(Request::get(INFO_PATH)).await?;
+/// Sends the info request on `client` and reads the answer. A gateway's answer is classified by `current-net` (ADR 0017); a redirect
+/// that was not followed stays [`ProbeError::Redirected`], and Jellyfin's own redirect to its web client is recognised before an
+/// HTML page counts as a sign-in page.
+pub(crate) async fn ask(client: &ServerClient) -> Result<Answer, ProbeError> {
+    let result = client.send(Request::get(INFO_PATH)).await;
+    let gateway = GatewayAnswer::of(&result);
+    let response = match result {
+        Ok(response) => response,
+        Err(error @ NetError::Redirected { .. }) => return Err(error.into()),
+        Err(error) => return Err(gateway.map_or_else(|| error.into(), ProbeError::from)),
+    };
     let answered = response.url.url();
     if let Some(address) = strip_info_path(answered) {
+        if let Some(gateway) = gateway {
+            return Err(gateway.into());
+        }
         let info = response.json::<wire::PublicSystemInfo>()?;
         return found(info, address).map(Answer::Found);
     }
-    web_client_base(answered)
-        .map(Answer::WebClient)
-        .ok_or(ProbeError::NotJellyfin)
+    if let Some(base) = web_client_base(answered) {
+        return Ok(Answer::WebClient(base));
+    }
+    Err(gateway.map_or(ProbeError::NotJellyfin, ProbeError::from))
 }
 
 /// The identity check for roaming between a server's addresses (ADR 0014): the address must answer as a usable Jellyfin server with
@@ -317,14 +419,30 @@ impl JellyfinIdentity {
     /// Checks the address `client` is bound to. A server that sends the request to its web client fails: a stored address is
     /// already the base path, unlike what a user types in setup.
     pub async fn check_client(&self, client: &ServerClient) -> IdentityCheck {
-        match ask(client).await {
-            Ok(Answer::Found(found)) if found.info.id == self.expected => {
+        match self.probe_client(client).await {
+            Ok(_) => IdentityCheck::Passed,
+            Err(ProbeError::DifferentServer) => IdentityCheck::DifferentServer,
+            Err(_) => IdentityCheck::Failed,
+        }
+    }
+
+    /// The identity check with its full answer: the server, or why the address failed, a gateway's answer included (ADR 0017), for
+    /// the 401 rule's confirming probe. `client` carries the address's gateway credentials and never the token (a roaming probe
+    /// client from [`RoamingAddresses::with_gateways`](current_net::RoamingAddresses::with_gateways) does). A passed check records
+    /// the version.
+    ///
+    /// # Errors
+    /// [`ProbeError::DifferentServer`] for another server, [`ProbeError::NotJellyfin`] when the server sends the request to its web
+    /// client, or any error of [`Prober::probe_url`].
+    pub async fn probe_client(&self, client: &ServerClient) -> Result<FoundServer, ProbeError> {
+        match ask(client).await? {
+            Answer::Found(found) if found.info.id == self.expected => {
                 *self.version.lock().unwrap_or_else(PoisonError::into_inner) =
-                    Some(found.info.version);
-                IdentityCheck::Passed
+                    Some(found.info.version.clone());
+                Ok(found)
             }
-            Ok(Answer::Found(_)) => IdentityCheck::DifferentServer,
-            Ok(Answer::WebClient(_)) | Err(_) => IdentityCheck::Failed,
+            Answer::Found(_) => Err(ProbeError::DifferentServer),
+            Answer::WebClient(_) => Err(ProbeError::NotJellyfin),
         }
     }
 
@@ -500,7 +618,66 @@ mod tests {
         assert!(ProbeError::Tls.rank() > ProbeError::Unreachable.rank());
         assert!(ProbeError::Unavailable.rank() > ProbeError::NotJellyfin.rank());
         assert!(ProbeError::SetupIncomplete.is_conclusive());
+        assert!(ProbeError::GatewaySignIn.rank() > ProbeError::Unavailable.rank());
+        assert!(
+            ProbeError::GatewayPassword { realm: None }.rank()
+                > ProbeError::Redirected {
+                    status: 302,
+                    location: None
+                }
+                .rank()
+        );
+        assert!(
+            ProbeError::TooOld {
+                version: "10.11.0".into()
+            }
+            .rank()
+                > ProbeError::GatewayRefused.rank()
+        );
+        assert!(!ProbeError::GatewaySignIn.is_conclusive());
         assert!(!ProbeError::Unavailable.is_conclusive());
+    }
+
+    #[test]
+    fn sign_in_is_offered_for_portals_and_redirects() {
+        assert!(ProbeError::GatewaySignIn.offers_sign_in());
+        assert!(
+            ProbeError::Redirected {
+                status: 302,
+                location: None
+            }
+            .offers_sign_in()
+        );
+        assert!(!ProbeError::GatewayPassword { realm: None }.offers_sign_in());
+        assert!(!ProbeError::NotJellyfin.offers_sign_in());
+    }
+
+    #[test]
+    fn gateway_answers_map_to_probe_errors() {
+        assert_eq!(
+            ProbeError::from(GatewayAnswer::Password {
+                realm: Realm::new("Home")
+            }),
+            ProbeError::GatewayPassword {
+                realm: Realm::new("Home")
+            }
+        );
+        assert_eq!(
+            ProbeError::from(GatewayAnswer::SignIn),
+            ProbeError::GatewaySignIn
+        );
+        assert_eq!(
+            ProbeError::from(GatewayAnswer::Refused),
+            ProbeError::GatewayRefused
+        );
+        assert_eq!(
+            ProbeError::from(GatewayAnswer::UnsupportedChallenge),
+            ProbeError::UnsupportedChallenge
+        );
+        let error = ProbeError::GatewayPassword {
+            realm: Realm::new("Private Realm Text"),
+        };
+        assert!(!format!("{error:?} {error}").contains("Private"));
     }
 
     #[test]
