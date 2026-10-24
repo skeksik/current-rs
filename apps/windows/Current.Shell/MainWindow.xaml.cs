@@ -22,12 +22,8 @@ public sealed partial class MainWindow : Window
 {
     private static readonly Dictionary<string, Type> Pages = new() { ["home"] = typeof(HomePage) };
 
-    /// <summary>Pages reached from Home (adding a server, signing in): Home stays selected, the header names the step.</summary>
-    private static readonly Dictionary<Type, string> HomeSteps = new()
-    {
-        [typeof(AddServerPage)] = "Add a server",
-        [typeof(SignInPage)] = "Sign in",
-    };
+    /// <summary>Pages reached from Home (adding a server, signing in): Home stays selected; the page names the step in its title.</summary>
+    private static readonly HashSet<Type> HomeSteps = [typeof(AddServerPage), typeof(SignInPage)];
 
     /// <summary>
     /// The smallest window, in effective pixels: the narrowest page column (Sign in, 400 plus 24 on each side) and the title bar with
@@ -66,7 +62,6 @@ public sealed partial class MainWindow : Window
         Activated += OnActivated;
         Root.Loaded += OnRootLoaded;
 
-        Notices.Margin = PageLayout.NoticesMargin;
         NavView.SelectedItem = HomeItem;
         Navigate(typeof(HomePage), new EntranceNavigationTransitionInfo());
     }
@@ -255,23 +250,20 @@ public sealed partial class MainWindow : Window
     {
         DropSignInHistory();
         UpdateBackButton();
+        // Each page shows its own title (App.xaml, PageTitleTextBlockStyle); the navigation view's header is not used.
         if (ContentFrame.SourcePageType == typeof(SettingsPage))
         {
             // The settings item is not in MenuItems and has no tag.
             NavView.SelectedItem = NavView.SettingsItem;
-            NavView.Header = "Settings";
             return;
         }
-        if (HomeSteps.TryGetValue(ContentFrame.SourcePageType, out var step))
+        if (HomeSteps.Contains(ContentFrame.SourcePageType))
         {
             NavView.SelectedItem = HomeItem;
-            NavView.Header = step;
             return;
         }
         var tag = Pages.FirstOrDefault(entry => entry.Value == ContentFrame.SourcePageType).Key;
-        var item = NavView.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(i => Equals(i.Tag, tag));
-        NavView.SelectedItem = item;
-        NavView.Header = item?.Content;
+        NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(i => Equals(i.Tag, tag));
     }
 
     private bool TryGoBack()

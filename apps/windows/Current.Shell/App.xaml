@@ -8,6 +8,20 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Every page: its title over one column, centred, up to PageMaxWidth, as the WinUI Gallery's settings page lays out its
+                 title and column (docs/notes/windows-shell.md, "Page layout"). -->
+            <x:Double x:Key="PageMaxWidth">1064</x:Double>
+            <Style x:Key="PageTitleTextBlockStyle" TargetType="TextBlock" BasedOn="{StaticResource TitleTextBlockStyle}">
+                <Setter Property="MaxWidth" Value="{StaticResource PageMaxWidth}" />
+                <Setter Property="Margin" Value="24,24,24,0" />
+                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                <Setter Property="TextWrapping" Value="NoWrap" />
+            </Style>
+            <Style x:Key="PageColumnStyle" TargetType="Grid">
+                <Setter Property="MaxWidth" Value="{StaticResource PageMaxWidth}" />
+                <Setter Property="Margin" Value="24" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

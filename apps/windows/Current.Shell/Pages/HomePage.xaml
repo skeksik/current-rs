@@ -2,7 +2,6 @@
     x:Class="Current.Shell.Pages.HomePage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:shell="using:Current.Shell"
     xmlns:vm="using:Current.Shell.ViewModels">
     <Page.Resources>
         <Style x:Key="Card" TargetType="Border">
@@ -15,109 +14,114 @@
     </Page.Resources>
 
     <Grid>
-        <!-- While the core opens; shown only if that takes a moment. -->
-        <ProgressRing
-            x:Name="Opening"
-            HorizontalAlignment="Center"
-            VerticalAlignment="Center"
-            Width="48"
-            Height="48"
-            IsActive="False"
-            AutomationProperties.Name="Opening Current" />
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <TextBlock Style="{StaticResource PageTitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" Text="Home" />
 
-        <TextBlock
-            x:Name="CoreFailed"
-            Visibility="Collapsed"
-            HorizontalAlignment="Center"
-            VerticalAlignment="Center"
-            Style="{StaticResource BodyTextBlockStyle}"
-            Text="Current couldn't start. Close it and open it again." />
-
-        <!-- The state before any server exists (docs/notes/windows-shell.md, "Screens"). -->
-        <StackPanel
-            HorizontalAlignment="Center"
-            VerticalAlignment="Center"
-            MaxWidth="480"
-            Spacing="8"
-            Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay, FallbackValue=Collapsed}">
-            <TextBlock
-                Style="{StaticResource SubtitleTextBlockStyle}"
+        <Grid Grid.Row="1">
+            <!-- While the core opens; shown only if that takes a moment. -->
+            <ProgressRing
+                x:Name="Opening"
                 HorizontalAlignment="Center"
-                AutomationProperties.HeadingLevel="Level1"
-                Text="No servers yet" />
+                VerticalAlignment="Center"
+                Width="48"
+                Height="48"
+                IsActive="False"
+                AutomationProperties.Name="Opening Current" />
+
             <TextBlock
+                x:Name="CoreFailed"
+                Visibility="Collapsed"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
                 Style="{StaticResource BodyTextBlockStyle}"
-                HorizontalAlignment="Center"
-                TextAlignment="Center"
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                Text="Add a Jellyfin server to browse and play your media." />
-            <Button
-                x:Name="AddFirstServer"
-                Margin="0,8,0,0"
-                HorizontalAlignment="Center"
-                Style="{StaticResource AccentButtonStyle}"
-                Content="Add a server"
-                Click="OnAddServer" />
-        </StackPanel>
+                Text="Current couldn't start. Close it and open it again." />
 
-        <StackPanel
-            HorizontalAlignment="Center"
-            VerticalAlignment="Center"
-            Spacing="8"
-            Visibility="{x:Bind ViewModel.FaultedVisibility, Mode=OneWay, FallbackValue=Collapsed}">
-            <TextBlock
-                Style="{StaticResource BodyTextBlockStyle}"
+            <!-- The state before any server exists (docs/notes/windows-shell.md, "Screens"). -->
+            <StackPanel
                 HorizontalAlignment="Center"
-                Text="Couldn't refresh the server list." />
-            <Button HorizontalAlignment="Center" Content="Reload" Click="OnReload" />
-        </StackPanel>
+                VerticalAlignment="Center"
+                MaxWidth="480"
+                Spacing="8"
+                Visibility="{x:Bind ViewModel.EmptyVisibility, Mode=OneWay, FallbackValue=Collapsed}">
+                <TextBlock
+                    Style="{StaticResource SubtitleTextBlockStyle}"
+                    HorizontalAlignment="Center"
+                    AutomationProperties.HeadingLevel="Level2"
+                    Text="No servers yet" />
+                <TextBlock
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    HorizontalAlignment="Center"
+                    TextAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    Text="Add a Jellyfin server to browse and play your media." />
+                <Button
+                    x:Name="AddFirstServer"
+                    Margin="0,8,0,0"
+                    HorizontalAlignment="Center"
+                    Style="{StaticResource AccentButtonStyle}"
+                    Content="Add a server"
+                    Click="OnAddServer" />
+            </StackPanel>
 
-        <!-- Signed-in servers: the server and user for now; browsing comes with M2 (docs/roadmap.md). -->
-        <ScrollViewer Visibility="{x:Bind ViewModel.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}">
-            <Grid shell:PageLayout.IsColumn="True">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" MaxWidth="920" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Spacing="4">
-                    <ItemsControl ItemsSource="{x:Bind ViewModel.Rows, Mode=OneWay}" IsTabStop="False">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:ServerRow">
-                                <Border Style="{StaticResource Card}" Margin="0,0,0,4">
-                                    <Grid ColumnSpacing="16">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel VerticalAlignment="Center">
-                                            <TextBlock
-                                                Style="{StaticResource BodyStrongTextBlockStyle}"
-                                                AutomationProperties.HeadingLevel="Level2"
-                                                Text="{x:Bind Name, Mode=OneWay}" />
-                                            <TextBlock Text="{x:Bind Account, Mode=OneWay}" />
-                                            <TextBlock
-                                                Style="{StaticResource CaptionTextBlockStyle}"
-                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                Text="{x:Bind Product, Mode=OneWay}" />
-                                            <TextBlock
-                                                Style="{StaticResource CaptionTextBlockStyle}"
-                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                Text="{x:Bind Connection, Mode=OneWay}" />
-                                        </StackPanel>
-                                        <Button
-                                            Grid.Column="1"
-                                            VerticalAlignment="Center"
-                                            Content="Sign in"
-                                            AutomationProperties.Name="{x:Bind SignInLabel, Mode=OneWay}"
-                                            Visibility="{x:Bind SignInVisibility, Mode=OneWay}"
-                                            Click="OnSignInAgain" />
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <Button Margin="0,8,0,0" Content="Add another server" Click="OnAddServer" />
-                </StackPanel>
-            </Grid>
-        </ScrollViewer>
+            <StackPanel
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="8"
+                Visibility="{x:Bind ViewModel.FaultedVisibility, Mode=OneWay, FallbackValue=Collapsed}">
+                <TextBlock
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    HorizontalAlignment="Center"
+                    Text="Couldn't refresh the server list." />
+                <Button HorizontalAlignment="Center" Content="Reload" Click="OnReload" />
+            </StackPanel>
+
+            <!-- Signed-in servers: the server and user for now; browsing comes with M2 (docs/roadmap.md). -->
+            <ScrollViewer Visibility="{x:Bind ViewModel.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}">
+                <Grid Style="{StaticResource PageColumnStyle}">
+                    <StackPanel Spacing="4">
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.Rows, Mode=OneWay}" IsTabStop="False">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ServerRow">
+                                    <Border Style="{StaticResource Card}" Margin="0,0,0,4">
+                                        <Grid ColumnSpacing="16">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock
+                                                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                                                    AutomationProperties.HeadingLevel="Level2"
+                                                    Text="{x:Bind Name, Mode=OneWay}" />
+                                                <TextBlock Text="{x:Bind Account, Mode=OneWay}" />
+                                                <TextBlock
+                                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    Text="{x:Bind Product, Mode=OneWay}" />
+                                                <TextBlock
+                                                    Style="{StaticResource CaptionTextBlockStyle}"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    Text="{x:Bind Connection, Mode=OneWay}" />
+                                            </StackPanel>
+                                            <Button
+                                                Grid.Column="1"
+                                                VerticalAlignment="Center"
+                                                Content="Sign in"
+                                                AutomationProperties.Name="{x:Bind SignInLabel, Mode=OneWay}"
+                                                Visibility="{x:Bind SignInVisibility, Mode=OneWay}"
+                                                Click="OnSignInAgain" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Button Margin="0,8,0,0" Content="Add another server" Click="OnAddServer" />
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+        </Grid>
     </Grid>
 </Page>

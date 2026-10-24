@@ -2,113 +2,116 @@
     x:Class="Current.Shell.Pages.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:shell="using:Current.Shell"
     xmlns:toolkit="using:CommunityToolkit.WinUI.Controls"
     xmlns:vm="using:Current.Shell.ViewModels">
     <!-- Microsoft's settings layout: one scrollable column of about 1000 px, BodyStrong section headers, SettingsCard and
          SettingsExpander, "About" last ("Guidelines for app settings", learn.microsoft.com, ms.date 2026-04-08, read 2026-10-23). The
-         column stretches up to that width, left-aligned under the page title (PageLayout.cs; the owner's run,
-         2026-10-23). The first section header has no top margin, so it sits as far below the title as every page's first item. -->
-    <ScrollViewer>
-        <Grid shell:PageLayout.IsColumn="True">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MaxWidth="920" />
-            </Grid.ColumnDefinitions>
-            <StackPanel Spacing="4">
-                <TextBlock
-                    Style="{StaticResource BodyStrongTextBlockStyle}"
-                    Margin="0,0,0,4"
-                    AutomationProperties.HeadingLevel="Level2"
-                    Text="Accounts" />
-                <toolkit:SettingsCard
-                    Header="No servers are set up."
-                    Visibility="{x:Bind Servers.EmptyVisibility, Mode=OneWay, FallbackValue=Collapsed}">
-                    <Button x:Name="AddFirstServerButton" Content="Add a server" Click="OnAddServer" />
-                </toolkit:SettingsCard>
-                <toolkit:SettingsCard
-                    Header="Couldn't refresh the server list."
-                    Visibility="{x:Bind Servers.FaultedVisibility, Mode=OneWay, FallbackValue=Collapsed}">
-                    <Button Content="Reload" Click="OnReload" />
-                </toolkit:SettingsCard>
-                <ItemsControl
-                    IsTabStop="False"
-                    ItemsSource="{x:Bind Servers.Rows, Mode=OneWay}"
-                    Visibility="{x:Bind Servers.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:ServerRow">
-                            <!-- An expander per server, Remove inside it, as Windows Settings removes an account: "Under Other users,
-                                 select the flyout for the account you want to remove. Next to Account and data, select Remove." ("Manage
-                                 User Accounts in Windows", support.microsoft.com, read 2026-10-23). -->
-                            <toolkit:SettingsExpander Margin="0,0,0,4" Header="{x:Bind Name, Mode=OneWay}">
-                                <toolkit:SettingsExpander.Description>
-                                    <StackPanel>
-                                        <TextBlock Text="{x:Bind Account, Mode=OneWay}" />
-                                        <TextBlock Text="{x:Bind Product, Mode=OneWay}" />
-                                        <TextBlock Text="{x:Bind Connection, Mode=OneWay}" />
-                                    </StackPanel>
-                                </toolkit:SettingsExpander.Description>
-                                <Grid>
-                                    <Button
-                                        Content="Sign out"
-                                        AutomationProperties.Name="{x:Bind SignOutLabel, Mode=OneWay}"
-                                        Visibility="{x:Bind SignOutVisibility, Mode=OneWay}"
-                                        IsEnabled="{x:Bind Idle, Mode=OneWay}"
-                                        Click="OnSignOut" />
-                                    <Button
-                                        Content="Sign in"
-                                        AutomationProperties.Name="{x:Bind SignInLabel, Mode=OneWay}"
-                                        Visibility="{x:Bind SignInVisibility, Mode=OneWay}"
-                                        IsEnabled="{x:Bind Idle, Mode=OneWay}"
-                                        Click="OnSignInAgain" />
-                                </Grid>
-                                <toolkit:SettingsExpander.Items>
-                                    <toolkit:SettingsCard
-                                        Header="Remove this server"
-                                        Description="Signs out every user here and forgets the server's addresses on this PC.">
-                                        <!-- The row travels in Tag: the expander's items need not inherit the template's DataContext. -->
+         title and the column are centred together, as on every page (App.xaml, PageMaxWidth). The first section header has no top
+         margin, so it sits as far below the title as every page's first item. -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <TextBlock Style="{StaticResource PageTitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" Text="Settings" />
+        <ScrollViewer Grid.Row="1">
+            <Grid Style="{StaticResource PageColumnStyle}">
+                <StackPanel Spacing="4">
+                    <TextBlock
+                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                        Margin="0,0,0,4"
+                        AutomationProperties.HeadingLevel="Level2"
+                        Text="Accounts" />
+                    <toolkit:SettingsCard
+                        Header="No servers are set up."
+                        Visibility="{x:Bind Servers.EmptyVisibility, Mode=OneWay, FallbackValue=Collapsed}">
+                        <Button x:Name="AddFirstServerButton" Content="Add a server" Click="OnAddServer" />
+                    </toolkit:SettingsCard>
+                    <toolkit:SettingsCard
+                        Header="Couldn't refresh the server list."
+                        Visibility="{x:Bind Servers.FaultedVisibility, Mode=OneWay, FallbackValue=Collapsed}">
+                        <Button Content="Reload" Click="OnReload" />
+                    </toolkit:SettingsCard>
+                    <ItemsControl
+                        IsTabStop="False"
+                        ItemsSource="{x:Bind Servers.Rows, Mode=OneWay}"
+                        Visibility="{x:Bind Servers.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ServerRow">
+                                <!-- An expander per server, Remove inside it, as Windows Settings removes an account: "Under Other users,
+                                     select the flyout for the account you want to remove. Next to Account and data, select Remove." ("Manage
+                                     User Accounts in Windows", support.microsoft.com, read 2026-10-23). -->
+                                <toolkit:SettingsExpander Margin="0,0,0,4" Header="{x:Bind Name, Mode=OneWay}">
+                                    <toolkit:SettingsExpander.Description>
+                                        <StackPanel>
+                                            <TextBlock Text="{x:Bind Account, Mode=OneWay}" />
+                                            <TextBlock Text="{x:Bind Product, Mode=OneWay}" />
+                                            <TextBlock Text="{x:Bind Connection, Mode=OneWay}" />
+                                        </StackPanel>
+                                    </toolkit:SettingsExpander.Description>
+                                    <Grid>
                                         <Button
-                                            Content="Remove"
-                                            Tag="{x:Bind Self}"
-                                            AutomationProperties.Name="{x:Bind RemoveLabel, Mode=OneWay}"
+                                            Content="Sign out"
+                                            AutomationProperties.Name="{x:Bind SignOutLabel, Mode=OneWay}"
+                                            Visibility="{x:Bind SignOutVisibility, Mode=OneWay}"
                                             IsEnabled="{x:Bind Idle, Mode=OneWay}"
-                                            Click="OnRemove" />
-                                    </toolkit:SettingsCard>
-                                </toolkit:SettingsExpander.Items>
-                            </toolkit:SettingsExpander>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                <Button
-                    x:Name="AddAnotherServerButton"
-                    Margin="0,4,0,0"
-                    Content="Add another server"
-                    Visibility="{x:Bind Servers.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}"
-                    Click="OnAddServer" />
-                <InfoBar x:Name="AccountsInfo" Margin="0,8,0,0" IsOpen="False" />
+                                            Click="OnSignOut" />
+                                        <Button
+                                            Content="Sign in"
+                                            AutomationProperties.Name="{x:Bind SignInLabel, Mode=OneWay}"
+                                            Visibility="{x:Bind SignInVisibility, Mode=OneWay}"
+                                            IsEnabled="{x:Bind Idle, Mode=OneWay}"
+                                            Click="OnSignInAgain" />
+                                    </Grid>
+                                    <toolkit:SettingsExpander.Items>
+                                        <toolkit:SettingsCard
+                                            Header="Remove this server"
+                                            Description="Signs out every user here and forgets the server's addresses on this PC.">
+                                            <!-- The row travels in Tag: the expander's items need not inherit the template's DataContext. -->
+                                            <Button
+                                                Content="Remove"
+                                                Tag="{x:Bind Self}"
+                                                AutomationProperties.Name="{x:Bind RemoveLabel, Mode=OneWay}"
+                                                IsEnabled="{x:Bind Idle, Mode=OneWay}"
+                                                Click="OnRemove" />
+                                        </toolkit:SettingsCard>
+                                    </toolkit:SettingsExpander.Items>
+                                </toolkit:SettingsExpander>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button
+                        x:Name="AddAnotherServerButton"
+                        Margin="0,4,0,0"
+                        Content="Add another server"
+                        Visibility="{x:Bind Servers.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}"
+                        Click="OnAddServer" />
+                    <InfoBar x:Name="AccountsInfo" Margin="0,8,0,0" IsOpen="False" />
 
-                <TextBlock
-                    Style="{StaticResource BodyStrongTextBlockStyle}"
-                    Margin="0,24,0,4"
-                    AutomationProperties.HeadingLevel="Level2"
-                    Text="Diagnostics" />
-                <toolkit:SettingsCard
-                    Header="Request log"
-                    Description="Recent server requests for a bug report, without server addresses or query values.">
-                    <Button Content="Copy diagnostics" Click="OnCopyDiagnostics" />
-                </toolkit:SettingsCard>
-                <InfoBar x:Name="CopiedInfo" Margin="0,8,0,0" IsOpen="False" />
+                    <TextBlock
+                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                        Margin="0,24,0,4"
+                        AutomationProperties.HeadingLevel="Level2"
+                        Text="Diagnostics" />
+                    <toolkit:SettingsCard
+                        Header="Request log"
+                        Description="Recent server requests for a bug report, without server addresses or query values.">
+                        <Button Content="Copy diagnostics" Click="OnCopyDiagnostics" />
+                    </toolkit:SettingsCard>
+                    <InfoBar x:Name="CopiedInfo" Margin="0,8,0,0" IsOpen="False" />
 
-                <TextBlock
-                    Style="{StaticResource BodyStrongTextBlockStyle}"
-                    Margin="0,24,0,4"
-                    AutomationProperties.HeadingLevel="Level2"
-                    Text="About" />
-                <toolkit:SettingsExpander Header="Current" Description="{x:Bind VersionText}">
-                    <toolkit:SettingsExpander.Items>
-                        <toolkit:SettingsCard Header="© 2026 Skeksik. All rights reserved." />
-                    </toolkit:SettingsExpander.Items>
-                </toolkit:SettingsExpander>
-            </StackPanel>
-        </Grid>
-    </ScrollViewer>
+                    <TextBlock
+                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                        Margin="0,24,0,4"
+                        AutomationProperties.HeadingLevel="Level2"
+                        Text="About" />
+                    <toolkit:SettingsExpander Header="Current" Description="{x:Bind VersionText}">
+                        <toolkit:SettingsExpander.Items>
+                            <toolkit:SettingsCard Header="© 2026 Skeksik. All rights reserved." />
+                        </toolkit:SettingsExpander.Items>
+                    </toolkit:SettingsExpander>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
 </Page>
