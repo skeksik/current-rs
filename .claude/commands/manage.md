@@ -42,14 +42,15 @@ The manager queues local cards with `spawn_task` (the card must stand alone) and
 not show, save the prompt in the scratchpad and give the owner its full path. A cloud session cannot message a local one; local cards
 message the manager. So a card that waits for the manager's reply (a plan to approve) gets it through the owner: give the owner the
 reply as a block to paste, and save it in the scratchpad too. Prefer cards that need no reply: put the approvals in the card's prompt.
-Small fixes on a card's branch (removing a prototype, ticking the roadmap) the manager may push itself.
+Small fixes on a card's branch (removing a prototype, ticking the roadmap) the manager may push itself. Every card and worker prompt
+names the manager by its session id and its title (`get_session` with no id), so the session can find it and message back.
 
 ## 3. Start a cloud worker
 `create_session` with `source_url` `https://github.com/skeksik/current-rs`, `outcome_branch` the task's branch, `title` the task title,
 `tags` `current:worker` and `current:task:<topic>`. Leave `permission_mode` to inherit; never `plan` (it stalls unattended).
 
 ```
-You are a worker session for Current, started by the manager session <manager session id>.
+You are a worker session for Current, started by the manager session <manager session id> (named "<manager session title>").
 Task: <title>. Branch: <type>/<topic> (create it from the latest main).
 Scope: <what to build, crates/apps touched, done-when>. Out of scope: <nearby work that belongs to another task>.
 Context: <roadmap item, ADRs, notes, earlier PRs, review findings>.
@@ -90,7 +91,7 @@ Report
 - git -c user.name=skeksik -c user.email=personal@skeksik.com commit (no trailers); push to the branch; git pull --no-rebase if it
   moved; never force-push.
 - Clean up: stop stand-ins, git worktree remove the worktree; say what is left on disk.
-- Send the summary to the manager session <manager session id> with send_message.
+- Send the summary to the manager session <manager session id> (named "<manager session title>") with send_message.
 ```
 
 ## 5. Answer plans and watch workers

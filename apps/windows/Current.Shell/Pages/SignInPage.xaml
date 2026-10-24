@@ -61,12 +61,24 @@
                         Style="{StaticResource BodyTextBlockStyle}"
                         TextWrapping="Wrap"
                         Text="Enter this code under Quick Connect in a Jellyfin app where you're already signed in." />
-                    <TextBlock
-                        x:Name="CodeText"
-                        AutomationProperties.LiveSetting="Assertive"
-                        Style="{StaticResource TitleLargeTextBlockStyle}"
-                        CharacterSpacing="200"
-                        IsTextSelectionEnabled="True" />
+                    <!-- The code is heard by CodeView's name, digit by digit; its text is kept out of UI Automation (SpokenText). -->
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <shell:SpokenText x:Name="CodeView" VerticalAlignment="Center">
+                            <TextBlock
+                                x:Name="CodeText"
+                                AutomationProperties.AccessibilityView="Raw"
+                                Style="{StaticResource TitleLargeTextBlockStyle}"
+                                CharacterSpacing="200"
+                                IsTextSelectionEnabled="True" />
+                        </shell:SpokenText>
+                        <Button
+                            x:Name="CopyCodeButton"
+                            VerticalAlignment="Center"
+                            Content="Copy"
+                            AutomationProperties.Name="Copy code"
+                            Click="OnCopyCode" />
+                    </StackPanel>
+                    <InfoBar x:Name="CodeCopiedInfo" IsOpen="False" />
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <ProgressRing x:Name="WaitingRing" Width="20" Height="20" IsActive="False" />
                         <TextBlock x:Name="WaitingText" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" Text="Waiting for approval…" />
