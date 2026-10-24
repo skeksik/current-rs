@@ -104,7 +104,7 @@
                     Text="About" />
                 <toolkit:SettingsExpander Header="Current" Description="{x:Bind VersionText}">
                     <toolkit:SettingsExpander.Items>
-                        <toolkit:SettingsCard Header="© 2026 Skeksik" />
+                        <toolkit:SettingsCard Header="© 2026 Skeksik. All rights reserved." />
                     </toolkit:SettingsExpander.Items>
                 </toolkit:SettingsExpander>
             </StackPanel>

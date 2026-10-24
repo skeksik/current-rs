@@ -229,7 +229,7 @@ actions; nothing is decided in C#.
     expander's items inherit.
   - **Diagnostics:** "Copy diagnostics" now copies `ExportDiagnosticsAsync()` (version, platform, settings state, then the
     redacted request log).
-  - **About:** a `SettingsExpander` "Current" with the version, and "© 2026 Skeksik" inside.
+  - **About:** a `SettingsExpander` "Current" with the version, and "© 2026 Skeksik. All rights reserved." inside.
 - **Keyboard and Narrator:** every input has a `Header` that names it; buttons in lists carry `AutomationProperties.Name` with the
   server ("Sign in to <name>"); page titles and section headers have `AutomationProperties.HeadingLevel`; progress texts are
   `LiveSetting="Polite"`, and because "Connecting…", "Signing in…" and "Waiting for approval…" never change, their peer raises
@@ -401,7 +401,7 @@ upload-artifact step in `ci.yml`), or `apps/windows/out/app/Current.exe`:
 1. The window has Mica, the title bar is part of the window, it drags and double-click maximises; the caption buttons and snap layouts
    (hover over maximise) work.
 2. Switch Windows between light and dark: the app follows at once.
-3. Home shows the empty state. Settings shows the version, "© 2026 Skeksik", "No servers are set up." and "Copy diagnostics"; paste the clipboard
+3. Home shows the empty state. Settings shows the version, "© 2026 Skeksik. All rights reserved.", "No servers are set up." and "Copy diagnostics"; paste the clipboard
    somewhere: the text is there, also after closing the app.
 4. Back and forward: go Home -> Settings, then back with the title bar's back button, Alt+Left, and a mouse Back button; each
    returns to Home, and at Home with an empty back stack the back button is disabled (after Home -> Settings -> Home it stays
