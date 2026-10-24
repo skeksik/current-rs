@@ -98,6 +98,19 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
     `PART_PaneToggleButton` after loading and sets the name on `PaneOpened` and `PaneClosed`. A future WinUI that renames that
     part leaves the default name; nothing fails.
   - That Task Manager uses the same thresholds is not verified, the owner compares with Task Manager.
+- **Pane colour: the title bar's (owner's run, 2026-10-24).** Opened over the page, the pane was acrylic (light #F7 to #FA) with a
+  line under the title bar; Windows Settings' opened pane is #F3F3F3 like its title bar, with no line. In the template
+  (`NavigationView.xaml`, `NavigationView_themeresources.xaml`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) the
+  SplitView's `PaneBackground` is `NavigationViewDefaultPaneBackground` (`AcrylicInAppFillColorDefaultBrush`) while the pane
+  overlays the page, and `NavigationViewExpandedPaneBackground` (`SolidBackgroundFillColorTransparent`, so Mica) while it does not.
+  `MainWindow.xaml` points the first at `SolidBackgroundFillColorBaseBrush`, #F3F3F3 light and #202020 dark
+  (`Common_themeresources_any.xaml`, same tag), the solid colour the owner measured on the Mica title bar; high contrast keeps
+  `SystemControlBackgroundBaseLowBrush`. The line was the pane's border: the navigation view gives its SplitView
+  `NavigationViewBorderThickness` 1 on every side with `NavigationViewItemSeparatorForeground` while overlaying, and the SplitView
+  draws it around `PaneRoot` (`SplitView_themeresources.xaml`, same tag); with our title bar outside the navigation view, its top
+  edge sits under the title bar. `NavigationViewBorderThickness` becomes 0,0,1,0, the SplitView's own default
+  (`SplitViewLeftBorderThemeThickness`), so only the edge towards the page stays. Whether Windows Settings has that edge is not
+  verified, the owner compares.
 - **Background per page (owner, 2026-10-24, Task Manager as the reference).** Content pages (Home, Add a server, Sign in) show the
   navigation view's content layer, as Task Manager's Users page does; pages made of settings cards (Settings) show Mica, as the
   pane does. The layer is the template part `ContentGrid`, the `Content` of `RootSplitView` (`NavigationView.xaml`, same tag; the item templates name parts `ContentGrid` too, so `MainWindow` takes it from the SplitView): `<Grid x:Name="ContentGrid"
