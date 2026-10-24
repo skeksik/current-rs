@@ -1173,15 +1173,19 @@ an "App theme" card, "Select which app theme to display", with a combo box: Ligh
   Gallery uses; Task Manager too, per the manager, not verified). The page does not link to "Windows color settings"
   (`ms-settings:colors`), which the guideline says "you may also want to add"; the owner's example has none (not verified).
   Narrator: the card and the combo are both named "App theme" (`AutomationProperties.Name`).
+  **Icon:** Photos' card has a palette icon, and the owner wanted ours to have one (2026-10-24): Segoe Fluent Icons E790 "Color"
+  ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-24) as the card's `HeaderIcon`, a `FontIcon`
+  with no font or size set, so `SettingsCard` gives it its own. It is the only card with an icon so far.
 - **The whole window.** `MainWindow.FollowAppTheme` sets `Root.RequestedTheme` (Light, Dark, or Default for Windows default) and
   follows every change. "The RequestedTheme value you set on a FrameworkElement will inherit to any elements that are nested within
   the element", and it can change "at run-time", unlike `Application.RequestedTheme` (FrameworkElement.RequestedTheme,
   learn.microsoft.com, updated 2026-09-30, read 2026-10-24). The title bar, the pane and the pages are all inside `Root`. Windows
   default is `ElementTheme.Default`, as the WinUI Gallery maps "Use system setting" (`SettingsPage.xaml.cs`, main, read 2026-10-24).
   The same API page notes "On Windows, setting RequestedTheme to ElementTheme.Default will always result in "Dark" being the
-  theme", which the owner's check settles (not verified). High contrast ignores `RequestedTheme` (same page).
+  theme". That did not happen on the owner's PC: under Windows default the app followed Windows into light and back to dark
+  while it ran (owner's run, 2026-10-24, below). High contrast ignores `RequestedTheme` (same page).
 - **Caption buttons.** The system draws their glyphs for the system's theme, so in the other app theme they would be white on light
-  or black on dark (not seen yet: the owner's check). `ApplyCaptionButtonColors`, which already runs on load and on every
+  or black on dark. `ApplyCaptionButtonColors`, which already runs on load and on every
   `ActualThemeChanged`, now also sets `ButtonForegroundColor`, `ButtonHoverForegroundColor` and `ButtonPressedForegroundColor`
   (white in dark, black in light, as the WinUI Gallery's `TitleBarHelper.ApplySystemThemeToCaptionButtons`, main, read
   2026-10-24) and `ButtonInactiveForegroundColor` (WinUI's `TextFillColorDisabled`, #5DFFFFFF dark, #5C000000 light; not
@@ -1204,3 +1208,20 @@ an "App theme" card, "Select which app theme to display", with a combo box: Ligh
 5. Restart with Light or Dark chosen while Windows uses the other: the window opens in the chosen theme without a flash of the other.
 6. Narrator on the combo: "App theme, combo box, Light" (or the current value) and the options read as their labels.
 7. Not on the owner's run unless chosen: high contrast with a theme chosen (should look as without the setting).
+
+### Windows run (2026-10-24, owner's PC, Windows 11 Pro 10.0.26300, Windows in dark mode at the start)
+PR 39 at f1d6315 (04d79e8 plus the card's icon), built with the four scripts (C# tests 36 passed; the smoke run passed, with Dark
+and Light reaching the window and the caption-button glyphs). The owner compared it with Photos' own App theme setting.
+1. Personalization section and App theme card (placement, wording, icon; Narrator): **pass** after one change. Photos' card has a
+   palette icon and ours had none; the owner chose to add it (Segoe Fluent Icons E790, above).
+2. Light: the whole window light at once, without a restart (title bar, caption buttons with hover and pressed, pane, overlay
+   pane, content layer, dialogs including Remove, InfoBars, the combo's drop-down): **pass**.
+3. Dark: the same: **pass**.
+4. Windows default, then Windows switched to light and back to dark while the app ran: the app followed live, so
+   `ElementTheme.Default` did not mean "always Dark" here: **pass**.
+5. Restart with a theme chosen: the chosen theme from the first frame, with no flash of the other: **pass**.
+6. settings.json: Light writes `"app_theme": "light"`; Windows default removes the key (read from the file; only that key
+   printed): **pass**.
+7. High contrast and Narrator: the owner tried them: **pass**.
+
+The owner accepted the app theme and considers M1 done (2026-10-24).
