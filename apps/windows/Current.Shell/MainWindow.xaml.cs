@@ -127,6 +127,8 @@ public sealed partial class MainWindow : Window
         presenter.PreferredMinimumHeight = (int)Math.Ceiling(MinWindowHeight * scale);
     }
 
+    /// <summary>Also on PaneOpening: Back is enabled as the pane starts to open over the page, as Windows Settings' back button is
+    /// (owner's recording, 2026-10-24), not once its animation has ended.</summary>
     private void OnPaneOpenedOrClosed(NavigationView sender, object args)
     {
         NamePaneToggleButton();

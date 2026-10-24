@@ -92,6 +92,7 @@
             IsSettingsVisible="True"
             ItemInvoked="OnItemInvoked"
             DisplayModeChanged="OnDisplayModeChanged"
+            PaneOpening="OnPaneOpenedOrClosed"
             PaneOpened="OnPaneOpenedOrClosed"
             PaneClosed="OnPaneOpenedOrClosed">
             <NavigationView.MenuItems>
