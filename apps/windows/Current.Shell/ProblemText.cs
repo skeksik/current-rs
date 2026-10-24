@@ -10,6 +10,9 @@ internal static class ProblemText
 {
     public const string Unexpected = "Something went wrong in Current. Try again.";
 
+    /// <summary>Until the gateway screens exist (ADR 0017).</summary>
+    public const string GatewayNotYet = "This address asks for a sign-in of its own, which this version of Current can't show yet.";
+
     public static string Probe(ProbeProblem problem) => problem switch
     {
         ProbeProblem.InvalidAddress invalid => invalid.Reason switch

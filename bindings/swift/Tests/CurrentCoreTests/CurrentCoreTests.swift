@@ -44,7 +44,7 @@ import Testing
         // Start from a value the core does not have, so only a real delivery can replace it.
         let placeholder = ServerStatusSnapshot(
             service: "placeholder", key: "0", signedIn: false, reachability: .unknown, addressPosition: nil, user: nil, version: nil,
-            features: [])
+            features: [], gatewaySignInNeeded: false)
         let capabilities = ObservedValue(initial: CapabilitiesSnapshot(servers: [placeholder])) { forwarder in
             core.subscribeCapabilities(listener: forwarder)
         }

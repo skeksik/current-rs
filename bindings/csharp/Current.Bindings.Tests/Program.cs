@@ -43,6 +43,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("the server list recovers from a lost batch", FlowTests.ServerListRecoversFromALostBatch),
     ("the server list stops after repeated failures", FlowTests.ServerListStopsAfterRepeatedFailures),
     ("network facts hide the key", FlowTests.NetworkFactsHideTheKey),
+    ("a Basic gateway asks for its password", GatewayTests.BasicGatewayAsksForItsPassword),
+    ("a header gate takes extra headers", GatewayTests.HeaderGateTakesExtraHeaders),
+    ("a portal's cookies sign in, and again after its session ended", GatewayTests.PortalSignInAndAgain),
+    ("gateway inputs hide their values", GatewayTests.GatewayInputsHideTheirValues),
 };
 
 var failed = 0;

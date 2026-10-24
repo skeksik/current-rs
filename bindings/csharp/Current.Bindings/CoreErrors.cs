@@ -30,6 +30,12 @@ public sealed class ServerHasNoAddressException() : Exception("the server has no
 /// <summary>The server's address cannot take requests. Setup never saves such an address, so this points to a bug.</summary>
 public sealed class InvalidServerAddressException() : Exception("the server's address cannot be used");
 
+/// <summary>The gateway credentials handed over were not used (ADR 0017): nothing was sent. Holds nothing the user typed.</summary>
+public sealed class GatewayInputException(GatewayInputProblem problem) : Exception("the gateway credentials cannot be used")
+{
+    public GatewayInputProblem Problem { get; } = problem;
+}
+
 /// <summary>
 /// Runs core calls and maps the generated exceptions to public ones: <c>Cancelled</c> becomes
 /// <see cref="OperationCanceledException"/>, every other variant its own public exception.
@@ -101,6 +107,7 @@ internal static class CoreCall
         Ffi.CoreException.UnknownServer => new UnknownServerException(),
         Ffi.CoreException.NoAddress => new ServerHasNoAddressException(),
         Ffi.CoreException.InvalidAddress => new InvalidServerAddressException(),
+        Ffi.CoreException.Gateway gateway => new GatewayInputException(MapProblems.From(gateway.@problem)),
         _ => new CoreRuntimeException(error.Message),
     };
 }

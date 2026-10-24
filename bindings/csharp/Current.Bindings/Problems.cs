@@ -34,6 +34,54 @@ public abstract record ProbeProblem
     public sealed record SetupIncomplete : ProbeProblem;
     /// <summary>The address leads to another server than the one expected.</summary>
     public sealed record DifferentServer : ProbeProblem;
+    /// <summary>
+    /// An authentication gateway in front of the server wants something (ADR 0017). Setup's gateway states say what to do; this
+    /// appears where no flow can ask, e.g. a saved address checked before a sign-in.
+    /// </summary>
+    public sealed record Gateway(GatewayProblem Answer) : ProbeProblem;
+}
+
+/// <summary>What an authentication gateway in front of the server wants (ADR 0017). Never its realm or any text it sent.</summary>
+public enum GatewayProblem
+{
+    /// <summary>A password (HTTP Basic).</summary>
+    Password,
+    /// <summary>A sign-in in a web page. Also what a plain web site at the address looks like.</summary>
+    SignIn,
+    /// <summary>It refuses without a sign-in: it wants something else, such as a service token in extra headers.</summary>
+    Refused,
+    /// <summary>A sign-in method Current does not support.</summary>
+    Unsupported,
+}
+
+/// <summary>Why the gateway credentials handed over were not used (ADR 0017). Nothing of what the user typed.</summary>
+public enum GatewayInputProblem
+{
+    /// <summary>The address is plain http outside the local network: confirm it first.</summary>
+    PlainHttpNotConfirmed,
+    NoHeaders,
+    /// <summary>A user name with <c>:</c> or a control character.</summary>
+    InvalidUserName,
+    /// <summary>A password with a control character.</summary>
+    InvalidPassword,
+    InvalidHeaderName,
+    /// <summary>A header Current sets itself (<c>Authorization</c>, <c>Cookie</c>, <c>Host</c>, the framing headers).</summary>
+    ReservedHeader,
+    /// <summary>A header value that is not visible ASCII text.</summary>
+    InvalidHeaderValue,
+    InvalidCookie,
+}
+
+/// <summary>Why signing in to a saved server's gateway again failed.</summary>
+public abstract record GatewaySignInProblem
+{
+    private GatewaySignInProblem() { }
+
+    /// <summary>The address could not be checked: not reached, another server, or not a usable server.</summary>
+    public sealed record Probe(ProbeProblem Problem) : GatewaySignInProblem;
+    /// <summary>The new credentials could not be saved.</summary>
+    public sealed record Save(StoreProblem Problem) : GatewaySignInProblem;
+    public sealed record ServerRemoved : GatewaySignInProblem;
 }
 
 /// <summary>Why a request failed.</summary>
@@ -84,6 +132,16 @@ public abstract record SignInProblem
     /// <summary>Signed in, but the sign-in could not be saved.</summary>
     public sealed record Save(StoreProblem Problem) : SignInProblem;
     public sealed record ServerRemoved : SignInProblem;
+    /// <summary>An authentication gateway in front of the server answered instead (ADR 0017): sign in to it first.</summary>
+    public sealed record Gateway(GatewayProblem Answer) : SignInProblem;
+    /// <summary>
+    /// The server ignored the sign-in's client details sent in <c>X-Emby-Authorization</c> (ADR 0017). Explain the two server-side
+    /// fixes: turn on legacy authorization on the server and stop the gateway passing its own <c>Authorization</c> header on; or
+    /// add a gateway rule that lets the server's API through.
+    /// </summary>
+    public sealed record EmbyHeaderIgnored : SignInProblem;
+    /// <summary>The server's answer is being checked (mid-session only): try again in a moment.</summary>
+    public sealed record Unconfirmed : SignInProblem;
 }
 
 /// <summary>Why the search for local servers failed.</summary>
@@ -118,6 +176,7 @@ internal static class MapProblems
         Ffi.ProbeProblem.TooOld old => new ProbeProblem.TooOld(old.Version),
         Ffi.ProbeProblem.SetupIncomplete => new ProbeProblem.SetupIncomplete(),
         Ffi.ProbeProblem.DifferentServer => new ProbeProblem.DifferentServer(),
+        Ffi.ProbeProblem.Gateway gateway => new ProbeProblem.Gateway(From(gateway.Answer)),
         _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
     };
 
@@ -154,6 +213,37 @@ internal static class MapProblems
         Ffi.SignInProblem.Probe probe => new SignInProblem.Probe(From(probe.Problem)),
         Ffi.SignInProblem.Save save => new SignInProblem.Save(From(save.Problem)),
         Ffi.SignInProblem.ServerRemoved => new SignInProblem.ServerRemoved(),
+        Ffi.SignInProblem.Gateway gateway => new SignInProblem.Gateway(From(gateway.Answer)),
+        Ffi.SignInProblem.EmbyHeaderIgnored => new SignInProblem.EmbyHeaderIgnored(),
+        Ffi.SignInProblem.Unconfirmed => new SignInProblem.Unconfirmed(),
+        _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
+    };
+
+    public static GatewayProblem From(Ffi.GatewayProblem problem) => problem switch
+    {
+        Ffi.GatewayProblem.Password => GatewayProblem.Password,
+        Ffi.GatewayProblem.SignIn => GatewayProblem.SignIn,
+        Ffi.GatewayProblem.Refused => GatewayProblem.Refused,
+        _ => GatewayProblem.Unsupported,
+    };
+
+    public static GatewayInputProblem From(Ffi.GatewayInputProblem problem) => problem switch
+    {
+        Ffi.GatewayInputProblem.PlainHttpNotConfirmed => GatewayInputProblem.PlainHttpNotConfirmed,
+        Ffi.GatewayInputProblem.NoHeaders => GatewayInputProblem.NoHeaders,
+        Ffi.GatewayInputProblem.InvalidUserName => GatewayInputProblem.InvalidUserName,
+        Ffi.GatewayInputProblem.InvalidPassword => GatewayInputProblem.InvalidPassword,
+        Ffi.GatewayInputProblem.InvalidHeaderName => GatewayInputProblem.InvalidHeaderName,
+        Ffi.GatewayInputProblem.ReservedHeader => GatewayInputProblem.ReservedHeader,
+        Ffi.GatewayInputProblem.InvalidHeaderValue => GatewayInputProblem.InvalidHeaderValue,
+        _ => GatewayInputProblem.InvalidCookie,
+    };
+
+    public static GatewaySignInProblem From(Ffi.GatewaySignInProblem problem) => problem switch
+    {
+        Ffi.GatewaySignInProblem.Probe probe => new GatewaySignInProblem.Probe(From(probe.Problem)),
+        Ffi.GatewaySignInProblem.Save save => new GatewaySignInProblem.Save(From(save.Problem)),
+        Ffi.GatewaySignInProblem.ServerRemoved => new GatewaySignInProblem.ServerRemoved(),
         _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
     };
 

@@ -20,6 +20,75 @@ public abstract record AddServerState
     public sealed record ConfirmPlainHttp(NewServerInfo Server) : AddServerState;
     /// <summary>Ready to sign in: call <see cref="AddServerFlow.SignIn"/>.</summary>
     public sealed record Ready(NewServerInfo Server) : AddServerState;
+    /// <summary>
+    /// A password gateway (HTTP Basic) in front of the address (ADR 0017): ask for its user name and password
+    /// (<see cref="AddServerFlow.SubmitPasswordAsync"/>). <c>Origin</c> names the address in the prompt. <c>Realm</c> is the site's
+    /// own text: show it only as "The site says: ...", never as a title. <c>Wrong</c>: the password just given was refused.
+    /// <c>PlainHttp</c>: plain http outside the local network, so the prompt also asks to confirm that.
+    /// </summary>
+    public sealed record GatewayPassword(string Origin, string? Realm, bool Wrong, bool PlainHttp) : AddServerState;
+    /// <summary>
+    /// The address shows a web page where the server's answer was expected: a gateway's sign-in, or a plain web site. Say so
+    /// ("This address shows a web page. If it is your server's sign-in, sign in; otherwise check the address.") and offer "Sign in",
+    /// which opens the sign-in window on <c>Url</c>, titled with <c>Origin</c>. After each navigation that lands on <c>Origin</c>, hand
+    /// the window's cookies over (<see cref="AddServerFlow.SubmitCookiesAsync"/>). <c>Redirected</c>: a redirect to another host or
+    /// port, which may be a moved server: also offer "Use the address it points to" (<see cref="AddServerFlow.FollowRedirectAsync"/>),
+    /// naming <c>LocationOrigin</c> when known.
+    /// </summary>
+    public sealed record GatewaySignIn(string Url, string Origin, bool Redirected, string? LocationOrigin, bool PlainHttp)
+        : AddServerState;
+    /// <summary>
+    /// The gateway refuses without a sign-in: offer "Advanced: extra headers" (<see cref="AddServerFlow.SubmitHeadersAsync"/>) with
+    /// an explanation.
+    /// </summary>
+    public sealed record GatewayRefused(string Origin, bool PlainHttp) : AddServerState;
+    /// <summary>The address asks for a sign-in method Current does not support.</summary>
+    public sealed record GatewayUnsupported(string Origin) : AddServerState;
+}
+
+/// <summary>
+/// A cookie the sign-in window's web view holds, read after a navigation (ADR 0017). <c>Domain</c> as the web view reports it: with
+/// a leading dot for a domain cookie. <c>Expires</c> is null for a session cookie. Its text form shows no name and no value.
+/// </summary>
+public sealed record GatewayCookie(
+    string Name, string Value, string Domain, string Path, bool Secure, bool HttpOnly, DateTimeOffset? Expires)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("[redacted]");
+        return true;
+    }
+}
+
+/// <summary>An extra header the user typed (advanced, ADR 0017). Its text form shows no name and no value.</summary>
+public sealed record GatewayHeader(string Name, string Value)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("[redacted]");
+        return true;
+    }
+}
+
+/// <summary>
+/// Where signing in to a saved server's gateway again stands (ADR 0017). As <see cref="AddServerState"/>'s gateway states:
+/// <c>Realm</c> only as "The site says: ...".
+/// </summary>
+public abstract record GatewaySignInState
+{
+    private GatewaySignInState() { }
+
+    /// <summary>Asking the address what its gateway wants, or trying what was just given.</summary>
+    public sealed record Checking : GatewaySignInState;
+    public sealed record Password(string Origin, string? Realm, bool Wrong) : GatewaySignInState;
+    /// <summary>Open the sign-in window on <c>Url</c> and hand its cookies over after each navigation that lands on <c>Origin</c>.</summary>
+    public sealed record WebSignIn(string Url, string Origin, bool Redirected, string? LocationOrigin) : GatewaySignInState;
+    /// <summary>Extra headers (advanced).</summary>
+    public sealed record Refused(string Origin) : GatewaySignInState;
+    public sealed record Unsupported(string Origin) : GatewaySignInState;
+    /// <summary>Signed in to the gateway again and saved: the session goes on. <c>Remembered</c> is false when the keyring refused.</summary>
+    public sealed record Done(bool Remembered) : GatewaySignInState;
+    public sealed record Failed(GatewaySignInProblem Problem) : GatewaySignInState;
 }
 
 /// <summary>Where the search for local servers stands. Servers are listed in the order they answered.</summary>
@@ -83,7 +152,46 @@ public sealed class AddServerFlow : IDisposable
     /// <summary>Confirms plain http when the state asks for it. False in any other state.</summary>
     public bool ConfirmPlainHttp() => _flow.ConfirmPlainHttp();
 
-    /// <summary>Back to Idle, dropping a running probe.</summary>
+    /// <summary>
+    /// The gateway's user name and password, in GatewayPassword: the address is probed again with them, never with a Jellyfin token.
+    /// <paramref name="confirmPlainHttp"/> is the user's agreement where the state says <c>PlainHttp</c>. Cancelling stops only the
+    /// waiting: the probe ends and sets the state.
+    /// </summary>
+    /// <exception cref="FlowNotReadyException">The state does not ask for a password.</exception>
+    /// <exception cref="GatewayInputException">They cannot be used, or plain http is not confirmed: nothing was sent.</exception>
+    public Task SubmitPasswordAsync(string user, string password, bool confirmPlainHttp, CancellationToken ct = default) =>
+        CoreCall.RunVoidAsync(token => _flow.SubmitPassword(user, password, confirmPlainHttp, token), ct);
+
+    /// <summary>
+    /// The sign-in window's cookies, in GatewaySignIn, after each navigation that lands on the state's <c>Origin</c>. Pass every
+    /// cookie the web view holds: only those that apply to the server's address are kept. The state moves on once they let the
+    /// server through; until then keep the window open.
+    /// </summary>
+    /// <exception cref="FlowNotReadyException">The state is not GatewaySignIn.</exception>
+    /// <exception cref="GatewayInputException">Plain http is not confirmed.</exception>
+    public Task SubmitCookiesAsync(IReadOnlyList<GatewayCookie> cookies, bool confirmPlainHttp, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(cookies);
+        var native = MapStates.ToFfi(cookies);
+        return CoreCall.RunVoidAsync(token => _flow.SubmitCookies(native, confirmPlainHttp, token), ct);
+    }
+
+    /// <summary>Extra headers (advanced), in GatewayPassword, GatewaySignIn or GatewayRefused.</summary>
+    /// <exception cref="FlowNotReadyException">No gateway state asks for them.</exception>
+    /// <exception cref="GatewayInputException">None given, a name Current sets itself, or a value outside visible ASCII.</exception>
+    public Task SubmitHeadersAsync(IReadOnlyList<GatewayHeader> headers, bool confirmPlainHttp, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(headers);
+        var native = MapStates.ToFfi(headers);
+        return CoreCall.RunVoidAsync(token => _flow.SubmitHeaders(native, confirmPlainHttp, token), ct);
+    }
+
+    /// <summary>"Use the address it points to", in GatewaySignIn after a redirect: probes it as if typed. The address stays in the core.</summary>
+    /// <exception cref="FlowNotReadyException">Not after a redirect, or the server sent no address.</exception>
+    public Task FollowRedirectAsync(CancellationToken ct = default) =>
+        CoreCall.RunVoidAsync(token => _flow.FollowRedirect(token), ct);
+
+    /// <summary>Back to Idle, dropping a running probe and the gateway credentials given so far.</summary>
     public void Reset() => _flow.Reset();
 
     /// <summary>A sign-in to the server the state is Ready with.</summary>
@@ -173,8 +281,88 @@ public sealed class SignInFlow : IDisposable
     public void Dispose() => _flow.Dispose();
 }
 
+/// <summary>
+/// Signing in to a saved server's gateway again, when its status says <c>GatewaySignInNeeded</c> (ADR 0017). Call
+/// <see cref="StartAsync"/> first. One per sign-in window or prompt; dispose it with them.
+/// </summary>
+public sealed class GatewaySignInFlow : IDisposable
+{
+    private readonly Ffi.GatewaySignInFlow _flow;
+
+    internal GatewaySignInFlow(Ffi.GatewaySignInFlow flow)
+    {
+        _flow = flow;
+    }
+
+    public GatewaySignInState State => MapStates.From(_flow.State());
+
+    /// <summary>The state, mirrored on the UI thread. Dispose it when the window goes away.</summary>
+    public ValueSubscription<GatewaySignInState> ObserveState(IUiDispatcher ui)
+    {
+        var subscription = new ValueSubscription<GatewaySignInState>(State);
+        subscription.Attach(_flow.SubscribeState(new GatewaySignInStateForwarder(subscription, ui)));
+        return subscription;
+    }
+
+    /// <summary>Asks the address what its gateway wants: a gateway state, or Done when it lets the server through already.</summary>
+    public Task StartAsync(CancellationToken ct = default) => CoreCall.RunVoidAsync(token => _flow.Start(token), ct);
+
+    /// <summary>The gateway's user name and password, in Password.</summary>
+    /// <exception cref="FlowNotReadyException">The state does not ask for a password.</exception>
+    /// <exception cref="GatewayInputException">They cannot be used: nothing was sent.</exception>
+    public Task SubmitPasswordAsync(string user, string password, CancellationToken ct = default) =>
+        CoreCall.RunVoidAsync(token => _flow.SubmitPassword(user, password, token), ct);
+
+    /// <summary>The sign-in window's cookies, in WebSignIn, after each navigation that lands on the state's <c>Origin</c>.</summary>
+    /// <exception cref="FlowNotReadyException">The state is not WebSignIn.</exception>
+    public Task SubmitCookiesAsync(IReadOnlyList<GatewayCookie> cookies, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(cookies);
+        var native = MapStates.ToFfi(cookies);
+        return CoreCall.RunVoidAsync(token => _flow.SubmitCookies(native, token), ct);
+    }
+
+    /// <summary>Extra headers (advanced), in Password, WebSignIn or Refused.</summary>
+    /// <exception cref="FlowNotReadyException">No state asks for them.</exception>
+    /// <exception cref="GatewayInputException">None given, a reserved name, or a value outside visible ASCII.</exception>
+    public Task SubmitHeadersAsync(IReadOnlyList<GatewayHeader> headers, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(headers);
+        var native = MapStates.ToFfi(headers);
+        return CoreCall.RunVoidAsync(token => _flow.SubmitHeaders(native, token), ct);
+    }
+
+    /// <summary>Stops the flow (the window or prompt closed): a running attempt's result is dropped.</summary>
+    public void Cancel() => _flow.Cancel();
+
+    public void Dispose() => _flow.Dispose();
+}
+
 internal static class MapStates
 {
+    public static Ffi.GatewayCookie[] ToFfi(IReadOnlyList<GatewayCookie> cookies) => cookies
+        .Select(c => new Ffi.GatewayCookie(
+            c.Name, c.Value, c.Domain, c.Path, c.Secure, c.HttpOnly, c.Expires?.ToUnixTimeMilliseconds()))
+        .ToArray();
+
+    public static Ffi.GatewayHeader[] ToFfi(IReadOnlyList<GatewayHeader> headers) => headers
+        .Select(h => new Ffi.GatewayHeader(h.Name, h.Value))
+        .ToArray();
+
+    public static GatewaySignInState From(Ffi.GatewaySignInState state) => state switch
+    {
+        Ffi.GatewaySignInState.Checking => new GatewaySignInState.Checking(),
+        Ffi.GatewaySignInState.Password password =>
+            new GatewaySignInState.Password(password.Origin, password.Realm, password.Wrong),
+        Ffi.GatewaySignInState.WebSignIn web =>
+            new GatewaySignInState.WebSignIn(web.Url, web.Origin, web.Redirected, web.LocationOrigin),
+        Ffi.GatewaySignInState.Refused refused => new GatewaySignInState.Refused(refused.Origin),
+        Ffi.GatewaySignInState.Unsupported unsupported => new GatewaySignInState.Unsupported(unsupported.Origin),
+        Ffi.GatewaySignInState.Done done => new GatewaySignInState.Done(done.Remembered),
+        Ffi.GatewaySignInState.Failed failed => new GatewaySignInState.Failed(MapProblems.From(failed.Problem)),
+        _ => throw new ArgumentException($"unknown state {state.GetType().Name}", nameof(state)),
+    };
+
     public static NewServerInfo From(Ffi.NewServerInfo server) =>
         new(server.Id, server.Name, server.Version, server.Product, server.HttpsFailedTls);
 
@@ -188,6 +376,12 @@ internal static class MapStates
         Ffi.AddServerState.Failed failed => new AddServerState.Failed(MapProblems.From(failed.Problem)),
         Ffi.AddServerState.ConfirmPlainHttp confirm => new AddServerState.ConfirmPlainHttp(From(confirm.Server)),
         Ffi.AddServerState.Ready ready => new AddServerState.Ready(From(ready.Server)),
+        Ffi.AddServerState.GatewayPassword password =>
+            new AddServerState.GatewayPassword(password.Origin, password.Realm, password.Wrong, password.PlainHttp),
+        Ffi.AddServerState.GatewaySignIn web =>
+            new AddServerState.GatewaySignIn(web.Url, web.Origin, web.Redirected, web.LocationOrigin, web.PlainHttp),
+        Ffi.AddServerState.GatewayRefused refused => new AddServerState.GatewayRefused(refused.Origin, refused.PlainHttp),
+        Ffi.AddServerState.GatewayUnsupported unsupported => new AddServerState.GatewayUnsupported(unsupported.Origin),
         _ => throw new ArgumentException($"unknown state {state.GetType().Name}", nameof(state)),
     };
 
@@ -229,4 +423,10 @@ internal sealed class SignInStateForwarder(ValueSubscription<SignInState> target
     : ValueForwarder<Ffi.SignInState, SignInState>(target, ui, MapStates.From), Ffi.SignInStateListener
 {
     public void OnValue(Ffi.SignInState value) => Forward(value);
+}
+
+internal sealed class GatewaySignInStateForwarder(ValueSubscription<GatewaySignInState> target, IUiDispatcher ui)
+    : ValueForwarder<Ffi.GatewaySignInState, GatewaySignInState>(target, ui, MapStates.From), Ffi.GatewaySignInStateListener
+{
+    public void OnValue(Ffi.GatewaySignInState value) => Forward(value);
 }
