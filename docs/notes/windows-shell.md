@@ -685,3 +685,21 @@ the run: 6-8 are 1-3 above, 9 is approving the code from another Jellyfin client
     Narrator says "Remove <name>, button" each time.
 
 New finding from the owner during the run (not fixed here): add a copy button for the Quick Connect code, next to `CodeText`. Cases 8 and 9 and the copy button were fixed afterwards in the same branch (owner, 2026-10-24); cases 3-6 above check them.
+
+### Windows run (2026-10-24, cases 1-6)
+Heads fix/narrator-quick-connect-code 9d970f8 and fix/windows-window-chrome 2be79a6, merged in a throwaway local worktree (never
+pushed) and built with the four scripts: binding tests 34 passed, smoke run passed. Windows 11 26H2, 10.0.26300.9711, x64, display
+scale 150%; the cases ran `out/app/Current.exe` with the saved server, signed out first from Settings. Cases 1-6 above (6-11 in
+the run); the owner ran them with Narrator and reported that everything worked as described.
+1. **Pass.** "Use Quick Connect": the code was read digit by digit, once, and not again as a number. Whether "Cancel, button" was
+   also read was not noted.
+2. **Pass.** Cancel, then "Use Quick Connect" again: the new code was read digit by digit, once.
+3. **Pass.** In scan mode, arrowing to the code: "Quick Connect code" and the digits, once, not the number again. With Narrator off,
+   the code could be selected with the mouse and copied with Ctrl+C.
+4. **Pass.** Tab to "Copy": "Copy code, button". Pressed: "Code copied to the clipboard." was shown and read. Pasted into Notepad
+   (not saved, then deleted): the bare code (6 digits).
+5. **Pass.** Approved from another Jellyfin client: Home opened and Narrator read "Signed in to <server> as <user>.", once, whole.
+   What else was read, and in which order, was not noted.
+6. **Pass.** Signed out, then signed in with the password: the same announcement.
+No new finding about Narrator; the window chrome findings of this run are under "Window chrome: owner's check" on
+fix/windows-window-chrome.
