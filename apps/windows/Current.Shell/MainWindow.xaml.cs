@@ -41,6 +41,11 @@ public sealed partial class MainWindow : Window
 
     private FrameworkElement? _paneToggleButton;
 
+    /// <summary>The navigation view's content layer: ContentGrid, the content of its template part RootSplitView.</summary>
+    private Grid? _contentLayer;
+
+    private readonly SolidColorBrush _transparent = new(Microsoft.UI.Colors.Transparent);
+
     public MainWindow()
     {
         InitializeComponent();
@@ -61,6 +66,8 @@ public sealed partial class MainWindow : Window
         Activated += OnActivated;
         Root.Loaded += OnRootLoaded;
         Notices.Margin = PageLayout.NoticesMargin;
+        // A handler of its own, so the one that keeps the selection and header in step stays as it is.
+        ContentFrame.Navigated += (_, _) => ApplyContentLayer();
 
         NavView.SelectedItem = HomeItem;
         Navigate(typeof(HomePage), new EntranceNavigationTransitionInfo());
@@ -80,6 +87,8 @@ public sealed partial class MainWindow : Window
         Root.Loaded -= OnRootLoaded;
         // A window that opens narrow stays in the navigation view's initial Minimal mode, which raises no DisplayModeChanged.
         ApplyDisplayMode(NavView.DisplayMode);
+        ApplyContentLayer();
+        DispatcherQueue.TryEnqueue(NamePaneToggleButton);
         ApplyMinimumSize();
         // The scale changes when the window moves to a display with another scale or the user changes it.
         Root.XamlRoot.Changed += (_, _) => ApplyMinimumSize();
@@ -104,20 +113,37 @@ public sealed partial class MainWindow : Window
     private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) =>
         ApplyDisplayMode(args.DisplayMode);
 
-    /// <summary>
-    /// With the full pane shown there is no pane button, as in Windows Settings (the owner's run, 2026-10-24). On a narrower window the
-    /// pane hides and the title bar's pane button opens it over the content; the page's insets follow (PageLayout).
-    /// </summary>
+    /// <summary>The page's insets follow the display mode: only Minimal hides both the pane and the icon rail (PageLayout).</summary>
     private void ApplyDisplayMode(NavigationViewDisplayMode mode)
     {
-        var expanded = mode == NavigationViewDisplayMode.Expanded;
-        AppTitleBar.IsPaneToggleButtonVisible = !expanded;
-        PageLayout.SetMinimal(!expanded);
+        PageLayout.SetMinimal(mode == NavigationViewDisplayMode.Minimal);
         Notices.Margin = PageLayout.NoticesMargin;
-        if (!expanded)
+    }
+
+    /// <summary>
+    /// Shows the content layer behind content pages and Mica behind pages of settings cards (PageLayout.HasContentLayer). The layer
+    /// is the template's ContentGrid, whose Background and BorderBrush come from ThemeResources (NavigationViewContentBackground,
+    /// NavigationViewContentGridBorderBrush; NavigationView.xaml, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) and
+    /// no visual state sets either. A local value hides them; ClearValue brings the template's values back, which rank below local
+    /// ones ("Dependency properties overview", learn.microsoft.com, ms.date 2026-07-27, read 2026-10-24).
+    /// </summary>
+    private void ApplyContentLayer()
+    {
+        // The template's items name parts "ContentGrid" too, so the layer is taken from the SplitView it is the content of.
+        _contentLayer ??= (FindDescendant(NavView, "RootSplitView") as SplitView)?.Content as Grid;
+        if (_contentLayer is null || ContentFrame.Content is not Page page)
         {
-            // The title bar loads its pane button when it is first shown; name it once it is there.
-            DispatcherQueue.TryEnqueue(NamePaneToggleButton);
+            return;
+        }
+        if (PageLayout.GetHasContentLayer(page))
+        {
+            _contentLayer.ClearValue(Panel.BackgroundProperty);
+            _contentLayer.ClearValue(Grid.BorderBrushProperty);
+        }
+        else
+        {
+            _contentLayer.Background = _transparent;
+            _contentLayer.BorderBrush = _transparent;
         }
     }
 

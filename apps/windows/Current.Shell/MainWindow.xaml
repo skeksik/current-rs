@@ -26,7 +26,7 @@
             IsBackButtonVisible="True"
             IsBackButtonEnabled="False"
             BackRequested="OnTitleBarBackRequested"
-            IsPaneToggleButtonVisible="False"
+            IsPaneToggleButtonVisible="True"
             PaneToggleRequested="OnTitleBarPaneToggleRequested">
             <!-- A disabled back button keeps its transparent background and only dims its glyph, as the navigation view's own back
                  button does: its Disabled state sets only the glyph's foreground (NavigationBackButton.xaml), while the title bar's
@@ -55,15 +55,14 @@
             </TitleBar.Resources>
         </TitleBar>
 
-        <!-- The full pane on a wide window; below 1008 px it hides and opens over the content from the title bar's pane button
-             (MainWindow.xaml.cs). Equal thresholds leave out the Compact stage: the NavigationView page's "Minimal" adaptive
-             behaviour (learn.microsoft.com, ms.date 2026-10-02, read 2026-10-24); 1008 is its default for the expanded pane. -->
+        <!-- The navigation view's own adaptive behaviour, as in Task Manager (owner, 2026-10-24): the full pane from 1008 px, the
+             icon rail from 641 px, hidden below that (the default thresholds, NavigationView page, learn.microsoft.com, ms.date
+             2026-10-02, read 2026-10-24). The title bar's pane button opens and closes it: inline on a wide window, over the
+             content on a narrower one. -->
         <NavigationView
             x:Name="NavView"
             Grid.Row="1"
             PaneDisplayMode="Auto"
-            CompactModeThresholdWidth="1008"
-            ExpandedModeThresholdWidth="1008"
             IsBackButtonVisible="Collapsed"
             IsPaneToggleButtonVisible="False"
             IsSettingsVisible="True"

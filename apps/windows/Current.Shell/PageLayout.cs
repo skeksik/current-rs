@@ -4,11 +4,12 @@ using Microsoft.UI.Xaml.Controls;
 namespace Current.Shell;
 
 /// <summary>
-/// One rule for the page title, the notices and every page column, in both of the navigation view's display modes
-/// (docs/notes/windows-shell.md, "Page layout"). They start at the same left inset: 56 px with the pane shown (Expanded), where the
-/// navigation view puts its header (NavigationViewHeaderMargin 56,44,0,0), and 24 px with the pane hidden (Minimal), where
-/// MainWindow.xaml moves the header (NavigationViewMinimalHeaderMargin). The right inset is 24 px in both, so a narrow window has
-/// equal margins at both edges. The content starts 24 px below the title. A page marks its column Grid with
+/// One rule for the page title, the notices and every page column in each of the navigation view's display modes
+/// (docs/notes/windows-shell.md, "Page layout"). They start at the same left inset: 56 px from the content's left edge while the
+/// full pane or the icon rail shows (Expanded, open or closed, and Compact), where the navigation view puts its header
+/// (NavigationViewHeaderMargin 56,44,0,0), and 24 px from the window's edge with the pane hidden (Minimal), where MainWindow.xaml
+/// moves the header (NavigationViewMinimalHeaderMargin). The right inset is 24 px in all of them, so a narrow window has equal
+/// margins at both edges. The content starts 24 px below the title. A page marks its column Grid with
 /// <c>shell:PageLayout.IsColumn="True"</c>; MainWindow calls <see cref="SetMinimal"/> when the display mode changes. That Grid has
 /// one star column with the page's MaxWidth, so the column fills the width up to that maximum and stays at the left: a StackPanel
 /// with HorizontalAlignment="Left" would size to its content instead, and one stretched with a MaxWidth centres.
@@ -21,6 +22,14 @@ public static class PageLayout
     private const double TitleGap = 24;
     private const double Bottom = 24;
 
+    /// <summary>
+    /// Whether a page shows the navigation view's content layer (its background, border and rounded corner): content pages do, as
+    /// Task Manager's Users page does; pages made of settings cards set it to false and show the window's Mica, as the pane does
+    /// (owner, 2026-10-24). MainWindow reads it on every navigation.
+    /// </summary>
+    public static readonly DependencyProperty HasContentLayerProperty = DependencyProperty.RegisterAttached(
+        "HasContentLayer", typeof(bool), typeof(PageLayout), new PropertyMetadata(true));
+
     public static readonly DependencyProperty IsColumnProperty = DependencyProperty.RegisterAttached(
         "IsColumn", typeof(bool), typeof(PageLayout), new PropertyMetadata(false, OnIsColumnChanged));
 
@@ -28,6 +37,10 @@ public static class PageLayout
     private static readonly List<WeakReference<Grid>> Columns = [];
 
     private static bool _minimal;
+
+    public static bool GetHasContentLayer(Page element) => (bool)element.GetValue(HasContentLayerProperty);
+
+    public static void SetHasContentLayer(Page element, bool value) => element.SetValue(HasContentLayerProperty, value);
 
     public static bool GetIsColumn(Grid element) => (bool)element.GetValue(IsColumnProperty);
 

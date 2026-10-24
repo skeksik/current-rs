@@ -75,30 +75,43 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   2026-10-13, read 2026-10-22): "Fluent Design guidance recommends that these controls be placed in the title bar when a custom title
   bar is used." So the NavigationView's back and pane toggle buttons are hidden and the TitleBar's are used, enabled from
   `Frame.CanGoBack`.
-- **Pane: full on a wide window, hidden on a narrow one (like Windows Settings, owner's run 2026-10-24).** `PaneDisplayMode="Auto"`
-  with `CompactModeThresholdWidth` and `ExpandedModeThresholdWidth` both 1008. The NavigationView page (ms.date 2026-10-02, read
-  2026-10-24), "Minimal" adaptive behaviour: "an expanded left pane on large window widths, and only a menu button on both medium
-  and small window widths ... set CompactModeThresholdWidth to the width at which you want the pane to collapse ... You should also
-  set ExpandedModeThresholdWidth to ensure the values don't conflict"; its default is "An expanded left pane on large window widths
-  (1008px or greater)". `UpdateAdaptiveLayout` (`NavigationView.cpp`, tag winui3/release/2.5.1, read 2026-10-24) takes Expanded
-  when the width is at least the expanded threshold and Minimal below the compact one, so equal values leave no Compact stage;
-  Minimal puts the SplitView in Overlay, so the opened pane covers the page instead of pushing it, and the control closes the pane
-  when it enters Minimal. That Windows Settings has no Compact stage and hides its pane near 1008 px is not verified.
-  `DisplayModeChanged` (and the initial mode when the window loads, since a window that opens narrow stays in the initial Minimal
-  without the event) shows the title bar's pane button only outside Expanded, as the WinUI Gallery's `OnPaneDisplayModeChanged`
-  drives it (github.com/microsoft/WinUI-Gallery, main at 14061ee, read 2026-10-24). The button is named as the NavigationView names
-  its own, "Open Navigation" while the pane is closed and "Close Navigation" while it is open (`NavigationButtonClosedName` and
-  `NavigationButtonOpenName`, NavigationView's `Resources.resw`), with the same tooltip (manager, 2026-10-24). The TitleBar names it
-  "Toggle Navigation" whatever the state (`NavigationButtonToggleName`, `LoadPaneToggleButton` in `TitleBar.cpp`, same tag) and
-  has no property for it, so `MainWindow` looks up its template part `PART_PaneToggleButton` and sets the name on `PaneOpened` and
-  `PaneClosed`. A future WinUI that renames that part leaves the default name; nothing fails.
-  Disabled, the TitleBar fills its back button (`TitleBarBackButtonBackgroundDisabled` is `ControlFillColorDisabledBrush` in
-  `TitleBar_themeresources.xaml`), while the NavigationView's own back button keeps its transparent background and only dims the
-  glyph (its Disabled state sets only the foreground, `NavigationBackButton.xaml`; both microsoft-ui-xaml, tag
-  winui3/release/2.5.1, read 2026-10-23). The owner saw the transparent one in Windows Settings (2026-10-23), so `MainWindow.xaml`
-  overrides that one resource on the TitleBar with `SubtleFillColorTransparentBrush`, the enabled value (lightweight styling);
-  high contrast keeps the control's value, which already equals its enabled one. That the 2.5.1 tag is the source of the
-  `Microsoft.WindowsAppSDK.WinUI` 2.3.9 package is not verified.
+- **Pane: the navigation view's own three stages, like Task Manager (owner, 2026-10-24).** `PaneDisplayMode="Auto"` with the default
+  thresholds. The NavigationView page (learn.microsoft.com, ms.date 2026-10-02, read 2026-10-24): "An expanded left pane on large
+  window widths (1008px or greater)", "A left, icon-only, nav pane (`LeftCompact`) on medium window widths (641px to 1007px)",
+  "Only a menu button (`LeftMinimal`) on small window widths (640px or less)". In the template (`UpdateVisualStateForDisplayModeGroup`,
+  `NavigationView.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) Expanded is a `CompactInline` SplitView, so
+  closing the pane there leaves the icon rail and the content moves with it; Compact is `CompactOverlay` and Minimal `Overlay`, so
+  the pane opened there covers the content. The title bar's pane button is always shown (the WinUI Gallery shows it in every left
+  mode, `OnPaneDisplayModeChanged`, github.com/microsoft/WinUI-Gallery, main at 14061ee, read 2026-10-24) and flips
+  `NavView.IsPaneOpen`.
+  - Remembering a closed pane: the navigation view does it for the run. Closing the pane through `IsPaneOpen` while it is open
+    sets `m_wasForceClosed` (`OnIsPaneOpenChanged`), and on entering Expanded it reopens the pane only without that flag
+    (`UpdateAdaptiveLayout`); a close caused by resizing does not set it, and changing `PaneDisplayMode` clears it (same file).
+    Nothing is stored between runs, and no code of ours is involved. One consequence, as with the navigation view's own button
+    (`OnPaneToggleButtonClick`): opening the pane over the content on a medium window and closing it with the button keeps the
+    rail when the window is widened; closing it by clicking the page (light dismiss) does not.
+  - The button is named as the NavigationView names its own, "Open Navigation" while the pane is closed and "Close Navigation"
+    while it is open (`NavigationButtonClosedName` and `NavigationButtonOpenName`, NavigationView's `Resources.resw`), with the
+    same tooltip (manager, 2026-10-24). The TitleBar names it "Toggle Navigation" whatever the state (`NavigationButtonToggleName`,
+    `LoadPaneToggleButton` in `TitleBar.cpp`, same tag) and has no property for it, so `MainWindow` looks up its template part
+    `PART_PaneToggleButton` after loading and sets the name on `PaneOpened` and `PaneClosed`. A future WinUI that renames that
+    part leaves the default name; nothing fails.
+  - That Task Manager uses the same thresholds is not verified, the owner compares with Task Manager.
+- **Background per page (owner, 2026-10-24, Task Manager as the reference).** Content pages (Home, Add a server, Sign in) show the
+  navigation view's content layer, as Task Manager's Users page does; pages made of settings cards (Settings) show Mica, as the
+  pane does. The layer is the template part `ContentGrid`, the `Content` of `RootSplitView` (`NavigationView.xaml`, same tag; the item templates name parts `ContentGrid` too, so `MainWindow` takes it from the SplitView): `<Grid x:Name="ContentGrid"
+  BorderBrush="{ThemeResource NavigationViewContentGridBorderBrush}" BorderThickness="{ThemeResource
+  NavigationViewContentGridBorderThickness}" Background="{ThemeResource NavigationViewContentBackground}" Margin="{ThemeResource
+  NavigationViewContentMargin}" CornerRadius="{ThemeResource NavigationViewContentGridCornerRadius}">`, with
+  `LayerFillColorDefaultBrush`, `CardStrokeColorDefaultBrush`, a 1,1,0,0 border and an 8,0,0,0 corner
+  (`NavigationView_themeresources.xaml`); the Minimal state sets the border to 0,1,0,0 and the corner to 0. It holds the header and
+  the Frame and lies inside the NavigationView, which is below our TitleBar's row, so the layer starts under the title bar. A page
+  sets `shell:PageLayout.HasContentLayer="False"` (Settings); on each navigation `MainWindow` sets `ContentGrid`'s `Background` and
+  `BorderBrush` to transparent for such a page (the navigation view has no background of its own, so the window's Mica shows) and
+  clears them for the others. No visual state sets either property, and the template's values return on `ClearValue`: "the
+  template-set values must be distinguishable from a true local value, so that any new local value can overwrite it" ("Dependency
+  properties overview", learn.microsoft.com, ms.date 2026-07-27, read 2026-10-24). A theme switch while Settings shows is not
+  verified on screen. That the layer matches Task Manager's is not verified, the owner compares with Task Manager.
 - **Alt+Left, the GoBack key and the mouse Back button** call the same `TryGoBack`; **Alt+Right and the mouse Forward button** call
   `TryGoForward` (`Frame.GoForward` when `CanGoForward`). The WinUI 3 page "Navigation history and backwards navigation" (ms.date
   2026-09-19, read 2026-10-22) no longer lists these inputs; the UWP page (learn.microsoft.com/windows/uwp/ui-input/back-navigation,
@@ -175,12 +188,14 @@ Sources, read 2026-10-23 on learn.microsoft.com: "Dialog controls" (ms.date 2026
 2025-02-26), "InfoBar" (ms.date 2025-02-26), "Guidelines for progress controls" (ms.date 2026-07-08), "Guidelines for app settings"
 (ms.date 2026-04-08), "Keyboard accessibility" (ms.date 2026-10-04). Each screen renders the core's state and sends the user's
 actions; nothing is decided in C#.
-- **Page layout:** each page's content is one column left-aligned under the page title, not centred. One rule in both display
-  modes (`PageLayout.cs`): the page title, the notices and the column start at the same left inset, the column keeps 24 px on its
-  right and below, and its first item (a card or a section header) is 24 px below the title on every page.
-  - Expanded (window 1008 px or wider, pane shown): left 56 px, where the NavigationView puts its header
-    (`NavigationViewHeaderMargin` 56,44,0,0, `NavigationView_themeresources.xaml`, microsoft-ui-xaml, tag winui3/release/2.5.1,
-    read 2026-10-23); right 24.
+- **Page layout:** each page's content is one column left-aligned under the page title, not centred. One rule in every display
+  mode (`PageLayout.cs`): the page title, the notices and the column start at the same left inset, the column keeps 24 px on its
+  right and below, and its first item (a card or a section header) is 24 px below the title on every page. On a content page all
+  of it sits inside the content layer.
+  - Expanded with the pane open, and Expanded with it closed or Compact (the 48 px icon rail): left 56 px from the content's left
+    edge, that is from the pane or the rail, where the NavigationView puts its header (`NavigationViewHeaderMargin` 56,44,0,0,
+    `NavigationView_themeresources.xaml`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-23; the Expanded and Compact
+    states leave the header's margin as it is, and the content starts after the pane or the rail in both); right 24.
   - Minimal (narrower, pane hidden): left and right 24 px, equal margins at both window edges (owner's run, 2026-10-24). The
     control's own Minimal header margin is -24,44,0,0 (same file, read 2026-10-24), which assumes its pane and back buttons to the
     header's left; those are hidden here, so `MainWindow.xaml` sets `NavigationViewMinimalHeaderMargin` to 24,44,0,0 on `NavView`.
@@ -193,7 +208,7 @@ actions; nothing is decided in C#.
     value on every page (manager, 2026-10-24). Windows Settings' own gap is not verified.
   - A static resource cannot change with the display mode, so each page marks its column `Grid` with
     `shell:PageLayout.IsColumn="True"`; `PageLayout` sets its padding and keeps a weak reference, and `MainWindow` calls
-    `PageLayout.SetMinimal` on `DisplayModeChanged`, which updates the live columns and the notices' margin.
+    `PageLayout.SetMinimal` on `DisplayModeChanged` (true only for Minimal), which updates the live columns and the notices' margin.
   The column is a `Grid` with that padding and one `*` column with a `MaxWidth`: the column fills the page up to its maximum and
   stays at the left. Max widths, padding included: Settings and Home 1000 px (column 920; "a scrollable layout with a constrained
   max width (around 1000–1100 px)", "Guidelines for app settings"), Add a server 640 (560), Sign in 480 (400). Why not a
@@ -452,7 +467,7 @@ upload-artifact step in `ci.yml`), or `apps/windows/out/app/Current.exe`:
 4. Back and forward: go Home -> Settings, then back with the title bar's back button, Alt+Left, and a mouse Back button; each
    returns to Home, and at Home with an empty back stack the back button is disabled (after Home -> Settings -> Home it stays
    enabled, as in Windows Settings). After going back, Alt+Right and a mouse Forward button return to
-   Settings. Narrow the window below 1008 px: the pane hides, and "Open Navigation" in the title bar opens it over the page.
+   Settings. Narrow the window below 641 px: the pane hides, and "Open Navigation" in the title bar opens it over the page.
 5. Keyboard only: Tab reaches the back button, the pane and the settings controls; Narrator reads them by name.
 6. Start a second copy (from Start or the exe): no second window; the first one comes to the front, also when minimised.
 7. Taskbar and Start show "Current" with the app's name (not "Current.exe"); pin to the taskbar and start from the pin.
@@ -679,27 +694,39 @@ New findings from the owner during the run (not fixed here):
 
 ## Window chrome: owner's check
 The findings of the Windows run of 2026-10-24 above, fixed on fix/windows-window-chrome: the gap under the page title, the pane, the
-title bar's height, a minimum window size, and "All rights reserved.". Compare each width side by side with Windows Settings >
-Accessibility, in light and dark theme. Widths are effective pixels (at 150% scale, 1008 px is 1512 physical).
-1. Wide window (wider than 1008 px, e.g. maximised):
-   - The full pane shows, and the title bar has the back button but no pane button.
-   - The title bar is as tall as Windows Settings', and the caption buttons (minimise, maximise, close) fill its height; it still
-     drags, double-click maximises, and snap layouts show on hovering maximise.
+background per page, the title bar's height, a minimum window size, and "All rights reserved.". Pane and background: compare side by
+side with Task Manager; title gap and title bar: with Windows Settings > Accessibility. Light and dark theme. Widths are effective
+pixels (at 150% scale, 1008 px is 1512 physical and 641 is 962).
+1. Wide window (1008 px or wider, e.g. maximised):
+   - The full pane shows, and the title bar has the back button and the pane button. Narrator reads the pane button as "Close
+     Navigation" and its tooltip says the same.
+   - Press it: the pane narrows to the icon rail and the page moves left with it (nothing covers the page); the button now reads
+     "Open Navigation". Press it again: the full pane returns and the page moves back. Same as Task Manager.
+   - Close the pane, narrow the window to medium and widen it again: the pane stays a rail. Restart the app: it opens with the
+     full pane (nothing is remembered between runs).
+   - The title bar is as tall as Windows Settings', and the caption buttons fill its height; it still drags, double-click
+     maximises, and snap layouts show on hovering maximise.
    - On Home (with a server), Settings, Add a server and Sign in, the first card, section header or text sits the same distance
-     below the page title on every page, about as far as on Windows Settings' Accessibility page. The content still starts under
-     the title (56 px from the pane), and a notice, if one shows, lines up with it.
+     below the page title on every page, about as far as on Windows Settings' Accessibility page. The title and the content start
+     56 px from the pane (or the rail), and a notice, if one shows, lines up with them.
    - Settings > About, expanded: "© 2026 Skeksik. All rights reserved."
-2. Just narrower than 1008 px (drag the window's edge slowly from wide):
-   - The pane hides as the window crosses that width; there is no stage with an icon-only pane.
-   - A pane button appears in the title bar after the back button. Narrator reads it as "Open Navigation" and its tooltip says the
-     same; pressed, the pane opens over the page (the page does not move), and the button then reads "Close Navigation". Esc, a
-     click on the page, or the button closes it; choosing Home or Settings in it navigates and closes it.
-   - With the pane closed, the page title, the content and any notice start 24 px from the left edge of the window, and the content
-     keeps the same 24 px at the right edge.
-   - With the pane open, Alt+Left and the mouse Back button do not go back (as before); with it closed, they do.
-   - Widen past 1008 px again: the full pane returns and the pane button goes away.
-3. The minimum (drag a corner inwards as far as it goes): the window stops at 500 × 500 px. On each page nothing is cut off at the
+2. Medium window (641 to 1007 px):
+   - The icon rail shows; no stage with the full pane pushing the page. The pane button opens the full pane over the page (the
+     page does not move); Esc, a click on the page, or the button closes it, and choosing Home or Settings in it navigates.
+   - The title and content start 56 px from the rail.
+3. Small window (below 641 px, down to the minimum):
+   - No pane and no rail; the pane button opens the pane over the page.
+   - With the pane closed, the page title, the content and any notice start 24 px from the window's left edge, and the content
+     keeps 24 px at the right edge.
+   - With the pane open (medium or small), Alt+Left and the mouse Back button do not go back (as before); with it closed, they do.
+4. Background, at each width: Home, Add a server and Sign in show the content layer: a lighter (or, in dark theme, slightly
+   different) surface with a thin border and a rounded top-left corner, starting just below the title bar, as on Task Manager's
+   Users page. Settings shows no layer: the same Mica as the pane, with no border. Go Home -> Settings -> Home: the layer goes and
+   comes back each time. Switch light/dark on Settings and go Home: the layer has the new theme's colours. At the small width
+   the layer has a top border only and no rounded corner (the navigation view's Minimal state).
+5. The minimum (drag a corner inwards as far as it goes): the window stops at 500 × 500 px. On each page nothing is cut off at the
    right edge and there is no horizontal scroll bar: the cards and boxes shrink, and the title bar still shows the back and pane
    buttons, "Current" and the caption buttons. Move the window to a display with another scale (or change the scale): the minimum
    stays 500 × 500 effective px. Note how narrow Windows Settings goes, for comparison.
-
+Anything above that cannot be measured is not verified: the owner compares with Task Manager (pane, layer) or Windows Settings
+(title gap, title bar height).
