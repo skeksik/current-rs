@@ -178,10 +178,22 @@ public sealed class ServerRow : INotifyPropertyChanged
     /// <summary>"Signed in as …" or "Signed out".</summary>
     public string Account { get; private set; } = "";
 
-    /// <summary>"Connected", "Can't reach the server" or "Checking…", plus "address 2 of 3" when there is more than one.</summary>
+    /// <summary>
+    /// "Connected", "Can't reach the server" or "Checking…", plus "address 2 of 3" when there is more than one; "Sign in to the gateway
+    /// again" when the gateway in front of the address wants that (ADR 0017).
+    /// </summary>
     public string Connection { get; private set; } = "";
 
     public bool SignedIn { get; private set; }
+
+    /// <summary>The gateway in front of the address in use wants a sign-in again; the session is kept (ADR 0017).</summary>
+    public bool GatewaySignInNeeded { get; private set; }
+
+    public Visibility GatewaySignInVisibility => GatewaySignInNeeded ? Visibility.Visible : Visibility.Collapsed;
+
+    public string GatewaySignInLabel => $"Sign in to the gateway of {Name}";
+
+    public string HeadersLabel => $"Edit extra headers for {Name}";
 
     public string UserName { get; private set; } = "";
 
@@ -211,13 +223,17 @@ public sealed class ServerRow : INotifyPropertyChanged
             Reachability.Unreachable => "Can't reach the server",
             _ => "Checking…",
         };
-        Connection = status?.AddressPosition is { } position && saved.AddressCount > 1
-            ? $"{reachability}, address {position} of {saved.AddressCount}"
-            : reachability;
+        GatewaySignInNeeded = status?.GatewaySignInNeeded ?? false;
+        Connection = GatewaySignInNeeded
+            ? "Sign in to the gateway again"
+            : status?.AddressPosition is { } position && saved.AddressCount > 1
+                ? $"{reachability}, address {position} of {saved.AddressCount}"
+                : reachability;
         foreach (var name in new[]
         {
             nameof(Name), nameof(Product), nameof(Account), nameof(Connection), nameof(SignedIn), nameof(UserName),
             nameof(SignInVisibility), nameof(SignOutVisibility), nameof(SignInLabel), nameof(SignOutLabel), nameof(RemoveLabel),
+            nameof(GatewaySignInNeeded), nameof(GatewaySignInVisibility), nameof(GatewaySignInLabel), nameof(HeadersLabel),
         })
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

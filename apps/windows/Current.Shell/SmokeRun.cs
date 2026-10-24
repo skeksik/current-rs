@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using Current.Bindings;
+using Current.Shell.Gateway;
 using Current.Shell.Pages;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -70,7 +72,8 @@ internal static class SmokeRun
             _ = new AddServerPage();
             _ = new SignInPage();
             _ = new SettingsPage();
-            Check(true, "home, add-server, sign-in and settings pages built");
+            _ = new ExtraHeadersEditor();
+            Check(true, "home, add-server, sign-in and settings pages and the extra headers editor built");
 
             // The network observer reads the facts without asking for anything; the facts themselves are not printed.
             var facts = NetworkObserver.Read();
@@ -109,6 +112,8 @@ internal static class SmokeRun
                 Check(applied, $"the {theme} app theme reaches the window and its caption buttons ({window.ActualTheme})");
             }
             await core.SetAppThemeAsync(AppTheme.System);
+            // While the main window is open: closing the sign-in window must not be the last window closing.
+            await SignInWindowChecksAsync(Check);
             window.Close();
             Check(true, "main window built");
         }
@@ -121,6 +126,91 @@ internal static class SmokeRun
         Console.Out.Flush();
         Program.SetExitCode(failures == 0 ? 0 : 1);
         Application.Current.Exit();
+    }
+
+    /// <summary>
+    /// The sign-in window against the Jellyfin stand-in's portal on 127.0.0.1 (ADR 0017), when <c>CURRENT_STAND_IN</c> names the built
+    /// stand-in (smoke.ps1 -StandIn, as CI runs it): setup finds the web sign-in; the window opens its page with the title and the
+    /// origin bar the state names (plain http, so the warning, not the lock); following the portal's link sets its HttpOnly cookie, the
+    /// window hands it over and setup reaches Ready; the throw-away profile is deleted after the window closes. Skipped, visibly,
+    /// without the stand-in.
+    /// </summary>
+    private static async Task SignInWindowChecksAsync(Action<bool, string> check)
+    {
+        var path = Environment.GetEnvironmentVariable("CURRENT_STAND_IN");
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+        {
+            Console.WriteLine("skip the sign-in window against the stand-in's portal: CURRENT_STAND_IN does not name the stand-in");
+            return;
+        }
+        var runtime = WebViewRuntime.Version();
+        check(runtime is not null, $"the WebView2 Runtime is installed ({runtime ?? "none"})");
+        if (runtime is null)
+        {
+            return;
+        }
+        using var standIn = Process.Start(new ProcessStartInfo(path)
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        }) ?? throw new InvalidOperationException("the stand-in did not start");
+        var folder = Path.Combine(Path.GetTempPath(), $"current-smoke-{Guid.NewGuid():N}");
+        try
+        {
+            var line = await standIn.StandardOutput.ReadLineAsync().WaitAsync(Timeout);
+            var address = line is { } listening && listening.StartsWith("listening ", StringComparison.Ordinal)
+                ? listening["listening ".Length..]
+                : throw new InvalidOperationException("the stand-in did not report its address");
+            await standIn.StandardInput.WriteLineAsync("gate portal");
+            await standIn.StandardInput.FlushAsync();
+
+            using var core = await CoreHost.OpenAsync(folder, "smoke", SecretStore.Memory);
+            using var flow = core.AddServer();
+            await flow.ProbeAsync(address);
+            check(flow.State is AddServerState.GatewaySignIn, $"setup finds the portal's web sign-in ({flow.State.GetType().Name})");
+            if (flow.State is not AddServerState.GatewaySignIn web)
+            {
+                return;
+            }
+            var window = new SignInWindow(web.Url, web.Origin, cookies => flow.SubmitCookiesAsync(cookies, false));
+            window.Activate();
+            var opened = await Task.WhenAny(window.FirstPage, Task.Delay(Timeout * 3)) == window.FirstPage && window.FirstPage.Result;
+            check(opened, "the sign-in window opens the portal's page");
+            var host = web.Origin["http://".Length..];
+            check(window.Title == $"Sign in to {host}", "its title names the server's origin");
+            var (origin, locked) = window.OriginShown;
+            check(origin == web.Origin && !locked, "its origin bar shows the origin, with the warning for plain http");
+            window.NavigateForTest($"{web.Url}/gate/sign-in");
+            var ready = await WaitUntilAsync(() => flow.State is AddServerState.Ready, Timeout * 3);
+            check(ready, $"after the portal's sign-in, its cookie lets the server through ({flow.State.GetType().Name})");
+            window.CloseFromApp();
+            var profiles = Path.Combine(AppIdentity.DataFolder, "SignIn");
+            var deleted = await WaitUntilAsync(
+                () => !Directory.Exists(profiles) || !Directory.EnumerateDirectories(profiles).Any(), Timeout * 2);
+            check(deleted, "the window's throw-away profile is deleted after it closes");
+        }
+        catch (Exception error)
+        {
+            check(false, $"the sign-in window check failed: {error.GetType().Name}");
+        }
+        finally
+        {
+            // It exits when its stdin closes.
+            standIn.StandardInput.Close();
+            if (!standIn.WaitForExit(5000))
+            {
+                standIn.Kill();
+            }
+            try
+            {
+                Directory.Delete(folder, true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     /// <summary>The opacity of a solid brush; -1 for no brush or another kind.</summary>
@@ -171,9 +261,11 @@ internal static class SmokeRun
         }
     }
 
-    private static async Task<bool> WaitUntilAsync(Func<bool> condition)
+    private static Task<bool> WaitUntilAsync(Func<bool> condition) => WaitUntilAsync(condition, Timeout);
+
+    private static async Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + Timeout;
+        var deadline = DateTime.UtcNow + timeout;
         while (!condition())
         {
             if (DateTime.UtcNow > deadline)

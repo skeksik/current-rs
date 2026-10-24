@@ -32,6 +32,8 @@ pub const GATE_REALM: &str = "Stand-in Gate";
 /// The cookie [`Gate::Portal`] wants, and the value it takes until [`Controls::set_gate_cookie`] changes it.
 pub const GATE_COOKIE: &str = "stand_in_gate";
 pub const GATE_COOKIE_VALUE: &str = "not-a-real-gate-cookie";
+/// Where [`Gate::Portal`]'s sign-in link goes: it sets the cookie.
+pub const GATE_SIGN_IN_PATH: &str = "/gate/sign-in";
 /// The header [`Gate::Header`] wants.
 pub const GATE_HEADER: &str = "x-stand-in-gate";
 pub const GATE_HEADER_VALUE: &str = "not-a-real-gate-header";
@@ -59,7 +61,8 @@ pub enum Gate {
     /// HTTP Basic: 401 with a challenge without [`GATE_USER`]'s password. It does not pass its `Authorization` on, so Jellyfin's
     /// fields then come from `X-Emby-Authorization`.
     Basic,
-    /// A portal: an HTML sign-in page without the [`GATE_COOKIE`] cookie.
+    /// A portal: an HTML sign-in page without the [`GATE_COOKIE`] cookie. Its link, [`GATE_SIGN_IN_PATH`], sets the cookie and
+    /// redirects back to `/`, as a portal does after a sign-in: for the sign-in window, by hand or in the Windows smoke run.
     Portal,
     /// 403 without the [`GATE_HEADER`] header.
     Header,
@@ -270,11 +273,21 @@ fn gate(state: &State, received: &Received) -> Option<String> {
                 .clone()
                 .unwrap_or_else(|| GATE_COOKIE_VALUE.to_owned());
             let wanted = format!("{GATE_COOKIE}={value}");
+            if received.path == GATE_SIGN_IN_PATH {
+                // The page's link: "signs in" by setting the cookie (HttpOnly, as portals do) and going back to the start.
+                return Some(reply(
+                    302,
+                    &format!("set-cookie: {wanted}; Path=/; HttpOnly\r\nlocation: /\r\n"),
+                    "",
+                ));
+            }
             (!received.cookie.split("; ").any(|pair| pair == wanted)).then(|| {
                 reply(
                     200,
                     "content-type: text/html\r\n",
-                    "<!DOCTYPE html><html><body>Sign in</body></html>",
+                    &format!(
+                        "<!DOCTYPE html><html><body><a href=\"{GATE_SIGN_IN_PATH}\">Sign in</a></body></html>"
+                    ),
                 )
             })
         }

@@ -1,11 +1,18 @@
 # Runs `Current.exe --smoke` (Current.Shell/SmokeRun.cs) and fails unless it prints "smoke run passed" and exits 0 in time.
+# -StandIn names the built Jellyfin stand-in (bindings/csharp/build.ps1 builds it): the run then also opens the sign-in window on its
+# portal (ADR 0017). Without it that check is skipped, and the run says so.
 param(
     [Parameter(Mandatory)] [string]$Exe,
+    [string]$StandIn,
     [int]$TimeoutSeconds = 120
 )
 $ErrorActionPreference = 'Stop'
 
 if (-not (Test-Path $Exe)) { throw "$Exe does not exist" }
+if ($StandIn) {
+    if (-not (Test-Path $StandIn)) { throw "$StandIn does not exist" }
+    $env:CURRENT_STAND_IN = (Resolve-Path $StandIn).Path
+}
 $log = New-TemporaryFile
 # Current.exe is a GUI executable, so it is started as a process with its standard output sent to a file.
 $process = Start-Process -FilePath $Exe -ArgumentList '--smoke' -RedirectStandardOutput $log -PassThru -NoNewWindow

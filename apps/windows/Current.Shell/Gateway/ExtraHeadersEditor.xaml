@@ -1,0 +1,18 @@
+<UserControl
+    x:Class="Current.Shell.Gateway.ExtraHeadersEditor"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Extra headers (ADR 0017, "Mechanism 3"): name and value pairs, the value hidden like a password. Shown only on request
+         ("Advanced"), with a short explanation. -->
+    <StackPanel Spacing="12">
+        <TextBlock
+            Style="{StaticResource BodyTextBlockStyle}"
+            TextWrapping="Wrap"
+            Text="Some gateways let apps through with a secret header instead of a sign-in, such as a Cloudflare Access service token (CF-Access-Client-Id and CF-Access-Client-Secret). Current sends these headers only to this address." />
+        <StackPanel x:Name="RowsPanel" Spacing="8" />
+        <Button x:Name="AddButton" Content="Add a header" Click="OnAdd" />
+        <InfoBar x:Name="ErrorBar" Severity="Error" IsClosable="False" IsOpen="False" />
+        <!-- Not the accent button: the page's own next step (Connect, or Sign in) keeps that. -->
+        <Button x:Name="UseButton" Content="Use these headers" Click="OnUse" />
+    </StackPanel>
+</UserControl>

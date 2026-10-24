@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using Current.Bindings;
+using Current.Shell.Gateway;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -13,8 +14,9 @@ namespace Current.Shell.Pages;
 
 /// <summary>
 /// Adding a server (ADR 0012, ADR 0016): probe a typed address or pick a server found on the network, confirm plain http when the core
-/// asks, then go on to sign in. The page renders the flows' states and sends the user's actions; the core decides. It owns one
-/// AddServerFlow and one DiscoveryFlow from OnNavigatedTo to OnNavigatedFrom.
+/// asks, then go on to sign in. A gateway in front of the address (ADR 0017) gets its password dialog, its sign-in window or its extra
+/// headers here. The page renders the flows' states and sends the user's actions; the core decides. It owns one AddServerFlow and one
+/// DiscoveryFlow from OnNavigatedTo to OnNavigatedFrom, and the sign-in window while it is open.
 /// </summary>
 public sealed partial class AddServerPage : Page
 {
@@ -28,11 +30,14 @@ public sealed partial class AddServerPage : Page
     private AddServerState? _shown;
     private bool _confirming;
     private bool _leaving;
+    private bool _askingPassword;
+    private SignInWindow? _signInWindow;
 
     public AddServerPage()
     {
         InitializeComponent();
         FoundList.ItemsSource = _found;
+        HeadersEditor.UseRequested += (_, _) => UseHeaders();
         Loaded += (_, _) => AddressBox.Focus(FocusState.Programmatic);
     }
 
@@ -62,6 +67,8 @@ public sealed partial class AddServerPage : Page
         _leaving = true;
         _probe?.Cancel();
         _searching?.Cancel();
+        CloseSignInWindow();
+        HeadersEditor.Clear();
         if (_state is not null)
         {
             _state.PropertyChanged -= OnStateChanged;
@@ -132,14 +139,67 @@ public sealed partial class AddServerPage : Page
                 // Leave the page after this delivery has finished, not inside it.
                 DispatcherQueue.TryEnqueue(() => GoToSignIn(ready.Server));
                 break;
-            // Until the gateway screens exist (the next task, ADR 0017): say so instead of showing nothing.
-            case AddServerState.GatewayPassword or AddServerState.GatewaySignIn or AddServerState.GatewayRefused
-                or AddServerState.GatewayUnsupported:
-                ShowError(ProblemText.GatewayNotYet);
+            case AddServerState.GatewayPassword password:
+                HideError();
+                _ = AskGatewayPasswordAsync(password);
+                break;
+            case AddServerState.GatewayUnsupported:
+                ShowError(ProblemText.GatewayUnsupported);
                 break;
             default:
                 HideError();
                 break;
+        }
+        RenderGateway(state, before);
+    }
+
+    /// <summary>
+    /// The web sign-in panel, the extra headers and the sign-in window, which closes by itself once the core moves on from the web
+    /// sign-in (ADR 0017).
+    /// </summary>
+    private void RenderGateway(AddServerState state, AddServerState? before)
+    {
+        var web = state as AddServerState.GatewaySignIn;
+        var refused = state is AddServerState.GatewayRefused;
+        if (web is null)
+        {
+            CloseSignInWindow();
+        }
+        GatewayPanel.Visibility = web is not null || refused ? Visibility.Visible : Visibility.Collapsed;
+        GatewayText.Text = web switch
+        {
+            { Redirected: true } => $"This address sends Current to {web.LocationOrigin ?? "another address"}. It may be your "
+                + "gateway's sign-in, or the server may have moved.",
+            not null => ProblemText.GatewayWebPage,
+            null => refused ? ProblemText.GatewayRefused : "",
+        };
+        GatewaySignInButton.Visibility = web is not null ? Visibility.Visible : Visibility.Collapsed;
+        // One accent button for the step at hand (owner's run, 2026-10-24): "Sign in" while it is offered, Connect otherwise.
+        ConnectButton.Style = (Style)Application.Current.Resources[web is not null ? "DefaultButtonStyle" : "AccentButtonStyle"];
+        GatewaySignInButton.IsEnabled = _signInWindow is null;
+        // Without an address from the server there is nothing to use (AddServerFlow.FollowRedirectAsync).
+        FollowRedirectButton.Visibility = web is { Redirected: true, LocationOrigin: not null } ? Visibility.Visible : Visibility.Collapsed;
+
+        // The headers stay on screen while the address is checked with them.
+        var probing = state is AddServerState.Probing;
+        var asksHeaders = state is AddServerState.GatewaySignIn or AddServerState.GatewayRefused or AddServerState.GatewayPassword;
+        var headersShown = asksHeaders || (probing && AdvancedExpander.Visibility == Visibility.Visible);
+        AdvancedExpander.Visibility = headersShown ? Visibility.Visible : Visibility.Collapsed;
+        HeadersEditor.IsEditable = !probing;
+        if (!headersShown)
+        {
+            HeadersEditor.Clear();
+            AdvancedExpander.IsExpanded = false;
+        }
+
+        if (state.GetType() != before?.GetType() && GatewayPanel.Visibility == Visibility.Visible)
+        {
+            Announce.Shown(GatewayText);
+        }
+        if (refused && before is not AddServerState.GatewayRefused)
+        {
+            // The headers are the way in: open them.
+            AdvancedExpander.IsExpanded = true;
         }
     }
 
@@ -183,6 +243,7 @@ public sealed partial class AddServerPage : Page
     {
         // Close and open again, so Narrator reads a changed message (InfoBar page, learn.microsoft.com, read 2026-10-23).
         ProbeError.IsOpen = false;
+        ProbeError.ActionButton = null;
         ProbeError.Message = message;
         ProbeError.IsOpen = true;
     }
@@ -352,6 +413,227 @@ public sealed partial class AddServerPage : Page
         {
             _confirming = false;
         }
+    }
+
+    /// <summary>
+    /// The gateway's password (ADR 0017, "Mechanism 1"), asked in a dialog: again with the error inside it when the core says the last
+    /// one was wrong. Cancel goes back to the address.
+    /// </summary>
+    private async Task AskGatewayPasswordAsync(AddServerState.GatewayPassword state)
+    {
+        if (_askingPassword || _confirming || XamlRoot is null || _flow is not { } flow)
+        {
+            return;
+        }
+        _askingPassword = true;
+        GatewayPasswordDialog.Answer? answer;
+        try
+        {
+            answer = await GatewayPasswordDialog.AskAsync(XamlRoot, state.Origin, state.Realm, state.Wrong, state.PlainHttp, null);
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: the gateway password dialog failed: {error.GetType().Name}");
+            ShowError(ProblemText.Unexpected);
+            return;
+        }
+        finally
+        {
+            _askingPassword = false;
+        }
+        if (_leaving || _flow != flow || _state?.Value != state)
+        {
+            return;
+        }
+        if (answer is null)
+        {
+            flow.Reset();
+            AddressBox.Focus(FocusState.Programmatic);
+            return;
+        }
+        await RunGatewayAsync(token => flow.SubmitPasswordAsync(answer.User, answer.Password, state.PlainHttp, token));
+    }
+
+    /// <summary>
+    /// "Sign in": the sign-in window on the address (ADR 0017, "Mechanism 2"), after a confirmation over plain public http. async
+    /// void, as event handlers are: it catches everything itself.
+    /// </summary>
+    private async void OnGatewaySignIn(object sender, RoutedEventArgs e)
+    {
+        if (_state?.Value is not AddServerState.GatewaySignIn web || _flow is not { } flow || _signInWindow is not null)
+        {
+            return;
+        }
+        try
+        {
+            if (!WebViewRuntime.IsInstalled())
+            {
+                ShowWebViewMissing();
+                return;
+            }
+            if (web.PlainHttp && !await ConfirmGatewayPlainHttpAsync())
+            {
+                return;
+            }
+            if (_leaving || _state?.Value != web)
+            {
+                return;
+            }
+            var window = new SignInWindow(web.Url, web.Origin, async cookies =>
+            {
+                try
+                {
+                    await flow.SubmitCookiesAsync(cookies, web.PlainHttp);
+                }
+                catch (FlowNotReadyException)
+                {
+                    // The core moved on meanwhile; its state says where to.
+                }
+            });
+            // Closing it cancels the web sign-in; the page still offers it, and the extra headers.
+            window.Cancelled += (_, _) =>
+            {
+                if (_signInWindow == window)
+                {
+                    _signInWindow = null;
+                    GatewaySignInButton.IsEnabled = true;
+                    GatewaySignInButton.Focus(FocusState.Programmatic);
+                }
+            };
+            _signInWindow = window;
+            GatewaySignInButton.IsEnabled = false;
+            window.Activate();
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: opening the sign-in window failed: {error.GetType().Name}");
+            ShowError(ProblemText.Unexpected);
+        }
+    }
+
+    private void CloseSignInWindow()
+    {
+        var window = _signInWindow;
+        _signInWindow = null;
+        window?.CloseFromApp();
+    }
+
+    /// <summary>"Use the address it points to": probes the redirect's target as if typed (ADR 0012).</summary>
+    private async void OnFollowRedirect(object sender, RoutedEventArgs e)
+    {
+        if (_flow is { } flow)
+        {
+            await RunGatewayAsync(flow.FollowRedirectAsync);
+        }
+    }
+
+    /// <summary>
+    /// The extra headers, in any gateway state that takes them (ADR 0017, "Mechanism 3"). async void, as event handlers are: it
+    /// catches everything itself.
+    /// </summary>
+    private async void UseHeaders()
+    {
+        if (_flow is not { } flow)
+        {
+            return;
+        }
+        try
+        {
+            var plainHttp = _state?.Value is AddServerState.GatewaySignIn { PlainHttp: true }
+                or AddServerState.GatewayRefused { PlainHttp: true } or AddServerState.GatewayPassword { PlainHttp: true };
+            if (plainHttp && !await ConfirmGatewayPlainHttpAsync())
+            {
+                return;
+            }
+            HeadersEditor.HideError();
+            await RunGatewayAsync(token => flow.SubmitHeadersAsync(HeadersEditor.Read(), plainHttp, token));
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: using the extra headers failed: {error.GetType().Name}");
+            ShowError(ProblemText.Unexpected);
+        }
+    }
+
+    /// <summary>Runs a gateway step like a probe: Cancel and Esc stop the waiting, and the state shows the outcome.</summary>
+    private async Task RunGatewayAsync(Func<CancellationToken, Task> step)
+    {
+        if (_probe is not null)
+        {
+            return;
+        }
+        using var probe = new CancellationTokenSource();
+        _probe = probe;
+        try
+        {
+            await step(probe.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (GatewayInputException error)
+        {
+            // Nothing was sent: the reason goes next to what the user typed.
+            var message = ProblemText.GatewayInput(error.Problem);
+            if (AdvancedExpander.Visibility == Visibility.Visible && AdvancedExpander.IsExpanded)
+            {
+                HeadersEditor.ShowError(message);
+            }
+            else
+            {
+                ShowError(message);
+            }
+        }
+        catch (FlowNotReadyException)
+        {
+            // The state moved on meanwhile and shows where to.
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: a gateway step failed: {error.GetType().Name}");
+            if (!_leaving)
+            {
+                ShowError(ProblemText.Unexpected);
+            }
+        }
+        finally
+        {
+            _probe = null;
+        }
+    }
+
+    /// <summary>
+    /// The plain-http confirmation for what goes to a gateway over public http: as the server's (above), the safe action the
+    /// default, and Esc cancels.
+    /// </summary>
+    private async Task<bool> ConfirmGatewayPlainHttpAsync()
+    {
+        if (XamlRoot is null)
+        {
+            return false;
+        }
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Connect without encryption?",
+            Content = "This address uses http. What you send to its sign-in would cross the internet unencrypted. Use https if the "
+                + "server offers it.",
+            PrimaryButtonText = "Connect anyway",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
+    /// <summary>No WebView2 Runtime (some Windows 10 PCs): say so, with Microsoft's download page (WebViewRuntime).</summary>
+    private void ShowWebViewMissing()
+    {
+        ShowError(WebViewRuntime.Missing);
+        ProbeError.ActionButton = new HyperlinkButton
+        {
+            Content = "Get it from Microsoft",
+            NavigateUri = new Uri(WebViewRuntime.DownloadPage),
+        };
     }
 
     private void GoToSignIn(NewServerInfo server)

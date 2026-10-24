@@ -1,0 +1,54 @@
+<Window
+    x:Class="Current.Shell.Gateway.SignInWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- The sign-in window (ADR 0017, "Mechanism 2"): the system title bar, the window's default size and place, and the main
+         window's Mica. The web view fills it under a bar that shows where the page is, as a browser's address bar does. -->
+    <Window.SystemBackdrop>
+        <MicaBackdrop Kind="Base" />
+    </Window.SystemBackdrop>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Where the page is: its origin, with a lock for verified https and a warning otherwise. Its name says both for Narrator,
+             and it takes focus first, so keyboard users hear it before the page. -->
+        <StackPanel
+            x:Name="OriginBar"
+            Orientation="Horizontal"
+            Spacing="8"
+            Padding="16,8">
+            <FontIcon x:Name="OriginIcon" FontSize="16" Glyph="&#xE72E;" AutomationProperties.AccessibilityView="Raw" />
+            <TextBlock
+                x:Name="OriginText"
+                VerticalAlignment="Center"
+                IsTextSelectionEnabled="True"
+                TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+
+        <InfoBar x:Name="Notice" Grid.Row="1" IsClosable="False" IsOpen="False" />
+
+        <WebView2 x:Name="Web" Grid.Row="2" AutomationProperties.Name="Sign-in page" />
+
+        <!-- In place of Google's sign-in, which refuses apps' web views (ADR 0017, "Google"). -->
+        <StackPanel
+            x:Name="GooglePanel"
+            Grid.Row="2"
+            MaxWidth="560"
+            Margin="24"
+            Spacing="12"
+            HorizontalAlignment="Left"
+            Visibility="Collapsed">
+            <TextBlock
+                x:Name="GoogleText"
+                Style="{StaticResource BodyTextBlockStyle}"
+                TextWrapping="Wrap"
+                AutomationProperties.LiveSetting="Assertive" />
+            <Button x:Name="GoogleBackButton" Content="Back to the sign-in page" Click="OnGoogleBack" />
+        </StackPanel>
+    </Grid>
+</Window>

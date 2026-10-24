@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using Current.Bindings;
+using Current.Shell.Gateway;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -25,6 +26,7 @@ public sealed partial class SignInPage : Page
     private CancellationTokenSource? _attempt;
     private readonly CancellationTokenSource _leave = new();
     private bool _leaving;
+    private bool _gatewayRunning;
 
     public SignInPage()
     {
@@ -153,6 +155,11 @@ public sealed partial class SignInPage : Page
                     Announce.Say(CodeView, spoken, "QuickConnectCode");
                 }
                 break;
+            case SignInState.Failed { Problem: SignInProblem.Gateway gateway }
+                when gateway.Answer != GatewayProblem.Unsupported && _request?.Saved is not null:
+                ShowError(ProblemText.SignIn(gateway));
+                OfferGatewaySignIn(gateway.Answer == GatewayProblem.Refused);
+                break;
             case SignInState.Failed failed:
                 ShowError(ProblemText.SignIn(failed.Problem));
                 break;
@@ -176,10 +183,62 @@ public sealed partial class SignInPage : Page
     /// <summary>Focus after this layout pass, so a control just made visible or enabled can take it.</summary>
     private void FocusLater(Control control) => DispatcherQueue.TryEnqueue(() => control.Focus(FocusState.Programmatic));
 
+    /// <summary>
+    /// The gateway in front of a saved server answered the sign-in (ADR 0017): the error offers to sign in to it, with the same
+    /// password dialog, sign-in window or extra headers as Settings; then the user signs in to the server as before.
+    /// </summary>
+    private void OfferGatewaySignIn(bool headers)
+    {
+        var button = new Button { Content = "Sign in to the gateway" };
+        button.Click += async (_, _) =>
+        {
+            if (App.Core is not { } core || _request?.Saved is not { } server || XamlRoot is null || _gatewayRunning)
+            {
+                return;
+            }
+            _gatewayRunning = true;
+            button.IsEnabled = false;
+            try
+            {
+                var outcome = await new GatewaySignInRunner(XamlRoot, new DispatcherQueueUi(DispatcherQueue))
+                    .RunAsync(core, server, headers);
+                if (_leaving)
+                {
+                    return;
+                }
+                if (outcome.Severity is InfoBarSeverity.Success or InfoBarSeverity.Warning)
+                {
+                    HideError();
+                    App.Announce("Signed in to the gateway. Now sign in to the server.", "GatewaySignedIn");
+                    FocusForm();
+                }
+                else if (outcome.Message is { } message)
+                {
+                    ShowError(message);
+                }
+            }
+            catch (Exception error)
+            {
+                Trace.TraceError($"Current: signing in to the gateway failed: {error.GetType().Name}");
+                if (!_leaving)
+                {
+                    ShowError(ProblemText.Unexpected);
+                }
+            }
+            finally
+            {
+                _gatewayRunning = false;
+                button.IsEnabled = true;
+            }
+        };
+        SignInError.ActionButton = button;
+    }
+
     private void ShowError(string message)
     {
         // Close and open again, so Narrator reads a changed message (InfoBar page, learn.microsoft.com, read 2026-10-23).
         SignInError.IsOpen = false;
+        SignInError.ActionButton = null;
         SignInError.Message = message;
         SignInError.IsOpen = true;
     }
