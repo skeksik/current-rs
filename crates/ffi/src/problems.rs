@@ -2,7 +2,7 @@
 //! no redirect target, no server message, no OS error text (ADR 0006).
 
 use current_app::SignInError;
-use current_jellyfin::{AddressError, AuthError, DiscoveryError, ProbeError};
+use current_jellyfin::{AddressError, AuthError, DiscoveryError, GatewayAnswer, ProbeError};
 use current_net::NetError;
 use current_store::StoreError;
 
@@ -147,6 +147,12 @@ impl From<&ProbeError> for ProbeProblem {
             },
             ProbeError::SetupIncomplete => Self::SetupIncomplete,
             ProbeError::DifferentServer => Self::DifferentServer,
+            // The gateway problems get their own ffi variants with the app's gateway states (ADR 0017); until then, the closest.
+            ProbeError::GatewayPassword { .. } | ProbeError::UnsupportedChallenge => {
+                Self::UnexpectedStatus { status: 401 }
+            }
+            ProbeError::GatewayRefused => Self::UnexpectedStatus { status: 403 },
+            ProbeError::GatewaySignIn => Self::NotJellyfin,
         }
     }
 }
@@ -190,6 +196,16 @@ impl From<&AuthError> for SignInProblem {
             AuthError::NotSignedIn => Self::NotSignedIn,
             AuthError::Network(error) => Self::Network {
                 problem: error.into(),
+            },
+            // The gateway problems get their own ffi variants with the app's gateway states (ADR 0017); until then, the closest.
+            AuthError::Gateway(GatewayAnswer::Refused) => Self::Network {
+                problem: NetProblem::Auth { status: 403 },
+            },
+            AuthError::Gateway(_) => Self::Network {
+                problem: NetProblem::Auth { status: 401 },
+            },
+            AuthError::EmbyHeaderIgnored => Self::Network {
+                problem: NetProblem::UnexpectedStatus { status: 400 },
             },
         }
     }

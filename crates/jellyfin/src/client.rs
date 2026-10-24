@@ -1,4 +1,6 @@
 //! Signing in to a Jellyfin server and the session that follows: password, Quick Connect, the current user, sign out (ADR 0015).
+//! Behind an authentication gateway (ADR 0017), the header Jellyfin's credentials go in can move to `X-Emby-Authorization`, and a
+//! gateway's challenge never ends the session.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -9,7 +11,12 @@ use current_net::{
 };
 use tokio::time::Instant;
 
-use crate::auth::{self, AccessToken, ClientIdentity, JellyfinAuth, QuickConnectSecret, TokenSlot};
+use crate::auth::{
+    self, AccessToken, ClientIdentity, HeaderPlacement, JellyfinAuth, PlacementSlot,
+    QuickConnectSecret, TokenSlot,
+};
+use crate::gateway::GatewayAnswer;
+use crate::probe::{self, Answer};
 use crate::wire;
 
 /// How often Quick Connect asks whether the code was approved: jellyfin-web's interval (5 s).
@@ -43,6 +50,21 @@ pub enum AuthError {
     /// The request needs a token and the client has none.
     #[error("not signed in")]
     NotSignedIn,
+    /// An authentication gateway in front of the server answered with a `WWW-Authenticate` challenge, which Jellyfin's own 401 and
+    /// 403 never carry (ADR 0017): the request did not reach Jellyfin. Mid-session the token is kept and the session goes on once
+    /// the user signs in to the gateway again.
+    #[error(transparent)]
+    Gateway(GatewayAnswer),
+    /// A sign-in sent with `X-Emby-Authorization` answered 400: the server did not get the client's details, so it ignores that
+    /// header (ADR 0017). Jellyfin reads it only when legacy authorization is turned on in its settings and `Authorization` arrives
+    /// empty (`docs/notes/gateway-auth.md`). The UI explains the two server-side fixes: turn on legacy authorization on the server
+    /// and make the gateway stop passing its own `Authorization` header on to the server; or add a gateway rule that lets the
+    /// server's API through without the gateway's password.
+    #[error(
+        "the server ignored the sign-in's client details: turn on legacy authorization on the server and stop the gateway passing \
+         its Authorization header on, or let the server's API through the gateway"
+    )]
+    EmbyHeaderIgnored,
     /// The server could not be reached or answered something unexpected.
     #[error(transparent)]
     Network(#[from] NetError),
@@ -70,7 +92,11 @@ pub type RevokedHook = Arc<dyn Fn() + Send + Sync>;
 /// A Jellyfin client for one server, signed in or not. Every request carries the client's identity; once a token is set, it too.
 pub struct JellyfinClient {
     http: ServerClient,
+    /// The server's addresses, shared with `http`, for the unauthenticated probe that confirms a gateway refused Jellyfin's header.
+    address: Arc<dyn AddressProvider>,
+    log: Arc<RequestLog>,
     token: TokenSlot,
+    placement: PlacementSlot,
     on_revoked: Mutex<Option<RevokedHook>>,
 }
 
@@ -92,14 +118,25 @@ impl JellyfinClient {
         log: Arc<RequestLog>,
     ) -> Result<Self, NetError> {
         let token = TokenSlot::default();
+        let placement = PlacementSlot::default();
         let auth = Arc::new(JellyfinAuth {
             identity,
             token: token.clone(),
+            placement: placement.clone(),
         });
-        let http = ServerClient::new(server, address, Some(auth), log, &ClientConfig::default())?;
+        let http = ServerClient::new(
+            server,
+            address.clone(),
+            Some(auth),
+            log.clone(),
+            &ClientConfig::default(),
+        )?;
         Ok(Self {
             http,
+            address,
+            log,
             token,
+            placement,
             on_revoked: Mutex::new(None),
         })
     }
@@ -122,6 +159,17 @@ impl JellyfinClient {
         auth::read(&self.token).is_some()
     }
 
+    /// Puts Jellyfin's credentials in `placement`'s header from now on: the server's saved setting (ADR 0017), or
+    /// [`HeaderPlacement::for_gateway`] for an address with Basic gateway credentials.
+    pub fn set_header_placement(&self, placement: HeaderPlacement) {
+        auth::set_placement(&self.placement, placement);
+    }
+
+    /// The header Jellyfin's credentials go in now. A sign-in can change it (see [`JellyfinClient::sign_in_by_name`]): the app reads
+    /// it after one and saves it with the server when it changed.
+    pub fn header_placement(&self) -> HeaderPlacement {
+        auth::placement(&self.placement)
+    }
     /// Sets what runs when a request that carried a token gets 401. The client has already forgotten the token by then.
     pub fn on_revoked(&self, hook: RevokedHook) {
         *self
@@ -131,6 +179,10 @@ impl JellyfinClient {
     }
 
     /// Signs in with a user name and password. The password goes into the request body and nowhere else.
+    ///
+    /// When a gateway answers `Authorization: MediaBrowser ...` with a challenge while an unauthenticated probe of the same address
+    /// passes, the gateway refused the header itself: the client moves its credentials to `X-Emby-Authorization` and signs in once
+    /// more (ADR 0017). If the server then ignores that header ([`AuthError::EmbyHeaderIgnored`]), the placement goes back.
     pub async fn sign_in_by_name(
         &self,
         username: &str,
@@ -141,9 +193,11 @@ impl JellyfinClient {
             pw: password,
         };
         let request = Request::post("/Users/AuthenticateByName").json(&body)?;
-        let response = self.http.send(request).await.map_err(|error| match error {
-            NetError::Auth { status: 401, .. } => AuthError::WrongCredentials,
-            other => sign_in_error(other),
+        let response = self.send_with_fields(request).await.map_err(|error| {
+            error.map_net(|error| match error {
+                NetError::Auth { status: 401, .. } => AuthError::WrongCredentials,
+                other => sign_in_error(other),
+            })
         })?;
         self.signed_in(&response)
     }
@@ -156,13 +210,14 @@ impl JellyfinClient {
             .await?)
     }
 
-    /// Starts a Quick Connect request. Jellyfin keeps it for 10 minutes.
+    /// Starts a Quick Connect request. Jellyfin keeps it for 10 minutes. It needs the client's details as a sign-in does, and moves
+    /// them to `X-Emby-Authorization` in the same way (see [`JellyfinClient::sign_in_by_name`]).
     pub async fn quick_connect_initiate(&self) -> Result<QuickConnectCode, AuthError> {
         let result: wire::QuickConnectResult = self
-            .http
-            .send_json(Request::post("/QuickConnect/Initiate"))
+            .send_with_fields(Request::post("/QuickConnect/Initiate"))
             .await
-            .map_err(quick_connect_error)?;
+            .map_err(|error| error.map_net(quick_connect_error))?
+            .json()?;
         Ok(QuickConnectCode {
             code: result.code,
             secret: QuickConnectSecret::new(result.secret),
@@ -246,12 +301,21 @@ impl JellyfinClient {
     }
 
     /// Sends a request that needs the token. A 401 means the token is dead: the client forgets it and runs the revoked hook
-    /// (ADR 0015). A 403 does not: the token is valid, only this request was refused.
+    /// (ADR 0015). A 403 does not: the token is valid, only this request was refused. A 401 or 403 with a `WWW-Authenticate`
+    /// challenge is a gateway's ([`AuthError::Gateway`]): the token is kept and the hook does not run (ADR 0017). Whether a 401
+    /// without a challenge was Jellyfin's is for the caller to confirm with the identity probe first (the 401 rule's second part).
     pub async fn send_authenticated(&self, request: Request) -> Result<Response, AuthError> {
         let Some(token) = auth::read(&self.token) else {
             return Err(AuthError::NotSignedIn);
         };
-        match self.http.send(request).await {
+        let result = self.http.send(request).await;
+        // A gateway's challenge, not Jellyfin's answer: the token is kept and the hook does not run (ADR 0017, the 401 rule).
+        if let Err(error) = &result
+            && let Some(answer) = GatewayAnswer::challenged(error)
+        {
+            return Err(AuthError::Gateway(answer));
+        }
+        match result {
             Ok(response) => Ok(response),
             Err(NetError::Auth { status: 401, .. }) => {
                 // A newer sign-in may have set another token meanwhile: only the token that failed is forgotten.
@@ -270,6 +334,56 @@ impl JellyfinClient {
             Err(NetError::Auth { status: 403, .. }) => Err(AuthError::Refused),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Sends a request that needs the client's four details (a sign-in, Quick Connect's Initiate). A gateway's challenge to
+    /// `Authorization: MediaBrowser ...`, confirmed by an unauthenticated probe of the same address, moves the details to
+    /// `X-Emby-Authorization` and sends the request once more: the request provably never reached Jellyfin (ADR 0017). Errors come
+    /// back as [`FieldsError`]: a gateway's challenge or the 400 diagnosis, else the server's answer for the caller to map.
+    async fn send_with_fields(&self, request: Request) -> Result<Response, FieldsError> {
+        let sent = self.header_placement();
+        let result = self.http.send(request.clone()).await;
+        let (result, sent) = match &result {
+            Err(error) => match HeaderPlacement::after_gateway_challenge(sent, error) {
+                Some(other) if self.bare_probe_passes().await => {
+                    self.set_header_placement(other);
+                    let retried = self.http.send(request).await;
+                    if is_bad_request(&retried) {
+                        // The server ignores the other header: going back keeps a later fix on the gateway's side working.
+                        self.set_header_placement(sent);
+                    }
+                    (retried, other)
+                }
+                _ => (result, sent),
+            },
+            Ok(_) => (result, sent),
+        };
+        result.map_err(|error| {
+            if let Some(answer) = GatewayAnswer::challenged(&error) {
+                FieldsError::Auth(AuthError::Gateway(answer))
+            } else if sent == HeaderPlacement::EmbyAuthorization
+                && matches!(error, NetError::Status { status: 400, .. })
+            {
+                FieldsError::Auth(AuthError::EmbyHeaderIgnored)
+            } else {
+                FieldsError::Net(error)
+            }
+        })
+    }
+
+    /// Whether the address in use answers the unauthenticated probe as a Jellyfin server: through the same address provider, so
+    /// with that address's gateway credentials and never Jellyfin's header or token.
+    async fn bare_probe_passes(&self) -> bool {
+        let Ok(client) = ServerClient::new(
+            self.server().clone(),
+            self.address.clone(),
+            None,
+            self.log.clone(),
+            &probe::probe_config(),
+        ) else {
+            return false;
+        };
+        matches!(probe::ask(&client).await, Ok(Answer::Found(_)))
     }
 
     /// Forgets `token` if it is still the one in use. Returns whether it was.
@@ -296,6 +410,27 @@ impl JellyfinClient {
     }
 }
 
+/// Why a request that needs the client's details failed: already decided ([`AuthError::Gateway`], [`AuthError::EmbyHeaderIgnored`])
+/// or the server's answer, for the caller to map.
+enum FieldsError {
+    Auth(AuthError),
+    Net(NetError),
+}
+
+impl FieldsError {
+    /// The error, with `map` applied to the server's answer.
+    fn map_net(self, map: impl FnOnce(NetError) -> AuthError) -> AuthError {
+        match self {
+            Self::Auth(error) => error,
+            Self::Net(error) => map(error),
+        }
+    }
+}
+
+fn is_bad_request(result: &Result<Response, NetError>) -> bool {
+    matches!(result, Err(NetError::Status { status: 400, .. }))
+}
+
 /// Errors a later attempt may not meet: the connection, a timeout, or the server failing for a moment.
 fn is_transient(error: &NetError) -> bool {
     match error {
@@ -306,14 +441,20 @@ fn is_transient(error: &NetError) -> bool {
 }
 
 fn sign_in_error(error: NetError) -> AuthError {
+    if let Some(answer) = GatewayAnswer::challenged(&error) {
+        return AuthError::Gateway(answer);
+    }
     match error {
         NetError::Auth { status: 403, .. } => AuthError::Refused,
         other => other.into(),
     }
 }
 
-/// Quick Connect answers 401 when it is turned off and 404 for a request it no longer knows.
+/// Quick Connect answers 401 when it is turned off and 404 for a request it no longer knows. A gateway's challenge comes first.
 fn quick_connect_error(error: NetError) -> AuthError {
+    if let Some(answer) = GatewayAnswer::challenged(&error) {
+        return AuthError::Gateway(answer);
+    }
     match error {
         NetError::Auth { status: 401, .. } => AuthError::QuickConnectDisabled,
         NetError::Status { status: 404, .. } => AuthError::QuickConnectExpired,

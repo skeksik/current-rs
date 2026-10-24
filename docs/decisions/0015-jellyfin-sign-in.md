@@ -2,7 +2,8 @@
 
 Status: proposed (2026-10-22), from M1; accepted when its PR merges. The device name rule and the tokio features were decided by the
 owner (2026-10-22, marked **Decided by the owner**). Amended 2026-10-23: removing a saved server (owner's request; manager's answers
-on the design), below under "Remove a server" and in "Saved servers".
+on the design), below under "Remove a server" and in "Saved servers". Amended 2026-10-24: the 401 rule and Jellyfin's header
+placement behind an authentication gateway (ADR 0017, approved by the owner), below under "The 401 rule" and "Header placement".
 
 ## Context
 After setup finds a server (ADR 0012), the user signs in with a password or Quick Connect. The app must remember the server and user,
@@ -63,7 +64,8 @@ Facts below were read on 2026-10-22 from the sources listed at the end; "Jellyfi
 - `ClientIdentity`'s `Debug` leaves out the device name.
 - The password is borrowed into the request body and nowhere else: no state, error or log holds it (tested).
 - `AuthError`, by what the UI does: `WrongCredentials` (401 at sign-in), `Refused` (403), `QuickConnectDisabled`,
-  `QuickConnectExpired`, `SessionRevoked` (401 with a token), `NotSignedIn`, `Network(NetError)`.
+  `QuickConnectExpired`, `SessionRevoked` (401 with a token), `NotSignedIn`, `Network(NetError)`; amended 2026-10-24 (ADR 0017):
+  `Gateway(GatewayAnswer)` (a gateway's challenge) and `EmbyHeaderIgnored` (the 400 diagnosis).
 - **Users:** `UserDto` maps to the model's `User`. Policy flags that are `true` become permissions: `IsAdministrator` → `admin`,
   `EnableContentDownloading` → `download`, `EnableContentDeletion` → `delete`; every other true flag passes through under Jellyfin's
   name (open values, ADR 0005), except `IsDisabled` and `IsHidden`, which are states of the account. The policy is read as a JSON
@@ -87,6 +89,30 @@ nothing (tested).
 the token. Jellyfin's own 401 carries no `WWW-Authenticate: Basic` (ASP.NET Core's default challenge; not verified against a live
 server), so a later change could ignore 401s that ask for Basic. That needs `current-net`'s `NetError::Auth` to carry that fact; not
 built now (manager, 2026-10-22).
+
+**Amended 2026-10-24 (ADR 0017):** a 401 ends the Jellyfin session only if it is Jellyfin's.
+1. A 401 with any `WWW-Authenticate` challenge is a gateway's: never a session end. With a Basic challenge the password prompt
+   reappears. `send_authenticated` returns `AuthError::Gateway` for a 401 or 403 with a challenge, keeps the token and does not run
+   the revoked hook; a sign-in's 401 with a challenge is `AuthError::Gateway`, not `WrongCredentials`.
+2. Any other 401 (and any redirect or HTML page where JSON was expected) on a server: the core re-runs the identity probe with the
+   address's gateway credentials before acting (`JellyfinIdentity::probe_client`). If the probe answers Jellyfin's JSON with the
+   right identity, the 401 was Jellyfin's: the rule above applies. If the probe gets a gateway shape, the server shows "Sign in to
+   the gateway again" and the session and token are kept. If the probe fails to connect, nothing changes (roaming handles it).
+   Built in `current-app`, not yet.
+This also covers gateways that answer 401 without a challenge.
+
+### Header placement (amended 2026-10-24, ADR 0017)
+A per-server setting, `HeaderPlacement`: `Authorization` (default) or `X-Emby-Authorization`, which Jellyfin reads only with
+`EnableLegacyAuthorization` on and `Authorization` empty (`docs/notes/gateway-auth.md`). The app keeps it with the server and sets
+it on the client (`JellyfinClient::set_header_placement`). It changes to `X-Emby-Authorization` automatically when the address has
+Basic gateway credentials (`HeaderPlacement::for_gateway`), and when a request carrying `Authorization: MediaBrowser` gets a gateway
+answer with a challenge while the probe (without that header, through the same address) passes, as some portal gateways' default
+endpoints do (`HeaderPlacement::after_gateway_challenge`). In the second case the request provably did not reach Jellyfin, so a
+sign-in (and Quick Connect's `Initiate`, which needs the same four values) is retried once with the other header; the app reads
+`header_placement()` afterwards and saves it if it changed. A sign-in that then answers 400 means the server ignores
+`X-Emby-Authorization`: `AuthError::EmbyHeaderIgnored` explains the two server-side fixes (legacy authorization on, and the gateway
+not passing its `Authorization` on; or a gateway rule that lets Jellyfin's API through), and a placement changed by the retry goes
+back.
 
 ### Saved servers (`current-model`, `current-store`)
 - `SavedServer { server: ServerRef, id: ServerId, name, addresses: Vec<ServerAddress>, users: Vec<SavedUser { id, name }>,

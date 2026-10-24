@@ -1,9 +1,10 @@
-//! Who the client is and how it proves it: the `Authorization: MediaBrowser ...` header Jellyfin reads on every request (ADR 0015).
+//! Who the client is and how it proves it: the `Authorization: MediaBrowser ...` header Jellyfin reads on every request (ADR 0015),
+//! or `X-Emby-Authorization` when a gateway in front of the server needs `Authorization` for itself (ADR 0017).
 
 use std::sync::{Arc, PoisonError, RwLock};
 
-use current_net::RequestAuth;
-use current_net::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use current_net::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use current_net::{GatewayCredentials, NetError, RequestAuth};
 
 /// The name Jellyfin shows for the app (Dashboard, Devices: the app column).
 pub const CLIENT_NAME: &str = "Current";
@@ -140,6 +141,62 @@ fn encode(value: &str) -> String {
     out
 }
 
+/// Which header carries Jellyfin's client fields and token: a per-server setting the app keeps (ADR 0017, "Jellyfin's header
+/// placement"). Jellyfin 12.2 reads `X-Emby-Authorization` only when its `EnableLegacyAuthorization` setting is on and `Authorization`
+/// is empty (`AuthorizationContext.cs`, read 2026-10-22, `docs/notes/gateway-auth.md`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum HeaderPlacement {
+    /// `Authorization: MediaBrowser ...`, what Jellyfin reads by default.
+    #[default]
+    Authorization,
+    /// `X-Emby-Authorization: MediaBrowser ...`, leaving `Authorization` to a gateway.
+    EmbyAuthorization,
+}
+
+impl HeaderPlacement {
+    /// The header's name.
+    pub fn header_name(self) -> HeaderName {
+        match self {
+            Self::Authorization => AUTHORIZATION,
+            Self::EmbyAuthorization => HeaderName::from_static("x-emby-authorization"),
+        }
+    }
+
+    /// The placement for an address with `credentials`: a Basic gateway needs `Authorization` for its password, so Jellyfin's
+    /// header moves to `X-Emby-Authorization`; otherwise `current` stays (the setting never moves back on its own).
+    pub fn for_gateway(credentials: &GatewayCredentials, current: Self) -> Self {
+        if credentials.basic().is_some() {
+            Self::EmbyAuthorization
+        } else {
+            current
+        }
+    }
+
+    /// The placement to retry a request with after it failed with `error`: when it carried `Authorization: MediaBrowser ...` and
+    /// the answer is a gateway's challenge (Jellyfin's own 401 and 403 carry none), the gateway may be refusing the header itself.
+    /// Only a hint: switch and retry once only if an unauthenticated probe of the same address (without that header) then answers
+    /// Jellyfin's JSON, which proves the request never reached Jellyfin. `None` when there is nothing to try.
+    pub fn after_gateway_challenge(sent: Self, error: &NetError) -> Option<Self> {
+        match (sent, error) {
+            (Self::Authorization, NetError::Auth { challenges, .. }) if !challenges.is_empty() => {
+                Some(Self::EmbyAuthorization)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Where a client's header placement is kept while it runs. Shared between the client and its [`JellyfinAuth`].
+pub(crate) type PlacementSlot = Arc<RwLock<HeaderPlacement>>;
+
+pub(crate) fn placement(slot: &PlacementSlot) -> HeaderPlacement {
+    *slot.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+pub(crate) fn set_placement(slot: &PlacementSlot, placement: HeaderPlacement) {
+    *slot.write().unwrap_or_else(PoisonError::into_inner) = placement;
+}
+
 /// Where a client's token is kept while it runs. Shared between the client and its [`JellyfinAuth`].
 pub(crate) type TokenSlot = Arc<RwLock<Option<AccessToken>>>;
 
@@ -151,11 +208,13 @@ pub(crate) fn write(slot: &TokenSlot, token: Option<AccessToken>) {
     *slot.write().unwrap_or_else(PoisonError::into_inner) = token;
 }
 
-/// Adds the authorization header to every request, with the token once there is one. It runs after the request log entry is built
-/// (ADR 0006), so the header never reaches the log.
+/// Adds the authorization header to every request, in the header its placement says, with the token once there is one. It runs
+/// after the request log entry is built (ADR 0006), so the header never reaches the log. It runs before the gateway's credentials,
+/// which never replace a header already set: with [`HeaderPlacement::EmbyAuthorization`], `Authorization` is left to the gateway.
 pub(crate) struct JellyfinAuth {
     pub(crate) identity: ClientIdentity,
     pub(crate) token: TokenSlot,
+    pub(crate) placement: PlacementSlot,
 }
 
 impl RequestAuth for JellyfinAuth {
@@ -164,7 +223,7 @@ impl RequestAuth for JellyfinAuth {
         // Every byte is ASCII after encoding, so this cannot fail.
         if let Ok(mut value) = HeaderValue::from_str(&header) {
             value.set_sensitive(true);
-            headers.insert(AUTHORIZATION, value);
+            headers.insert(placement(&self.placement).header_name(), value);
         }
     }
 }
@@ -295,6 +354,7 @@ mod tests {
         let auth = JellyfinAuth {
             identity: identity("PC"),
             token: slot.clone(),
+            placement: PlacementSlot::default(),
         };
         let mut headers = HeaderMap::new();
         auth.apply(&mut headers, &mut Vec::new());
@@ -306,5 +366,91 @@ mod tests {
         assert!(value.is_sensitive());
         assert!(value.to_str().unwrap().ends_with(", Token=\"t1\""));
         assert_eq!(headers.len(), 1);
+    }
+
+    #[test]
+    fn the_placement_moves_the_header() {
+        let placement = PlacementSlot::default();
+        let auth = JellyfinAuth {
+            identity: identity("PC"),
+            token: Arc::new(RwLock::new(Some(AccessToken::new("t1")))),
+            placement: placement.clone(),
+        };
+        set_placement(&placement, HeaderPlacement::EmbyAuthorization);
+        let mut headers = HeaderMap::new();
+        auth.apply(&mut headers, &mut Vec::new());
+        assert!(headers.get(AUTHORIZATION).is_none());
+        let value = &headers["x-emby-authorization"];
+        assert!(value.is_sensitive());
+        assert!(value.to_str().unwrap().starts_with("MediaBrowser Client="));
+    }
+
+    #[test]
+    fn a_basic_gateway_moves_jellyfins_header() {
+        use current_net::{BasicCredentials, ExtraHeader};
+        let basic = GatewayCredentials::new(
+            Some(BasicCredentials::new("user", "password").unwrap()),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let header = GatewayCredentials::new(
+            None,
+            vec![
+                ExtraHeader::new(
+                    "x-gate-key",
+                    "value",
+                    current_net::AuthorizationUse::Service,
+                )
+                .unwrap(),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        use HeaderPlacement::{Authorization, EmbyAuthorization};
+        assert_eq!(
+            HeaderPlacement::for_gateway(&basic, Authorization),
+            EmbyAuthorization
+        );
+        assert_eq!(
+            HeaderPlacement::for_gateway(&header, Authorization),
+            Authorization
+        );
+        assert_eq!(
+            HeaderPlacement::for_gateway(&GatewayCredentials::default(), EmbyAuthorization),
+            EmbyAuthorization
+        );
+    }
+
+    #[test]
+    fn only_a_challenge_to_authorization_suggests_the_other_header() {
+        use HeaderPlacement::{Authorization, EmbyAuthorization};
+        let auth = |challenges: Vec<current_net::AuthChallenge>| NetError::Auth {
+            status: 401,
+            message: None,
+            challenges,
+            page: false,
+        };
+        let challenged = auth(vec![current_net::AuthChallenge {
+            scheme: current_net::AuthScheme::BASIC,
+            realm: None,
+        }]);
+        assert_eq!(
+            HeaderPlacement::after_gateway_challenge(Authorization, &challenged),
+            Some(EmbyAuthorization)
+        );
+        assert_eq!(
+            HeaderPlacement::after_gateway_challenge(EmbyAuthorization, &challenged),
+            None
+        );
+        // Jellyfin's own 401 has no challenge.
+        assert_eq!(
+            HeaderPlacement::after_gateway_challenge(Authorization, &auth(Vec::new())),
+            None
+        );
+        assert_eq!(
+            HeaderPlacement::after_gateway_challenge(Authorization, &NetError::Unreachable),
+            None
+        );
     }
 }
