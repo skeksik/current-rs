@@ -80,47 +80,49 @@
 
             <!-- Signed-in servers: the server and user for now; browsing comes with M2 (docs/roadmap.md). -->
             <ScrollViewer Visibility="{x:Bind ViewModel.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}">
-                <Grid Style="{StaticResource PageColumnStyle}">
-                    <StackPanel Spacing="4">
-                        <ItemsControl ItemsSource="{x:Bind ViewModel.Rows, Mode=OneWay}" IsTabStop="False">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:ServerRow">
-                                    <Border Style="{StaticResource Card}" Margin="0,0,0,4">
-                                        <Grid ColumnSpacing="16">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel VerticalAlignment="Center">
-                                                <TextBlock
-                                                    Style="{StaticResource BodyStrongTextBlockStyle}"
-                                                    AutomationProperties.HeadingLevel="Level2"
-                                                    Text="{x:Bind Name, Mode=OneWay}" />
-                                                <TextBlock Text="{x:Bind Account, Mode=OneWay}" />
-                                                <TextBlock
-                                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                    Text="{x:Bind Product, Mode=OneWay}" />
-                                                <TextBlock
-                                                    Style="{StaticResource CaptionTextBlockStyle}"
-                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                    Text="{x:Bind Connection, Mode=OneWay}" />
-                                            </StackPanel>
-                                            <Button
-                                                Grid.Column="1"
-                                                VerticalAlignment="Center"
-                                                Content="Sign in"
-                                                AutomationProperties.Name="{x:Bind SignInLabel, Mode=OneWay}"
-                                                Visibility="{x:Bind SignInVisibility, Mode=OneWay}"
-                                                Click="OnSignInAgain" />
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                        <Button Margin="0,8,0,0" Content="Add another server" Click="OnAddServer" />
-                    </StackPanel>
-                </Grid>
+                <Border>
+                    <Grid Style="{StaticResource PageColumnStyle}">
+                        <StackPanel Spacing="4">
+                            <ItemsControl ItemsSource="{x:Bind ViewModel.Rows, Mode=OneWay}" IsTabStop="False">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ServerRow">
+                                        <Border Style="{StaticResource Card}" Margin="0,0,0,4">
+                                            <Grid ColumnSpacing="16">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel VerticalAlignment="Center">
+                                                    <TextBlock
+                                                        Style="{StaticResource BodyStrongTextBlockStyle}"
+                                                        AutomationProperties.HeadingLevel="Level2"
+                                                        Text="{x:Bind Name, Mode=OneWay}" />
+                                                    <TextBlock Text="{x:Bind Account, Mode=OneWay}" />
+                                                    <TextBlock
+                                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                        Text="{x:Bind Product, Mode=OneWay}" />
+                                                    <TextBlock
+                                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                        Text="{x:Bind Connection, Mode=OneWay}" />
+                                                </StackPanel>
+                                                <Button
+                                                    Grid.Column="1"
+                                                    VerticalAlignment="Center"
+                                                    Content="Sign in"
+                                                    AutomationProperties.Name="{x:Bind SignInLabel, Mode=OneWay}"
+                                                    Visibility="{x:Bind SignInVisibility, Mode=OneWay}"
+                                                    Click="OnSignInAgain" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Button Margin="0,8,0,0" Content="Add another server" Click="OnAddServer" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
             </ScrollViewer>
         </Grid>
     </Grid>
