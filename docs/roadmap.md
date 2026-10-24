@@ -137,6 +137,13 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
       gateway's 401 keeps the Jellyfin session. Choices decided by the owner (2026-10-22); the player and image parts follow the
       libmpv engine and the image path
   - [x] Spike: research and design (2026-10-22, PR 24, ADR 0017, docs/notes/gateway-auth.md)
+  - [x] Core (2026-10-24): gateway credentials per address and answer classification in `current-net` (PR 42), per-address
+        gateway secrets in the keyring (PR 41), Jellyfin probe classification, header placement and the 400 diagnosis (PR 43),
+        add-a-server gateway states, saved credentials and cookie rotation, the 401 rule (PR 44), the ffi surface and C# adapters
+        (PR 45); ADRs 0006, 0012-0015 amended as ADR 0017 proposed
+  - [ ] Windows UI: password dialog, WebView2 sign-in window with the origin bar, extra headers editor, "Sign in to the gateway
+        again"; checked live on the owner's Nginx and Cloudflare test setups
+  - [ ] Images and the player carry gateway credentials (with the image path and the libmpv engine)
 
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
