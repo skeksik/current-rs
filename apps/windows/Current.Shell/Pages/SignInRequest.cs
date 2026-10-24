@@ -10,7 +10,9 @@ namespace Current.Shell.Pages;
 /// </summary>
 /// <param name="HttpsFailedTls">Setup found https with a certificate this PC does not trust and fell back to http (ADR 0012).</param>
 /// <param name="UserName">The user to fill in, for signing in again; null for a new server.</param>
-internal sealed record SignInRequest(SignInFlow Flow, string ServerName, bool HttpsFailedTls, string? UserName)
+/// <param name="Saved">The saved server, for signing in again: a gateway in front of it can be signed in to from the page (ADR 0017).
+/// Null for a new server.</param>
+internal sealed record SignInRequest(SignInFlow Flow, string ServerName, bool HttpsFailedTls, string? UserName, ServerRef? Saved = null)
 {
     /// <summary>Set by the page that took the flow: a request is used once, even if the Frame offers it again.</summary>
     public bool Taken { get; set; }
@@ -34,7 +36,7 @@ internal sealed record SignInRequest(SignInFlow Flow, string ServerName, bool Ht
             App.ShowNotice(InfoBarSeverity.Error, $"Can't sign in to {row.Name}.", ProblemText.Unexpected);
             return;
         }
-        if (!frame.Navigate(typeof(SignInPage), new SignInRequest(flow, row.Name, false, row.UserName)))
+        if (!frame.Navigate(typeof(SignInPage), new SignInRequest(flow, row.Name, false, row.UserName, row.Server)))
         {
             flow.Dispose();
         }

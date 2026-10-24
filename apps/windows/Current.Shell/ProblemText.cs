@@ -99,9 +99,14 @@ internal static class ProblemText
             "These settings are from a newer version of Current, so this sign-in can't be saved. Update Current.",
         SignInProblem.Save => "Current couldn't save the sign-in to its settings folder.",
         SignInProblem.ServerRemoved => "This server was removed.",
-        SignInProblem.Gateway gateway => gateway.Answer == GatewayProblem.Unsupported
-            ? GatewayUnsupported
-            : "The gateway in front of the server wants you to sign in to it first.",
+        SignInProblem.Gateway gateway => gateway.Answer switch
+        {
+            GatewayProblem.Password => "The gateway in front of the server asks for its own password first.",
+            GatewayProblem.SignIn => "The gateway in front of the server wants you to sign in on its page first.",
+            GatewayProblem.Refused => "The gateway in front of the server refuses Current. If it gave you a service token or another "
+                + "secret header, add it as extra headers.",
+            _ => GatewayUnsupported,
+        },
         SignInProblem.EmbyHeaderIgnored => EmbyHeaderIgnored,
         SignInProblem.Unconfirmed => "The server's answer is being checked. Try again in a moment.",
         _ => Unexpected,
