@@ -476,7 +476,8 @@ async fn with_a_hook_a_401_keeps_the_token_until_the_app_decides() {
     assert_eq!(
         *events.lock().unwrap(),
         [SessionEvent::Unconfirmed {
-            token: AccessToken::new(TOKEN)
+            token: AccessToken::new(TOKEN),
+            unauthorized: true,
         }]
     );
     assert_no_secret(&log, &format!("{result:?} {client:?} {events:?}"));
@@ -503,26 +504,35 @@ async fn with_a_hook_a_401_keeps_the_token_until_the_app_decides() {
 
 #[tokio::test]
 async fn a_page_or_a_redirect_where_json_was_expected_is_checked_too() {
-    for (status, body) in [(200, "<html>sign in</html>"), (403, "<html>sign in</html>")] {
-        let server = StandIn::start(move |_: &Received| (status, body.to_owned())).await;
+    for status in [200, 403] {
+        let server =
+            StandIn::start(move |_: &Received| (status, "<html>sign in</html>".to_owned())).await;
         let client = client(&server, &Arc::new(RequestLog::default()));
         let events = recorder(&client);
         client.set_token(AccessToken::new(TOKEN));
-        assert_eq!(
-            client.current_user().await,
-            Err(AuthError::Unconfirmed),
-            "{status}"
-        );
+        // The request answers as it would without a check: a page is no 401, so it can never end the session.
+        let result = client.current_user().await;
+        if status == 403 {
+            assert_eq!(result, Err(AuthError::Refused));
+        } else {
+            assert!(
+                matches!(result, Err(AuthError::Network(NetError::Decode { .. }))),
+                "{result:?}"
+            );
+        }
         assert!(client.has_token());
-        assert_eq!(events.lock().unwrap().len(), 1);
-        // A new token ends the check.
-        client.set_token(AccessToken::new("a-newer-token"));
         assert_eq!(
-            client.current_user().await,
-            Err(AuthError::Unconfirmed),
-            "{status}"
+            *events.lock().unwrap(),
+            [SessionEvent::Unconfirmed {
+                token: AccessToken::new(TOKEN),
+                unauthorized: false,
+            }]
         );
-        assert_eq!(server.received().len(), 2);
+        // Held back while the check runs; a new token ends the check.
+        assert_eq!(client.current_user().await, Err(AuthError::Unconfirmed));
+        client.set_token(AccessToken::new("a-newer-token"));
+        let _ = client.current_user().await;
+        assert_eq!(server.received().len(), 2, "{status}");
     }
     // A plain 403 is Jellyfin refusing one request: no check.
     let server = StandIn::start(|_: &Received| (403, String::new())).await;

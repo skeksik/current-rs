@@ -51,8 +51,8 @@ pub enum AuthError {
     /// The request needs a token and the client has none.
     #[error("not signed in")]
     NotSignedIn,
-    /// An answer that may not be Jellyfin's (a 401 without a challenge, a redirect that was not followed, an HTML page where JSON
-    /// was expected) is being checked with the identity probe ([`SessionEvent::Unconfirmed`]): the token is kept meanwhile and
+    /// A 401 without a challenge, which may be Jellyfin's or a gateway's, is being checked with the identity probe
+    /// ([`SessionEvent::Unconfirmed`]); requests made while any such check runs get this too. The token is kept meanwhile and
     /// nothing is sent. Try again once the check is done.
     #[error("the server's answer is being checked")]
     Unconfirmed,
@@ -97,11 +97,17 @@ pub struct QuickConnectCode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
     /// A 401 without a challenge, a redirect that was not followed or an HTML page where JSON was expected, to a request that
-    /// carried `token`: Jellyfin ended the session, or a gateway in front of it wants a sign-in. The client keeps the token and
-    /// answers [`AuthError::Unconfirmed`] without sending anything until the app has re-run the identity probe and called
-    /// [`JellyfinClient::revoke`] (Jellyfin's 401) or [`JellyfinClient::resume`]. Reported once per check: such answers that
-    /// arrive while one runs join it.
-    Unconfirmed { token: AccessToken },
+    /// carried `token`: a gateway in front of the server may want a sign-in, or (for a 401 only) Jellyfin ended the session. The
+    /// client keeps the token and answers [`AuthError::Unconfirmed`] without sending anything until the app has re-run the
+    /// identity probe and called [`JellyfinClient::revoke`] or [`JellyfinClient::resume`]. Reported once per check: such answers
+    /// that arrive while one runs join it.
+    ///
+    /// `unauthorized` is true for a 401. Only then can a passing probe mean the session ended: Jellyfin never answers with a page
+    /// or a redirect, and a 403 never ends a session (ADR 0015), so for those a passing probe means the app resumes.
+    Unconfirmed {
+        token: AccessToken,
+        unauthorized: bool,
+    },
     /// A gateway's challenge mid-session ([`AuthError::Gateway`]): the token is kept and nothing waits for the app.
     Gateway(GatewayAnswer),
 }
@@ -354,9 +360,11 @@ impl JellyfinClient {
 
     /// Sends a request that needs the token. A 401 or 403 with a `WWW-Authenticate` challenge is a gateway's
     /// ([`AuthError::Gateway`]): the token is kept and the hook hears it (ADR 0017). A 401 without a challenge, a redirect that was
-    /// not followed, or an HTML page where JSON was expected may be Jellyfin's or a gateway's: with a hook, the token is kept and
-    /// the hook asked to confirm ([`SessionEvent::Unconfirmed`], the 401 rule's second part); without one, a 401 forgets the token
-    /// (ADR 0015). A 403 without a challenge never does: the token is valid, only this request was refused.
+    /// not followed, or an HTML page where JSON was expected may be a gateway's: with a hook, the token is kept and the hook asked
+    /// to confirm ([`SessionEvent::Unconfirmed`], the 401 rule's second part). The 401 answers [`AuthError::Unconfirmed`]; a page
+    /// or a redirect answers as it would without a hook ([`AuthError::Refused`] for a 403 page, the network error for a redirect,
+    /// the page itself for a 2xx one). Without a hook, a 401 forgets the token (ADR 0015). A 403 never does: the token is valid,
+    /// only this request was refused.
     pub async fn send_authenticated(&self, request: Request) -> Result<Response, AuthError> {
         let Some(token) = auth::read(&self.token) else {
             return Err(AuthError::NotSignedIn);
@@ -382,16 +390,22 @@ impl JellyfinClient {
             Ok(_) => classify(&result) == GatewayShape::SignIn,
             Err(_) => false,
         };
+        let unauthorized = matches!(result, Err(NetError::Auth { status: 401, .. }));
         if unconfirmed && let Some(hook) = self.hook() {
             if self.begin_check(&token) {
-                hook(SessionEvent::Unconfirmed { token });
+                hook(SessionEvent::Unconfirmed {
+                    token: token.clone(),
+                    unauthorized,
+                });
             }
-            return Err(AuthError::Unconfirmed);
+            if unauthorized {
+                return Err(AuthError::Unconfirmed);
+            }
         }
         match result {
             Ok(response) => Ok(response),
             Err(NetError::Auth { status: 401, .. }) => {
-                // A newer sign-in may have set another token meanwhile: only the token that failed is forgotten.
+                // Without a hook. A newer sign-in may have set another token meanwhile: only the token that failed is forgotten.
                 self.forget(&token);
                 Err(AuthError::SessionRevoked)
             }

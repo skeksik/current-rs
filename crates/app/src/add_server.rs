@@ -199,11 +199,12 @@ impl AddServer {
         password: &str,
         confirm_plain_http: bool,
     ) -> Result<(), GatewaySubmitError> {
+        let seen = self.generation.load(Ordering::SeqCst);
         if !matches!(*self.state.borrow(), AddServerState::GatewayPassword { .. }) {
             return Err(GatewaySubmitError::NotAsked);
         }
         let basic = gateway::basic(user, password)?;
-        self.submit(confirm_plain_http, true, |current| {
+        self.submit(seen, confirm_plain_http, true, |current| {
             Ok(gateway::merge(current, Some(basic), None, None)?)
         })
         .await
@@ -222,6 +223,7 @@ impl AddServer {
         cookies: &[CookieInput],
         confirm_plain_http: bool,
     ) -> Result<(), GatewaySubmitError> {
+        let seen = self.generation.load(Ordering::SeqCst);
         if !matches!(*self.state.borrow(), AddServerState::GatewaySignIn { .. }) {
             return Err(GatewaySubmitError::NotAsked);
         }
@@ -234,7 +236,7 @@ impl AddServer {
             // Nothing that could let the server through: no probe.
             return Ok(());
         }
-        self.submit(confirm_plain_http, false, |current| {
+        self.submit(seen, confirm_plain_http, false, |current| {
             Ok(gateway::merge(current, None, None, Some(kept))?)
         })
         .await
@@ -250,6 +252,7 @@ impl AddServer {
         headers: &[HeaderInput],
         confirm_plain_http: bool,
     ) -> Result<(), GatewaySubmitError> {
+        let seen = self.generation.load(Ordering::SeqCst);
         if !matches!(
             *self.state.borrow(),
             AddServerState::GatewayPassword { .. }
@@ -259,16 +262,18 @@ impl AddServer {
             return Err(GatewaySubmitError::NotAsked);
         }
         let headers = gateway::headers(headers)?;
-        self.submit(confirm_plain_http, true, |current| {
+        self.submit(seen, confirm_plain_http, true, |current| {
             Ok(gateway::merge(current, None, Some(headers), None)?)
         })
         .await
     }
 
-    /// Probes the pending address with the credentials `change` makes from those given so far. `show_probing`: the UI shows
-    /// `Probing` meanwhile (not for cookies, whose window stays open).
+    /// Probes the pending address with the credentials `change` makes from those given so far. `seen` is the probe generation
+    /// whose state asked for them: if a reset or a newer probe came since, nothing is sent, so the values never reach another
+    /// address. `show_probing`: the UI shows `Probing` meanwhile (not for cookies, whose window stays open).
     async fn submit(
         &self,
+        seen: u64,
         confirm_plain_http: bool,
         show_probing: bool,
         change: impl FnOnce(&GatewayCredentials) -> Result<GatewayCredentials, GatewaySubmitError>,
@@ -276,6 +281,11 @@ impl AddServer {
         let asked_password = matches!(*self.state.borrow(), AddServerState::GatewayPassword { .. });
         let (input, base, credentials, confirmed) = {
             let pending = self.lock_pending();
+            // Every probe and reset changes the generation before it touches `pending`, so under this lock it tells whether
+            // `pending` is still the address the state asked for.
+            if self.generation.load(Ordering::SeqCst) != seen {
+                return Err(GatewaySubmitError::NotAsked);
+            }
             let Some(pending) = pending.as_ref() else {
                 return Err(GatewaySubmitError::NotAsked);
             };

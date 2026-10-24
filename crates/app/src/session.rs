@@ -698,20 +698,46 @@ impl Shared {
             Target::New { gateway, .. } => gateway.clone(),
             Target::Saved(_) => None,
         };
-        let (saved, version, remembered) = blocking("save", move || {
-            let Some((saved, version)) = shared.commit(|servers, last_key| {
+        let in_use = gateway_in_use.clone();
+        let (saved, version, remembered, new_gateway) = blocking("save", move || {
+            let mut stored = None;
+            let committed = shared.commit(|servers, last_key| {
+                // Whether the address is saved already (the same address set up again): its key then stays its own.
+                let known = match &target {
+                    Target::New { id, address, .. } => servers.iter().any(|saved| {
+                        saved.server.service == ServiceType::JELLYFIN
+                            && &saved.id == id
+                            && saved.addresses.iter().any(|a| a.url == address.url)
+                    }),
+                    Target::Saved(_) => true,
+                };
                 let (saved, version) = record(servers, &target, &user, last_key)?;
                 let index = servers.iter().position(|s| s.server == saved.server)?;
                 let record = &mut servers[index];
-                if let Some(placement) = placement {
-                    record.header_placement = gateway::stored_placement(placement);
+                // Moved towards `X-Emby-Authorization` only, never back on its own: a sign-in on an address without a gateway
+                // must not undo what another address's gateway needs (ADR 0017).
+                if placement == Some(HeaderPlacement::EmbyAuthorization) {
+                    record.header_placement =
+                        gateway::stored_placement(HeaderPlacement::EmbyAuthorization);
                 }
-                if let (Target::New { address, .. }, Some(in_use)) = (&target, &gateway_in_use) {
-                    shared.save_new_gateway(record, &address.url, in_use);
+                if let (Target::New { address, .. }, Some(in_use)) = (&target, &in_use) {
+                    stored = shared
+                        .store_new_gateway(record, &address.url, in_use)
+                        .map(|stored| (stored, known));
                 }
                 Some((record.clone(), version))
-            })?
-            else {
+            });
+            let committed = match committed {
+                Ok(committed) => committed,
+                Err(error) => {
+                    // Not saved: a new address's key and id stay free for the next server, so nothing may be left under them.
+                    if let Some((stored, false)) = &stored {
+                        shared.unstore_new_gateway(stored);
+                    }
+                    return Err(error.into());
+                }
+            };
+            let Some((saved, version)) = committed else {
                 return Err(SignInError::ServerRemoved);
             };
             let remembered = match &shared.storage {
@@ -724,9 +750,13 @@ impl Shared {
                     .is_ok(),
                 None => false,
             };
-            Ok((saved, version, remembered))
+            Ok((saved, version, remembered, stored))
         })
         .await??;
+        // Only once saved does the gateway become the address's (and rotations of it saved).
+        if let (Some((new_gateway, _)), Some(in_use)) = (new_gateway, &gateway_in_use) {
+            self.adopt_new_gateway(new_gateway, in_use);
+        }
 
         let server = saved.server.clone();
         let mut user = signed_in.user;

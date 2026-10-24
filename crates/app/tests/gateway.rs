@@ -108,6 +108,16 @@ struct Server {
     rotate_to: Mutex<Option<String>>,
     /// Closes the connection without an answer on `/System/Info/Public`.
     info_down: AtomicBool,
+    /// `/System/Info/Public` answers 500.
+    info_fails: AtomicBool,
+    /// `/System/Info/Public` answers after 300 ms.
+    info_slow: AtomicBool,
+    /// The next `/Users/Me` answers 401, once.
+    me_fails_once: AtomicBool,
+    /// A proxy rule in front of the server blocks `/Users/Me` with a 403 page; the rest goes through.
+    me_blocked: AtomicBool,
+    /// The server's id.
+    id: Mutex<String>,
     tokens: Mutex<HashSet<String>>,
     issued: AtomicUsize,
     received: Mutex<Vec<Received>>,
@@ -120,6 +130,11 @@ impl Server {
             cookies: Mutex::new(vec![COOKIE_VALUE.to_owned()]),
             rotate_to: Mutex::new(None),
             info_down: AtomicBool::new(false),
+            info_fails: AtomicBool::new(false),
+            info_slow: AtomicBool::new(false),
+            me_fails_once: AtomicBool::new(false),
+            me_blocked: AtomicBool::new(false),
+            id: Mutex::new(SERVER_ID.to_owned()),
             tokens: Mutex::new(HashSet::new()),
             issued: AtomicUsize::new(0),
             received: Mutex::new(Vec::new()),
@@ -196,11 +211,14 @@ impl Server {
         let valid = token
             .as_ref()
             .is_some_and(|token| self.tokens.lock().unwrap().contains(token));
+        let id = self.id.lock().unwrap().clone();
         match request.path.as_str() {
+            "/System/Info/Public" if self.info_fails.load(Ordering::SeqCst) => json(500, ""),
+            "/Users/Me" if self.me_fails_once.swap(false, Ordering::SeqCst) => json(401, ""),
             "/System/Info/Public" => json(
                 200,
                 &format!(
-                    r#"{{"ServerName":"Test Server","Version":"12.2.0","ProductName":"Jellyfin Server","Id":"{SERVER_ID}","StartupWizardCompleted":true}}"#
+                    r#"{{"ServerName":"Test Server","Version":"12.2.0","ProductName":"Jellyfin Server","Id":"{id}","StartupWizardCompleted":true}}"#
                 ),
             ),
             "/Users/AuthenticateByName" if !fields.contains("Client=") => json(400, ""),
@@ -210,7 +228,7 @@ impl Server {
                 json(
                     200,
                     &format!(
-                        r#"{{"User":{},"SessionInfo":{{}},"AccessToken":"{token}","ServerId":"{SERVER_ID}"}}"#,
+                        r#"{{"User":{},"SessionInfo":{{}},"AccessToken":"{token}","ServerId":"{id}"}}"#,
                         user()
                     ),
                 )
@@ -276,8 +294,20 @@ async fn listen(server: &Arc<Server>, gated: bool) -> String {
                     return;
                 };
                 server.received.lock().unwrap().push(request.clone());
-                if request.path == "/System/Info/Public" && server.info_down.load(Ordering::SeqCst)
+                if request.path == "/System/Info/Public" {
+                    if server.info_down.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    if server.info_slow.load(Ordering::SeqCst) {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    }
+                }
+                if gated && request.path == "/Users/Me" && server.me_blocked.load(Ordering::SeqCst)
                 {
+                    let page = "<!DOCTYPE html><html><body>Blocked</body></html>";
+                    let text = answer(403, &["content-type: text/html".to_owned()], page);
+                    let _ = socket.write_all(text.as_bytes()).await;
+                    let _ = socket.shutdown().await;
                     return;
                 }
                 let text = match gated.then(|| server.gate(&request)).flatten() {
@@ -845,9 +875,16 @@ async fn an_expired_gateway_session_keeps_the_jellyfin_session_until_signed_in_a
     let temp = tempfile::tempdir().unwrap();
     let secrets = Arc::new(MemorySecrets::new());
     let (server, app, client) = signed_in_through_portal(temp.path(), &secrets).await;
-    // The gateway forgets its session: requests get its sign-in page.
+    // The gateway forgets its session: requests get its sign-in page, which is no JSON.
     server.cookies.lock().unwrap().clear();
-    assert_eq!(client.current_user().await, Err(AuthError::Unconfirmed));
+    let result = client.current_user().await;
+    assert!(
+        matches!(
+            result,
+            Err(AuthError::Network(current_net::NetError::Decode { .. }))
+        ),
+        "{result:?}"
+    );
     eventually(|| app.capabilities().borrow().servers[0].gateway_sign_in_needed).await;
     let status = app.capabilities().borrow().servers[0].clone();
     assert!(status.signed_in, "{status:?}");
@@ -883,38 +920,220 @@ async fn an_expired_gateway_session_keeps_the_jellyfin_session_until_signed_in_a
     assert_nothing_secret(&app, temp.path(), &format!("{flow:?}"));
 }
 
-#[tokio::test]
-async fn a_401_whose_probe_reaches_nothing_changes_nothing() {
+fn info_probes(server: &Server) -> usize {
+    server
+        .received()
+        .iter()
+        .filter(|r| r.path == "/System/Info/Public")
+        .count()
+}
+
+/// Asks for the current user until the answer is not `Unconfirmed` (at most 5 s): the check has ended.
+async fn after_the_check(client: &JellyfinClient) -> Result<current_model::User, AuthError> {
+    for _ in 0..500 {
+        let result = client.current_user().await;
+        if result != Err(AuthError::Unconfirmed) {
+            return result;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("still unconfirmed after 5 s");
+}
+
+/// A server signed in without a gateway.
+async fn signed_in_directly(
+    dir: &Path,
+    secrets: &Arc<MemorySecrets>,
+) -> (Arc<Server>, App, Arc<JellyfinClient>) {
     let server = Server::new(Gate::Open);
     let address = listen(&server, true).await;
-    let temp = tempfile::tempdir().unwrap();
-    let secrets = Arc::new(MemorySecrets::new());
-    let app = open(temp.path(), &secrets);
+    let app = open(dir, secrets);
     let setup = app.add_server();
     setup.probe(&address).await;
     let client = sign_in(&app, ready(state_of(&setup))).await;
+    (server, app, client)
+}
 
-    server.info_down.store(true, Ordering::SeqCst);
-    server.revoke_all();
+#[tokio::test]
+async fn a_401_whose_probe_gets_another_answer_runs_one_probe_and_changes_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let (server, app, client) = signed_in_directly(temp.path(), &secrets).await;
+    let before = info_probes(&server);
+    server.info_fails.store(true, Ordering::SeqCst);
+    server.me_fails_once.store(true, Ordering::SeqCst);
     assert_eq!(client.current_user().await, Err(AuthError::Unconfirmed));
-    // Once the probe has given up, requests go out again: the session and its token stay.
-    eventually(|| {
-        server
-            .received()
-            .iter()
-            .filter(|r| r.path == "/System/Info/Public")
-            .count()
-            >= 2
-    })
-    .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Once the check is done, requests go out again and work.
+    assert!(after_the_check(&client).await.is_ok());
+    assert_eq!(info_probes(&server), before + 1);
     let status = app.capabilities().borrow().servers[0].clone();
     assert!(
         status.signed_in && !status.gateway_sign_in_needed,
         "{status:?}"
     );
-    assert!(client.has_token());
     assert!(token_kept(&app, &secrets));
+}
+
+#[tokio::test]
+async fn a_401_whose_probe_reaches_nothing_changes_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let (server, app, client) = signed_in_directly(temp.path(), &secrets).await;
+    server.info_down.store(true, Ordering::SeqCst);
+    server.me_fails_once.store(true, Ordering::SeqCst);
+    assert_eq!(client.current_user().await, Err(AuthError::Unconfirmed));
+    // The probe reached nothing: the session and its token stay, and requests are not held back once the server is back.
+    let result = after_the_check(&client).await;
+    assert_ne!(result, Err(AuthError::SessionRevoked));
+    server.info_down.store(false, Ordering::SeqCst);
+    app.returned_to_foreground();
+    eventually(|| {
+        app.capabilities().borrow().servers[0].reachability
+            == current_model::Reachability::Reachable
+    })
+    .await;
+    assert!(after_the_check(&client).await.is_ok());
+    let status = app.capabilities().borrow().servers[0].clone();
+    assert!(
+        status.signed_in && !status.gateway_sign_in_needed,
+        "{status:?}"
+    );
+    assert!(token_kept(&app, &secrets));
+}
+
+#[tokio::test]
+async fn concurrent_401s_start_one_probe() {
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let (server, app, client) = signed_in_directly(temp.path(), &secrets).await;
+    let before = info_probes(&server);
+    server.info_slow.store(true, Ordering::SeqCst);
+    server.revoke_all();
+    let results = futures_join(&client, 5).await;
+    assert!(
+        results.iter().all(|r| *r == Err(AuthError::Unconfirmed)),
+        "{results:?}"
+    );
+    eventually(|| !app.capabilities().borrow().servers[0].signed_in).await;
+    eventually(|| !token_kept(&app, &secrets)).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(info_probes(&server), before + 1);
+}
+
+/// `count` requests for the current user at once.
+async fn futures_join(
+    client: &Arc<JellyfinClient>,
+    count: usize,
+) -> Vec<Result<current_model::User, AuthError>> {
+    let tasks: Vec<_> = (0..count)
+        .map(|_| {
+            let client = client.clone();
+            tokio::spawn(async move { client.current_user().await })
+        })
+        .collect();
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap());
+    }
+    results
+}
+
+#[tokio::test]
+async fn a_blocked_page_with_a_passing_probe_never_ends_the_session() {
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let (server, app, client) = signed_in_through_portal(temp.path(), &secrets).await;
+    let before = info_probes(&server);
+    server.me_blocked.store(true, Ordering::SeqCst);
+    // A 403 page is no 401: the request is refused, and the check that runs ends without touching the session.
+    assert_eq!(client.current_user().await, Err(AuthError::Refused));
+    eventually(|| info_probes(&server) == before + 1).await;
+    server.me_blocked.store(false, Ordering::SeqCst);
+    assert!(after_the_check(&client).await.is_ok());
+    let status = app.capabilities().borrow().servers[0].clone();
+    assert!(
+        status.signed_in && !status.gateway_sign_in_needed,
+        "{status:?}"
+    );
+    assert!(client.has_token() && token_kept(&app, &secrets));
+}
+
+#[tokio::test]
+async fn a_failed_settings_write_leaves_no_gateway_for_the_next_server() {
+    let gated = Server::new(Gate::Basic);
+    let gated_address = listen(&gated, true).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    let setup = app.add_server();
+    setup.probe(&gated_address).await;
+    setup
+        .submit_password(GATE_USER, GATE_PASSWORD, false)
+        .await
+        .unwrap();
+    let found = ready(state_of(&setup));
+
+    // The settings cannot be written: a folder stands where the file goes.
+    let file = temp.path().join(current_store::SETTINGS_FILE);
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    std::fs::write(file.join("keep"), "").unwrap();
+    let flow = app.sign_in(found).unwrap();
+    flow.with_password("Example User", PASSWORD).await;
+    let state = flow.state().borrow().clone();
+    assert!(matches!(state, SignInState::Failed { .. }), "{state:?}");
+    assert!(app.servers().is_empty());
+    // Nothing is left under the key and address id the next server gets.
+    let key = GatewayKey::new(jellyfin("1"), current_model::AddressId::new(1));
+    assert!(
+        get_gateway_secret(secrets.as_ref(), &key)
+            .unwrap()
+            .is_none()
+    );
+    std::fs::remove_dir_all(&file).unwrap();
+
+    // Another server, without a gateway, gets that key and id: it never receives the first server's password.
+    let other = Server::new(Gate::Open);
+    *other.id.lock().unwrap() = "fedcba9876543210fedcba9876543210".into();
+    let other_address = listen(&other, true).await;
+    let setup = app.add_server();
+    setup.probe(&other_address).await;
+    let client = sign_in(&app, ready(state_of(&setup))).await;
+    assert_eq!(app.servers()[0].server, jellyfin("1"));
+    assert!(client.current_user().await.is_ok());
+    for request in other.received() {
+        assert!(!request.all().contains(BASIC), "{request:?}");
+    }
+}
+
+#[tokio::test]
+async fn an_address_without_a_gateway_never_moves_the_header_back() {
+    let server = Server::new(Gate::Basic);
+    let public = listen(&server, true).await;
+    let lan = listen(&server, false).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let app = open(temp.path(), &secrets);
+    let setup = app.add_server();
+    setup.probe(&public).await;
+    setup
+        .submit_password(GATE_USER, GATE_PASSWORD, false)
+        .await
+        .unwrap();
+    sign_in(&app, ready(state_of(&setup))).await;
+    assert_eq!(
+        app.servers()[0].header_placement,
+        AuthHeader::X_EMBY_AUTHORIZATION
+    );
+    // The LAN address signs in with `Authorization`: the server's setting stays, for the gated address.
+    let setup = app.add_server();
+    setup.probe(&lan).await;
+    sign_in(&app, ready(state_of(&setup))).await;
+    assert_eq!(app.servers()[0].addresses.len(), 2);
+    assert_eq!(
+        app.servers()[0].header_placement,
+        AuthHeader::X_EMBY_AUTHORIZATION
+    );
 }
 
 #[tokio::test]

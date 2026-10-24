@@ -18,7 +18,8 @@ use current_net::{
     AddressProvider, ClientConfig, Gateway, GatewayCredentials, RuntimeHandle, ServerClient, Url,
 };
 use current_store::{
-    GatewayKey, GatewaySecret, StoreError, get_gateway_secret, set_gateway_secret,
+    GatewayKey, GatewaySecret, StoreError, delete_gateway_secret, get_gateway_secret,
+    set_gateway_secret,
 };
 
 use super::{Shared, UNCHECKED, blocking, lock};
@@ -42,6 +43,14 @@ pub(super) struct GatewayEntry {
     saved: u64,
     /// Whether the credentials are in the keyring: rotated cookies are saved only then. Credentials the keyring refused last for
     /// this run only, as a token does (ADR 0013).
+    remembered: bool,
+}
+
+/// A new server's gateway credentials, stored in the keyring (when `remembered`) but not yet in use.
+pub(super) struct NewGateway {
+    key: GatewayKey,
+    credentials: GatewayCredentials,
+    count: u64,
     remembered: bool,
 }
 
@@ -117,31 +126,61 @@ impl Shared {
         }
     }
 
-    /// Saves the gateway a new server's sign-in went through for its address at `url` in `record`: the credentials in the keyring
-    /// first, then (in the settings write that follows) the kinds on the address. Credentials the keyring refuses are used for
-    /// this run only and the kinds stay empty. Blocking: called inside [`Shared::commit`].
-    pub(super) fn save_new_gateway(
+    /// Stores the gateway a new server's sign-in went through for its address at `url` in `record`: the credentials in the
+    /// keyring first, then (in the settings write that follows) the kinds on the address. Credentials the keyring refuses are used
+    /// for this run only and the kinds stay empty. Nothing is cached here: the caller adopts the result with
+    /// [`Shared::adopt_new_gateway`] once the settings write succeeded, and deletes the keyring entry if it failed, so a key and
+    /// address id that a failed write leaves free never lead to these credentials. Blocking: called inside [`Shared::commit`].
+    pub(super) fn store_new_gateway(
         &self,
         record: &mut SavedServer,
         url: &str,
         in_use: &Arc<Gateway>,
-    ) {
+    ) -> Option<NewGateway> {
         let server = record.server.clone();
-        let Some(address) = record.addresses.iter_mut().find(|a| a.url == url) else {
-            return;
-        };
-        let Some(id) = address.id else {
-            return;
-        };
+        let address = record.addresses.iter_mut().find(|a| a.url == url)?;
+        let id = address.id?;
         let (credentials, count) = in_use.snapshot();
         if credentials.is_empty() {
-            return;
+            return None;
         }
-        let remembered = self.store_gateway(&GatewayKey::new(server.clone(), id), &credentials);
+        let key = GatewayKey::new(server, id);
+        let remembered = self.store_gateway(&key, &credentials);
         if remembered {
             address.gateway = gateway::kinds(&credentials);
         }
-        self.adopt_gateway(&server, id, in_use.clone(), remembered, count);
+        Some(NewGateway {
+            key,
+            credentials,
+            count,
+            remembered,
+        })
+    }
+
+    /// Uses a new server's gateway, stored by [`Shared::store_new_gateway`] and saved: an address already in use (the same
+    /// address set up again) gets the new credentials in place, so every client of it carries them; otherwise `in_use` becomes
+    /// the address's.
+    pub(super) fn adopt_new_gateway(&self, stored: NewGateway, in_use: &Arc<Gateway>) {
+        let NewGateway {
+            key,
+            credentials,
+            count,
+            remembered,
+        } = stored;
+        match self.gateway_of(&key.server, key.address) {
+            Some(existing) if !Arc::ptr_eq(&existing, in_use) => {
+                existing.replace(credentials);
+                self.gateway_stored(&key.server, key.address, remembered, existing.changes());
+            }
+            _ => self.adopt_gateway(&key.server, key.address, in_use.clone(), remembered, count),
+        }
+    }
+
+    /// Deletes a gateway secret [`Shared::store_new_gateway`] wrote for a settings write that then failed. Blocking.
+    pub(super) fn unstore_new_gateway(&self, stored: &NewGateway) {
+        if let (Some(storage), true) = (&self.storage, stored.remembered) {
+            let _ = delete_gateway_secret(storage.secrets.as_ref(), &stored.key);
+        }
     }
 
     /// Makes `gateway` the address's, as stored at `count` (when `remembered`).
@@ -196,15 +235,32 @@ impl Shared {
 
     /// Saves the server's gateway credentials that changed since they were last stored (a gateway's rotated cookies, ADR 0017),
     /// only for addresses whose credentials are in the keyring. Nothing is written when no count moved.
+    ///
+    /// Runs under the session lock, as removing the server and a sign-in to the gateway do: a rotation can never land after the
+    /// removal deleted the secret, nor over the credentials of a newer sign-in to the gateway. Under it, the server and each
+    /// address must still be saved with gateway kinds, and the count must still differ.
     pub(super) async fn save_rotations(self: &Arc<Self>, server: &ServerRef) {
+        if self.storage.is_none() {
+            return;
+        }
+        let _changes = self.changes.lock().await;
+        let Some(saved) = self.saved(server) else {
+            return;
+        };
         let moved: Vec<(AddressId, Arc<Gateway>)> = lock(&self.gateways)
             .iter()
             .filter(|((owner, _), entry)| {
                 owner == server && entry.remembered && entry.gateway.changes() != entry.saved
             })
             .map(|((_, address), entry)| (*address, entry.gateway.clone()))
+            .filter(|(address, _)| {
+                saved
+                    .addresses
+                    .iter()
+                    .any(|a| a.id == Some(*address) && !a.gateway.is_empty())
+            })
             .collect();
-        if moved.is_empty() || self.storage.is_none() {
+        if moved.is_empty() {
             return;
         }
         let shared = self.clone();
@@ -212,7 +268,14 @@ impl Shared {
         let _ = blocking("save", move || {
             for (address, gateway) in moved {
                 let (credentials, count) = gateway.snapshot();
-                if shared.store_gateway(&GatewayKey::new(server.clone(), address), &credentials) {
+                let still_moved = lock(&shared.gateways)
+                    .get(&(server.clone(), address))
+                    .is_some_and(|entry| {
+                        Arc::ptr_eq(&entry.gateway, &gateway) && entry.saved != count
+                    });
+                if still_moved
+                    && shared.store_gateway(&GatewayKey::new(server.clone(), address), &credentials)
+                {
                     shared.gateway_stored(&server, address, true, count);
                 }
             }
@@ -231,7 +294,10 @@ impl Shared {
     ) {
         match event {
             SessionEvent::Gateway(_) => self.needs_gateway_sign_in(server, id, None),
-            SessionEvent::Unconfirmed { token } => {
+            SessionEvent::Unconfirmed {
+                token,
+                unauthorized,
+            } => {
                 let Some(client) = client.upgrade() else {
                     return;
                 };
@@ -244,7 +310,9 @@ impl Shared {
                 let shared = self.clone();
                 let server = server.clone();
                 runtime.spawn(async move {
-                    shared.confirm(&server, id, token, &client).await;
+                    shared
+                        .confirm(&server, id, token, unauthorized, &client)
+                        .await;
                     shared.set_confirming(&server, id, false);
                 });
             }
@@ -252,14 +320,16 @@ impl Shared {
     }
 
     /// The 401 rule's second part: re-runs the identity probe through the server's provider, with the address's gateway
-    /// credentials and never the token. Jellyfin's answer with the server's id: the 401 was Jellyfin's, the session ends (ADR
-    /// 0015). A gateway's answer: "Sign in to the gateway again", session and token kept. No answer: nothing changes. The client
+    /// credentials and never the token. Jellyfin's answer with the server's id after a 401 (`unauthorized`): the 401 was
+    /// Jellyfin's, the session ends (ADR 0015); after a page or a redirect, which Jellyfin never sends, nothing changes (a proxy
+    /// rule blocking one path, say). A gateway's answer: "Sign in to the gateway again", session and token kept. No answer: nothing changes. The client
     /// holds its requests back meanwhile and lets them go once this decides, so at most one probe runs per session.
     async fn confirm(
         self: &Arc<Self>,
         server: &ServerRef,
         id: u64,
         token: AccessToken,
+        unauthorized: bool,
         client: &JellyfinClient,
     ) {
         let link = lock(&self.links)
@@ -280,7 +350,7 @@ impl Shared {
             Err(_) => None,
         };
         match answer {
-            Some(Ok(_)) => {
+            Some(Ok(_)) if unauthorized => {
                 if client.revoke(&token) {
                     self.revoked(server, id);
                 }
