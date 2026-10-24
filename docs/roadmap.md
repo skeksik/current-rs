@@ -64,6 +64,8 @@ before merging, and its PR carries only the record.
       costly custom hook added later, that could stall the core for every subscription (not verified in production). Possible
       fixes: deliver listener callbacks off the core workers, or keep the panic hook cheap. Decide when the playback work raises
       the worker count
+- [ ] Windows, not measured in the owner's M1 runs: the caption buttons' pressed colour against Windows' own apps (high contrast
+      and Narrator passed on PR 39's run, 2026-10-24; docs/notes/windows-shell.md)
 - [ ] Linux: choose how to ship (Flatpak, per-distro packages, AppImage or tarball; ADR 0011) before M5's release work
 - [ ] Windows: move `CommunityToolkit.WinUI.Controls.SettingsControls` from 8.3.260402-preview2 to 8.3 stable when it ships with the
       same component-package dependency (docs/notes/windows-shell.md, "Windows Community Toolkit")
@@ -71,7 +73,7 @@ before merging, and its PR carries only the record.
       are minimums and NuGet's NU1603 (InteractiveExperiences 2.1.8 not on nuget.org) stays a warning
 - [ ] Linux HDR: revisit when GTK enables Wayland colour management by default or mpv's render API gains HDR output (ADR 0011)
 
-## M1: Jellyfin sign-in and server setup (Windows)
+## M1: Jellyfin sign-in and server setup (Windows) (done 2026-10-24)
 Each item starts with our own research (the server's API and source, the platform's documentation, how existing clients behave),
 recorded with sources and dates, and a decision record where it decides something.
 - [x] Server setup: add a Jellyfin server by URL, check it is the same server on every address, warn about plain HTTP except locally
@@ -115,14 +117,12 @@ recorded with sources and dates, and a decision record where it decides somethin
     - [x] 9. Caption buttons as tall as the title bar (48 × 48, as Photos'); back and pane buttons 40 × 36, as Windows Settings'
     - [x] 10. Title bar buttons that work while the pane is open over the page: the navigation view under the title bar
     - [x] 11. Caption button hover in the app's theme, also after a switch while the app runs
-  - [ ] Not verified on the owner's run: the pressed caption colour, a switch to high contrast while the app runs, Narrator read
-        aloud
 - [x] App theme in Settings, as in Photos: Personalization → "App theme", Light / Dark / Windows default (owner, 2026-10-24); saved
       in the core (ADR 0013), applied to the whole window and its caption buttons without a restart, and before the window shows
       (PR 39; docs/notes/windows-shell.md, "App theme"; accepted on the owner's run, 2026-10-24)
 
 Done when: sign in and out of Jellyfin on Windows, and the app restarts signed in; and the owner's open layout items above are
-fixed.
+fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
 
 ## M2: First usable version: Jellyfin browse and play (Windows)
 - [ ] `current-jellyfin`: libraries, items (paging, sort, filter), latest, resume, next up, series/seasons/episodes, details, similar,
