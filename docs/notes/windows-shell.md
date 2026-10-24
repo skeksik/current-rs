@@ -71,7 +71,12 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
 - **Navigation:** a left `NavigationView` with Home and the built-in Settings item over one `Frame`, as in the NavigationView page's
   example (learn.microsoft.com/windows/apps/develop/ui/controls/navigationview, ms.date 2026-10-02, read 2026-10-22): navigate on
   `ItemInvoked` only when the page differs (no duplicate back stack entries), keep the selection and header in step on
-  `Frame.Navigated` (the settings item via `SettingsItem`), and do not go back while the pane overlays the content.
+  `Frame.Navigated` (the settings item via `SettingsItem`). Where the example does not go back while the pane overlays the
+  content, and the control's own back button only closes the pane then ("clicking the back button will close the Pane and raise
+  the PaneClosing event instead", same page, read 2026-10-24), here back closes the pane and goes back: the title bar's Back
+  button, Alt+Left, the GoBack key and the mouse Back button all do (owner, 2026-10-24). The old rule left the title bar's Back
+  button without effect and Alt+Left only closing the pane (owner's run, 2026-10-24). Closing the pane this way counts as the
+  navigation view's forced close, so after it a medium window widened to wide keeps the rail (see "Pane" below).
 - **Back button in the title bar.** The TitleBar page (learn.microsoft.com/windows/apps/develop/ui/controls/title-bar, ms.date
   2026-10-13, read 2026-10-22): "Fluent Design guidance recommends that these controls be placed in the title bar when a custom title
   bar is used." So the NavigationView's back and pane toggle buttons are hidden and the TitleBar's are used, enabled from

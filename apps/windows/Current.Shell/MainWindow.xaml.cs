@@ -291,10 +291,13 @@ public sealed partial class MainWindow : Window
         {
             return false;
         }
-        // Don't go back while the pane overlays the content.
+        // With the pane open over the page, back closes the pane and goes back (owner, 2026-10-24). The NavigationView page's example
+        // does not go back then, and the control's own back button only closes the pane ("clicking the back button will close the
+        // Pane and raise the PaneClosing event instead", learn.microsoft.com, ms.date 2026-10-02, read 2026-10-24); that blocked the
+        // title bar's Back button and Alt+Left here.
         if (NavView.IsPaneOpen && NavView.DisplayMode is NavigationViewDisplayMode.Compact or NavigationViewDisplayMode.Minimal)
         {
-            return false;
+            NavView.IsPaneOpen = false;
         }
         ContentFrame.GoBack();
         return true;
