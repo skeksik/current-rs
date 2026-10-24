@@ -1,7 +1,7 @@
 //! The one error type every export returns (ADR 0004). It becomes `CoreException` with one nested class per variant in C#, and a
 //! Swift `Error` enum.
 
-use crate::problems::StoreProblem;
+use crate::problems::{GatewayInputProblem, StoreProblem};
 
 /// Why a call into the core failed.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error, uniffi::Error)]
@@ -27,4 +27,7 @@ pub enum CoreError {
     /// The server's address cannot take requests. Setup never saves such an address, so this points to a bug.
     #[error("the server's address cannot be used")]
     InvalidAddress,
+    /// The gateway credentials handed over were not used (ADR 0017): nothing was sent.
+    #[error("the gateway credentials cannot be used")]
+    Gateway { problem: GatewayInputProblem },
 }

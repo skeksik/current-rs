@@ -22,6 +22,19 @@ pub const USER_ID: &str = "57a2d1e0000000000000000000000002";
 pub const PASSWORD: &str = "not-a-real-password";
 /// The Quick Connect code the stand-in hands out. Its requests are approved at the first check.
 pub const QUICK_CONNECT_CODE: &str = "123456";
+/// The gateway's user name and password in [`Gate::Basic`].
+pub const GATE_USER: &str = "stand-in-gate-user";
+pub const GATE_PASSWORD: &str = "not-a-real-gate-password";
+/// `stand-in-gate-user:not-a-real-gate-password` in base64.
+const GATE_BASIC: &str = "c3RhbmQtaW4tZ2F0ZS11c2VyOm5vdC1hLXJlYWwtZ2F0ZS1wYXNzd29yZA==";
+/// The realm of [`Gate::Basic`]'s challenge.
+pub const GATE_REALM: &str = "Stand-in Gate";
+/// The cookie [`Gate::Portal`] wants, and the value it takes until [`Controls::set_gate_cookie`] changes it.
+pub const GATE_COOKIE: &str = "stand_in_gate";
+pub const GATE_COOKIE_VALUE: &str = "not-a-real-gate-cookie";
+/// The header [`Gate::Header`] wants.
+pub const GATE_HEADER: &str = "x-stand-in-gate";
+pub const GATE_HEADER_VALUE: &str = "not-a-real-gate-header";
 const QUICK_CONNECT_SECRET: &str =
     "57a2d1e0000000000000000000000000000000000000000000000000000000ff";
 
@@ -37,8 +50,26 @@ impl std::fmt::Debug for StandIn {
     }
 }
 
+/// An authentication gateway in front of the stand-in (ADR 0017), as a reverse proxy would answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Gate {
+    /// None.
+    #[default]
+    Off,
+    /// HTTP Basic: 401 with a challenge without [`GATE_USER`]'s password. It does not pass its `Authorization` on, so Jellyfin's
+    /// fields then come from `X-Emby-Authorization`.
+    Basic,
+    /// A portal: an HTML sign-in page without the [`GATE_COOKIE`] cookie.
+    Portal,
+    /// 403 without the [`GATE_HEADER`] header.
+    Header,
+}
+
 #[derive(Default)]
 struct State {
+    gate: Mutex<Gate>,
+    /// The cookie value [`Gate::Portal`] takes; [`GATE_COOKIE_VALUE`] when unset.
+    gate_cookie: Mutex<Option<String>>,
     /// Live tokens.
     tokens: Mutex<Vec<String>>,
     issued: AtomicUsize,
@@ -160,6 +191,16 @@ impl Controls {
             .count()
     }
 
+    /// Puts `gate` in front of the stand-in.
+    pub fn set_gate(&self, gate: Gate) {
+        *lock(&self.state.gate) = gate;
+    }
+
+    /// The cookie value [`Gate::Portal`] takes from now on (the gateway's session expired and a new one began).
+    pub fn set_gate_cookie(&self, value: &str) {
+        *lock(&self.state.gate_cookie) = Some(value.to_owned());
+    }
+
     /// How many sessions are live.
     pub fn live_sessions(&self) -> usize {
         lock(&self.state.tokens).len()
@@ -174,6 +215,9 @@ fn revoke_all(state: &State) {
 struct Received {
     path: String,
     authorization: String,
+    emby_authorization: String,
+    cookie: String,
+    gate_header: String,
     body: String,
 }
 
@@ -190,13 +234,52 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
         }
         released.await;
     }
-    let (status, body) = answer(&state, &received);
-    let response = format!(
-        "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-        body.len()
-    );
+    let response = match gate(&state, &received) {
+        Some(blocked) => blocked,
+        None => {
+            let (status, body) = answer(&state, &received);
+            format!(
+                "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        }
+    };
     let _ = socket.write_all(response.as_bytes()).await;
     let _ = socket.shutdown().await;
+}
+
+/// The gateway's answer when it does not let `received` through.
+fn gate(state: &State, received: &Received) -> Option<String> {
+    let reply = |status: u16, header: &str, body: &str| {
+        format!(
+            "HTTP/1.1 {status} X\r\n{header}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    };
+    match *lock(&state.gate) {
+        Gate::Off => None,
+        Gate::Basic => (received.authorization != format!("Basic {GATE_BASIC}")).then(|| {
+            reply(
+                401,
+                &format!("www-authenticate: Basic realm=\"{GATE_REALM}\"\r\n"),
+                "",
+            )
+        }),
+        Gate::Portal => {
+            let value = lock(&state.gate_cookie)
+                .clone()
+                .unwrap_or_else(|| GATE_COOKIE_VALUE.to_owned());
+            let wanted = format!("{GATE_COOKIE}={value}");
+            (!received.cookie.split("; ").any(|pair| pair == wanted)).then(|| {
+                reply(
+                    200,
+                    "content-type: text/html\r\n",
+                    "<!DOCTYPE html><html><body>Sign in</body></html>",
+                )
+            })
+        }
+        Gate::Header => (received.gate_header != GATE_HEADER_VALUE).then(|| reply(403, "", "")),
+    }
 }
 
 fn answer(state: &State, received: &Received) -> (u16, String) {
@@ -270,7 +353,14 @@ fn quick_connect(authenticated: bool) -> String {
 }
 
 fn token(received: &Received) -> Option<String> {
-    let (_, rest) = received.authorization.split_once("Token=\"")?;
+    // Jellyfin reads `X-Emby-Authorization` when `Authorization` carries no fields of its own (legacy authorization on, and a Basic
+    // gateway that does not pass its header on).
+    let fields = if received.authorization.starts_with("MediaBrowser") {
+        &received.authorization
+    } else {
+        &received.emby_authorization
+    };
+    let (_, rest) = fields.split_once("Token=\"")?;
     Some(rest.split('"').next()?.to_owned())
 }
 
@@ -311,6 +401,9 @@ async fn read_request(socket: &mut TcpStream) -> Option<Received> {
     Some(Received {
         path: target.split('?').next()?.to_owned(),
         authorization: header("authorization"),
+        emby_authorization: header("x-emby-authorization"),
+        cookie: header("cookie"),
+        gate_header: header(GATE_HEADER),
         body: String::from_utf8_lossy(&data[head_end..]).into_owned(),
     })
 }

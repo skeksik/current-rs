@@ -1,9 +1,9 @@
 //! Why a flow failed, as the UI acts on it. Flat copies of the core's error enums with nothing a user should not see: no address,
 //! no redirect target, no server message, no OS error text (ADR 0006).
 
-use current_app::SignInError;
+use current_app::{GatewaySignInError, GatewaySubmitError, SignInError};
 use current_jellyfin::{AddressError, AuthError, DiscoveryError, GatewayAnswer, ProbeError};
-use current_net::NetError;
+use current_net::{GatewayError, NetError};
 use current_store::StoreError;
 
 /// Why the typed address is not one: the UI asks the user to fix it.
@@ -47,6 +47,54 @@ pub enum ProbeProblem {
     SetupIncomplete,
     /// The address leads to another server than the one expected.
     DifferentServer,
+    /// An authentication gateway in front of the server wants something (ADR 0017). The flow's gateway states say what to do;
+    /// this problem appears where no flow can ask, e.g. a saved address checked before a sign-in.
+    Gateway {
+        answer: GatewayProblem,
+    },
+}
+
+/// What an authentication gateway in front of the server wants (ADR 0017). Never its realm or any other text it sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum GatewayProblem {
+    /// A password (HTTP Basic).
+    Password,
+    /// A sign-in in a web page. Also what a plain web site at the address looks like.
+    SignIn,
+    /// It refuses without a sign-in: it wants something else, such as a service token in extra headers.
+    Refused,
+    /// A sign-in method Current does not support.
+    Unsupported,
+}
+
+/// Why the gateway credentials the UI handed over were not used (ADR 0017). Nothing of what the user typed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum GatewayInputProblem {
+    /// The address is plain http outside the local network: confirm it first.
+    PlainHttpNotConfirmed,
+    /// No header was given.
+    NoHeaders,
+    /// A user name with `:` or a control character.
+    InvalidUserName,
+    /// A password with a control character.
+    InvalidPassword,
+    InvalidHeaderName,
+    /// A header Current sets itself (`Authorization`, `Cookie`, `Host`, the framing headers).
+    ReservedHeader,
+    /// A header value that is not visible ASCII text.
+    InvalidHeaderValue,
+    InvalidCookie,
+}
+
+/// Why signing in to a saved server's gateway again failed.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum GatewaySignInProblem {
+    /// The address could not be checked: not reached, another server, or not a usable server.
+    Probe { problem: ProbeProblem },
+    /// The new credentials could not be saved.
+    Save { problem: StoreProblem },
+    /// The server was removed meanwhile.
+    ServerRemoved,
 }
 
 /// Why a request failed.
@@ -107,6 +155,16 @@ pub enum SignInProblem {
     },
     /// The server was removed while signing in.
     ServerRemoved,
+    /// An authentication gateway in front of the server answered instead (ADR 0017): sign in to it first.
+    Gateway {
+        answer: GatewayProblem,
+    },
+    /// The server ignored the sign-in's client details sent in `X-Emby-Authorization` (ADR 0017): it reads that header only with
+    /// legacy authorization on. The UI explains the two server-side fixes: turn on legacy authorization on the server and stop the
+    /// gateway passing its own `Authorization` header on; or add a gateway rule that lets the server's API through.
+    EmbyHeaderIgnored,
+    /// The server's answer is being checked (mid-session only, never from a sign-in): try again in a moment.
+    Unconfirmed,
 }
 
 /// Why the search for local servers failed.
@@ -147,12 +205,19 @@ impl From<&ProbeError> for ProbeProblem {
             },
             ProbeError::SetupIncomplete => Self::SetupIncomplete,
             ProbeError::DifferentServer => Self::DifferentServer,
-            // The gateway problems get their own ffi variants with the app's gateway states (ADR 0017); until then, the closest.
-            ProbeError::GatewayPassword { .. } | ProbeError::UnsupportedChallenge => {
-                Self::UnexpectedStatus { status: 401 }
-            }
-            ProbeError::GatewayRefused => Self::UnexpectedStatus { status: 403 },
-            ProbeError::GatewaySignIn => Self::NotJellyfin,
+            // The realm stays in the core: only the add-a-server and gateway sign-in states show it.
+            ProbeError::GatewayPassword { .. } => Self::Gateway {
+                answer: GatewayProblem::Password,
+            },
+            ProbeError::GatewaySignIn => Self::Gateway {
+                answer: GatewayProblem::SignIn,
+            },
+            ProbeError::GatewayRefused => Self::Gateway {
+                answer: GatewayProblem::Refused,
+            },
+            ProbeError::UnsupportedChallenge => Self::Gateway {
+                answer: GatewayProblem::Unsupported,
+            },
         }
     }
 }
@@ -194,23 +259,14 @@ impl From<&AuthError> for SignInProblem {
             AuthError::QuickConnectExpired => Self::QuickConnectExpired,
             AuthError::SessionRevoked => Self::SessionRevoked,
             AuthError::NotSignedIn => Self::NotSignedIn,
-            // Mid-session only, never from a sign-in; its own variant comes with the gateway states (ADR 0017).
-            AuthError::Unconfirmed => Self::Network {
-                problem: NetProblem::Auth { status: 401 },
-            },
+            AuthError::Unconfirmed => Self::Unconfirmed,
             AuthError::Network(error) => Self::Network {
                 problem: error.into(),
             },
-            // The gateway problems get their own ffi variants with the app's gateway states (ADR 0017); until then, the closest.
-            AuthError::Gateway(GatewayAnswer::Refused) => Self::Network {
-                problem: NetProblem::Auth { status: 403 },
+            AuthError::Gateway(answer) => Self::Gateway {
+                answer: answer.into(),
             },
-            AuthError::Gateway(_) => Self::Network {
-                problem: NetProblem::Auth { status: 401 },
-            },
-            AuthError::EmbyHeaderIgnored => Self::Network {
-                problem: NetProblem::UnexpectedStatus { status: 400 },
-            },
+            AuthError::EmbyHeaderIgnored => Self::EmbyHeaderIgnored,
         }
     }
 }
@@ -226,6 +282,50 @@ impl From<&SignInError> for SignInProblem {
                 problem: error.into(),
             },
             SignInError::ServerRemoved => Self::ServerRemoved,
+        }
+    }
+}
+
+impl From<&GatewayAnswer> for GatewayProblem {
+    fn from(answer: &GatewayAnswer) -> Self {
+        match answer {
+            GatewayAnswer::Password { .. } => Self::Password,
+            GatewayAnswer::SignIn => Self::SignIn,
+            GatewayAnswer::Refused => Self::Refused,
+            GatewayAnswer::UnsupportedChallenge => Self::Unsupported,
+        }
+    }
+}
+
+impl GatewayInputProblem {
+    /// The problem for `error`; `None` for [`GatewaySubmitError::NotAsked`], which is [`crate::CoreError::NotReady`].
+    pub(crate) fn of(error: &GatewaySubmitError) -> Option<Self> {
+        Some(match error {
+            GatewaySubmitError::NotAsked => return None,
+            GatewaySubmitError::PlainHttpNotConfirmed => Self::PlainHttpNotConfirmed,
+            GatewaySubmitError::NoHeaders => Self::NoHeaders,
+            GatewaySubmitError::Invalid(error) => match error {
+                GatewayError::InvalidUserName => Self::InvalidUserName,
+                GatewayError::InvalidPassword => Self::InvalidPassword,
+                GatewayError::InvalidHeaderName => Self::InvalidHeaderName,
+                GatewayError::ReservedHeader => Self::ReservedHeader,
+                GatewayError::InvalidHeaderValue => Self::InvalidHeaderValue,
+                GatewayError::InvalidCookie => Self::InvalidCookie,
+            },
+        })
+    }
+}
+
+impl From<&GatewaySignInError> for GatewaySignInProblem {
+    fn from(error: &GatewaySignInError) -> Self {
+        match error {
+            GatewaySignInError::Probe(error) => Self::Probe {
+                problem: error.into(),
+            },
+            GatewaySignInError::Save(error) => Self::Save {
+                problem: error.into(),
+            },
+            GatewaySignInError::ServerRemoved => Self::ServerRemoved,
         }
     }
 }
@@ -274,5 +374,36 @@ mod tests {
                 problem: StoreProblem::NewerVersion { found: 9 }
             }
         );
+    }
+
+    #[test]
+    fn gateway_problems_carry_no_realm() {
+        let realm = current_jellyfin::Realm::new("Private Realm Text");
+        let probe = ProbeProblem::from(&ProbeError::GatewayPassword {
+            realm: realm.clone(),
+        });
+        assert_eq!(
+            probe,
+            ProbeProblem::Gateway {
+                answer: GatewayProblem::Password
+            }
+        );
+        let sign_in = SignInProblem::from(&AuthError::Gateway(GatewayAnswer::Password { realm }));
+        assert_eq!(
+            sign_in,
+            SignInProblem::Gateway {
+                answer: GatewayProblem::Password
+            }
+        );
+        assert!(!format!("{probe:?} {sign_in:?}").contains("Private"));
+        assert_eq!(
+            SignInProblem::from(&AuthError::EmbyHeaderIgnored),
+            SignInProblem::EmbyHeaderIgnored
+        );
+        assert_eq!(
+            GatewayInputProblem::of(&GatewaySubmitError::Invalid(GatewayError::ReservedHeader)),
+            Some(GatewayInputProblem::ReservedHeader)
+        );
+        assert_eq!(GatewayInputProblem::of(&GatewaySubmitError::NotAsked), None);
     }
 }
