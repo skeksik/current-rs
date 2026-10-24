@@ -72,6 +72,21 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         #expect(try Core().loadReport() == nil)
     }
 
+    @Test @MainActor func theAppThemeIsSavedAndReadAtTheNextOpen() async throws {
+        let folder = try DataFolder()
+        defer { folder.remove() }
+        let core = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        let theme = core.observeAppTheme()
+        defer { theme.cancel() }
+        #expect(theme.value == .system)
+        try await core.setAppTheme(theme: .dark)
+        #expect(core.appTheme() == .dark)
+        try await eventually("the dark theme") { theme.value == .dark }
+
+        let again = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        #expect(again.appTheme() == .dark)
+    }
+
     @Test func openingReportsAFolderItCannotUse() async throws {
         let folder = try DataFolder()
         defer { folder.remove() }

@@ -90,6 +90,13 @@ internal class ValueForwarder<TRaw, T>(ValueSubscription<T> target, IUiDispatche
         Trace.TraceError($"Current: a core listener failed: {error}");
 }
 
+internal sealed class AppThemeForwarder(ValueSubscription<AppTheme> target, IUiDispatcher ui)
+    : ValueForwarder<uniffi.current_ffi.AppTheme, AppTheme>(target, ui, Map.From),
+      uniffi.current_ffi.AppThemeListener
+{
+    public void OnValue(uniffi.current_ffi.AppTheme value) => Forward(value);
+}
+
 internal sealed class CapabilitiesForwarder(ValueSubscription<Capabilities> target, IUiDispatcher ui)
     : ValueForwarder<uniffi.current_ffi.CapabilitiesSnapshot, Capabilities>(target, ui, Map.From),
       uniffi.current_ffi.CapabilitiesListener

@@ -28,6 +28,12 @@ extension ValueForwarder: CapabilitiesListener where Value == CapabilitiesSnapsh
     }
 }
 
+extension ValueForwarder: AppThemeListener where Value == AppTheme {
+    public func onValue(value: AppTheme) {
+        forward(value)
+    }
+}
+
 extension ValueForwarder: AddServerStateListener where Value == AddServerState {
     public func onValue(value: AddServerState) {
         forward(value)
