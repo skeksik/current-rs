@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use current_app::{App, NewServer};
+use current_jellyfin::ProbeError;
 use tokio::runtime::Handle;
 
 use crate::problems::{DiscoveryProblem, ProbeProblem, SignInProblem};
@@ -75,7 +76,28 @@ impl From<&current_app::AddServerState> for AddServerState {
             App::Ready { server } => Self::Ready {
                 server: server.into(),
             },
+            // The gateway states get their own ffi states with the next task (ADR 0017); until then, the probe's problem.
+            App::GatewayPassword { .. } => {
+                gateway_failure(ProbeError::GatewayPassword { realm: None })
+            }
+            App::GatewaySignIn {
+                redirected: true,
+                location,
+                ..
+            } => gateway_failure(ProbeError::Redirected {
+                status: 302,
+                location: location.clone(),
+            }),
+            App::GatewaySignIn { .. } => gateway_failure(ProbeError::GatewaySignIn),
+            App::GatewayRefused { .. } => gateway_failure(ProbeError::GatewayRefused),
+            App::GatewayUnsupported { .. } => gateway_failure(ProbeError::UnsupportedChallenge),
         }
+    }
+}
+
+fn gateway_failure(error: ProbeError) -> AddServerState {
+    AddServerState::Failed {
+        problem: (&error).into(),
     }
 }
 

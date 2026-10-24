@@ -7,6 +7,8 @@
 
 mod add_server;
 mod discovery;
+mod gateway;
+mod gateway_sign_in;
 mod list;
 mod session;
 mod sign_in;
@@ -21,13 +23,16 @@ use current_model::{
     AppTheme, Capabilities, NetworkFacts, SavedServer, ServerAddress, ServerId, ServerRef,
 };
 use current_net::{
-    NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError, RuntimeHandle, Url,
+    Gateway, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError, RuntimeHandle,
+    Url,
 };
 use current_store::{DeviceId, LoadReport, Secrets, SettingsStore, StoreError};
 use tokio::sync::watch;
 
 pub use add_server::{AddServer, AddServerState, NewServer};
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
+pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
+pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState};
 pub use list::{ListSubscription, ObservableList, VectorDiff};
 pub use sign_in::{SignIn, SignInError, SignInState};
 
@@ -223,19 +228,25 @@ impl App {
     }
 
     /// A sign-in to the server [`AddServer`] found (its `Ready` state). Success saves the server, or adds the address and user to
-    /// the saved server with the same id. Its requests are logged as `jellyfin/setup`.
+    /// the saved server with the same id, with the address's gateway credentials (ADR 0017) and the header Jellyfin's credentials
+    /// went in. Its requests are logged as `jellyfin/setup`.
     pub fn sign_in(&self, server: NewServer) -> Result<SignIn, NetError> {
         let setup = ServerRef::new(
             current_model::ServiceType::JELLYFIN,
             current_model::ServerKey::new("setup"),
         );
-        let client = self.shared.client(setup, &server.address)?;
+        // The gateway credentials setup was given for the address, if any: the sign-in goes through them (ADR 0017).
+        let gateway = (!server.gateway.is_empty()).then(|| Arc::new(Gateway::new(server.gateway)));
+        let client = self
+            .shared
+            .client(setup, &server.address, gateway.clone())?;
         let expected = server.info.id.clone();
         let target = Target::New {
             id: server.info.id,
             name: server.info.name,
             address: server.address,
             version: server.info.version,
+            gateway,
         };
         Ok(SignIn::new(self.shared.clone(), target, client, expected))
     }
@@ -257,6 +268,21 @@ impl App {
             return Some(Err(NetError::InvalidRequest));
         }
         Some(Ok(SignIn::saved(self.shared.clone(), saved)))
+    }
+
+    /// A sign-in to a saved server's gateway again (ADR 0017), when its status says `gateway_sign_in_needed`: for the address
+    /// whose gateway asked (else the address in use, else the first with gateway credentials). Call [`GatewaySignIn::start`]
+    /// first. Success saves the credentials for that address only; the Jellyfin session and its token were kept and go on. `None`
+    /// if no such server is saved or its address is not an http(s) URL.
+    pub fn sign_in_to_gateway(&self, server: &ServerRef) -> Option<GatewaySignIn> {
+        let saved = self.shared.saved(server)?;
+        let address = self.shared.gateway_address(server)?;
+        Some(GatewaySignIn::new(
+            self.shared.clone(),
+            server.clone(),
+            saved.id,
+            address,
+        ))
     }
 
     /// Checks every saved session, all servers at once; the shell runs it in the background after [`App::open`]. Each saved Jellyfin
@@ -296,6 +322,7 @@ impl App {
     /// providers made later start from it. Call it from one thread (the UI's network observer): the providers hear the facts after
     /// the lock is released, so two concurrent reports could reach a provider in either order.
     pub fn network_changed(&self, facts: NetworkFacts) {
+        self.shared.network_changed();
         let providers = {
             let mut roaming = self.lock_roaming();
             roaming

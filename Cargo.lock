@@ -255,6 +255,8 @@ dependencies = [
  "current-model",
  "current-net",
  "current-store",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
