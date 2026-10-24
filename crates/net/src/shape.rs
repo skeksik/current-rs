@@ -38,7 +38,8 @@ impl std::fmt::Debug for GatewayShape {
     }
 }
 
-/// The shape of a request's result.
+/// The shape of a request's result. Only for answers where the service's JSON was expected, never for images or other media: a
+/// body starting with `<` (an SVG, for one) counts as a sign-in page.
 pub fn classify(result: &Result<Response, NetError>) -> GatewayShape {
     match result {
         Ok(response) if is_html(&response.headers, &response.body) => GatewayShape::SignIn,

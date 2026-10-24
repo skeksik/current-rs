@@ -353,10 +353,18 @@ pub struct Gateway {
 
 impl std::fmt::Debug for Gateway {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Gateway")
-            .field("credentials", &*self.lock())
-            .field("changes", &self.changes())
-            .finish()
+        let mut debug = f.debug_struct("Gateway");
+        // `try_lock`: formatting a gateway while `apply` or `update` holds its lock must not deadlock.
+        match self.credentials.try_lock() {
+            Ok(credentials) => debug.field("credentials", &*credentials),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                debug.field("credentials", &*poisoned.into_inner())
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                debug.field("credentials", &format_args!("<locked>"))
+            }
+        };
+        debug.field("changes", &self.changes()).finish()
     }
 }
 
@@ -375,23 +383,26 @@ impl Gateway {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The credentials now, for storing them. Expired cookies are dropped first (which counts as a change).
-    pub fn snapshot(&self) -> GatewayCredentials {
+    /// The credentials now, for storing them, with the [`Gateway::changes`] count they reflect: store that count with them and
+    /// store again once `changes()` differs from it. Expired cookies are dropped first (which counts as a change, already included
+    /// in the count returned).
+    pub fn snapshot(&self) -> (GatewayCredentials, u64) {
         self.snapshot_at(SystemTime::now())
     }
 
-    fn snapshot_at(&self, now: SystemTime) -> GatewayCredentials {
+    fn snapshot_at(&self, now: SystemTime) -> (GatewayCredentials, u64) {
         let mut credentials = self.lock();
         let before = credentials.cookies.len();
         credentials.cookies.retain(|cookie| !cookie.expired(now));
         if credentials.cookies.len() != before {
             self.changes.fetch_add(1, Ordering::Relaxed);
         }
-        credentials.clone()
+        // Every change happens under the lock, so the count read here matches the credentials.
+        (credentials.clone(), self.changes())
     }
 
     /// How many times the credentials changed since this handle was made: a cookie updated or removed from `Set-Cookie`, or expired
-    /// cookies dropped by [`Gateway::snapshot`]. Store a new snapshot when it moves.
+    /// cookies dropped by [`Gateway::snapshot`]. Store a new snapshot when it differs from the count the last stored one reflects.
     pub fn changes(&self) -> u64 {
         self.changes.load(Ordering::Relaxed)
     }
@@ -977,7 +988,8 @@ mod tests {
             NOW,
         );
         assert_eq!(gateway.changes(), 1);
-        let snapshot = gateway.snapshot_at(at(NOW));
+        let (snapshot, count) = gateway.snapshot_at(at(NOW));
+        assert_eq!(count, 1);
         let cookies = snapshot.cookies();
         assert_eq!(cookies.len(), 2);
         assert_eq!(
@@ -1005,7 +1017,7 @@ mod tests {
         set_cookie(&gateway, "https://media.example.com/web/x", &["s=2"], NOW);
         assert_eq!(gateway.changes(), 0);
         set_cookie(&gateway, "https://media.example.com/x", &["s=2"], NOW);
-        assert_eq!(gateway.snapshot_at(at(NOW)).cookies()[0].value(), "2");
+        assert_eq!(gateway.snapshot_at(at(NOW)).0.cookies()[0].value(), "2");
     }
 
     #[test]
@@ -1023,7 +1035,7 @@ mod tests {
             NOW,
         );
         assert_eq!(gateway.changes(), 0);
-        assert_eq!(gateway.snapshot_at(at(NOW)).cookies()[0].value(), "1");
+        assert_eq!(gateway.snapshot_at(at(NOW)).0.cookies()[0].value(), "1");
     }
 
     #[test]
@@ -1042,8 +1054,8 @@ mod tests {
             NOW,
         );
         assert_eq!(gateway.changes(), 1);
-        let snapshot = gateway.snapshot_at(at(NOW));
-        assert_eq!(snapshot.cookies().len(), 1);
+        let (snapshot, count) = gateway.snapshot_at(at(NOW));
+        assert_eq!((snapshot.cookies().len(), count), (1, 1));
         let expires = snapshot.cookies()[0].expires().unwrap();
         // Not sent once expired, and dropped at the next snapshot.
         let after = expires
@@ -1054,8 +1066,11 @@ mod tests {
             cookie_line(&gateway, "https://media.example.com/", after),
             None
         );
-        assert!(gateway.snapshot_at(at(after)).cookies().is_empty());
-        assert_eq!(gateway.changes(), 2);
+        let (snapshot, count) = gateway.snapshot_at(at(after));
+        assert!(snapshot.cookies().is_empty());
+        // The drop is in the returned count: no extra change after storing it.
+        assert_eq!((count, gateway.changes()), (2, 2));
+        assert_eq!(gateway.snapshot_at(at(after)).1, 2);
     }
 
     #[test]
@@ -1091,6 +1106,16 @@ mod tests {
         assert_eq!(max_age_at("-1", at(NOW)), Some(SystemTime::UNIX_EPOCH));
         assert_eq!(max_age_at("1x", at(NOW)), None);
         assert_eq!(max_age_at("", at(NOW)), None);
+    }
+
+    #[test]
+    fn debug_does_not_wait_for_the_lock() {
+        let gateway = gateway(Vec::new());
+        let _held = gateway.lock();
+        assert_eq!(
+            format!("{gateway:?}"),
+            "Gateway { credentials: <locked>, changes: 0 }"
+        );
     }
 
     #[test]

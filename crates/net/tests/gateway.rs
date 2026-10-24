@@ -394,7 +394,8 @@ async fn a_login_portal_needs_a_web_sign_in_and_its_cookie_passes() {
             header(&received[received.len() - 1], "cookie"),
             Some(format!("{COOKIE_NAME}={ROTATED_VALUE}").as_str())
         );
-        let snapshot = gateway.snapshot();
+        let (snapshot, count) = gateway.snapshot();
+        assert_eq!(count, gateway.changes());
         assert_eq!(snapshot.cookies().len(), 1);
         assert_eq!(snapshot.cookies()[0].value(), ROTATED_VALUE);
 
