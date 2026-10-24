@@ -607,3 +607,26 @@ window (wider than 1300 px) and a narrow one:
    viewer should hand the column the viewport's width: its default style sets no horizontal bar visibility and the control
    starts at Disabled (`generic.xaml`, `ScrollViewer_Partial.cpp`, microsoft-ui-xaml main, read 2026-10-23; not verified at run
    time).
+
+### Windows run (2026-10-24)
+Heads fix/windows-layout-polish 6f1770b and fix/narrator-quick-connect-code efa74f9, merged in a throwaway local worktree (never
+pushed) and built with the four scripts: binding tests 34 passed, smoke run passed. Windows 11 25H2, 10.0.26200.9711, x64, display
+scale 150%; the cases ran `out/app/Current.exe`. No server was saved, so the owner added one from discovery and signed in. Window
+widths (effective px): 1920 (2880 physical) wide, and 983 (1475 physical) narrower; the narrowest width was not measured.
+1. **Pass.** Light and dark, wide and narrow.
+2. **Pass.**
+3. **Pass.**
+4. **Pass.**
+5. **Pass.** No horizontal scroll bar at the bottom of Home, nothing cut off at the right edge.
+
+New findings from the owner during the run (not fixed here):
+- The gap between the page title and the first section header or card is too small on every page; Windows Settings'
+  Accessibility page, compared side by side, has a larger one. The column's top padding is `PageColumnPadding` (56,0,24,24,
+  `App.xaml`), used by Home, Settings, Add a server and Sign in.
+- Settings' About card: add "All rights reserved." (`Pages/SettingsPage.xaml`).
+- The title bar's pane button: its name should be "Open Navigation", and it should show only on a small window, where the pane
+  is forced closed; opened there, the pane overlaps the page content instead of pushing it, and the page keeps the same margin
+  at both edges of the window. Today it is always shown (`IsPaneToggleButtonVisible="True"` on `AppTitleBar`) and the navigation
+  view is fixed at `PaneDisplayMode="Left"` (`MainWindow.xaml`).
+- The title bar should be taller (`AppTitleBar`, `MainWindow.xaml`).
+- The window needs a sensible minimum width and height; none is set in the shell.
