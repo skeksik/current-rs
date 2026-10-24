@@ -97,8 +97,9 @@ pub fn get_gateway_secret(
     Ok(Some(GatewaySecret(value)))
 }
 
-/// Stores the address's gateway secret, replacing any earlier one. Chunk 0 is written last, so a write cut short leaves no
-/// secret that reads as whole; one that fails part-way deletes what it wrote. Blocking.
+/// Stores the address's gateway secret, replacing any earlier one. An earlier chunk 0 is deleted first and the new chunk 0 is
+/// written last, so a write cut short leaves no secret, never one that mixes old and new chunks; one that fails part-way deletes
+/// what it wrote. Blocking.
 pub fn set_gateway_secret(
     secrets: &(impl Secrets + ?Sized),
     key: &GatewayKey,
@@ -108,6 +109,8 @@ pub fn set_gateway_secret(
     let chunks = split(secret.expose());
     let header = format!("{}:{}\n", chunks.len(), secret.expose().len());
     let written = (|| {
+        // Without its chunk 0 the earlier secret reads as absent, so new chunks written over its others are never read with it.
+        secrets.delete(&key.chunk(0))?;
         for (index, chunk) in chunks.iter().enumerate().skip(1) {
             secrets.set(&key.chunk(index), &Secret::new(*chunk))?;
         }
@@ -383,6 +386,29 @@ mod tests {
             Err(SecretsError::Failed)
         );
         assert!(memory.accounts().is_empty(), "{:?}", memory.accounts());
+        assert_eq!(get_gateway_secret(&memory, &key()), Ok(None));
+    }
+
+    /// A gateway rotating a cookie of the same length: the new secret has the old one's length and chunk count, so a write cut
+    /// short before the new chunk 0 must not leave old and new chunks that read as one.
+    #[test]
+    fn a_write_cut_short_never_mixes_old_and_new_chunks() {
+        let memory = memory();
+        let old = GatewaySecret::new("o".repeat(2000));
+        set_gateway_secret(&memory, &key(), &old).unwrap();
+        assert_eq!(memory.accounts(), chunk_accounts(2));
+        // The delete of the old chunk 0 and the new chunk 1 go through; then the keyring stops taking writes, cleanup included,
+        // as if the process ended there.
+        memory.fail_writes_after(2);
+        assert_eq!(
+            set_gateway_secret(&memory, &key(), &GatewaySecret::new("n".repeat(2000))),
+            Err(SecretsError::Failed)
+        );
+        assert_eq!(memory.accounts(), ["gateway/1/2/1"]);
+        assert_eq!(
+            memory.get(&key().chunk(1)).unwrap().unwrap().expose(),
+            "n".repeat(2000 - (CHUNK_UNITS - HEADER_UNITS))
+        );
         assert_eq!(get_gateway_secret(&memory, &key()), Ok(None));
     }
 

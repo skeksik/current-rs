@@ -101,6 +101,8 @@ pub struct MemorySecrets {
     size_limit: Option<usize>,
     /// Accounts starting with one of these fail to be written or deleted.
     failing: Mutex<Vec<String>>,
+    /// How many more writes or deletes succeed before every later one fails; `None`: no limit.
+    writes_left: Mutex<Option<usize>>,
 }
 
 impl MemorySecrets {
@@ -121,6 +123,12 @@ impl MemorySecrets {
         lock(&self.failing).push(prefix.to_owned());
     }
 
+    /// Lets `count` more writes or deletes succeed, then makes every later one fail with [`SecretsError::Failed`]: a process that
+    /// stops part-way.
+    pub fn fail_writes_after(&self, count: usize) {
+        *lock(&self.writes_left) = Some(count);
+    }
+
     /// The accounts stored, sorted.
     pub fn accounts(&self) -> Vec<String> {
         let mut accounts: Vec<_> = lock(&self.entries)
@@ -138,7 +146,14 @@ impl MemorySecrets {
         {
             return Err(SecretsError::Failed);
         }
-        Ok(())
+        match &mut *lock(&self.writes_left) {
+            Some(0) => Err(SecretsError::Failed),
+            Some(left) => {
+                *left -= 1;
+                Ok(())
+            }
+            None => Ok(()),
+        }
     }
 }
 

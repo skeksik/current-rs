@@ -84,10 +84,12 @@ directory-lookup crate could not cover Android or tvOS anyway.
   Credential Manager "loses updates when credentials, even different ones, are written and deleted concurrently" (its README).
 - **Gateway secrets (ADR 0017, 2026-10-24):** gateway secrets under `gateway/<server key>/<address id>`, stored in chunks when larger
   than a Windows credential. The chunks are numbered, `gateway/<server key>/<address id>/0`, `.../1`, ..., and written and deleted
-  together; a secret that fits one credential is one chunk, so every gateway secret has the same format. Windows' store writes a password as UTF-16 (windows-native-keyring-store 1.1.0, `validate_password`,
-  read 2026-10-24), so a chunk holds at most 1,280 UTF-16 units. Chunk 0 is written last and starts with the number of chunks and the
-  secret's length; a read that finds a chunk missing, one too many or a wrong length treats the secret as absent and deletes every
-  chunk. Removing an address or a server deletes its gateway secrets after the settings are saved, as for tokens.
+  together; a secret that fits one credential is one chunk, so every gateway secret has the same format. Windows' store writes a
+  password as UTF-16 (windows-native-keyring-store 1.1.0, `validate_password`, read 2026-10-24), so a chunk holds at most 1,280 UTF-16
+  units. Chunk 0 starts with the number of chunks and the secret's length; a write deletes the earlier chunk 0 first and writes the
+  new one last, so a write cut short leaves no secret, never a mix of two; a read that finds a chunk missing, one too many or a wrong
+  length treats the secret as absent and deletes every chunk. Removing an address or a server deletes its gateway secrets after the
+  settings are saved, as for tokens.
 - **No keyring** (no backend on the platform, a locked or refused keyring): calls return `Unavailable`. Sign-in works for the run
   but is not remembered, and the UI says so.
 - **No fallback to the settings file.** A token in a plain file can be read by any process of the user and travels into backups,
