@@ -58,12 +58,16 @@ public partial class App : Application
         _window.Closed += (_, _) =>
         {
             _closed = true;
+            // A sign-in window talks to the core, which goes with this window; open, it would also keep the app running.
+            Gateway.SignInWindow.CloseAll();
             _network?.Dispose();
             _network = null;
             Core?.Dispose();
             Core = null;
         };
         _ = OpenCoreAsync(_ui);
+        // Sign-in profiles an earlier run could not delete (it ended with a sign-in window open).
+        _ = Task.Run(Gateway.SignInProfiles.DeleteLeftovers);
         try
         {
             await Task.WhenAny(CoreReady, Task.Delay(ThemeWait));

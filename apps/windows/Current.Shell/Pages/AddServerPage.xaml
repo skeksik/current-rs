@@ -2,7 +2,8 @@
     x:Class="Current.Shell.Pages.AddServerPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:bindings="using:Current.Bindings">
+    xmlns:bindings="using:Current.Bindings"
+    xmlns:gateway="using:Current.Shell.Gateway">
     <!-- Esc stops a running probe (docs/notes/windows-shell.md, "Keyboard and Narrator"). -->
     <Page.KeyboardAccelerators>
         <KeyboardAccelerator Key="Escape" Invoked="OnEscape" />
@@ -50,6 +51,34 @@
                                 Text="Connecting…" />
                         </StackPanel>
                         <InfoBar x:Name="ProbeError" Severity="Error" IsClosable="False" IsOpen="False" />
+
+                        <!-- A gateway's web sign-in (ADR 0017): what the address shows, "Sign in", and after a redirect to another host
+                             "Use the address it points to", since a moved server looks the same. -->
+                        <StackPanel x:Name="GatewayPanel" Spacing="12" Visibility="Collapsed">
+                            <TextBlock
+                                x:Name="GatewayText"
+                                Style="{StaticResource BodyTextBlockStyle}"
+                                TextWrapping="Wrap"
+                                AutomationProperties.LiveSetting="Polite" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button
+                                    x:Name="GatewaySignInButton"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Content="Sign in"
+                                    Click="OnGatewaySignIn" />
+                                <Button x:Name="FollowRedirectButton" Content="Use the address it points to" Click="OnFollowRedirect" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- Extra headers (ADR 0017, "Mechanism 3"): only on request, behind "Advanced". -->
+                        <Expander
+                            x:Name="AdvancedExpander"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            Header="Advanced: extra headers"
+                            Visibility="Collapsed">
+                            <gateway:ExtraHeadersEditor x:Name="HeadersEditor" />
+                        </Expander>
 
                         <TextBlock
                             Style="{StaticResource BodyStrongTextBlockStyle}"
