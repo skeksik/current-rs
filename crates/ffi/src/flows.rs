@@ -1,7 +1,8 @@
-//! The M1 flows as bridge objects: adding a server, finding servers on the local network and signing in (ADR 0012, ADR 0015,
-//! ADR 0016). Each has a state the UI subscribes to (a value, ADR 0004) and actions. The states carry what a screen shows and
-//! nothing more: no address, token, password or Quick Connect secret ever crosses the bridge in a state. The password goes in only
-//! as an argument of [`SignInFlow::with_password`].
+//! The M1 flows as bridge objects: adding a server, finding servers on the local network, signing in, and signing in to a
+//! gateway again (ADR 0012, ADR 0015, ADR 0016, ADR 0017). Each has a state the UI subscribes to (a value, ADR 0004) and actions.
+//! The states carry what a screen shows and nothing more: no token, password, Quick Connect secret, cookie or header value ever
+//! crosses the bridge in a state; of an address, only the origin a prompt names and the URL the sign-in window opens. Passwords,
+//! cookies and headers go in only as arguments of the actions that send them.
 //!
 //! Cancelling an action's token returns its flow to where it was before the action (`Idle`, or `Ready` for a sign-in), unless a
 //! newer action on the same flow started meanwhile: that one is left alone.
@@ -9,11 +10,15 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use current_app::{App, NewServer};
-use current_jellyfin::ProbeError;
+use std::time::{Duration, SystemTime};
+
+use current_app::{App, CookieInput, GatewaySubmitError, HeaderInput, NewServer};
+use current_net::Url;
 use tokio::runtime::Handle;
 
-use crate::problems::{DiscoveryProblem, ProbeProblem, SignInProblem};
+use crate::problems::{
+    DiscoveryProblem, GatewayInputProblem, GatewaySignInProblem, ProbeProblem, SignInProblem,
+};
 use crate::records::{ServerRef, UserSnapshot};
 use crate::subscribe::{self, LiveListeners};
 use crate::{CancelToken, CoreError, TaskHandle, cancel};
@@ -44,7 +49,7 @@ impl From<&NewServer> for NewServerInfo {
 }
 
 /// Where adding a server stands. The address the user typed is not repeated here: the UI has it.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
+#[derive(Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum AddServerState {
     Idle,
     Probing,
@@ -59,6 +64,104 @@ pub enum AddServerState {
     Ready {
         server: NewServerInfo,
     },
+    /// A password gateway (HTTP Basic) in front of the address (ADR 0017): the UI asks for its user name and password
+    /// ([`AddServerFlow::submit_password`]). `origin` (scheme, host and port) names the address in the prompt. `realm` is the
+    /// site's own text: show it only as "The site says: ...", never as a title. `wrong`: the password just given was refused.
+    /// `plain_http`: plain http outside the local network, so the prompt also asks to confirm that, and the action passes it.
+    GatewayPassword {
+        origin: String,
+        realm: Option<String>,
+        wrong: bool,
+        plain_http: bool,
+    },
+    /// The address shows a web page where the server's answer was expected: a gateway's sign-in, or a plain web site. The UI says
+    /// so ("This address shows a web page. If it is your server's sign-in, sign in; otherwise check the address.") and offers
+    /// "Sign in", which opens the sign-in window on `url`, titled with `origin`. After each navigation that lands on `origin`, the
+    /// UI hands the window's cookies over ([`AddServerFlow::submit_cookies`]); the state moves on once they let the server through.
+    /// `redirected`: a redirect to another host or port, which may as well be a moved server: the UI also offers "Use the address
+    /// it points to" ([`AddServerFlow::follow_redirect`]), naming `location_origin` when the server sent one.
+    GatewaySignIn {
+        url: String,
+        origin: String,
+        redirected: bool,
+        location_origin: Option<String>,
+        plain_http: bool,
+    },
+    /// The gateway refuses without a sign-in: it wants something else, such as a service token. The UI offers "Advanced: extra
+    /// headers" ([`AddServerFlow::submit_headers`]) with an explanation.
+    GatewayRefused {
+        origin: String,
+        plain_http: bool,
+    },
+    /// The address asks for a sign-in method Current does not support.
+    GatewayUnsupported {
+        origin: String,
+    },
+}
+
+/// Shown in Debug in place of an address (ADR 0006) or a realm (ADR 0017).
+const REDACTED: &str = "<redacted>";
+
+impl std::fmt::Debug for AddServerState {
+    /// Like a derived Debug, with the gateway states' origin, URL and realm redacted.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Idle => f.write_str("Idle"),
+            Self::Probing => f.write_str("Probing"),
+            Self::Failed { problem } => f.debug_struct("Failed").field("problem", problem).finish(),
+            Self::ConfirmPlainHttp { server } => f
+                .debug_struct("ConfirmPlainHttp")
+                .field("server", server)
+                .finish(),
+            Self::Ready { server } => f.debug_struct("Ready").field("server", server).finish(),
+            Self::GatewayPassword {
+                realm,
+                wrong,
+                plain_http,
+                ..
+            } => f
+                .debug_struct("GatewayPassword")
+                .field("origin", &REDACTED)
+                .field("realm", &realm.as_ref().map(|_| REDACTED))
+                .field("wrong", wrong)
+                .field("plain_http", plain_http)
+                .finish(),
+            Self::GatewaySignIn {
+                redirected,
+                location_origin,
+                plain_http,
+                ..
+            } => f
+                .debug_struct("GatewaySignIn")
+                .field("url", &REDACTED)
+                .field("origin", &REDACTED)
+                .field("redirected", redirected)
+                .field(
+                    "location_origin",
+                    &location_origin.as_ref().map(|_| REDACTED),
+                )
+                .field("plain_http", plain_http)
+                .finish(),
+            Self::GatewayRefused { plain_http, .. } => f
+                .debug_struct("GatewayRefused")
+                .field("origin", &REDACTED)
+                .field("plain_http", plain_http)
+                .finish(),
+            Self::GatewayUnsupported { .. } => f
+                .debug_struct("GatewayUnsupported")
+                .field("origin", &REDACTED)
+                .finish(),
+        }
+    }
+}
+
+/// The origin (scheme, host and port when not the default) of `url`: what a prompt or a window title names.
+fn origin(url: &Url) -> String {
+    let host = url.host_str().unwrap_or_default();
+    match url.port() {
+        Some(port) => format!("{}://{host}:{port}", url.scheme()),
+        None => format!("{}://{host}", url.scheme()),
+    }
 }
 
 impl From<&current_app::AddServerState> for AddServerState {
@@ -76,28 +179,101 @@ impl From<&current_app::AddServerState> for AddServerState {
             App::Ready { server } => Self::Ready {
                 server: server.into(),
             },
-            // The gateway states get their own ffi states with the next task (ADR 0017); until then, the probe's problem.
-            App::GatewayPassword { .. } => {
-                gateway_failure(ProbeError::GatewayPassword { realm: None })
-            }
-            App::GatewaySignIn {
-                redirected: true,
-                location,
+            App::GatewayPassword {
+                origin,
+                realm,
+                wrong,
+                plain_http,
                 ..
-            } => gateway_failure(ProbeError::Redirected {
-                status: 302,
-                location: location.clone(),
-            }),
-            App::GatewaySignIn { .. } => gateway_failure(ProbeError::GatewaySignIn),
-            App::GatewayRefused { .. } => gateway_failure(ProbeError::GatewayRefused),
-            App::GatewayUnsupported { .. } => gateway_failure(ProbeError::UnsupportedChallenge),
+            } => Self::GatewayPassword {
+                origin: origin.clone(),
+                realm: realm.as_ref().map(|realm| realm.as_str().to_owned()),
+                wrong: *wrong,
+                plain_http: *plain_http,
+            },
+            App::GatewaySignIn {
+                url,
+                origin,
+                redirected,
+                location,
+                plain_http,
+                ..
+            } => Self::GatewaySignIn {
+                url: url.clone(),
+                origin: origin.clone(),
+                redirected: *redirected,
+                location_origin: location
+                    .as_ref()
+                    .map(|location| self::origin(location.url())),
+                plain_http: *plain_http,
+            },
+            App::GatewayRefused {
+                origin, plain_http, ..
+            } => Self::GatewayRefused {
+                origin: origin.clone(),
+                plain_http: *plain_http,
+            },
+            App::GatewayUnsupported { origin, .. } => Self::GatewayUnsupported {
+                origin: origin.clone(),
+            },
         }
     }
 }
 
-fn gateway_failure(error: ProbeError) -> AddServerState {
-    AddServerState::Failed {
-        problem: (&error).into(),
+/// A cookie the sign-in window's web view holds, read after a navigation (ADR 0017). Values go into the core only; no Debug.
+#[derive(uniffi::Record)]
+pub struct GatewayCookie {
+    pub name: String,
+    pub value: String,
+    /// As the web view reports it: with a leading dot for a domain cookie, without for a host-only one (RFC 6265 §5.3).
+    pub domain: String,
+    pub path: String,
+    pub secure: bool,
+    pub http_only: bool,
+    /// When it expires, in milliseconds since 1970 (UTC); `None` for a session cookie.
+    pub expires_unix_ms: Option<i64>,
+}
+
+impl From<GatewayCookie> for CookieInput {
+    fn from(cookie: GatewayCookie) -> Self {
+        let expires = cookie.expires_unix_ms.map(|ms| match u64::try_from(ms) {
+            Ok(ms) => SystemTime::UNIX_EPOCH + Duration::from_millis(ms),
+            // Before 1970: long expired.
+            Err(_) => SystemTime::UNIX_EPOCH,
+        });
+        Self {
+            name: cookie.name,
+            value: cookie.value,
+            domain: cookie.domain,
+            path: cookie.path,
+            secure: cookie.secure,
+            http_only: cookie.http_only,
+            expires,
+        }
+    }
+}
+
+/// An extra header the user typed (advanced, ADR 0017). The value goes into the core only; no Debug.
+#[derive(uniffi::Record)]
+pub struct GatewayHeader {
+    pub name: String,
+    pub value: String,
+}
+
+impl From<GatewayHeader> for HeaderInput {
+    fn from(header: GatewayHeader) -> Self {
+        Self {
+            name: header.name,
+            value: header.value,
+        }
+    }
+}
+
+/// The error a gateway action returns for `error`.
+fn submit_error(error: &GatewaySubmitError) -> CoreError {
+    match GatewayInputProblem::of(error) {
+        Some(problem) => CoreError::Gateway { problem },
+        None => CoreError::NotReady,
     }
 }
 
@@ -332,7 +508,103 @@ impl AddServerFlow {
         self.flow.confirm_plain_http()
     }
 
-    /// Back to `Idle`, dropping a running probe.
+    /// The gateway's user name and password, in `GatewayPassword`: the address is probed again with them, never with a Jellyfin
+    /// token. The state moves on when they let the server through, or asks again (`wrong`). `confirm_plain_http` is the user's
+    /// agreement where the state says `plain_http`. The password is used for these requests and kept with the server only once a
+    /// sign-in saves it (in the keyring).
+    ///
+    /// # Errors
+    /// [`CoreError::NotReady`] in any other state; [`CoreError::Gateway`] when they cannot be used or plain http is not
+    /// confirmed (nothing is sent then); [`CoreError::Cancelled`] if `token` is cancelled first: the probe still ends and sets the
+    /// state.
+    pub async fn submit_password(
+        &self,
+        user: String,
+        password: String,
+        confirm_plain_http: bool,
+        token: Arc<CancelToken>,
+    ) -> Result<(), CoreError> {
+        let flow = self.flow.clone();
+        self.attempts.begin();
+        cancel::run_detached(&self.runtime, token, async move {
+            flow.submit_password(&user, &password, confirm_plain_http)
+                .await
+                .map_err(|error| submit_error(&error))
+        })
+        .await
+    }
+
+    /// The sign-in window's cookies, in `GatewaySignIn`, after each navigation that lands on the state's `origin`. Hand over every
+    /// cookie the web view holds: only those that apply to the server's address are kept (RFC 6265). The state moves on once they
+    /// let the server through, and stays otherwise (keep the window open).
+    ///
+    /// # Errors
+    /// As [`AddServerFlow::submit_password`].
+    pub async fn submit_cookies(
+        &self,
+        cookies: Vec<GatewayCookie>,
+        confirm_plain_http: bool,
+        token: Arc<CancelToken>,
+    ) -> Result<(), CoreError> {
+        let flow = self.flow.clone();
+        let cookies: Vec<CookieInput> = cookies.into_iter().map(Into::into).collect();
+        self.attempts.begin();
+        cancel::run_detached(&self.runtime, token, async move {
+            flow.submit_cookies(&cookies, confirm_plain_http)
+                .await
+                .map_err(|error| submit_error(&error))
+        })
+        .await
+    }
+
+    /// Extra headers (advanced), in `GatewayPassword`, `GatewaySignIn` or `GatewayRefused`: the address is probed again with them.
+    ///
+    /// # Errors
+    /// As [`AddServerFlow::submit_password`]; [`CoreError::Gateway`] also for a name Current sets itself or a value outside
+    /// visible ASCII.
+    pub async fn submit_headers(
+        &self,
+        headers: Vec<GatewayHeader>,
+        confirm_plain_http: bool,
+        token: Arc<CancelToken>,
+    ) -> Result<(), CoreError> {
+        let flow = self.flow.clone();
+        let headers: Vec<HeaderInput> = headers.into_iter().map(Into::into).collect();
+        self.attempts.begin();
+        cancel::run_detached(&self.runtime, token, async move {
+            flow.submit_headers(&headers, confirm_plain_http)
+                .await
+                .map_err(|error| submit_error(&error))
+        })
+        .await
+    }
+
+    /// "Use the address it points to", in `GatewaySignIn` after a redirect: probes the address the server pointed to, as if the
+    /// user had typed it. The address itself stays in the core.
+    ///
+    /// # Errors
+    /// [`CoreError::NotReady`] in any other state, or when the server sent no address; [`CoreError::Cancelled`] as
+    /// [`AddServerFlow::probe`].
+    pub async fn follow_redirect(&self, token: Arc<CancelToken>) -> Result<(), CoreError> {
+        let state = self.flow.state().borrow().clone();
+        let current_app::AddServerState::GatewaySignIn {
+            redirected: true,
+            location: Some(location),
+            ..
+        } = state
+        else {
+            return Err(CoreError::NotReady);
+        };
+        // A server that moved points its info request to the new address: the address is what comes before it.
+        let target = location.url().as_str();
+        let target = target
+            .strip_suffix("/System/Info/Public")
+            .unwrap_or(target)
+            .to_owned();
+        self.probe(target, token).await
+    }
+
+    /// Back to `Idle`, dropping a running probe and the gateway credentials given so far.
     pub fn reset(&self) {
         self.attempts.begin();
         self.flow.reset();
@@ -590,6 +862,252 @@ impl SignInFlow {
     /// Stops a running attempt and goes back to `Ready`. A finished sign-in stays signed in.
     pub fn cancel(&self) {
         self.attempts.begin();
+        self.flow.cancel();
+    }
+}
+
+/// Where signing in to a saved server's gateway again stands (ADR 0017). The same rules as [`AddServerState`]'s gateway states:
+/// `realm` only as "The site says: ...", no credential ever.
+#[derive(Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum GatewaySignInState {
+    /// Asking the address what its gateway wants, or trying what was just given.
+    Checking,
+    Password {
+        origin: String,
+        realm: Option<String>,
+        wrong: bool,
+    },
+    /// Open the sign-in window on `url`, titled with `origin`, and hand its cookies over after each navigation that lands on
+    /// `origin`. `redirected` and `location_origin` as in [`AddServerState::GatewaySignIn`].
+    WebSignIn {
+        url: String,
+        origin: String,
+        redirected: bool,
+        location_origin: Option<String>,
+    },
+    /// Extra headers (advanced).
+    Refused {
+        origin: String,
+    },
+    Unsupported {
+        origin: String,
+    },
+    /// Signed in to the gateway again and saved: the session goes on. `remembered` is false when the keyring refused the
+    /// credentials: they last for this run.
+    Done {
+        remembered: bool,
+    },
+    Failed {
+        problem: GatewaySignInProblem,
+    },
+}
+
+impl std::fmt::Debug for GatewaySignInState {
+    /// Like a derived Debug, with the origin, URL and realm redacted.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Checking => f.write_str("Checking"),
+            Self::Password { realm, wrong, .. } => f
+                .debug_struct("Password")
+                .field("origin", &REDACTED)
+                .field("realm", &realm.as_ref().map(|_| REDACTED))
+                .field("wrong", wrong)
+                .finish(),
+            Self::WebSignIn {
+                redirected,
+                location_origin,
+                ..
+            } => f
+                .debug_struct("WebSignIn")
+                .field("url", &REDACTED)
+                .field("origin", &REDACTED)
+                .field("redirected", redirected)
+                .field(
+                    "location_origin",
+                    &location_origin.as_ref().map(|_| REDACTED),
+                )
+                .finish(),
+            Self::Refused { .. } => f
+                .debug_struct("Refused")
+                .field("origin", &REDACTED)
+                .finish(),
+            Self::Unsupported { .. } => f
+                .debug_struct("Unsupported")
+                .field("origin", &REDACTED)
+                .finish(),
+            Self::Done { remembered } => f
+                .debug_struct("Done")
+                .field("remembered", remembered)
+                .finish(),
+            Self::Failed { problem } => f.debug_struct("Failed").field("problem", problem).finish(),
+        }
+    }
+}
+
+impl From<&current_app::GatewaySignInState> for GatewaySignInState {
+    fn from(state: &current_app::GatewaySignInState) -> Self {
+        use current_app::GatewaySignInState as App;
+        match state {
+            App::Checking => Self::Checking,
+            App::Password {
+                origin,
+                realm,
+                wrong,
+            } => Self::Password {
+                origin: origin.clone(),
+                realm: realm.as_ref().map(|realm| realm.as_str().to_owned()),
+                wrong: *wrong,
+            },
+            App::WebSignIn {
+                url,
+                origin,
+                redirected,
+                location,
+            } => Self::WebSignIn {
+                url: url.clone(),
+                origin: origin.clone(),
+                redirected: *redirected,
+                location_origin: location
+                    .as_ref()
+                    .map(|location| self::origin(location.url())),
+            },
+            App::Refused { origin } => Self::Refused {
+                origin: origin.clone(),
+            },
+            App::Unsupported { origin } => Self::Unsupported {
+                origin: origin.clone(),
+            },
+            App::Done { remembered } => Self::Done {
+                remembered: *remembered,
+            },
+            App::Failed { error } => Self::Failed {
+                problem: error.into(),
+            },
+        }
+    }
+}
+
+/// See [`AddServerStateListener`].
+#[uniffi::export(callback_interface)]
+pub trait GatewaySignInStateListener: Send + Sync {
+    fn on_value(&self, value: GatewaySignInState);
+}
+
+/// Signing in to a saved server's gateway again, when its status says `gateway_sign_in_needed` (ADR 0017). Call
+/// [`GatewaySignInFlow::start`] first. One per sign-in window or prompt; success saves the credentials for that address only.
+#[derive(uniffi::Object)]
+pub struct GatewaySignInFlow {
+    flow: Arc<current_app::GatewaySignIn>,
+    runtime: Handle,
+    listeners: LiveListeners,
+}
+
+impl GatewaySignInFlow {
+    pub(crate) fn new(
+        flow: current_app::GatewaySignIn,
+        runtime: Handle,
+        listeners: LiveListeners,
+    ) -> Self {
+        Self {
+            flow: Arc::new(flow),
+            runtime,
+            listeners,
+        }
+    }
+}
+
+#[uniffi::export]
+impl GatewaySignInFlow {
+    /// Subscribes to the state. Keep the handle while listening; cancel it when the view goes away.
+    pub fn subscribe_state(
+        &self,
+        listener: Box<dyn GatewaySignInStateListener>,
+    ) -> Arc<TaskHandle> {
+        let listener = self.listeners.track(listener);
+        subscribe::watch_value(&self.runtime, self.flow.state(), move |state| {
+            listener.listener.on_value(GatewaySignInState::from(&state));
+        })
+    }
+
+    /// The state now.
+    pub fn state(&self) -> GatewaySignInState {
+        GatewaySignInState::from(&*self.flow.state().borrow())
+    }
+
+    /// Asks the address what its gateway wants, with the credentials it has: a gateway state, or `Done` when it lets the server
+    /// through already.
+    ///
+    /// # Errors
+    /// [`CoreError::Cancelled`] if `token` is cancelled first: the check still ends and sets the state.
+    pub async fn start(&self, token: Arc<CancelToken>) -> Result<(), CoreError> {
+        let flow = self.flow.clone();
+        cancel::run_detached(&self.runtime, token, async move {
+            flow.start().await;
+            Ok(())
+        })
+        .await
+    }
+
+    /// The gateway's user name and password, in `Password`.
+    ///
+    /// # Errors
+    /// [`CoreError::NotReady`] in any other state; [`CoreError::Gateway`] when they cannot be used; [`CoreError::Cancelled`] as
+    /// [`GatewaySignInFlow::start`].
+    pub async fn submit_password(
+        &self,
+        user: String,
+        password: String,
+        token: Arc<CancelToken>,
+    ) -> Result<(), CoreError> {
+        let flow = self.flow.clone();
+        cancel::run_detached(&self.runtime, token, async move {
+            flow.submit_password(&user, &password)
+                .await
+                .map_err(|error| submit_error(&error))
+        })
+        .await
+    }
+
+    /// The sign-in window's cookies, in `WebSignIn`, after each navigation that lands on the state's `origin`.
+    ///
+    /// # Errors
+    /// As [`GatewaySignInFlow::submit_password`].
+    pub async fn submit_cookies(
+        &self,
+        cookies: Vec<GatewayCookie>,
+        token: Arc<CancelToken>,
+    ) -> Result<(), CoreError> {
+        let flow = self.flow.clone();
+        let cookies: Vec<CookieInput> = cookies.into_iter().map(Into::into).collect();
+        cancel::run_detached(&self.runtime, token, async move {
+            flow.submit_cookies(&cookies)
+                .await
+                .map_err(|error| submit_error(&error))
+        })
+        .await
+    }
+
+    /// Extra headers (advanced), in `Password`, `WebSignIn` or `Refused`.
+    ///
+    /// # Errors
+    /// As [`GatewaySignInFlow::submit_password`].
+    pub async fn submit_headers(
+        &self,
+        headers: Vec<GatewayHeader>,
+        token: Arc<CancelToken>,
+    ) -> Result<(), CoreError> {
+        let flow = self.flow.clone();
+        let headers: Vec<HeaderInput> = headers.into_iter().map(Into::into).collect();
+        cancel::run_detached(&self.runtime, token, async move {
+            flow.submit_headers(&headers)
+                .await
+                .map_err(|error| submit_error(&error))
+        })
+        .await
+    }
+
+    /// Stops the flow (the window or prompt closed): a running attempt's result is dropped.
+    pub fn cancel(&self) {
         self.flow.cancel();
     }
 }

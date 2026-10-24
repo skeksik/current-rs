@@ -31,11 +31,13 @@ pub use cancel::CancelToken;
 pub use error::CoreError;
 pub use flows::{
     AddServerFlow, AddServerState, AddServerStateListener, DiscoveredServerInfo, DiscoveryFlow,
-    DiscoveryState, DiscoveryStateListener, LocalInterface, NewServerInfo, SignInFlow, SignInState,
-    SignInStateListener,
+    DiscoveryState, DiscoveryStateListener, GatewayCookie, GatewayHeader, GatewaySignInFlow,
+    GatewaySignInState, GatewaySignInStateListener, LocalInterface, NewServerInfo, SignInFlow,
+    SignInState, SignInStateListener,
 };
 pub use problems::{
-    AddressProblem, DiscoveryProblem, NetProblem, ProbeProblem, SignInProblem, StoreProblem,
+    AddressProblem, DiscoveryProblem, GatewayInputProblem, GatewayProblem, GatewaySignInProblem,
+    NetProblem, ProbeProblem, SignInProblem, StoreProblem,
 };
 pub use records::{
     AppInfo, AppTheme, CapabilitiesSnapshot, Connectivity, InterfaceKind, LoadReport, NetworkFacts,
@@ -282,6 +284,36 @@ impl Core {
         )))
     }
 
+    /// A sign-in to a saved server's gateway again (ADR 0017), when its status says `gateway_sign_in_needed`: for the address
+    /// whose gateway asked. Call [`GatewaySignInFlow::start`] first. The Jellyfin session and its token were kept and go on once
+    /// it is done.
+    ///
+    /// # Errors
+    /// [`CoreError::UnknownServer`] if no such server is saved; [`CoreError::NoAddress`] if it has no usable address.
+    pub fn sign_in_to_gateway(
+        &self,
+        server: ServerRef,
+    ) -> Result<Arc<GatewaySignInFlow>, CoreError> {
+        let server: current_model::ServerRef = (&server).into();
+        if !self
+            .app
+            .servers()
+            .iter()
+            .any(|saved| saved.server == server)
+        {
+            return Err(CoreError::UnknownServer);
+        }
+        let flow = self
+            .app
+            .sign_in_to_gateway(&server)
+            .ok_or(CoreError::NoAddress)?;
+        Ok(Arc::new(GatewaySignInFlow::new(
+            flow,
+            self.runtime.clone(),
+            self.listeners.clone(),
+        )))
+    }
+
     /// Checks every saved session, all servers at once: run it in the background after [`open_core`], and again when the network
     /// returns. The capabilities state shows the outcome per server.
     ///
@@ -400,5 +432,7 @@ impl Core {
 
 #[cfg(test)]
 mod flow_tests;
+#[cfg(test)]
+mod gateway_tests;
 #[cfg(test)]
 mod tests;

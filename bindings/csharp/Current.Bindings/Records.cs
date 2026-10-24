@@ -28,7 +28,12 @@ public sealed record ServerStatus(
     int? AddressPosition,
     UserInfo? User,
     string? Version,
-    IReadOnlyList<string> Features);
+    IReadOnlyList<string> Features,
+    /// <summary>
+    /// The gateway in front of the address in use wants a sign-in again (ADR 0017): show "Sign in to the gateway again" and offer
+    /// <see cref="CoreHost.SignInToGateway"/>. The session and its token are kept.
+    /// </summary>
+    bool GatewaySignInNeeded);
 
 /// <summary>Whether the server answered the last time Current tried.</summary>
 public enum Reachability
@@ -167,7 +172,8 @@ internal static class Map
         status.AddressPosition,
         status.User is { } user ? From(user) : null,
         status.Version,
-        status.Features);
+        status.Features,
+        status.GatewaySignInNeeded);
 
     public static UserInfo From(Ffi.UserSnapshot user) => new(user.Id, user.Name, user.Permissions);
 

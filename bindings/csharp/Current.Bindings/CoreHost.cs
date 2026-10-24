@@ -101,6 +101,15 @@ public sealed class CoreHost : IDisposable
     /// <exception cref="ServerHasNoAddressException">The saved server has no address.</exception>
     public SignInFlow SignInAgain(ServerRef server) => new(CoreCall.Run(() => _core.SignInAgain(Map.ToFfi(server))));
 
+    /// <summary>
+    /// A sign-in to a saved server's gateway again (ADR 0017), when its status says <c>GatewaySignInNeeded</c>: for the address whose
+    /// gateway asked. Call <see cref="GatewaySignInFlow.StartAsync"/> first. The session and its token were kept and go on.
+    /// </summary>
+    /// <exception cref="UnknownServerException">No such server is saved.</exception>
+    /// <exception cref="ServerHasNoAddressException">The saved server has no usable address.</exception>
+    public GatewaySignInFlow SignInToGateway(ServerRef server) =>
+        new(CoreCall.Run(() => _core.SignInToGateway(Map.ToFfi(server))));
+
     /// <summary>Checks every saved session; the capabilities state shows the outcome per server.</summary>
     /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled first.</exception>
     public Task RestoreSessionsAsync(CancellationToken ct = default) =>

@@ -77,3 +77,33 @@ where
         })
     })
 }
+
+/// Runs `work` on the core's runtime to its end, whatever happens to the call: `token`, or dropping the returned future, only
+/// stops the waiting. For actions whose outcome is the flow's state (a probe with gateway credentials, a save), so that a cancel
+/// never leaves that state half-changed.
+pub(crate) async fn run_detached<T, F>(
+    runtime: &Handle,
+    token: Arc<CancelToken>,
+    work: F,
+) -> Result<T, CoreError>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, CoreError>> + Send + 'static,
+{
+    // Dropping a JoinHandle does not abort its task: `work` runs on when the waiting below ends first.
+    let work = runtime.spawn(work);
+    let mut waiting = AbortOnDrop(runtime.spawn(async move {
+        tokio::select! {
+            biased;
+            () = token.cancelled() => Err(CoreError::Cancelled),
+            result = work => result.unwrap_or_else(|error| Err(CoreError::Runtime {
+                message: error.to_string(),
+            })),
+        }
+    }));
+    (&mut waiting.0).await.unwrap_or_else(|error| {
+        Err(CoreError::Runtime {
+            message: error.to_string(),
+        })
+    })
+}

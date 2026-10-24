@@ -503,11 +503,19 @@ impl Shared {
         let Some(saved) = self.saved(server) else {
             return;
         };
-        if saved
+        // Addresses with gateway credentials: listed in the settings, or in use for this run only (the keyring refused them).
+        let gated: Vec<(ServerAddress, AddressId)> = saved
             .addresses
             .iter()
-            .all(|address| address.gateway.is_empty())
-        {
+            .filter_map(|address| {
+                let id = address.id?;
+                let in_use = self
+                    .gateway_of(server, id)
+                    .is_some_and(|gateway| !gateway.snapshot().0.is_empty());
+                (in_use || !address.gateway.is_empty()).then(|| (address.clone(), id))
+            })
+            .collect();
+        if gated.is_empty() {
             return;
         }
         let first = lock(&self.links)
@@ -523,8 +531,8 @@ impl Shared {
         let server = server.clone();
         runtime.spawn(async move {
             let prober = Prober::new(server.clone(), shared.request_log.clone());
-            for address in saved.addresses.iter().filter(|a| !a.gateway.is_empty()) {
-                let (Some(id), Ok(url)) = (address.id, Url::parse(&address.url)) else {
+            for (address, id) in gated {
+                let Ok(url) = Url::parse(&address.url) else {
                     continue;
                 };
                 let gateway = shared.gateway_of(&server, id);

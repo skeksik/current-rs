@@ -132,6 +132,11 @@ public sealed partial class AddServerPage : Page
                 // Leave the page after this delivery has finished, not inside it.
                 DispatcherQueue.TryEnqueue(() => GoToSignIn(ready.Server));
                 break;
+            // Until the gateway screens exist (the next task, ADR 0017): say so instead of showing nothing.
+            case AddServerState.GatewayPassword or AddServerState.GatewaySignIn or AddServerState.GatewayRefused
+                or AddServerState.GatewayUnsupported:
+                ShowError(ProblemText.GatewayNotYet);
+                break;
             default:
                 HideError();
                 break;

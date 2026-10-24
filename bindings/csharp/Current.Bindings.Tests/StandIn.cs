@@ -14,6 +14,15 @@ internal sealed class StandIn : IDisposable
     public const string ServerName = "Stand-in Server";
     public const string QuickConnectCode = "123456";
 
+    // Its gateway modes' fake credentials (`gate basic`, `gate portal`, `gate header`; tools/jellyfin-stand-in/src/lib.rs).
+    public const string GateUser = "stand-in-gate-user";
+    public const string GatePassword = "not-a-real-gate-password";
+    public const string GateRealm = "Stand-in Gate";
+    public const string GateCookie = "stand_in_gate";
+    public const string GateCookieValue = "not-a-real-gate-cookie";
+    public const string GateHeader = "x-stand-in-gate";
+    public const string GateHeaderValue = "not-a-real-gate-header";
+
     private readonly Process _process;
 
     private StandIn(Process process, string address)
@@ -55,7 +64,8 @@ internal sealed class StandIn : IDisposable
 
     /// <summary>
     /// Sends a command: <c>revoke</c>; <c>quick-connect off</c>, <c>on</c> or <c>hold</c> (requests stay unapproved);
-    /// <c>hold &lt;path&gt;</c>, <c>release &lt;path&gt;</c> (requests to the path wait, unanswered, until released).
+    /// <c>hold &lt;path&gt;</c>, <c>release &lt;path&gt;</c> (requests to the path wait, unanswered, until released);
+    /// <c>gate off</c>, <c>basic</c>, <c>portal</c> or <c>header</c>; <c>gate-cookie &lt;value&gt;</c> (the portal takes this value now).
     /// </summary>
     public void Send(string command)
     {

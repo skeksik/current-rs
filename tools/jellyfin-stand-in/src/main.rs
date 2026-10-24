@@ -3,13 +3,15 @@
 //! - `revoke`: end every session;
 //! - `quick-connect off`, `quick-connect on`, `quick-connect hold` (requests stay unapproved; `on` approves them again);
 //! - `hold <path>`, `release <path>`: requests to the path wait, unanswered, until released;
-//! - `count <path>`: prints `count <n>`, how many requests to the path arrived.
+//! - `count <path>`: prints `count <n>`, how many requests to the path arrived;
+//! - `gate off`, `gate basic`, `gate portal`, `gate header`: the gateway in front of it (ADR 0017; credentials in `lib.rs`);
+//! - `gate-cookie <value>`: the portal takes this cookie value from now on.
 //!
 //! It exits when stdin closes, so a test that dies cannot leave it running.
 
 use std::io::{BufRead, Write};
 
-use jellyfin_stand_in::StandIn;
+use jellyfin_stand_in::{Gate, StandIn};
 
 fn main() -> std::io::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -42,11 +44,17 @@ fn main() -> std::io::Result<()> {
                 controls.set_quick_connect_pending(false);
             }
             "quick-connect hold" => controls.set_quick_connect_pending(true),
+            "gate off" => controls.set_gate(Gate::Off),
+            "gate basic" => controls.set_gate(Gate::Basic),
+            "gate portal" => controls.set_gate(Gate::Portal),
+            "gate header" => controls.set_gate(Gate::Header),
             _ => {
                 if let Some(path) = line.strip_prefix("hold ") {
                     controls.hold(path);
                 } else if let Some(path) = line.strip_prefix("release ") {
                     controls.release(path);
+                } else if let Some(value) = line.strip_prefix("gate-cookie ") {
+                    controls.set_gate_cookie(value);
                 } else if let Some(path) = line.strip_prefix("count ") {
                     let mut out = std::io::stdout().lock();
                     writeln!(out, "count {}", controls.count(path))?;
