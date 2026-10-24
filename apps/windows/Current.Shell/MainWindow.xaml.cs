@@ -48,8 +48,11 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        // The caption buttons keep their standard height (PreferredHeightOption stays Standard): Windows Settings' are 46 × 32 px in
-        // its 48 px title bar (owner's run, 2026-10-24).
+        // Caption buttons as tall as the 48 px title bar (owner's finding, 2026-10-24; Photos' are 48 × 48, measured on the owner's PC,
+        // 2026-10-24): "Set PreferredHeightOption to Tall so the caption buttons are the same height as the title bar" ("Title bar
+        // customization", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-24), as the WinUI Gallery does after
+        // ExtendsContentIntoTitleBar (MainWindow.xaml.cs, github.com/microsoft/WinUI-Gallery, main at 14061ee, read 2026-10-24).
+        AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
 
         // XAML cannot parse "GoBack" as a VirtualKey (XamlParseException in CI), so this one is added here.
         var goBack = new KeyboardAccelerator { Key = VirtualKey.GoBack };

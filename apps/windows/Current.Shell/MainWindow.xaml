@@ -52,13 +52,24 @@
                             <StaticResource x:Key="TitleBarBackButtonBackgroundDisabled" ResourceKey="SystemControlBackgroundBaseLowBrush" />
                         </ResourceDictionary>
                     </ResourceDictionary.ThemeDictionaries>
-                    <!-- The tall title bar, 48 px like Windows Settings' (owner's run, 2026-10-24), with standard caption buttons. The
+                    <!-- The tall title bar, 48 px like Windows Settings' (owner's run, 2026-10-24). The
                          guideline's standard is 32 px, and 48 only with a search box or a person picture ("Windows app title bar",
-                         learn.microsoft.com, ms.date 2024-07-31, read 2026-10-24); 48 here is the owner's choice (2026-10-24). The control's
+                         learn.microsoft.com, ms.date 2024-07-31, read 2026-10-24); 48 here is the owner's choice (2026-10-24); the caption buttons are as tall (MainWindow.xaml.cs). The control's
                          layout root takes TitleBarCompactHeight (32) and switches to TitleBarExpandedHeight (48) only when Content,
                          LeftHeader or RightHeader is set (TitleBar.xaml, UpdateHeight in TitleBar.cpp, microsoft-ui-xaml, tag
                          winui3/release/2.5.1, read 2026-10-24). This one has none, so the compact height itself is raised. -->
                     <x:Double x:Key="TitleBarCompactHeight">48</x:Double>
+                    <!-- The back and pane buttons 40 × 36 with 6 px above and below, as Windows Settings' back button in its 48 px title
+                         bar (measured on the owner's PC, 2026-10-24; owner's finding: a gap to the window's border). The control's
+                         styles stretch them to the bar's height less a 2 px margin (TitleBarBackButtonStyle and
+                         TitleBarPaneToggleButtonStyle, TitleBar_themeresources.xaml, microsoft-ui-xaml, tag winui3/release/2.5.1, read
+                         2026-10-24), 40 × 44 here; only the top and bottom margin change. -->
+                    <Style x:Key="TitleBarBackButtonStyle" TargetType="Button" BasedOn="{StaticResource TitleBarBackButtonStyle}">
+                        <Setter Property="Margin" Value="2,6" />
+                    </Style>
+                    <Style x:Key="TitleBarPaneToggleButtonStyle" TargetType="Button" BasedOn="{StaticResource TitleBarPaneToggleButtonStyle}">
+                        <Setter Property="Margin" Value="2,6" />
+                    </Style>
                 </ResourceDictionary>
             </TitleBar.Resources>
         </TitleBar>
