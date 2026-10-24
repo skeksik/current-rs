@@ -19,9 +19,15 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- With a custom title bar, the navigation view's back and pane buttons move into it (the TitleBar control's page). -->
+        <!-- With a custom title bar, the navigation view's back and pane buttons move into it (the TitleBar control's page).
+             Margin: "The back button should be 16px from the left-most border" ("Windows app title bar", learn.microsoft.com, ms.date
+             2024-07-31, read 2026-10-24). The back button is 40 px wide with a 2 px margin (TitleBarBackButtonStyle), and the control
+             sets its left padding column to the window's left inset (0 left to right; not verified on screen) in place of
+             TitleBarLeftPaddingWidth (UpdatePadding in TitleBar.cpp; both microsoft-ui-xaml, tag winui3/release/2.5.1, read
+             2026-10-24), so its glyph sat 14 px from the border and its backplate 2 px. 2 px more puts the glyph at 16. -->
         <TitleBar
             x:Name="AppTitleBar"
+            Margin="2,0,0,0"
             Title="Current"
             IsBackButtonVisible="True"
             IsBackButtonEnabled="False"
@@ -46,7 +52,9 @@
                             <StaticResource x:Key="TitleBarBackButtonBackgroundDisabled" ResourceKey="SystemControlBackgroundBaseLowBrush" />
                         </ResourceDictionary>
                     </ResourceDictionary.ThemeDictionaries>
-                    <!-- The tall title bar, 48 px like Windows Settings' (owner's run, 2026-10-24), with standard caption buttons. The control's
+                    <!-- The tall title bar, 48 px like Windows Settings' (owner's run, 2026-10-24), with standard caption buttons. The
+                         guideline's standard is 32 px, and 48 only with a search box or a person picture ("Windows app title bar",
+                         learn.microsoft.com, ms.date 2024-07-31, read 2026-10-24); 48 here is the owner's choice (2026-10-24). The control's
                          layout root takes TitleBarCompactHeight (32) and switches to TitleBarExpandedHeight (48) only when Content,
                          LeftHeader or RightHeader is set (TitleBar.xaml, UpdateHeight in TitleBar.cpp, microsoft-ui-xaml, tag
                          winui3/release/2.5.1, read 2026-10-24). This one has none, so the compact height itself is raised. -->
