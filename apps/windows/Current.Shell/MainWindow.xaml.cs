@@ -5,12 +5,13 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
 using Windows.System;
+using Windows.UI;
+using Windows.UI.ViewManagement;
 
 namespace Current.Shell;
 
@@ -23,12 +24,8 @@ public sealed partial class MainWindow : Window
 {
     private static readonly Dictionary<string, Type> Pages = new() { ["home"] = typeof(HomePage) };
 
-    /// <summary>Pages reached from Home (adding a server, signing in): Home stays selected, the header names the step.</summary>
-    private static readonly Dictionary<Type, string> HomeSteps = new()
-    {
-        [typeof(AddServerPage)] = "Add a server",
-        [typeof(SignInPage)] = "Sign in",
-    };
+    /// <summary>Pages reached from Home (adding a server, signing in): Home stays selected, and the page's title names the step.</summary>
+    private static readonly HashSet<Type> HomeSteps = [typeof(AddServerPage), typeof(SignInPage)];
 
     /// <summary>
     /// The smallest window, in effective pixels: the narrowest page column (Sign in, 400 plus 24 on each side) and the title bar with
@@ -43,20 +40,23 @@ public sealed partial class MainWindow : Window
 
     private FrameworkElement? _paneToggleButton;
 
-    /// <summary>The navigation view's content layer: ContentGrid, the content of its template part RootSplitView.</summary>
+    /// <summary>The navigation view's content layer, read by the smoke run: ContentGrid, the content of the part RootSplitView.</summary>
     private Grid? _contentLayer;
 
-    private readonly SolidColorBrush _transparent = new(Microsoft.UI.Colors.Transparent);
-
     private readonly TaskCompletionSource _shown = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private readonly AccessibilitySettings _accessibility = new();
 
     public MainWindow()
     {
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        // The caption buttons keep their standard height (PreferredHeightOption stays Standard): Windows Settings' are 46 × 32 px in
-        // its 48 px title bar (owner's run, 2026-10-24).
+        // Caption buttons as tall as the 48 px title bar (owner's finding, 2026-10-24; Photos' are 48 × 48, measured on the owner's PC,
+        // 2026-10-24): "Set PreferredHeightOption to Tall so the caption buttons are the same height as the title bar" ("Title bar
+        // customization", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-24), as the WinUI Gallery does after
+        // ExtendsContentIntoTitleBar (MainWindow.xaml.cs, github.com/microsoft/WinUI-Gallery, main at 14061ee, read 2026-10-24).
+        AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
 
         // XAML cannot parse "GoBack" as a VirtualKey (XamlParseException in CI), so this one is added here.
         var goBack = new KeyboardAccelerator { Key = VirtualKey.GoBack };
@@ -68,8 +68,6 @@ public sealed partial class MainWindow : Window
 
         Activated += OnActivated;
         Root.Loaded += OnRootLoaded;
-        // A handler of its own, so the one that keeps the selection and header in step stays as it is.
-        ContentFrame.Navigated += (_, _) => ApplyContentLayer();
 
         NavView.SelectedItem = HomeItem;
         Navigate(typeof(HomePage), new EntranceNavigationTransitionInfo());
@@ -96,11 +94,14 @@ public sealed partial class MainWindow : Window
     private void OnRootLoaded(object sender, RoutedEventArgs e)
     {
         Root.Loaded -= OnRootLoaded;
-        // The template is applied by now: a missing part is only traced, and the page keeps the control's default look.
-        ApplyContentLayer();
+        ApplyCaptionButtonColors();
+        Root.ActualThemeChanged += (_, _) => ApplyCaptionButtonColors();
+        // The template is applied by now. The template's items name parts "ContentGrid" too, so the layer is taken from the SplitView
+        // it is the content of.
+        _contentLayer = (FindDescendant(NavView, "RootSplitView") as SplitView)?.Content as Grid;
         if (_contentLayer is null)
         {
-            Trace.TraceWarning("Current: NavigationView template part RootSplitView not found; every page keeps the content layer");
+            Trace.TraceWarning("Current: NavigationView template part RootSplitView not found; the smoke run cannot read its layer");
         }
         DispatcherQueue.TryEnqueue(() =>
         {
@@ -133,56 +134,54 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Shows the content layer behind content pages and Mica behind pages of settings cards (PageLayout.HasContentLayer), and places
-    /// the page's title, notices and column for it. The layer is the template's ContentGrid, whose Background and BorderBrush come
-    /// from ThemeResources (NavigationViewContentBackground, NavigationViewContentGridBorderBrush; NavigationView.xaml,
-    /// microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) and no visual state sets either. Values set by a template are
-    /// local values in WinUI's property system, which knows only default, style and local sources (GetBaseValueSource,
-    /// PropertySystem.cpp, same tag), so ClearValue would leave no brush at all: that hid the layer on every page in the owner's run
-    /// (2026-10-24). Content pages bind both to ContentLayerBrushes (MainWindow.xaml) instead, which follows the theme.
+    /// The caption buttons' hover and pressed backgrounds in the app's theme, set again when it changes. WinUI sets only their
+    /// background and inactive background (transparent) and leaves these unset, and the system then drew a light theme's hover in
+    /// dark mode, #191919 on the #202020 title bar, and kept dark colours after a switch to light while the app ran (owner's new
+    /// finding 3; measured on the owner's PC, 2026-10-24). Photos and Windows Settings hover at #2D2D2D dark and #EAEAEA light,
+    /// which is WinUI's SubtleFillColorSecondary over the title bar; pressed takes SubtleFillColorTertiary (not measured). Values
+    /// from Common_themeresources_any.xaml (microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24). The WinUI Gallery
+    /// re-applies its caption colours on ActualThemeChanged in the same way, "as AppWindow TitleBar doesn't update caption button
+    /// colors correctly when changed while app is running" (TitleBarHelper.cs, main at 14061ee, read 2026-10-24). High contrast
+    /// keeps the system's own colours; AccessibilitySettings.HighContrastChanged cannot be subscribed to in a desktop window
+    /// (0x80070490 in the smoke run), so a switch to high contrast while the app runs is caught only if it changes ActualTheme (not
+    /// verified). Setting PreferredTheme (UseDefaultAppMode or Dark) did not change the hover (owner's PC, 2026-10-24).
     /// </summary>
-    private void ApplyContentLayer()
+    private void ApplyCaptionButtonColors()
     {
-        if (ContentFrame.Content is not Page page)
+        var titleBar = AppWindow.TitleBar;
+        if (_accessibility.HighContrast)
         {
+            titleBar.ButtonHoverBackgroundColor = null;
+            titleBar.ButtonPressedBackgroundColor = null;
             return;
         }
-        var hasLayer = PageLayout.GetHasContentLayer(page);
-        PageLayout.SetContentLayer(hasLayer);
-        Notices.Margin = PageLayout.NoticesMargin;
-
-        // The template's items name parts "ContentGrid" too, so the layer is taken from the SplitView it is the content of.
-        _contentLayer ??= (FindDescendant(NavView, "RootSplitView") as SplitView)?.Content as Grid;
-        if (_contentLayer is null)
-        {
-            return;
-        }
-        if (hasLayer)
-        {
-            _contentLayer.SetBinding(Panel.BackgroundProperty, new Binding { Source = ContentLayerBrushes, Path = new PropertyPath("Background") });
-            _contentLayer.SetBinding(Grid.BorderBrushProperty, new Binding { Source = ContentLayerBrushes, Path = new PropertyPath("BorderBrush") });
-        }
-        else
-        {
-            _contentLayer.Background = _transparent;
-            _contentLayer.BorderBrush = _transparent;
-        }
+        var dark = Root.ActualTheme == ElementTheme.Dark;
+        titleBar.ButtonHoverBackgroundColor = dark ? Color.FromArgb(0x0F, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x09, 0x00, 0x00, 0x00);
+        titleBar.ButtonPressedBackgroundColor = dark ? Color.FromArgb(0x0A, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x06, 0x00, 0x00, 0x00);
     }
 
-    private void OnPaneOpenedOrClosed(NavigationView sender, object args)
+    /// <summary>Also on PaneOpening: Back is enabled as the pane starts to open over the page, as Windows Settings' back button is
+    /// (owner's recording, 2026-10-24), not once its animation has ended.</summary>
+    private void OnPaneOpenedOrClosed(NavigationView sender, object args) => QueuePaneStateUpdate();
+
+    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) => QueuePaneStateUpdate();
+
+    /// <summary>
+    /// Updates the pane button's name and Back once the navigation view has finished the change. Crossing 1008 px, it raises
+    /// DisplayModeChanged while the full pane is still open and closes or reopens the pane after; read at once, the pane counted as
+    /// over the page for that moment and Back flashed enabled (owner's recording, 2026-10-24).
+    /// </summary>
+    private void QueuePaneStateUpdate() => DispatcherQueue.TryEnqueue(() =>
     {
         NamePaneToggleButton();
         UpdateBackButton();
-    }
-
-    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) => UpdateBackButton();
+    });
 
     /// <summary>
-    /// The pane open over the page (Compact or Minimal): it counts as a back step, which back closes. The full pane inline on a wide
-    /// window does not (owner, 2026-10-24).
+    /// The pane open over the page (Compact; Minimal is never reached, CompactModeThresholdWidth is 0): it counts as a back step,
+    /// which back closes. The full pane inline on a wide window does not (owner, 2026-10-24).
     /// </summary>
-    private bool PaneOverlaysPage =>
-        NavView.IsPaneOpen && NavView.DisplayMode is NavigationViewDisplayMode.Compact or NavigationViewDisplayMode.Minimal;
+    private bool PaneOverlaysPage => NavView.IsPaneOpen && NavView.DisplayMode == NavigationViewDisplayMode.Compact;
 
     /// <summary>The title bar's Back button is enabled while there is a page to go back to or the pane overlays the page.</summary>
     private void UpdateBackButton() => AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack || PaneOverlaysPage;
@@ -295,23 +294,20 @@ public sealed partial class MainWindow : Window
     {
         DropSignInHistory();
         UpdateBackButton();
+        // Each page shows its own title (App.xaml, PageTitleTextBlockStyle); the navigation view's header is not used.
         if (ContentFrame.SourcePageType == typeof(SettingsPage))
         {
             // The settings item is not in MenuItems and has no tag.
             NavView.SelectedItem = NavView.SettingsItem;
-            NavView.Header = "Settings";
             return;
         }
-        if (HomeSteps.TryGetValue(ContentFrame.SourcePageType, out var step))
+        if (HomeSteps.Contains(ContentFrame.SourcePageType))
         {
             NavView.SelectedItem = HomeItem;
-            NavView.Header = step;
             return;
         }
         var tag = Pages.FirstOrDefault(entry => entry.Value == ContentFrame.SourcePageType).Key;
-        var item = NavView.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(i => Equals(i.Tag, tag));
-        NavView.SelectedItem = item;
-        NavView.Header = item?.Content;
+        NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(i => Equals(i.Tag, tag));
     }
 
     private bool TryGoBack()

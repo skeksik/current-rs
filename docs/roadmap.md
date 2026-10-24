@@ -94,22 +94,29 @@ recorded with sources and dates, and a decision record where it decides somethin
       server is told in the background (PR 31, ADR 0015 amended; the owner's run 2026-10-23)
 - [x] Local server discovery (core 2026-10-22, ADR 0016; the Windows screen, PR 27)
   - [x] Search from each up interface (PR 29, ADR 0016 amended; the owner's multi-adapter run passed 2026-10-23)
-- [ ] Windows window and page layout, matched to Windows Settings and Task Manager (owner, 2026-10-23 and 2026-10-24)
-  - [x] Transparent disabled back button; page columns left-aligned under the page title (PR 33)
-  - [x] The title bar, the pane and the page backgrounds (PR 35): a 48 px title bar with standard caption buttons; a 500 × 500
+- [x] Windows window and page layout, matched to Windows Settings and Task Manager (owner, 2026-10-23 and 2026-10-24; done
+      on the owner's run of PR 38, 2026-10-24)
+  - [x] Transparent disabled back button; page columns left-aligned under the page title (PR 33; the columns are centred now)
+  - [x] The title bar, the pane and the page backgrounds (PR 35): a 48 px title bar (tall caption buttons since PR 38); a 500 × 500
         minimum; the navigation view's three-stage pane with an always-shown "Open/Close Navigation" button, the pane opening
         over the page on narrower windows in the title bar's colour; an open overlay pane is a back step that Back only closes;
         the content layer on content pages and Mica behind Settings; "All rights reserved." in About
-  - Open, from the owner's re-check of PR 35 (2026-10-24, docs/notes/windows-shell.md, "Window chrome: owner's re-check"):
-    - [ ] The page title sits 2.7 px under the title bar at every width; Windows Settings has about 5 px on a small window and
-          16 px on a wide one (`PageLayout.PlainHeader`, `apps/windows/Current.Shell/PageLayout.cs`)
-    - [ ] The open overlay pane keeps a 1 px line at its right edge and a shadow, and a 1 px line at its left edge; Windows
-          Settings' pane has neither
-    - [ ] Inside the content layer the title sits about 2.7 px right of and 2 px above Task Manager's Users page heading, and
-          the right gap is 16.7 px against Task Manager's 18
-    - [ ] The content layer's colour is WinUI's layer fill (#272727 dark, #F9F9F9 light); Task Manager's is #191919 / #FFFFFF
-          (the border matches)
-    - [ ] More from the owner (to be added)
+  - The owner's review of main cfa83b9 (2026-10-24), replacing the four items from the re-check of PR 35; fixed on
+    fix/windows-shell-defaults (PR 38) and accepted on the owner's run (docs/notes/windows-shell.md, "Windows shell defaults:
+    owner's check"). Rules: the controls' defaults first, sizes from Microsoft's guidelines, else from Microsoft's apps.
+    - [x] 1. The title bar's back and pane buttons inset from the window's left edge, as the guideline and Windows Settings
+    - [x] 2. The pane never hidden: the full pane or the icon rail at every width, with the pane button always shown
+    - [x] 3. A narrower full pane: 300 px, Windows Settings' as the owner measured it
+    - [x] 4. One content background on every page, Settings included: the control's own layer, which matches Photos
+    - [x] 5. The overrides that are not needed removed (layer switch, pane colour and border, header margins, `PageLayout.cs`)
+    - [x] 6. Every size from Microsoft's guidelines or apps, with its source
+    - [x] 7. The pane opened over the page translucent acrylic, as in Photos; the owner keeps its 1 px border
+    - [x] 8. Page content centred with a maximum width, the page title over the column
+    - [x] 9. Caption buttons as tall as the title bar (48 × 48, as Photos'); back and pane buttons 40 × 36, as Windows Settings'
+    - [x] 10. Title bar buttons that work while the pane is open over the page: the navigation view under the title bar
+    - [x] 11. Caption button hover in the app's theme, also after a switch while the app runs
+  - [ ] Not verified on the owner's run: the pressed caption colour, a switch to high contrast while the app runs, Narrator read
+        aloud
 
 Done when: sign in and out of Jellyfin on Windows, and the app restarts signed in; and the owner's open layout items above are
 fixed.
