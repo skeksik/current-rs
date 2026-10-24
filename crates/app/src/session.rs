@@ -29,7 +29,10 @@ use current_net::{
     FixedAddress, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError,
     RoamingStatus, RuntimeHandle, Url,
 };
-use current_store::{Secret, SecretKey, Secrets, SecretsError, SettingsStore, StoreError};
+use current_store::{
+    GatewayKey, Secret, SecretKey, Secrets, SecretsError, SettingsStore, StoreError,
+    forget_gateway_secret,
+};
 use tokio::sync::watch;
 
 use crate::Removal;
@@ -259,6 +262,8 @@ impl Shared {
                 settings.servers = next.clone();
                 settings.last_server_key = last_key;
             })?;
+            // As saved: the store gives an id to any address added without one (ADR 0017).
+            next = storage.settings.get().servers;
         }
         self.last_key.store(last_key, Ordering::Relaxed);
         self.servers.send_if_modified(|servers| {
@@ -853,7 +858,8 @@ impl Shared {
     /// without the server is saved, then its session, provider and status are dropped. From then on nothing can write a token
     /// under its key: a sign-in or restore finds no saved server, a sign-in saved earlier has already stored its token (read and
     /// deleted below), and the key is never given out again. After the lock: every saved user's token is read and deleted from
-    /// the keyring, and each token found, with the live session's, is logged out on the server in the background, through the
+    /// the keyring with every saved address's gateway secret (ADR 0017), and each token found, with the live session's, is logged
+    /// out on the server in the background, through the
     /// server's identity-checked provider (ADR 0014), never awaited.
     async fn apply_removal(self: &Arc<Self>, server: ServerRef) -> Result<Removal, StoreError> {
         let (saved, session, provider) = {
@@ -889,12 +895,24 @@ impl Shared {
         {
             users.push(active.clone());
         }
+        let addresses: Vec<_> = saved
+            .addresses
+            .iter()
+            .filter_map(|address| Some((address.id?, !address.gateway.is_empty())))
+            .collect();
         let (tokens, credentials_left) = match &self.storage {
             Some(storage) => {
                 let secrets = storage.secrets.clone();
                 let server = server.clone();
                 blocking("delete from the keyring", move || {
-                    forget_tokens(secrets.as_ref(), &server, &users)
+                    let (tokens, mut left) = forget_tokens(secrets.as_ref(), &server, &users);
+                    // Every saved address's gateway secret, whatever its kinds say: that also catches one left by a crash between
+                    // the keyring write and the settings save (ADR 0017).
+                    for (address, has_kinds) in addresses {
+                        let key = GatewayKey::new(server.clone(), address);
+                        left |= forget_gateway_secret(secrets.as_ref(), &key, has_kinds);
+                    }
+                    (tokens, left)
                 })
                 .await
                 .unwrap_or((Vec::new(), true))
@@ -1049,20 +1067,23 @@ fn record(
                 Some(index) => {
                     let saved = &mut servers[index];
                     if !saved.addresses.iter().any(|a| a.url == address.url) {
-                        saved.addresses.push(address.clone());
+                        saved.add_address(address.clone());
                     }
                     saved.name.clone_from(name);
                     index
                 }
                 None => {
-                    servers.push(SavedServer {
+                    let mut saved = SavedServer {
                         server: ServerRef::new(ServiceType::JELLYFIN, next_key(servers, last_key)),
                         id: id.clone(),
                         name: name.clone(),
-                        addresses: vec![address.clone()],
+                        addresses: Vec::new(),
                         users: Vec::new(),
                         active_user: None,
-                    });
+                        last_address_id: 0,
+                    };
+                    saved.add_address(address.clone());
+                    servers.push(saved);
                     servers.len() - 1
                 }
             };
@@ -1126,12 +1147,10 @@ mod tests {
             server: ServerRef::new(ServiceType::JELLYFIN, ServerKey::new(key)),
             id: ServerId::new(id),
             name: "Test Server".into(),
-            addresses: vec![ServerAddress {
-                url: "http://192.168.1.10:8096".into(),
-                plain_http_confirmed: false,
-            }],
+            addresses: vec![ServerAddress::new("http://192.168.1.10:8096", false)],
             users: Vec::new(),
             active_user: None,
+            last_address_id: 0,
         }
     }
 
@@ -1149,10 +1168,7 @@ mod tests {
         Target::New {
             id: ServerId::new(id),
             name: "Renamed Server".into(),
-            address: ServerAddress {
-                url: url.into(),
-                plain_http_confirmed: true,
-            },
+            address: ServerAddress::new(url, true),
             version: "12.2.0".into(),
         }
     }
@@ -1290,10 +1306,7 @@ mod tests {
         // A sign-in adds an address: the next caller gets a provider over both, whatever list it read earlier.
         shared
             .commit(|servers, _| {
-                servers[0].addresses.push(ServerAddress {
-                    url: "https://media.example.com".into(),
-                    plain_http_confirmed: false,
-                });
+                servers[0].add_address(ServerAddress::new("https://media.example.com", false));
             })
             .unwrap();
         let second = shared.provider(&server).await.unwrap();

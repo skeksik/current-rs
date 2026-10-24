@@ -996,10 +996,7 @@ mod tests {
 
     fn local(count: u16) -> Vec<ServerAddress> {
         (1..=count)
-            .map(|port| ServerAddress {
-                url: format!("http://127.0.0.1:{port}"),
-                plain_http_confirmed: false,
-            })
+            .map(|port| ServerAddress::new(format!("http://127.0.0.1:{port}"), false))
             .collect()
     }
 
@@ -1129,10 +1126,7 @@ mod tests {
     async fn plain_http_without_confirmation_is_never_probed() {
         let script = Script::new(&[Probe::Pass(1), Probe::Pass(1)]);
         let mut addresses = local(2);
-        addresses[0] = ServerAddress {
-            url: "http://media.example.com".into(),
-            plain_http_confirmed: false,
-        };
+        addresses[0] = ServerAddress::new("http://media.example.com", false);
         let roaming = roaming_with(&addresses, &script, RoamingConfig::default());
         assert_eq!(position(&roaming).await, Some(2));
         assert_eq!(script.probed(), [2]);

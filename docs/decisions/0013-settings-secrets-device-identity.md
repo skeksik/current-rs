@@ -29,6 +29,12 @@ directory-lookup crate could not cover Android or tvOS anyway.
   2026-10-23, both defaulted; `app_theme` on 2026-10-24: `"light"`, `"dark"` or `"system"`, left out while it is the default,
   system; a value this version does not know, of any JSON type, reads as system and is written back unchanged until the theme is
   changed here, so it never makes the file corrupt).
+- **Address ids (ADR 0017, 2026-10-24):** every saved address has an `id`, a number that stays with the address when the addresses are
+  reordered or its URL changes and is never given to another address of the same server: each server keeps `last_address_id`, the
+  highest id it gave out. Ids are given when an address is saved; an address read without one (older files) or with an id an earlier
+  address of the server already has gets the next one, and the file is saved. An address's `gateway` field lists the kinds of gateway
+  credential it has (`"basic"`, `"cookies"`, `"headers"`; open, so an unknown kind is kept), never a value. All three fields are
+  defaulted and left out while empty, so no format change.
 - **Adding a field** gives it `#[serde(default)]`: older files read without a migration. Fields this version does not know are kept
   and written back, so an older build never drops what a newer one wrote. The server list (several addresses per server, users with a
   reference to their secret) arrives this way in the server-setup and sign-in tasks.
@@ -76,6 +82,14 @@ directory-lookup crate could not cover Android or tvOS anyway.
 - **Limits:** `CredentialBlobSize` "cannot be larger than CRED_MAX_CREDENTIAL_BLOB_SIZE (5*512) bytes"; larger secrets fail with
   `TooLong`. Tokens and API keys are far smaller. The Windows store serializes Credential Manager calls with a named mutex, because
   Credential Manager "loses updates when credentials, even different ones, are written and deleted concurrently" (its README).
+- **Gateway secrets (ADR 0017, 2026-10-24):** gateway secrets under `gateway/<server key>/<address id>`, stored in chunks when larger
+  than a Windows credential. The chunks are numbered, `gateway/<server key>/<address id>/0`, `.../1`, ..., and written and deleted
+  together; a secret that fits one credential is one chunk, so every gateway secret has the same format. Windows' store writes a
+  password as UTF-16 (windows-native-keyring-store 1.1.0, `validate_password`, read 2026-10-24), so a chunk holds at most 1,280 UTF-16
+  units. Chunk 0 starts with the number of chunks and the secret's length; a write deletes the earlier chunk 0 first and writes the
+  new one last, so a write cut short leaves no secret, never a mix of two; a read that finds a chunk missing, one too many or a wrong
+  length treats the secret as absent and deletes every chunk. Removing an address or a server deletes its gateway secrets after the
+  settings are saved, as for tokens.
 - **No keyring** (no backend on the platform, a locked or refused keyring): calls return `Unavailable`. Sign-in works for the run
   but is not remembered, and the UI says so.
 - **No fallback to the settings file.** A token in a plain file can be read by any process of the user and travels into backups,

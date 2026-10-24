@@ -138,10 +138,7 @@ impl StandIn {
 }
 
 fn address(port: u16) -> ServerAddress {
-    ServerAddress {
-        url: format!("http://127.0.0.1:{port}"),
-        plain_http_confirmed: false,
-    }
+    ServerAddress::new(format!("http://127.0.0.1:{port}"), false)
 }
 
 async fn read_head(socket: &mut tokio::net::TcpStream) -> String {

@@ -132,12 +132,12 @@ impl FoundServer {
 
     /// The address as the model keeps it, with whether the user confirmed plain HTTP to it.
     pub fn server_address(&self, plain_http_confirmed: bool) -> ServerAddress {
-        ServerAddress {
-            url: String::from(self.address.clone())
+        ServerAddress::new(
+            String::from(self.address.clone())
                 .trim_end_matches('/')
                 .to_owned(),
             plain_http_confirmed,
-        }
+        )
     }
 }
 

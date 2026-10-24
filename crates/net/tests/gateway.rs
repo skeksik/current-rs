@@ -494,10 +494,7 @@ async fn plain_server() -> StandIn {
 
 /// An address as the user's list holds it (plain HTTP to 127.0.0.1 needs no confirmation).
 fn address(stand_in: &StandIn) -> ServerAddress {
-    ServerAddress {
-        url: stand_in.url().to_string(),
-        plain_http_confirmed: false,
-    }
+    ServerAddress::new(stand_in.url().to_string(), false)
 }
 
 /// The stand-ins' identity check: `GET /info` must answer `SERVER_ID`.
