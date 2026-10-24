@@ -224,7 +224,21 @@ impl Prober {
     /// # Errors
     /// [`ProbeError`] when no candidate leads to a usable server.
     pub async fn probe(&self, input: &str) -> Result<FoundServer, ProbeError> {
-        let candidates = parse_address(input)?;
+        self.probe_reporting(input)
+            .await
+            .map_err(|(error, _)| error)
+    }
+
+    /// Like [`Prober::probe`], and on failure also the candidate base URL the reported error came from (`None` for an address that
+    /// could not be read; boxed to keep the error small): a gateway's sign-in opens on that address, and a gateway's credentials are probed there (ADR 0017).
+    ///
+    /// # Errors
+    /// As [`Prober::probe`], with the candidate.
+    pub async fn probe_reporting(
+        &self,
+        input: &str,
+    ) -> Result<FoundServer, (ProbeError, Option<Box<Url>>)> {
+        let candidates = parse_address(input).map_err(|error| (error.into(), None))?;
         let tried = if resolves(&candidates[0]).await {
             &candidates[..]
         } else {
@@ -244,7 +258,7 @@ impl Prober {
                         https_failed_tls = true;
                     }
                     if error.is_conclusive() {
-                        return Err(error);
+                        return Err((error, Some(Box::new(candidate.clone()))));
                     }
                     failures.push((candidate, error));
                 }
@@ -353,7 +367,7 @@ pub(crate) enum Answer {
 
 /// The most telling of the candidates' errors. A failed https handshake on a host and port where plain http answered does not count:
 /// that port speaks plain http, so the http answer says more than the handshake.
-fn most_telling(failures: &[(&Url, ProbeError)]) -> ProbeError {
+fn most_telling(failures: &[(&Url, ProbeError)]) -> (ProbeError, Option<Box<Url>>) {
     let http_answered_on = |https: &Url| {
         failures.iter().any(|(url, error)| {
             url.scheme() == "http"
@@ -362,16 +376,18 @@ fn most_telling(failures: &[(&Url, ProbeError)]) -> ProbeError {
                 && error.http_answered()
         })
     };
-    let mut best: Option<&ProbeError> = None;
+    let mut best: Option<(&Url, &ProbeError)> = None;
     for (url, error) in failures {
         if *error == ProbeError::Tls && url.scheme() == "https" && http_answered_on(url) {
             continue;
         }
-        if best.is_none_or(|best| error.rank() > best.rank()) {
-            best = Some(error);
+        if best.is_none_or(|(_, best)| error.rank() > best.rank()) {
+            best = Some((url, error));
         }
     }
-    best.cloned().unwrap_or(ProbeError::Unreachable)
+    best.map_or((ProbeError::Unreachable, None), |(url, error)| {
+        (error.clone(), Some(Box::new((*url).clone())))
+    })
 }
 
 /// Sends the info request on `client` and reads the answer. A gateway's answer is classified by `current-net` (ADR 0017); a redirect
@@ -680,6 +696,10 @@ mod tests {
         assert!(!format!("{error:?} {error}").contains("Private"));
     }
 
+    fn most_telling_error(failures: &[(&Url, ProbeError)]) -> ProbeError {
+        most_telling(failures).0
+    }
+
     #[test]
     fn plain_http_answering_on_the_port_beats_its_failed_handshake() {
         let https = url("https://192.168.1.10:3000/");
@@ -693,19 +713,19 @@ mod tests {
             },
         ] {
             assert_eq!(
-                most_telling(&[(&https, ProbeError::Tls), (&http, answer.clone())]),
+                most_telling_error(&[(&https, ProbeError::Tls), (&http, answer.clone())]),
                 answer
             );
             // Whatever order they were tried in (http comes first on 80 and 8096).
             assert_eq!(
-                most_telling(&[(&http, answer.clone()), (&https, ProbeError::Tls)]),
+                most_telling_error(&[(&http, answer.clone()), (&https, ProbeError::Tls)]),
                 answer
             );
         }
         // Nothing answered on http: the handshake still says the most.
         for silent in [ProbeError::Unreachable, ProbeError::Timeout] {
             assert_eq!(
-                most_telling(&[(&https, ProbeError::Tls), (&http, silent)]),
+                most_telling_error(&[(&https, ProbeError::Tls), (&http, silent)]),
                 ProbeError::Tls
             );
         }
@@ -726,17 +746,22 @@ mod tests {
             (&candidates[2], ProbeError::Unreachable),
             (&candidates[3], ProbeError::NotJellyfin),
         ];
-        assert_eq!(most_telling(&failures), ProbeError::Tls);
+        assert_eq!(most_telling_error(&failures), ProbeError::Tls);
         // Another host on the same port does not count either.
         let other = url("http://192.168.1.10:443/");
         assert_eq!(
-            most_telling(&[
+            most_telling_error(&[
                 (&candidates[0], ProbeError::Tls),
                 (&other, ProbeError::NotJellyfin)
             ]),
             ProbeError::Tls
         );
-        assert_eq!(most_telling(&[]), ProbeError::Unreachable);
+        assert_eq!(most_telling(&[]), (ProbeError::Unreachable, None));
+        // The candidate the reported error came from goes with it.
+        assert_eq!(
+            most_telling(&failures),
+            (ProbeError::Tls, Some(Box::new(candidates[0].clone())))
+        );
     }
 
     #[test]

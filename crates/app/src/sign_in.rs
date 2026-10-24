@@ -399,7 +399,11 @@ impl SignIn {
         // Saved in full even if this future is dropped or the attempt cancelled meanwhile: the server already made the session.
         let next = match self
             .shared
-            .save_sign_in(self.target.clone(), signed_in)
+            .save_sign_in(
+                self.target.clone(),
+                signed_in,
+                self.link.get().map(|link| link.client.header_placement()),
+            )
             .await
         {
             Ok((server, remembered)) => SignInState::SignedIn {

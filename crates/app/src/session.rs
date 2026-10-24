@@ -19,15 +19,16 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use current_jellyfin::{
-    AccessToken, AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, SignedIn,
+    AccessToken, AuthError, ClientIdentity, HeaderPlacement, JellyfinClient, JellyfinIdentity,
+    SignedIn,
 };
 use current_model::{
-    Capabilities, NetworkFacts, Reachability, SavedServer, SavedUser, ServerAddress, ServerId,
-    ServerKey, ServerRef, ServerStatus, ServiceType, User, UserId,
+    AddressId, AuthHeader, Capabilities, NetworkFacts, Reachability, SavedServer, SavedUser,
+    ServerAddress, ServerId, ServerKey, ServerRef, ServerStatus, ServiceType, User, UserId,
 };
 use current_net::{
-    FixedAddress, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError,
-    RoamingStatus, RuntimeHandle, Url,
+    AddressProvider, FixedAddress, Gateway, GatewayAddress, NetError, RequestLog, RoamingAddresses,
+    RoamingConfig, RoamingError, RoamingStatus, RuntimeHandle, Url,
 };
 use current_store::{
     GatewayKey, Secret, SecretKey, Secrets, SecretsError, SettingsStore, StoreError,
@@ -36,7 +37,13 @@ use current_store::{
 use tokio::sync::watch;
 
 use crate::Removal;
+use crate::gateway;
 use crate::sign_in::SignInError;
+
+mod gateways;
+
+pub(crate) use gateways::gateway_answered;
+use gateways::{GatewayEntry, ROTATION_CHECK};
 
 /// What an app opened on a data folder keeps between runs.
 pub(crate) struct Storage {
@@ -53,6 +60,8 @@ struct Session {
     /// Whether the server confirmed the user (`GET /Users/Me`) in this session: [`UNCHECKED`], [`CHECKING`] or [`CHECKED`]. A
     /// restored session whose server could not be reached is checked again when its provider next reaches the server.
     check: Arc<AtomicU8>,
+    /// True while the 401 rule's confirming probe runs for this session (ADR 0015 as amended).
+    confirming: watch::Sender<bool>,
 }
 
 const UNCHECKED: u8 = 0;
@@ -68,8 +77,11 @@ struct Link {
     generation: u64,
     provider: Arc<RoamingAddresses>,
     identity: JellyfinIdentity,
-    /// The task that copies the provider's status into the capabilities state.
+    /// The task that copies the provider's status into the capabilities state and saves rotated gateway cookies.
     follow: tokio::task::AbortHandle,
+    /// Whether the gateway addresses were probed since the provider last found none reachable (ADR 0017); reset by a network
+    /// change.
+    gateways_probed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Drop for Link {
@@ -85,8 +97,17 @@ fn current_link(
 ) -> Option<Arc<RoamingAddresses>> {
     links
         .get(&saved.server)
-        .filter(|link| link.addresses == saved.addresses && link.id == saved.id)
+        .filter(|link| same_addresses(&link.addresses, &saved.addresses) && link.id == saved.id)
         .map(|link| link.provider.clone())
+}
+
+/// Whether two address lists are the same for a provider: the gateway kinds do not count, since every address's gateway is
+/// replaced in place (ADR 0017).
+fn same_addresses(a: &[ServerAddress], b: &[ServerAddress]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| {
+            a.url == b.url && a.plain_http_confirmed == b.plain_http_confirmed && a.id == b.id
+        })
 }
 
 /// Why a saved server's provider or client could not be made.
@@ -155,6 +176,10 @@ pub(crate) struct Shared {
     /// One address provider per saved Jellyfin server, made when first needed (restore, a sign-in) since it needs the runtime.
     links: Mutex<HashMap<ServerRef, Link>>,
     next_link: AtomicU64,
+    /// Each saved address's gateway in use, one per address for the process (ADR 0017).
+    gateways: Mutex<HashMap<(ServerRef, AddressId), GatewayEntry>>,
+    /// The address whose gateway last asked for a sign-in, per server.
+    gateway_address: Mutex<HashMap<ServerRef, AddressId>>,
     pub(crate) roaming: Mutex<Roaming>,
     next_session: AtomicU64,
     /// Orders session changes (see the module documentation).
@@ -169,6 +194,8 @@ pub(crate) enum Target {
         name: String,
         address: ServerAddress,
         version: String,
+        /// The address's gateway credentials from setup, saved with it (ADR 0017).
+        gateway: Option<Arc<Gateway>>,
     },
     Saved(ServerRef),
 }
@@ -201,6 +228,8 @@ impl Shared {
             sessions: Mutex::new(HashMap::new()),
             links: Mutex::new(HashMap::new()),
             next_link: AtomicU64::new(1),
+            gateways: Mutex::new(HashMap::new()),
+            gateway_address: Mutex::new(HashMap::new()),
             roaming: Mutex::new(Roaming::default()),
             next_session: AtomicU64::new(1),
             changes: tokio::sync::Mutex::new(()),
@@ -330,19 +359,38 @@ impl Shared {
         }
     }
 
-    /// A client for a server setup has just found, at the one address setup probed. Saved servers use [`Shared::saved_client`].
+    /// A client for a server setup has just found, at the one address setup probed, with that address's gateway credentials if
+    /// it has any (ADR 0017): Jellyfin's header then moves away from a Basic gateway's `Authorization`. Saved servers use
+    /// [`Shared::saved_client`].
     pub(crate) fn client(
         &self,
         server: ServerRef,
         address: &ServerAddress,
+        gateway: Option<Arc<Gateway>>,
     ) -> Result<JellyfinClient, NetError> {
         let url = Url::parse(&address.url).map_err(|_| NetError::InvalidRequest)?;
-        JellyfinClient::new(
+        let provider: Arc<dyn AddressProvider> = match &gateway {
+            Some(gateway) => Arc::new(GatewayAddress::new(
+                url,
+                gateway.clone(),
+                address.plain_http_confirmed,
+            )),
+            None => Arc::new(FixedAddress(url)),
+        };
+        let client = JellyfinClient::new(
             server,
-            Arc::new(FixedAddress(url)),
+            provider,
             self.identity.clone(),
             self.request_log.clone(),
-        )
+        )?;
+        if let Some(gateway) = &gateway {
+            let (credentials, _) = gateway.snapshot();
+            client.set_header_placement(HeaderPlacement::for_gateway(
+                &credentials,
+                HeaderPlacement::default(),
+            ));
+        }
+        Ok(client)
     }
 
     /// A client for a saved Jellyfin server over its address provider, and the provider. Async: the provider may have to be made.
@@ -358,6 +406,9 @@ impl Shared {
             self.request_log.clone(),
         )
         .map_err(LinkError::Net)?;
+        if let Some(saved) = self.saved(server) {
+            client.set_header_placement(gateway::placement(&saved.header_placement));
+        }
         Ok((client, provider))
     }
 
@@ -379,10 +430,9 @@ impl Shared {
             {
                 let mut links = lock(&self.links);
                 // The saved list changed while building (a sign-in added an address): build again from the new one.
-                if !self
-                    .saved(server)
-                    .is_some_and(|now| now.addresses == saved.addresses && now.id == saved.id)
-                {
+                if !self.saved(server).is_some_and(|now| {
+                    same_addresses(&now.addresses, &saved.addresses) && now.id == saved.id
+                }) {
                     continue;
                 }
                 // Another caller made one for the same list meanwhile: use theirs.
@@ -409,6 +459,7 @@ impl Shared {
                         provider: built.clone(),
                         identity,
                         follow,
+                        gateways_probed: Arc::default(),
                     },
                 );
             }
@@ -420,21 +471,23 @@ impl Shared {
     /// A new address provider over `saved`'s addresses, checking `identity`. Built on the blocking pool: building sets up TLS for
     /// each address, which takes noticeable time.
     async fn build_provider(
-        &self,
+        self: &Arc<Self>,
         saved: &SavedServer,
         identity: &JellyfinIdentity,
         runtime: &RuntimeHandle,
     ) -> Result<Arc<RoamingAddresses>, LinkError> {
-        let (saved, identity, log, runtime) = (
-            saved.clone(),
+        // Each address with its own gateway, never another's (ADR 0017).
+        let addresses = self.address_gateways(saved).await;
+        let (server, identity, log, runtime) = (
+            saved.server.clone(),
             identity.clone(),
             self.request_log.clone(),
             runtime.clone(),
         );
         tokio::task::spawn_blocking(move || {
-            RoamingAddresses::new(
-                saved.server.clone(),
-                &saved.addresses,
+            RoamingAddresses::with_gateways(
+                server,
+                &addresses,
                 Arc::new(identity),
                 log,
                 RoamingConfig::default(),
@@ -502,8 +555,17 @@ impl Shared {
                 }
             });
         }
-        if roaming.reachability == Reachability::Reachable {
-            self.recheck(server);
+        match roaming.reachability {
+            Reachability::Reachable => self.recheck(server),
+            Reachability::Unreachable => self.probe_gateways_when_unreachable(server),
+            Reachability::Unknown => {}
+        }
+    }
+
+    /// A network change: each server's gateway addresses may be probed again once its provider finds none reachable.
+    pub(crate) fn network_changed(&self) {
+        for link in lock(&self.links).values() {
+            link.gateways_probed.store(false, Ordering::Release);
         }
     }
 
@@ -547,9 +609,10 @@ impl Shared {
         let server = client.server().clone();
         let shared: Weak<Self> = Arc::downgrade(self);
         let hooked = server.clone();
-        client.on_revoked(Arc::new(move || {
+        let weak_client = Arc::downgrade(&client);
+        client.on_event(Arc::new(move |event| {
             if let Some(shared) = shared.upgrade() {
-                shared.revoked(&hooked, id);
+                shared.session_event(&hooked, id, &weak_client, event);
             }
         }));
         let check = Arc::new(AtomicU8::new(check));
@@ -560,12 +623,13 @@ impl Shared {
                 user,
                 client,
                 check: check.clone(),
+                confirming: watch::Sender::new(false),
             },
         );
         (id, check)
     }
 
-    /// The 401 rule (ADR 0015): session `id` is over. Nothing happens if a newer session replaced it. Otherwise the status changes
+    /// The 401 rule (ADR 0015), once the identity probe confirmed the 401 was Jellyfin's: session `id` is over. Nothing happens if a newer session replaced it. Otherwise the status changes
     /// at once, and the saved active user and that user's token are removed in the background.
     fn revoked(self: &Arc<Self>, server: &ServerRef, id: u64) {
         let user = {
@@ -601,13 +665,18 @@ impl Shared {
     /// Saves a successful sign-in: the server (a new key, or the saved record with the same server id), the user as the active
     /// one, the token in the keyring, the live session and the status. Returns the server and whether the token was remembered:
     /// without a keyring the session lasts for this run only (ADR 0013). Runs to the end even if the caller stops waiting.
+    ///
+    /// `placement` is the header the sign-in's client used last (it may have moved, ADR 0017): saved with the server. A new
+    /// server's gateway credentials go in the keyring under the address they were given for, then the settings list their kinds;
+    /// if the keyring refuses them they are used for this run only.
     pub(crate) async fn save_sign_in(
         self: &Arc<Self>,
         target: Target,
         signed_in: SignedIn,
+        placement: Option<HeaderPlacement>,
     ) -> Result<(ServerRef, bool), SignInError> {
         let shared = self.clone();
-        tokio::spawn(async move { shared.apply_sign_in(target, signed_in).await })
+        tokio::spawn(async move { shared.apply_sign_in(target, signed_in, placement).await })
             .await
             .unwrap_or(Err(SignInError::Save(StoreError::Io {
                 op: "save",
@@ -619,15 +688,56 @@ impl Shared {
         self: &Arc<Self>,
         target: Target,
         signed_in: SignedIn,
+        placement: Option<HeaderPlacement>,
     ) -> Result<(ServerRef, bool), SignInError> {
         let _changes = self.changes.lock().await;
         let shared = self.clone();
         let user = signed_in.user.clone();
         let token = signed_in.token.clone();
-        let (saved, version, remembered) = blocking("save", move || {
-            let Some((saved, version)) =
-                shared.commit(|servers, last_key| record(servers, &target, &user, last_key))?
-            else {
+        let gateway_in_use = match &target {
+            Target::New { gateway, .. } => gateway.clone(),
+            Target::Saved(_) => None,
+        };
+        let in_use = gateway_in_use.clone();
+        let (saved, version, remembered, new_gateway) = blocking("save", move || {
+            let mut stored = None;
+            let committed = shared.commit(|servers, last_key| {
+                // Whether the address is saved already (the same address set up again): its key then stays its own.
+                let known = match &target {
+                    Target::New { id, address, .. } => servers.iter().any(|saved| {
+                        saved.server.service == ServiceType::JELLYFIN
+                            && &saved.id == id
+                            && saved.addresses.iter().any(|a| a.url == address.url)
+                    }),
+                    Target::Saved(_) => true,
+                };
+                let (saved, version) = record(servers, &target, &user, last_key)?;
+                let index = servers.iter().position(|s| s.server == saved.server)?;
+                let record = &mut servers[index];
+                // Moved towards `X-Emby-Authorization` only, never back on its own: a sign-in on an address without a gateway
+                // must not undo what another address's gateway needs (ADR 0017).
+                if placement == Some(HeaderPlacement::EmbyAuthorization) {
+                    record.header_placement =
+                        gateway::stored_placement(HeaderPlacement::EmbyAuthorization);
+                }
+                if let (Target::New { address, .. }, Some(in_use)) = (&target, &in_use) {
+                    stored = shared
+                        .store_new_gateway(record, &address.url, in_use)
+                        .map(|stored| (stored, known));
+                }
+                Some((record.clone(), version))
+            });
+            let committed = match committed {
+                Ok(committed) => committed,
+                Err(error) => {
+                    // Not saved: a new address's key and id stay free for the next server, so nothing may be left under them.
+                    if let Some((stored, false)) = &stored {
+                        shared.unstore_new_gateway(stored);
+                    }
+                    return Err(error.into());
+                }
+            };
+            let Some((saved, version)) = committed else {
                 return Err(SignInError::ServerRemoved);
             };
             let remembered = match &shared.storage {
@@ -640,9 +750,13 @@ impl Shared {
                     .is_ok(),
                 None => false,
             };
-            Ok((saved, version, remembered))
+            Ok((saved, version, remembered, stored))
         })
         .await??;
+        // Only once saved does the gateway become the address's (and rotations of it saved).
+        if let (Some((new_gateway, _)), Some(in_use)) = (new_gateway, &gateway_in_use) {
+            self.adopt_new_gateway(new_gateway, in_use);
+        }
 
         let server = saved.server.clone();
         let mut user = signed_in.user;
@@ -778,6 +892,8 @@ impl Shared {
                 self.update_session_status(server, id, |status| {
                     status.signed_in = true;
                     status.user = Some(user);
+                    // The gateway let the request through.
+                    status.gateway_sign_in_needed = false;
                 });
                 let renamed = self.saved(server).is_some_and(|saved| {
                     saved.active_user.as_ref() == Some(&user_id)
@@ -801,6 +917,13 @@ impl Shared {
             Err(AuthError::SessionRevoked | AuthError::Refused) => {
                 check.store(CHECKED, Ordering::Release);
             }
+            // An answer that may not be Jellyfin's: wait for the identity probe to decide (the 401 rule), so that a restore ends
+            // signed out when the session ended; a gateway's answer leaves the check for later.
+            Err(AuthError::Unconfirmed) => {
+                self.confirmed(server, id).await;
+                check.store(UNCHECKED, Ordering::Release);
+            }
+            // A gateway's challenge: shown by the session hook; checked again later.
             // Not reached (the reachability comes from the provider), or an answer that could not be read: try again later.
             Err(_) => check.store(UNCHECKED, Ordering::Release),
         }
@@ -875,6 +998,7 @@ impl Shared {
             })
             .await??;
             let session = lock(&self.sessions).remove(&server);
+            self.forget_gateways(&server);
             // Dropping the link stops its follow task; the provider itself lives on for the logouts below.
             let provider = lock(&self.links)
                 .remove(&server)
@@ -1006,8 +1130,8 @@ fn forget_tokens(
     (tokens, left)
 }
 
-/// Copies a provider's status into the capabilities state on every change, until the provider or the app is gone or the link is
-/// replaced (which aborts it).
+/// Copies a provider's status into the capabilities state on every change, and saves the server's rotated gateway cookies on
+/// every change and every [`ROTATION_CHECK`], until the provider or the app is gone or the link is replaced (which aborts it).
 async fn follow(
     shared: Weak<Shared>,
     server: ServerRef,
@@ -1015,15 +1139,31 @@ async fn follow(
     mut status: watch::Receiver<RoamingStatus>,
     identity: JellyfinIdentity,
 ) {
+    let mut rotations = tokio::time::interval(ROTATION_CHECK);
+    rotations.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         let current = status.borrow_and_update().clone();
         let Some(app) = shared.upgrade() else {
             return;
         };
         app.apply_roaming(&server, generation, &current, identity.version());
+        app.save_rotations(&server).await;
         drop(app);
-        if status.changed().await.is_err() {
-            return;
+        loop {
+            tokio::select! {
+                changed = status.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    break;
+                }
+                _ = rotations.tick() => {
+                    let Some(app) = shared.upgrade() else {
+                        return;
+                    };
+                    app.save_rotations(&server).await;
+                }
+            }
         }
     }
 }
@@ -1059,6 +1199,7 @@ fn record(
             name,
             address,
             version,
+            ..
         } => {
             let index = match servers
                 .iter()
@@ -1081,6 +1222,7 @@ fn record(
                         users: Vec::new(),
                         active_user: None,
                         last_address_id: 0,
+                        header_placement: AuthHeader::default(),
                     };
                     saved.add_address(address.clone());
                     servers.push(saved);
@@ -1151,6 +1293,7 @@ mod tests {
             users: Vec::new(),
             active_user: None,
             last_address_id: 0,
+            header_placement: AuthHeader::default(),
         }
     }
 
@@ -1170,6 +1313,7 @@ mod tests {
             name: "Renamed Server".into(),
             address: ServerAddress::new(url, true),
             version: "12.2.0".into(),
+            gateway: None,
         }
     }
 

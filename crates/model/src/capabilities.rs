@@ -34,6 +34,9 @@ pub struct ServerStatus {
     /// The server's version as it reports it.
     pub version: Option<String>,
     pub features: Vec<Feature>,
+    /// The address in use is behind an authentication gateway whose sign-in ended (ADR 0017): the UI shows "Sign in to the
+    /// gateway again". The session and its token are kept and resume once the user has signed in to the gateway.
+    pub gateway_sign_in_needed: bool,
 }
 
 impl ServerStatus {
@@ -47,6 +50,7 @@ impl ServerStatus {
             user: None,
             version: None,
             features: Vec::new(),
+            gateway_sign_in_needed: false,
         }
     }
 

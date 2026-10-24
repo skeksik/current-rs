@@ -92,13 +92,15 @@ built now (manager, 2026-10-22).
 
 **Amended 2026-10-24 (ADR 0017):** a 401 ends the Jellyfin session only if it is Jellyfin's.
 1. A 401 with any `WWW-Authenticate` challenge is a gateway's: never a session end. With a Basic challenge the password prompt
-   reappears. `send_authenticated` returns `AuthError::Gateway` for a 401 or 403 with a challenge, keeps the token and does not run
-   the revoked hook; a sign-in's 401 with a challenge is `AuthError::Gateway`, not `WrongCredentials`.
+   reappears. `send_authenticated` returns `AuthError::Gateway` for a 401 or 403 with a challenge, keeps the token and reports
+   `SessionEvent::Gateway` to the session hook (`JellyfinClient::on_event`, which replaced the revoked hook); a sign-in's 401 with
+   a challenge is `AuthError::Gateway`, not `WrongCredentials`.
 2. Any other 401 (and any redirect or HTML page where JSON was expected) on a server: the core re-runs the identity probe with the
    address's gateway credentials before acting (`JellyfinIdentity::probe_client`). If the probe answers Jellyfin's JSON with the
    right identity, the 401 was Jellyfin's: the rule above applies. If the probe gets a gateway shape, the server shows "Sign in to
    the gateway again" and the session and token are kept. If the probe fails to connect, nothing changes (roaming handles it).
-   Built in `current-app`, not yet.
+   Built in `current-app`: the client keeps the token, reports `SessionEvent::Unconfirmed` to the session hook once, and answers
+   `AuthError::Unconfirmed` without sending until the app calls `revoke` (Jellyfin's 401) or `resume`.
 This also covers gateways that answer 401 without a challenge.
 
 ### Header placement (amended 2026-10-24, ADR 0017)

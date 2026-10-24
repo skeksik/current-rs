@@ -264,6 +264,12 @@ impl GatewayCookie {
         self.expires.is_some_and(|expires| expires <= now)
     }
 
+    /// Whether the cookie would go with a request to `url` now (RFC 6265 §5.4 step 1): domain, path, Secure and expiry. For
+    /// keeping only the cookies of a web sign-in that apply to the server's address (ADR 0017, "What is taken").
+    pub fn applies_to(&self, url: &Url) -> bool {
+        self.applies(url, SystemTime::now())
+    }
+
     /// Whether the cookie goes with a request to `url` at `now` (RFC 6265 §5.4 step 1): domain, path, Secure and expiry.
     fn applies(&self, url: &Url, now: SystemTime) -> bool {
         self.matches_url(url) && (!self.secure || url.scheme() == "https") && !self.expired(now)
@@ -399,6 +405,14 @@ impl Gateway {
         }
         // Every change happens under the lock, so the count read here matches the credentials.
         (credentials.clone(), self.changes())
+    }
+
+    /// Replaces the credentials, for a new sign-in to the gateway (ADR 0017): every request from now on carries the new ones.
+    /// Counts as a change.
+    pub fn replace(&self, credentials: GatewayCredentials) {
+        let mut current = self.lock();
+        *current = credentials;
+        self.changes.fetch_add(1, Ordering::Relaxed);
     }
 
     /// How many times the credentials changed since this handle was made: a cookie updated or removed from `Set-Cookie`, or expired
@@ -1151,5 +1165,40 @@ mod tests {
             assert!(!text.contains(secret), "{secret} in {text}");
         }
         assert!(text.contains("cookies: 1"), "{text}");
+    }
+
+    #[test]
+    fn replace_swaps_the_credentials_and_counts() {
+        let gateway = gateway(vec![
+            GatewayCookie::new("a", "1", "media.example.com").unwrap(),
+        ]);
+        gateway.replace(
+            GatewayCredentials::new(
+                None,
+                Vec::new(),
+                vec![GatewayCookie::new("a", "2", "media.example.com").unwrap()],
+            )
+            .unwrap(),
+        );
+        assert_eq!(gateway.changes(), 1);
+        assert_eq!(
+            cookie_line(&gateway, "https://media.example.com/", NOW),
+            Some("a=2".into())
+        );
+    }
+
+    #[test]
+    fn applies_to_checks_domain_path_and_secure() {
+        let cookie = GatewayCookie::new("a", "1", ".example.com")
+            .unwrap()
+            .with_secure(true);
+        assert!(cookie.applies_to(&url("https://media.example.com/jellyfin")));
+        assert!(!cookie.applies_to(&url("http://media.example.com/")));
+        assert!(!cookie.applies_to(&url("https://login.example.net/")));
+        let path = GatewayCookie::new("b", "1", "media.example.com")
+            .unwrap()
+            .with_path("/other")
+            .unwrap();
+        assert!(!path.applies_to(&url("http://media.example.com/jellyfin")));
     }
 }

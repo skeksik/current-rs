@@ -22,7 +22,7 @@ pub use auth::{
 };
 pub use client::{
     AuthError, JellyfinClient, QUICK_CONNECT_INTERVAL, QUICK_CONNECT_LIFETIME, QuickConnectCode,
-    RevokedHook, SignedIn,
+    SessionEvent, SessionHook, SignedIn,
 };
 pub use discovery::{
     Candidate, DISCOVERY_PORT, DiscoveryConfig, DiscoveryError, MAX_ADDRESSES_PER_SERVER,

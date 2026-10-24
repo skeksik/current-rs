@@ -444,6 +444,7 @@ mod tests {
             users: Vec::new(),
             active_user: None,
             last_address_id: 1,
+            header_placement: Default::default(),
         };
         let mut gated = ServerAddress::new("https://media.example.com", false);
         gated.gateway = vec![GatewayKind::BASIC];

@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use current_model::{Permission, ServerId, ServerRef, User, UserId};
 use current_net::{
-    AddressProvider, ClientConfig, NetError, Request, RequestLog, Response, ServerClient,
+    AddressProvider, ClientConfig, GatewayShape, NetError, Request, RequestLog, Response,
+    ServerClient, classify,
 };
 use tokio::time::Instant;
 
@@ -50,6 +51,11 @@ pub enum AuthError {
     /// The request needs a token and the client has none.
     #[error("not signed in")]
     NotSignedIn,
+    /// A 401 without a challenge, which may be Jellyfin's or a gateway's, is being checked with the identity probe
+    /// ([`SessionEvent::Unconfirmed`]); requests made while any such check runs get this too. The token is kept meanwhile and
+    /// nothing is sent. Try again once the check is done.
+    #[error("the server's answer is being checked")]
+    Unconfirmed,
     /// An authentication gateway in front of the server answered with a `WWW-Authenticate` challenge, which Jellyfin's own 401 and
     /// 403 never carry (ADR 0017): the request did not reach Jellyfin. Mid-session the token is kept and the session goes on once
     /// the user signs in to the gateway again.
@@ -86,8 +92,28 @@ pub struct QuickConnectCode {
     pub secret: QuickConnectSecret,
 }
 
-/// Called when a request that carried a token gets 401.
-pub type RevokedHook = Arc<dyn Fn() + Send + Sync>;
+/// What a signed-in client reports about answers that may not have come from Jellyfin (ADR 0015's 401 rule, as amended by ADR
+/// 0017). Debug shows no token.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionEvent {
+    /// A 401 without a challenge, a redirect that was not followed or an HTML page where JSON was expected, to a request that
+    /// carried `token`: a gateway in front of the server may want a sign-in, or (for a 401 only) Jellyfin ended the session. The
+    /// client keeps the token and answers [`AuthError::Unconfirmed`] without sending anything until the app has re-run the
+    /// identity probe and called [`JellyfinClient::revoke`] or [`JellyfinClient::resume`]. Reported once per check: such answers
+    /// that arrive while one runs join it.
+    ///
+    /// `unauthorized` is true for a 401. Only then can a passing probe mean the session ended: Jellyfin never answers with a page
+    /// or a redirect, and a 403 never ends a session (ADR 0015), so for those a passing probe means the app resumes.
+    Unconfirmed {
+        token: AccessToken,
+        unauthorized: bool,
+    },
+    /// A gateway's challenge mid-session ([`AuthError::Gateway`]): the token is kept and nothing waits for the app.
+    Gateway(GatewayAnswer),
+}
+
+/// Called with each [`SessionEvent`].
+pub type SessionHook = Arc<dyn Fn(SessionEvent) + Send + Sync>;
 
 /// A Jellyfin client for one server, signed in or not. Every request carries the client's identity; once a token is set, it too.
 pub struct JellyfinClient {
@@ -97,7 +123,9 @@ pub struct JellyfinClient {
     log: Arc<RequestLog>,
     token: TokenSlot,
     placement: PlacementSlot,
-    on_revoked: Mutex<Option<RevokedHook>>,
+    on_event: Mutex<Option<SessionHook>>,
+    /// The token whose unconfirmed answer the app is checking, if a check runs ([`SessionEvent::Unconfirmed`]).
+    checking: Mutex<Option<AccessToken>>,
 }
 
 impl std::fmt::Debug for JellyfinClient {
@@ -137,7 +165,8 @@ impl JellyfinClient {
             log,
             token,
             placement,
-            on_revoked: Mutex::new(None),
+            on_event: Mutex::new(None),
+            checking: Mutex::new(None),
         })
     }
 
@@ -145,14 +174,16 @@ impl JellyfinClient {
         self.http.server()
     }
 
-    /// Uses `token` for every request from now on.
+    /// Uses `token` for every request from now on. A check of the earlier token's answer no longer holds requests back.
     pub fn set_token(&self, token: AccessToken) {
         auth::write(&self.token, Some(token));
+        self.resume();
     }
 
     /// Forgets the token: requests go out unauthenticated.
     pub fn clear_token(&self) {
         auth::write(&self.token, None);
+        self.resume();
     }
 
     pub fn has_token(&self) -> bool {
@@ -170,12 +201,39 @@ impl JellyfinClient {
     pub fn header_placement(&self) -> HeaderPlacement {
         auth::placement(&self.placement)
     }
-    /// Sets what runs when a request that carried a token gets 401. The client has already forgotten the token by then.
-    pub fn on_revoked(&self, hook: RevokedHook) {
-        *self
-            .on_revoked
+    /// Sets what runs on each [`SessionEvent`]. Without a hook, nothing can confirm an answer: a 401 without a challenge then
+    /// forgets the token at once ([`AuthError::SessionRevoked`]), and a redirect or an HTML page is reported as it is.
+    pub fn on_event(&self, hook: SessionHook) {
+        *self.on_event.lock().unwrap_or_else(PoisonError::into_inner) = Some(hook);
+    }
+
+    /// The identity probe confirmed that the answer to `token` was Jellyfin's 401 (ADR 0015's rule): forgets `token` if it is still
+    /// the one in use, so a newer sign-in survives, and ends its check. Returns whether it was forgotten.
+    pub fn revoke(&self, token: &AccessToken) -> bool {
+        let forgotten = self.forget(token);
+        let mut checking = self.lock_checking();
+        if checking.as_ref() == Some(token) {
+            *checking = None;
+        }
+        forgotten
+    }
+
+    /// Ends a check without forgetting the token (the answer was a gateway's, or the probe could not reach the server): requests
+    /// go out again.
+    pub fn resume(&self) {
+        *self.lock_checking() = None;
+    }
+
+    fn lock_checking(&self) -> std::sync::MutexGuard<'_, Option<AccessToken>> {
+        // A single assignment under the lock: a poisoned one still holds a usable value.
+        self.checking.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn hook(&self) -> Option<SessionHook> {
+        self.on_event
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(hook);
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Signs in with a user name and password. The password goes into the request body and nowhere else.
@@ -300,40 +358,70 @@ impl JellyfinClient {
         }
     }
 
-    /// Sends a request that needs the token. A 401 means the token is dead: the client forgets it and runs the revoked hook
-    /// (ADR 0015). A 403 does not: the token is valid, only this request was refused. A 401 or 403 with a `WWW-Authenticate`
-    /// challenge is a gateway's ([`AuthError::Gateway`]): the token is kept and the hook does not run (ADR 0017). Whether a 401
-    /// without a challenge was Jellyfin's is for the caller to confirm with the identity probe first (the 401 rule's second part).
+    /// Sends a request that needs the token. A 401 or 403 with a `WWW-Authenticate` challenge is a gateway's
+    /// ([`AuthError::Gateway`]): the token is kept and the hook hears it (ADR 0017). A 401 without a challenge, a redirect that was
+    /// not followed, or an HTML page where JSON was expected may be a gateway's: with a hook, the token is kept and the hook asked
+    /// to confirm ([`SessionEvent::Unconfirmed`], the 401 rule's second part). The 401 answers [`AuthError::Unconfirmed`]; a page
+    /// or a redirect answers as it would without a hook ([`AuthError::Refused`] for a 403 page, the network error for a redirect,
+    /// the page itself for a 2xx one). Without a hook, a 401 forgets the token (ADR 0015). A 403 never does: the token is valid,
+    /// only this request was refused.
     pub async fn send_authenticated(&self, request: Request) -> Result<Response, AuthError> {
         let Some(token) = auth::read(&self.token) else {
             return Err(AuthError::NotSignedIn);
         };
+        if self.lock_checking().is_some() {
+            return Err(AuthError::Unconfirmed);
+        }
         let result = self.http.send(request).await;
-        // A gateway's challenge, not Jellyfin's answer: the token is kept and the hook does not run (ADR 0017, the 401 rule).
+        // A gateway's challenge, not Jellyfin's answer: the token is kept (ADR 0017, the 401 rule).
         if let Err(error) = &result
             && let Some(answer) = GatewayAnswer::challenged(error)
         {
+            if let Some(hook) = self.hook() {
+                hook(SessionEvent::Gateway(answer.clone()));
+            }
             return Err(AuthError::Gateway(answer));
+        }
+        let unconfirmed = match &result {
+            Err(NetError::Auth { status: 401, .. } | NetError::Redirected { .. }) => true,
+            Err(NetError::Auth {
+                status: 403, page, ..
+            }) => *page,
+            Ok(_) => classify(&result) == GatewayShape::SignIn,
+            Err(_) => false,
+        };
+        let unauthorized = matches!(result, Err(NetError::Auth { status: 401, .. }));
+        if unconfirmed && let Some(hook) = self.hook() {
+            if self.begin_check(&token) {
+                hook(SessionEvent::Unconfirmed {
+                    token: token.clone(),
+                    unauthorized,
+                });
+            }
+            if unauthorized {
+                return Err(AuthError::Unconfirmed);
+            }
         }
         match result {
             Ok(response) => Ok(response),
             Err(NetError::Auth { status: 401, .. }) => {
-                // A newer sign-in may have set another token meanwhile: only the token that failed is forgotten.
-                if self.forget(&token) {
-                    let hook = self
-                        .on_revoked
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .clone();
-                    if let Some(hook) = hook {
-                        hook();
-                    }
-                }
+                // Without a hook. A newer sign-in may have set another token meanwhile: only the token that failed is forgotten.
+                self.forget(&token);
                 Err(AuthError::SessionRevoked)
             }
             Err(NetError::Auth { status: 403, .. }) => Err(AuthError::Refused),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Starts the check of `token`'s answer, unless one runs already or a newer token replaced it. Returns whether it started.
+    fn begin_check(&self, token: &AccessToken) -> bool {
+        let mut checking = self.lock_checking();
+        if checking.is_some() || auth::read(&self.token).as_ref() != Some(token) {
+            return false;
+        }
+        *checking = Some(token.clone());
+        true
     }
 
     /// Sends a request that needs the client's four details (a sign-in, Quick Connect's Initiate). A gateway's challenge to
