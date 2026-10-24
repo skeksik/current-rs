@@ -2,7 +2,7 @@
     x:Class="Current.Shell.Pages.SignInPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:Current.Shell">
+    xmlns:shell="using:Current.Shell">
     <!-- Esc stops a running sign-in or Quick Connect (docs/notes/windows-shell.md, "Keyboard and Narrator"). -->
     <Page.KeyboardAccelerators>
         <KeyboardAccelerator Key="Escape" Invoked="OnEscape" />
@@ -63,14 +63,14 @@
                         Text="Enter this code under Quick Connect in a Jellyfin app where you're already signed in." />
                     <!-- The code is heard by CodeView's name, digit by digit; its text is kept out of UI Automation (SpokenText). -->
                     <StackPanel Orientation="Horizontal" Spacing="12">
-                        <local:SpokenText x:Name="CodeView" VerticalAlignment="Center">
+                        <shell:SpokenText x:Name="CodeView" VerticalAlignment="Center">
                             <TextBlock
                                 x:Name="CodeText"
                                 AutomationProperties.AccessibilityView="Raw"
                                 Style="{StaticResource TitleLargeTextBlockStyle}"
                                 CharacterSpacing="200"
                                 IsTextSelectionEnabled="True" />
-                        </local:SpokenText>
+                        </shell:SpokenText>
                         <Button
                             x:Name="CopyCodeButton"
                             VerticalAlignment="Center"
