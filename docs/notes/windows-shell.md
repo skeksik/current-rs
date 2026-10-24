@@ -581,3 +581,22 @@ of that branch, signed out of a server that offers Quick Connect:
    not again as a number. Note whether "Cancel, button" is also read and whether it cuts the code short.
 2. Press Cancel, then "Use Quick Connect" again: the new code is read digit by digit, once.
 3. In scan mode (Caps Lock+Space), arrow to the code: Narrator reads "Quick Connect code" and the digits.
+
+### Windows run (2026-10-24)
+Heads fix/narrator-quick-connect-code efa74f9 and fix/windows-layout-polish 6f1770b, merged in a throwaway local worktree (never
+pushed) and built with the four scripts: binding tests 34 passed, smoke run passed. Windows 11 25H2, 10.0.26200.9711, x64, display
+scale 150%; the cases ran `out/app/Current.exe`. No server was saved, so the owner added one from discovery. Cases numbered as in
+the run: 6-8 are 1-3 above, 9 is approving the code from another Jellyfin client, 10 is the Remove dialog's focus (main).
+6. **Pass.** "Use Quick Connect": Narrator read "Quick Connect code" and the digits one by one, once, not again as a number.
+   Whether "Cancel, button" was also read was not noted.
+7. **Pass.** Cancel, then "Use Quick Connect" again: the new code was read digit by digit, once.
+8. **Fail.** In scan mode, arrowing to the code, Narrator read "Quick Connect code" and the digits one by one, then the code
+   again as one number. The code's `TextBlock` (`CodeText`, `Pages/SignInPage.xaml`) has the spoken digits as its UI Automation
+   name (`Pages/SignInPage.xaml.cs`, `AutomationProperties.SetName`) and the bare code as its text; scan mode reads both.
+9. **Fail.** After the code was approved from another client, Narrator read the title bar, not "Signed in as …". Nothing
+   announces the sign-in: `Finish` (`Pages/SignInPage.xaml.cs`) navigates to Home and clears the history, and "Signed in as …"
+   is only the server card's text (`ViewModels/ServersViewModel.cs`).
+10. **Pass.** Settings -> Accounts -> the server -> "Remove": after Esc, Enter and "Cancel", focus is back on "Remove" and
+    Narrator says "Remove <name>, button" each time.
+
+New finding from the owner during the run (not fixed here): add a copy button for the Quick Connect code, next to `CodeText`.
