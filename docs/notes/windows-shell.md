@@ -71,12 +71,16 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
 - **Navigation:** a left `NavigationView` with Home and the built-in Settings item over one `Frame`, as in the NavigationView page's
   example (learn.microsoft.com/windows/apps/develop/ui/controls/navigationview, ms.date 2026-10-02, read 2026-10-22): navigate on
   `ItemInvoked` only when the page differs (no duplicate back stack entries), keep the selection and header in step on
-  `Frame.Navigated` (the settings item via `SettingsItem`). Where the example does not go back while the pane overlays the
-  content, and the control's own back button only closes the pane then ("clicking the back button will close the Pane and raise
-  the PaneClosing event instead", same page, read 2026-10-24), here back closes the pane and goes back: the title bar's Back
-  button, Alt+Left, the GoBack key and the mouse Back button all do (owner, 2026-10-24). The old rule left the title bar's Back
-  button without effect and Alt+Left only closing the pane (owner's run, 2026-10-24). Closing the pane this way counts as the
-  navigation view's forced close, so after it a medium window widened to wide keeps the rail (see "Pane" below).
+  `Frame.Navigated` (the settings item via `SettingsItem`). The pane open over the page (Compact or Minimal) counts as a back
+  step (owner, 2026-10-24): back then only closes the pane, from the title bar's Back button, Alt+Left, the GoBack key and the
+  mouse Back button alike, as the control's own back button does ("clicking the back button will close the Pane and raise the
+  PaneClosing event instead", same page, read 2026-10-24); with the pane closed, back goes back. The title bar's Back button is
+  enabled while the Frame can go back or the pane overlays the page, so it also closes the pane on a page with no history (Home at
+  start); `MainWindow.UpdateBackButton` runs on navigation, `PaneOpened`, `PaneClosed` and `DisplayModeChanged`. The full pane
+  inline on a wide window is not a back step. The first version followed the example, which does not go back while the pane
+  overlays the content, and left the title bar's Back button without effect and Alt+Left only closing the pane (owner's run,
+  2026-10-24). Closing the pane this way counts as the navigation view's forced close, so after it a medium window widened to wide
+  keeps the rail (see "Pane" below).
 - **Back button in the title bar.** The TitleBar page (learn.microsoft.com/windows/apps/develop/ui/controls/title-bar, ms.date
   2026-10-13, read 2026-10-22): "Fluent Design guidance recommends that these controls be placed in the title bar when a custom title
   bar is used." So the NavigationView's back and pane toggle buttons are hidden and the TitleBar's are used, enabled from
@@ -868,11 +872,14 @@ navigation view 4 physical px narrower than the frame at 150% (noted, not change
    pane's right edge (here a 1 px line stays there). Wide: the full pane and the rail look as before.
 4. Caption buttons: minimise, maximise and close are the standard 46 × 32 px at the top of the 48 px title bar, as in Windows
    Settings; drag, double-click and snap layouts still work.
-5. Back with the pane open (medium and small widths), from Home -> Settings with the pane opened over the page:
-   - the title bar's Back button closes the pane and goes back to Home;
-   - again with Alt+Left, then with the mouse Back button: each closes the pane and goes back.
-   - With the pane closed, back works as before. After closing the pane this way on a medium window, widening to wide keeps the
-     rail (the navigation view's forced close).
+5. Back with the pane open (medium and small widths):
+   - Start the app at a medium width (Home, nothing to go back to): the title bar's Back button is dimmed. Open the pane over the
+     page: Back becomes enabled; press it: the pane closes, the page stays Home, and Back is dimmed again.
+   - Home -> Settings, open the pane over the page: the title bar's Back button closes the pane and stays on Settings; press it
+     again: back to Home. The same with Alt+Left, and with the mouse Back button.
+   - Wide window with the full pane: Back follows the history only (the pane is not a back step); at Home after a start it stays
+     dimmed.
+   - After closing the pane this way on a medium window, widening to wide keeps the rail (the navigation view's forced close).
 
 
 ## Quick Connect code and Narrator: owner's check

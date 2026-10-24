@@ -169,7 +169,23 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnPaneOpenedOrClosed(NavigationView sender, object args) => NamePaneToggleButton();
+    private void OnPaneOpenedOrClosed(NavigationView sender, object args)
+    {
+        NamePaneToggleButton();
+        UpdateBackButton();
+    }
+
+    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) => UpdateBackButton();
+
+    /// <summary>
+    /// The pane open over the page (Compact or Minimal): it counts as a back step, which back closes. The full pane inline on a wide
+    /// window does not (owner, 2026-10-24).
+    /// </summary>
+    private bool PaneOverlaysPage =>
+        NavView.IsPaneOpen && NavView.DisplayMode is NavigationViewDisplayMode.Compact or NavigationViewDisplayMode.Minimal;
+
+    /// <summary>The title bar's Back button is enabled while there is a page to go back to or the pane overlays the page.</summary>
+    private void UpdateBackButton() => AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack || PaneOverlaysPage;
 
     /// <summary>
     /// Names the title bar's pane button as the navigation view names its own: "Open Navigation" while the pane is closed, "Close
@@ -254,7 +270,7 @@ public sealed partial class MainWindow : Window
     {
         ContentFrame.BackStack.Clear();
         ContentFrame.ForwardStack.Clear();
-        AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack;
+        UpdateBackButton();
     }
 
     /// <summary>
@@ -278,7 +294,7 @@ public sealed partial class MainWindow : Window
     private void OnNavigated(object sender, NavigationEventArgs e)
     {
         DropSignInHistory();
-        AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack;
+        UpdateBackButton();
         if (ContentFrame.SourcePageType == typeof(SettingsPage))
         {
             // The settings item is not in MenuItems and has no tag.
@@ -300,17 +316,18 @@ public sealed partial class MainWindow : Window
 
     private bool TryGoBack()
     {
+        // With the pane open over the page, back only closes the pane, from the title bar's Back button, Alt+Left, the GoBack key and
+        // the mouse Back button alike (owner, 2026-10-24), as the navigation view's own back button does then ("clicking the back
+        // button will close the Pane and raise the PaneClosing event instead", NavigationView page, learn.microsoft.com, ms.date
+        // 2026-10-02, read 2026-10-24).
+        if (PaneOverlaysPage)
+        {
+            NavView.IsPaneOpen = false;
+            return true;
+        }
         if (!ContentFrame.CanGoBack)
         {
             return false;
-        }
-        // With the pane open over the page, back closes the pane and goes back (owner, 2026-10-24). The NavigationView page's example
-        // does not go back then, and the control's own back button only closes the pane ("clicking the back button will close the
-        // Pane and raise the PaneClosing event instead", learn.microsoft.com, ms.date 2026-10-02, read 2026-10-24); that blocked the
-        // title bar's Back button and Alt+Left here.
-        if (NavView.IsPaneOpen && NavView.DisplayMode is NavigationViewDisplayMode.Compact or NavigationViewDisplayMode.Minimal)
-        {
-            NavView.IsPaneOpen = false;
         }
         ContentFrame.GoBack();
         return true;
