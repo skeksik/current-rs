@@ -9,9 +9,8 @@ apps/windows/
   Current.Shell/          the app (WinUI 3, net10.0-windows10.0.26100.0, unpackaged, self-contained, x64); builds Current.exe
     Program.cs            own Main: AppUserModelID, single instance, then XAML
     AppIdentity.cs        AppUserModelID, single-instance key, data folder
-    App.xaml(.cs)         owns the CoreHost (one per process) and the main window
+    App.xaml(.cs)         owns the CoreHost (one per process) and the main window; the page title and column styles
     MainWindow.xaml(.cs)  Mica, TitleBar, NavigationView over one Frame, back navigation, pane, minimum size
-    PageLayout.cs         the page columns' and notices' insets per display mode
     Pages/                HomePage, AddServerPage, SignInPage (+ SignInRequest), SettingsPage
     ViewModels/           ServersViewModel and ServerRow (saved servers joined with their status, for Home and Settings)
     DeviceName.cs         the device name Jellyfin shows (GetComputerNameExW, DNS host name)
@@ -61,6 +60,16 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   control's layout root is `TitleBarCompactHeight` (32) and becomes `TitleBarExpandedHeight` (48) only when `Content`, `LeftHeader`
   or `RightHeader` is set (`TitleBar.xaml`, `UpdateHeight` in `TitleBar.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read
   2026-10-24). Ours has none, so `MainWindow.xaml` raises `TitleBarCompactHeight` to 48 on `AppTitleBar` (lightweight styling).
+  The guideline's standard is 32 px, and 48 only with a search box or a person picture; 48 here is the owner's choice (owner,
+  2026-10-24).
+- **Back button inset (owner's finding 1, 2026-10-24).** "Windows app title bar" (ms.date 2024-07-31, read 2026-10-24): "The back
+  button should be 16px from the left-most border in LTR, or right-most border in RTL", "16px by 16px" with "a full bleed
+  backplate". The TitleBar's back button is 40 px wide with a 2 px margin (`TitleBarBackButtonStyle`), and `UpdatePadding` sets the
+  left padding column to `AppWindowTitleBar.LeftInset` in place of `TitleBarLeftPaddingWidth` (2) (`TitleBar_themeresources.xaml`,
+  `TitleBar.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24). With an inset of 0 the backplate started 2 px from
+  the border and the glyph 14 px; `Margin="2,0,0,0"` on `AppTitleBar` puts the backplate at 4 px and the glyph at the guideline's
+  16. A property of the control, not a resource override. That the left inset is 0 in a left-to-right window is not verified on
+  screen; the 2 px left of the title bar are not part of its drag region. Photos' inset is not verified; the owner compares.
 - **Minimum window size: 500 × 500 effective px** (manager, 2026-10-24): the narrowest page column (Sign in, 400 px plus 24 on
   each side) and the title bar (back and pane buttons, title, caption buttons) fit. `OverlappedPresenter.PreferredMinimumWidth` and
   `PreferredMinimumHeight` ("Gets or sets the preferred minimum width for the window", learn.microsoft.com, Windows App SDK 1.7 and
@@ -71,7 +80,7 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
 - **Navigation:** a left `NavigationView` with Home and the built-in Settings item over one `Frame`, as in the NavigationView page's
   example (learn.microsoft.com/windows/apps/develop/ui/controls/navigationview, ms.date 2026-10-02, read 2026-10-22): navigate on
   `ItemInvoked` only when the page differs (no duplicate back stack entries), keep the selection and header in step on
-  `Frame.Navigated` (the settings item via `SettingsItem`). The pane open over the page (Compact or Minimal) counts as a back
+  `Frame.Navigated` (the settings item via `SettingsItem`). The pane open over the page (Compact) counts as a back
   step (owner, 2026-10-24): back then only closes the pane, from the title bar's Back button, Alt+Left, the GoBack key and the
   mouse Back button alike, as the control's own back button does ("clicking the back button will close the Pane and raise the
   PaneClosing event instead", same page, read 2026-10-24); with the pane closed, back goes back. The title bar's Back button is
@@ -85,15 +94,23 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   2026-10-13, read 2026-10-22): "Fluent Design guidance recommends that these controls be placed in the title bar when a custom title
   bar is used." So the NavigationView's back and pane toggle buttons are hidden and the TitleBar's are used, enabled from
   `Frame.CanGoBack`.
-- **Pane: the navigation view's own three stages, like Task Manager (owner, 2026-10-24).** `PaneDisplayMode="Auto"` with the default
-  thresholds. The NavigationView page (learn.microsoft.com, ms.date 2026-10-02, read 2026-10-24): "An expanded left pane on large
-  window widths (1008px or greater)", "A left, icon-only, nav pane (`LeftCompact`) on medium window widths (641px to 1007px)",
-  "Only a menu button (`LeftMinimal`) on small window widths (640px or less)". In the template (`UpdateVisualStateForDisplayModeGroup`,
-  `NavigationView.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) Expanded is a `CompactInline` SplitView, so
-  closing the pane there leaves the icon rail and the content moves with it; Compact is `CompactOverlay` and Minimal `Overlay`, so
-  the pane opened there covers the content. The title bar's pane button is always shown (the WinUI Gallery shows it in every left
-  mode, `OnPaneDisplayModeChanged`, github.com/microsoft/WinUI-Gallery, main at 14061ee, read 2026-10-24) and flips
-  `NavView.IsPaneOpen`.
+- **Pane: never hidden (owner's finding 2, 2026-10-24).** Always the full pane or the icon rail, with the title bar's pane button
+  always shown: on a wide window it switches between the full pane and the rail inline, on a narrower one the rail shows and the
+  pane opens over the page. This is the NavigationView page's "Compact" adaptive pattern (learn.microsoft.com, ms.date 2026-10-02,
+  read 2026-10-24): "an expanded left pane on large window widths, and a LeftCompact, icon-only, nav pane on both medium and small
+  window widths", recommended when "It is important to always show all navigation options on screen" and "Your navigation
+  categories can be clearly represented with icons"; "To configure this behavior, set CompactModeThresholdWidth to 0." So
+  `PaneDisplayMode="Auto"` with `CompactModeThresholdWidth="0"`; Expanded from 1008 px (the default `ExpandedModeThresholdWidth`).
+  In the template (`UpdateVisualStateForDisplayModeGroup`, `NavigationView.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read
+  2026-10-24) Expanded is a `CompactInline` SplitView, so closing the pane there leaves the icon rail and the content moves with
+  it; Compact is `CompactOverlay`, so the pane opened there covers the content. Minimal is never reached, so `MainWindow` counts
+  only Compact as the pane over the page. The earlier version used the default thresholds (Minimal below 641 px), which hid the
+  pane on a small window. The title bar's pane button flips `NavView.IsPaneOpen` (the WinUI Gallery shows it in every left mode,
+  `OnPaneDisplayModeChanged`, github.com/microsoft/WinUI-Gallery, main at 14061ee, read 2026-10-24).
+  - Width of the full pane (owner's finding 3): `OpenPaneLength`, matched to Windows Settings' full pane (owner, 2026-10-24). No
+    Microsoft guideline gives a value: the NavigationView page names none, the control's default is 320 (`OpenPaneLength`,
+    learn.microsoft.com, read 2026-10-24), and the WinUI Gallery keeps the default. **280 is a placeholder until the owner's
+    measurement of Windows Settings**; it is the one attribute on `NavView` in `MainWindow.xaml`.
   - Remembering a closed pane: the navigation view does it for the run. Closing the pane through `IsPaneOpen` while it is open
     sets `m_wasForceClosed` (`OnIsPaneOpenChanged`), and on entering Expanded it reopens the pane only without that flag
     (`UpdateAdaptiveLayout`); a close caused by resizing does not set it, and changing `PaneDisplayMode` clears it (same file).
@@ -106,45 +123,40 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
     `LoadPaneToggleButton` in `TitleBar.cpp`, same tag) and has no property for it, so `MainWindow` looks up its template part
     `PART_PaneToggleButton` after loading and sets the name on `PaneOpened` and `PaneClosed`. A future WinUI that renames that
     part leaves the default name; nothing fails.
-  - That Task Manager uses the same thresholds is not verified, the owner compares with Task Manager.
-- **Pane colour: the title bar's (owner's run, 2026-10-24).** Opened over the page, the pane was acrylic (light #F7 to #FA) with a
-  line under the title bar; Windows Settings' opened pane is #F3F3F3 like its title bar, with no line. In the template
-  (`NavigationView.xaml`, `NavigationView_themeresources.xaml`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) the
-  SplitView's `PaneBackground` is `NavigationViewDefaultPaneBackground` (`AcrylicInAppFillColorDefaultBrush`) while the pane
-  overlays the page, and `NavigationViewExpandedPaneBackground` (`SolidBackgroundFillColorTransparent`, so Mica) while it does not.
-  `MainWindow.xaml` points the first at `SolidBackgroundFillColorBaseBrush`, #F3F3F3 light and #202020 dark
-  (`Common_themeresources_any.xaml`, same tag), the solid colour the owner measured on the Mica title bar; high contrast keeps
-  `SystemControlBackgroundBaseLowBrush`. The line was the pane's border: the navigation view gives its SplitView
-  `NavigationViewBorderThickness` 1 on every side with `NavigationViewItemSeparatorForeground` while overlaying, and the SplitView
-  draws it around `PaneRoot` (`SplitView_themeresources.xaml`, same tag); with our title bar outside the navigation view, its top
-  edge sits under the title bar. `NavigationViewBorderThickness` becomes 0,0,1,0, the SplitView's own default
-  (`SplitViewLeftBorderThemeThickness`), so only the edge towards the page stays. Whether Windows Settings has that edge is not
-  verified, the owner compares.
-- **Background per page (owner, 2026-10-24, Task Manager as the reference).** Content pages (Home, Add a server, Sign in) show the
-  navigation view's content layer, as Task Manager's Users page does; pages made of settings cards (Settings) show Mica, as the
-  pane does. The layer is the template part `ContentGrid`, the `Content` of `RootSplitView` (`NavigationView.xaml`, same tag; the item templates name parts `ContentGrid` too, so `MainWindow` takes it from the SplitView): `<Grid x:Name="ContentGrid"
-  BorderBrush="{ThemeResource NavigationViewContentGridBorderBrush}" BorderThickness="{ThemeResource
-  NavigationViewContentGridBorderThickness}" Background="{ThemeResource NavigationViewContentBackground}" Margin="{ThemeResource
-  NavigationViewContentMargin}" CornerRadius="{ThemeResource NavigationViewContentGridCornerRadius}">`, with
-  `LayerFillColorDefaultBrush`, `CardStrokeColorDefaultBrush`, a 1,1,0,0 border and an 8,0,0,0 corner
-  (`NavigationView_themeresources.xaml`); the Minimal state sets the border to 0,1,0,0 and the corner to 0. It holds the header and
-  the Frame and lies inside the NavigationView, which is below our TitleBar's row, so the layer starts under the title bar. A page
-  sets `shell:PageLayout.HasContentLayer="False"` (Settings); on each navigation `MainWindow` sets `ContentGrid`'s `Background` and
-  `BorderBrush` to transparent for such a page (the navigation view has no background of its own, so the window's Mica shows) and,
-  for the others, binds them to `ContentLayerBrushes`, a collapsed `Border` in `MainWindow.xaml` with the same two ThemeResources,
-  so they follow the theme. No visual state sets either property.
-  - Why the first version showed no layer on any page (owner's run, 2026-10-24, case 4): it called `ClearValue` on content pages,
-    expecting the template's values back, as "Dependency properties overview" (learn.microsoft.com, ms.date 2026-07-27, read
-    2026-10-24) describes ("the template-set values must be distinguishable from a true local value"). WinUI's property system has
-    no such source: `GetBaseValueSource` (`PropertySystem.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) knows
-    only default, style and local values, so a value set in a template is a local one and `ClearValue` dropped it to the property's
-    default, no brush. The 1 px border kept its thickness, which is why the owner measured 57.3 px for 56.
-  - The smoke run now shows the window and reads `ContentGrid`'s background on Home (a brush with some opacity) and after opening
-    Settings (fully transparent), so CI catches this.
-  A theme switch while Settings shows is not
-  verified on screen. That the layer matches Task Manager's is not verified, the owner compares with Task Manager. If a WinUI
-  version renames `RootSplitView` or `PART_PaneToggleButton`, nothing fails: `MainWindow` traces the part's name once loaded
-  (`Trace.TraceWarning`) and the control keeps its default look or name.
+- **Pane opened over the page: the control's own acrylic (owner's finding 7, 2026-10-24).** The NavigationView page (ms.date
+  2026-10-02, read 2026-10-24): "the pane uses in-app acrylic when open as an overlay on top of content (in Top, Minimal, or Compact
+  mode)", through `NavigationViewDefaultPaneBackground`, which is `AcrylicInAppFillColorDefaultBrush`; the full pane inline uses
+  `NavigationViewExpandedPaneBackground` (`SolidBackgroundFillColorTransparent`, so Mica) (`NavigationView_themeresources.xaml`,
+  microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24). Nothing is overridden. The earlier version made the overlay pane
+  solid (`SolidBackgroundFillColorBaseBrush`) and set `NavigationViewBorderThickness` to 0,0,1,0; both overrides are gone.
+  - The line under the title bar that the owner disliked earlier: it is the overlay pane's own border. The template gives
+    `RootSplitView` `BorderThickness="{ThemeResource NavigationViewBorderThickness}"` (1 on every side) and
+    `BorderBrush="{ThemeResource NavigationViewItemSeparatorForeground}"` (`NavigationView.xaml`, same tag), and the SplitView draws
+    it around its pane while the pane overlays the page. Its top edge sits under our title bar because the TitleBar is above the
+    NavigationView, which is the layout the NavigationView page recommends ("place a TitleBar control above the NavigationView",
+    "the pattern used by the WinUI 3 Gallery app"). It is part of the control's default look in that layout, so it stays (owner's
+    rule: defaults first, 2026-10-24); the only way to remove it is the override that was removed. The owner compares with Photos.
+- **One content background on every page (owner's finding 4, 2026-10-24).** Settings included: no page opts out. "Mica material"
+  (learn.microsoft.com, ms.date 2026-07-22, read 2026-10-24): "The content layer should pick up the material behind it, Mica, using
+  the `LayerFillColorDefaultBrush`, a low-opacity solid color, as its background", and "By default, NavigationView in Left mode
+  includes the content layer in its content area". That layer is the template part `ContentGrid` (the `Content` of
+  `RootSplitView`), with `NavigationViewContentBackground` (`LayerFillColorDefaultBrush`: #80FFFFFF light, #4C3A3A3A dark),
+  `NavigationViewContentGridBorderBrush` (`CardStrokeColorDefaultBrush`), a 1,1,0,0 border and an 8,0,0,0 corner
+  (`NavigationView.xaml`, `NavigationView_themeresources.xaml`, `Common_themeresources_any.xaml`, microsoft-ui-xaml, tag
+  winui3/release/2.5.1, read 2026-10-24); the Minimal state, never reached now, would set the border to 0,1,0,0.
+  - The owner found that default too dark (the owner's run of 2026-10-24 measured it at #F9F9F9 light, #272727 dark) and asked for
+    the Photos app's content area, light and dark. The Mica page changes the layer by "overriding the background and border theme
+    resources", so `MainWindow.xaml` overrides one, `NavigationViewContentBackground`, in `NavView.Resources` (Default, Light and
+    HighContrast; high contrast keeps the control's own `SystemColorWindowColor`). **`LayerOnMicaBaseAltFillColorDefaultBrush` is a
+    placeholder until the owner's measurement of Photos**: #B3FFFFFF light and #733A3A3A dark, about #FBFBFB and #2C2C2C over
+    Mica's solid colour (#F3F3F3, #202020), so lighter than the default in both themes and still translucent. The Mica page names
+    this brush for the commanding layer on Mica Alt, not for a content layer on Mica. When the measurement arrives, the brush
+    becomes the WinUI brush whose value over Mica matches Photos, or the measured colours with their source.
+  - The earlier version switched the layer off for Settings in code (`PageLayout.HasContentLayer`, `MainWindow.ApplyContentLayer`);
+    that switch is gone.
+  - The smoke run shows the window and reads `ContentGrid`'s background on Home and again after opening Settings: a brush with
+    some opacity, the same on both. If a WinUI version renames `RootSplitView` or `PART_PaneToggleButton`, nothing fails at run
+    time: `MainWindow` traces the part's name once loaded (`Trace.TraceWarning`), and the smoke run fails on the missing layer.
 - **Alt+Left, the GoBack key and the mouse Back button** call the same `TryGoBack`; **Alt+Right and the mouse Forward button** call
   `TryGoForward` (`Frame.GoForward` when `CanGoForward`). The WinUI 3 page "Navigation history and backwards navigation" (ms.date
   2026-09-19, read 2026-10-22) no longer lists these inputs; the UWP page (learn.microsoft.com/windows/uwp/ui-input/back-navigation,
@@ -221,44 +233,31 @@ Sources, read 2026-10-23 on learn.microsoft.com: "Dialog controls" (ms.date 2026
 2025-02-26), "InfoBar" (ms.date 2025-02-26), "Guidelines for progress controls" (ms.date 2026-07-08), "Guidelines for app settings"
 (ms.date 2026-04-08), "Keyboard accessibility" (ms.date 2026-10-04). Each screen renders the core's state and sends the user's
 actions; nothing is decided in C#.
-- **Page layout:** each page's content is one column left-aligned under the page title, not centred. One rule in every display
-  mode (`PageLayout.cs`), measured from the content's left edge (the pane, the icon rail or the window's edge), and one of two by
-  the page (owner, 2026-10-24, after the owner's run of that day measured the first version, which put the title and content
-  56 px from the pane and the title's glyphs 57 px below the title bar):
-  - Without the content layer (Settings), as Windows Settings: title, notices and column 24 px from the left, the column 24 px from
-    the right and the bottom; the title's glyphs 6 px below the title bar. The owner measured Windows Settings at 686 px: 25 px at
-    both sides, the title's glyphs 6 px below its 48 px title bar; on a wide window its content about 26 px after its pane.
-  - With the content layer (Home, Add a server, Sign in), as Task Manager's Users page inside its layer: title, notices and column
-    17 px from the layer's inner left edge, the column 17 px from its right and bottom; the title's glyphs 21 px below its inner
-    top. The owner measured Task Manager's at 17.3 and 20.7 px. Task Manager's heading is smaller (cap height 10 px against 19.3
-    here); the title's size is unchanged, not verified against Task Manager's style.
-  - How: the navigation view's header margins (`NavigationViewHeaderMargin` 56,44,0,0 and `NavigationViewMinimalHeaderMargin`
-    -24,44,0,0, `NavigationView_themeresources.xaml`, microsoft-ui-xaml, tag winui3/release/2.5.1) are 0 in `MainWindow.xaml`, so
-    the display mode no longer matters, and the header is a `TextBlock` in `NavigationView.HeaderTemplate` that `PageLayout`
-    places (`shell:PageLayout.IsHeader`). Worked from the owner's run: the header's 28 px glyphs start about 13 px below the top of
-    its box, which is at least 36 px high (`MinHeight="{StaticResource PaneToggleButtonHeight}"` on `HeaderContent`,
-    `NavigationView.xaml`). Without the layer the box is 8 px above the content's top (1 px of transparent layer border + 13 - 8 =
-    6); with it, 8 px below the layer's inner top (8 + 13 = 21).
-  - The gap: the distance from the title's glyphs to the first item stays what the owner's run measured against Windows Settings'
-    Accessibility page (title baseline to first text 55 physical px here and there, at 150%), which was 24 px between the boxes
-    with the header at margin 0. With the layer the header's box grows with its 8 px margin, so the column's top padding stays 24;
-    without it the 36 px box ends 7 px higher than before (its glyphs rise 8), so the top padding is 17. Settings' first section
-    header has no top margin of its own (later ones keep 24 above). The WinUI Gallery's settings page has 30 above its first section
-    header (`SettingsSectionHeaderTextBlockStyle` margin 1,30,0,6, `Pages/SettingsPage.xaml`, main at 14061ee, read 2026-10-24).
-  - Each page marks its column `Grid` with `shell:PageLayout.IsColumn="True"`, and `PageLayout` keeps weak references to the live
-    columns and headers; on every navigation `MainWindow` calls `PageLayout.SetContentLayer` with the page's
-    `PageLayout.HasContentLayer`, which places them and the notices.
-  - Not verified: the 13 px glyph offset and the 36 px box at other display scales and text sizes; the owner compares.
-  The column is a `Grid` with that padding and one `*` column with a `MaxWidth`: the column fills the page up to its maximum and
-  stays at the left. Column widths at most: Settings and Home 920 px (about 970 with the padding; "a scrollable layout with a
-  constrained max width (around 1000–1100 px)", "Guidelines for app settings"), Add a server 560, Sign in 400. Why not a
-  StackPanel: "Stretch is the default for both properties, and elements fill all of the space they're provided in the parent
-  container" ("Alignment, margin, padding", learn.microsoft.com, ms.date 2024-09-26, read 2026-10-23). With `Left` the panel
-  takes its content's width, so cards would differ in width, and a stretched panel with a `MaxWidth` is centred, which was the
-  bug (both from the layout behaviour, not quoted from a source). That a capped star column leaves the rest of the width empty
-  on its right is not verified on screen. The guidelines say nothing about alignment. Left alignment follows Windows Settings as
-  the owner saw it (2026-10-23), which places its content under the page title (not verified against a Microsoft source).
-  Home's empty and error states stay centred.
+- **Page layout (owner's findings 5, 6 and 8, 2026-10-24):** on every page the title sits over one column, and both are centred
+  together up to a maximum width; the navigation view's header is not used. This replaces the earlier rules (titles and columns
+  left-aligned and placed by `PageLayout.cs`, with per-page offsets and the navigation view's header margins set to 0), which are
+  gone with that file. The owner's rule: the controls' defaults first, and every size from Microsoft's guidelines, else from
+  Microsoft's own apps, saying which.
+  - Pattern: the WinUI Gallery's settings page (`Pages/SettingsPage.xaml`, github.com/microsoft/WinUI-Gallery, main at 14061ee,
+    read 2026-10-24), which "Guidelines for app settings" (learn.microsoft.com, ms.date 2026-04-08, read 2026-10-24) names as the
+    "complete implementation" example: a `TextBlock` title (`TitleTextBlockStyle`, `HeadingLevel` Level1, `MaxWidth="1064"`,
+    `Margin="36,24,36,0"`) above a scrolling area whose column has the same `MaxWidth`. Both stretch, so each is centred in the same
+    width and the title's left edge lines up with the column's. Each page here does the same with `PageTitleTextBlockStyle` and
+    `PageColumnStyle` (`App.xaml`), the title outside the `ScrollViewer`, so it stays while the page scrolls. The title is the
+    page's Level 1 heading for Narrator; headings inside a page are Level 2 ("No servers yet" on Home, "Sign in to <server>").
+  - Maximum width: 1064 px (`PageMaxWidth`, `App.xaml`), the Gallery's value, within the guideline's "constrained max width
+    (around 1000–1100 px)". Used on every page; the earlier per-page columns (Home 920) go. The forms keep their own width at the
+    left of the column, under the title: Add a server 560 px, Sign in 400 px (a `Grid` whose one `*` column has that `MaxWidth`;
+    a `StackPanel` with `HorizontalAlignment="Left"` would take its content's width instead).
+  - Margins: 24 px at the left, right and bottom of the column and at both sides of the title. The NavigationView page
+    (learn.microsoft.com, ms.date 2026-10-02, read 2026-10-24): "We recommend 12px margins for your content area when
+    NavigationView is in `Minimal` mode and 24px margins otherwise"; Minimal is never reached (see "Pane"). The Gallery uses 36;
+    the guideline wins. The notices (`MainWindow.xaml`) take the same width and side margins.
+  - Vertical: the title 24 px below the top of the content layer, the Gallery's top margin (no guideline gives one), and the
+    column 24 px below the title, the distance the owner's run of 2026-10-24 matched against Windows Settings (24 px between the
+    boxes). The guidelines say nothing about this gap. Settings' first section header has no top margin of its own.
+  - Whether Windows Settings centres its column with the title over it on a very wide window is not verified from a Microsoft
+    source; the owner compares. Home's empty and error states stay centred in the page.
 - **Home** (`HomePage`): before any server, "No servers yet", "Add a Jellyfin server to browse and play your media." and an accent
   "Add a server" button. With servers, a card per saved server: name, "Signed in as …" or "Signed out", "Jellyfin <version>", and
   "Connected", "Can't reach the server" or "Checking…" (plus "address N of M" with more than one address); a signed-out server has a
@@ -469,11 +468,10 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
 7. on a temporary data folder with secrets in memory: a first `OpenAsync` reports `Created`, a second `Loaded`; the saved servers
    arrive on the UI thread, empty; probing an empty address fails with `InvalidAddress(Empty)` without a request; the folder is
    deleted after;
-8. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`), and only settings opts out
-   of the content layer (`PageLayout.HasContentLayer`);
+8. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`);
 9. the network facts, the device name and the local interfaces can be read (none is printed beyond the connectivity level);
 10. last, the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and is shown (its content loads within 10 s); the
-    navigation view's content layer (`ContentGrid`) has a visible background on Home and a transparent one after opening Settings;
+    navigation view's content layer (`ContentGrid`) has a visible background on Home and the same one after opening Settings;
     then it closes: closing the only window ends XAML's message loop, so nothing can be awaited after it (CI run 39883272147
     stopped at the next await and exited 0 without a result).
 No check sends anything over the network; discovery (UDP) is left out.
@@ -978,3 +976,38 @@ the run); the owner ran them with Narrator and reported that everything worked a
 6. **Pass.** Signed out, then signed in with the password: the same announcement.
 No new finding about Narrator; the window chrome findings of this run are under "Window chrome: owner's check" on
 fix/windows-window-chrome.
+
+## Windows shell defaults: owner's check
+The owner's 8 findings of 2026-10-24 (on main cfa83b9), fixed on fix/windows-shell-defaults. Run each case at three widths: wide
+(1008 px or more, e.g. 1400 or maximised), medium (e.g. 800) and the minimum (500), in light and in dark theme. Compare with Photos
+(back button, overlay pane, content background) and Windows Settings (pane width, centred column). Widths are effective pixels (at
+150%, 1008 px is 1512 physical). Two values are placeholders until the owner's measurements: the full pane's width (280) and the
+content background (`LayerOnMicaBaseAltFillColorDefaultBrush`).
+1. Back button inset: the title bar's back button no longer touches the window's left edge. Hover it: its backplate starts a few
+   px (4 effective) inside the border, and its arrow is about 16 px from the border. Compare with Photos' back button. The pane
+   button sits right of it, as before.
+2. Pane never hidden:
+   - Wide: the full pane shows; the pane button switches between the full pane and the icon rail, and the page moves with it
+     (nothing covers the page).
+   - Medium and minimum: the icon rail always shows; the pane button opens the full pane over the page (the page does not move);
+     Esc, a click on the page, or the button closes it. At 500 px the rail and the pane button are still there.
+   - With the pane open over the page, the title bar's Back, Alt+Left and the mouse Back button only close it; with it closed,
+     they go back. "Open Navigation" and "Close Navigation" as before.
+3. Pane width: the full pane (wide, and opened over the page) is narrower than before (280 against 320). Measure Windows Settings'
+   full pane at the same scale and send the value.
+4. Content background: Home, Add a server, Sign in and Settings all show the same content background (a surface with a thin border
+   at its top and left and a rounded top-left corner, under the title bar), lighter than before in both themes. Home -> Settings ->
+   Home: it does not change. Measure Photos' content area in light and dark and send both colours.
+5. Overrides removed: nothing else in the window looks different from the control's own look except what cases 1-4, 7 and 8
+   describe; the 48 px title bar with 46 × 32 caption buttons, the 500 × 500 minimum, the dimmed transparent Back button at Home
+   and "All rights reserved." in Settings > About are unchanged.
+6. Sizes: the page title sits 24 px below the content's top, the column 24 px from the left, right and bottom (at the minimum
+   width too), the first item about as far below the title as before.
+7. Pane opened over the page (medium and minimum): translucent acrylic (the wallpaper and the page show through, softly), as in
+   Photos, not the title bar's solid colour. Note the 1 px line at its edges, including under the title bar: it is the control's
+   own border and stays unless the owner decides otherwise (docs above, "Pane opened over the page").
+8. Centred content: on a wide window (maximised on a wide display) every page's column stops at 1064 px and is centred in the space
+   right of the pane, with the page title over its left edge; the forms (Add a server, Sign in) keep their width at the left of
+   that column. At medium and minimum widths the column fills the width less 24 px on each side. A notice, if one shows, lines up
+   with the column. Narrator: each page's title is read as heading level 1 ("Home", "Settings", "Add a server", "Sign in").
+Anything above that cannot be measured is not verified.
