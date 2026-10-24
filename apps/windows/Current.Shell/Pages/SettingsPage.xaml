@@ -27,7 +27,9 @@
                              "Use system setting" (same page), as the WinUI Gallery's (Task Manager's too, per the manager; not verified);
                              the owner chose Photos'. The
                              combo applies a choice at once and the core saves it: "When a user changes a setting, the app should
-                             immediately reflect the change" (same page). -->
+                             immediately reflect the change" (same page). The card's palette icon is Photos' (owner, 2026-10-24): Segoe
+                             Fluent Icons E790 "Color" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-24),
+                             a FontIcon in the font and size SettingsCard gives it. -->
                         <TextBlock
                             Style="{StaticResource BodyStrongTextBlockStyle}"
                             Margin="0,0,0,4"
@@ -37,6 +39,9 @@
                             Header="App theme"
                             Description="Select which app theme to display"
                             AutomationProperties.Name="App theme">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xE790;" />
+                            </toolkit:SettingsCard.HeaderIcon>
                             <ComboBox
                                 x:Name="ThemeBox"
                                 AutomationProperties.Name="App theme"
