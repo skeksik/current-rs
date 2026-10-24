@@ -12,10 +12,7 @@
         <StackPanel x:Name="RowsPanel" Spacing="8" />
         <Button x:Name="AddButton" Content="Add a header" Click="OnAdd" />
         <InfoBar x:Name="ErrorBar" Severity="Error" IsClosable="False" IsOpen="False" />
-        <Button
-            x:Name="UseButton"
-            Style="{StaticResource AccentButtonStyle}"
-            Content="Use these headers"
-            Click="OnUse" />
+        <!-- Not the accent button: the page's own next step (Connect, or Sign in) keeps that. -->
+        <Button x:Name="UseButton" Content="Use these headers" Click="OnUse" />
     </StackPanel>
 </UserControl>

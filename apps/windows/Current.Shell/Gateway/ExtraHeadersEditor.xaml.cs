@@ -103,7 +103,6 @@ public sealed partial class ExtraHeadersEditor : UserControl
         var name = new TextBox
         {
             Header = "Name",
-            PlaceholderText = "CF-Access-Client-Id",
             IsSpellCheckEnabled = false,
             IsTextPredictionEnabled = false,
         };

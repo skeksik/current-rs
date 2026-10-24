@@ -174,6 +174,8 @@ public sealed partial class AddServerPage : Page
             null => refused ? ProblemText.GatewayRefused : "",
         };
         GatewaySignInButton.Visibility = web is not null ? Visibility.Visible : Visibility.Collapsed;
+        // One accent button for the step at hand (owner's run, 2026-10-24): "Sign in" while it is offered, Connect otherwise.
+        ConnectButton.Style = (Style)Application.Current.Resources[web is not null ? "DefaultButtonStyle" : "AccentButtonStyle"];
         GatewaySignInButton.IsEnabled = _signInWindow is null;
         // Without an address from the server there is nothing to use (AddServerFlow.FollowRedirectAsync).
         FollowRedirectButton.Visibility = web is { Redirected: true, LocationOrigin: not null } ? Visibility.Visible : Visibility.Collapsed;
