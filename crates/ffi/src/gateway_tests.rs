@@ -248,3 +248,38 @@ fn an_expired_portal_session_asks_for_the_gateway_again_and_the_session_goes_on(
         "{log}"
     );
 }
+
+#[test]
+fn a_network_change_finds_an_ended_portal_session_without_a_restart() {
+    let stand_in = stand_in(Gate::Portal);
+    let core = Core::new().unwrap();
+    let add = core.add_server();
+    block_on(add.probe(stand_in.address().into(), CancelToken::new())).unwrap();
+    block_on(add.submit_cookies(vec![cookie(GATE_COOKIE_VALUE)], false, CancelToken::new()))
+        .unwrap();
+    sign_in(&add);
+    eventually("the address in use", || {
+        core.app.capabilities().borrow().servers[0].address == Some(1)
+    });
+
+    // What the C# test does: the portal's session ends, then the network changes.
+    stand_in.set_gate_cookie("renewed-gate-cookie");
+    core.network_changed(NetworkFacts {
+        connectivity: Connectivity::Full,
+        metered: None,
+        constrained: None,
+        interface: InterfaceKind::Wifi,
+        vpn: None,
+        network_key: Some("away".into()),
+    });
+    eventually("the gateway asks again", || {
+        core.app.capabilities().borrow().servers[0].gateway_sign_in_needed
+    });
+    let flow = core.sign_in_to_gateway(first_server()).unwrap();
+    block_on(flow.start(CancelToken::new())).unwrap();
+    block_on(flow.submit_cookies(vec![cookie("renewed-gate-cookie")], CancelToken::new())).unwrap();
+    assert_eq!(flow.state(), GatewaySignInState::Done { remembered: false });
+    eventually("the status clears", || {
+        !core.app.capabilities().borrow().servers[0].gateway_sign_in_needed
+    });
+}
