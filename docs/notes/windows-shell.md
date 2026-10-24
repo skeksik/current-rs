@@ -109,8 +109,11 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   `OnPaneDisplayModeChanged`, github.com/microsoft/WinUI-Gallery, main at 14061ee, read 2026-10-24).
   - Width of the full pane (owner's finding 3): `OpenPaneLength`, matched to Windows Settings' full pane (owner, 2026-10-24). No
     Microsoft guideline gives a value: the NavigationView page names none, the control's default is 320 (`OpenPaneLength`,
-    learn.microsoft.com, read 2026-10-24), and the WinUI Gallery keeps the default. **280 is a placeholder until the owner's
-    measurement of Windows Settings**; it is the one attribute on `NavView` in `MainWindow.xaml`.
+    learn.microsoft.com, read 2026-10-24), and the WinUI Gallery keeps the default. So the value comes from Windows Settings:
+    **300 px**, measured by the owner (2026-10-24, Windows 11 build 26300, 150%): Settings' `SplitView` pane `PaneRoot` is 300
+    effective px wide, its content starting at x = 300, with no border between pane and content, and its nav items inset 16.7 px
+    and 279 px wide. Windows Settings itself has no icon rail (its full pane down to about 800 px, then only a menu button); the
+    owner's rule (never hidden) is kept anyway.
   - Remembering a closed pane: the navigation view does it for the run. Closing the pane through `IsPaneOpen` while it is open
     sets `m_wasForceClosed` (`OnIsPaneOpenChanged`), and on entering Expanded it reopens the pane only without that flag
     (`UpdateAdaptiveLayout`); a close caused by resizing does not set it, and changing `PaneDisplayMode` clears it (same file).
@@ -144,14 +147,11 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   `NavigationViewContentGridBorderBrush` (`CardStrokeColorDefaultBrush`), a 1,1,0,0 border and an 8,0,0,0 corner
   (`NavigationView.xaml`, `NavigationView_themeresources.xaml`, `Common_themeresources_any.xaml`, microsoft-ui-xaml, tag
   winui3/release/2.5.1, read 2026-10-24); the Minimal state, never reached now, would set the border to 0,1,0,0.
-  - The owner found that default too dark (the owner's run of 2026-10-24 measured it at #F9F9F9 light, #272727 dark) and asked for
-    the Photos app's content area, light and dark. The Mica page changes the layer by "overriding the background and border theme
-    resources", so `MainWindow.xaml` overrides one, `NavigationViewContentBackground`, in `NavView.Resources` (Default, Light and
-    HighContrast; high contrast keeps the control's own `SystemColorWindowColor`). **`LayerOnMicaBaseAltFillColorDefaultBrush` is a
-    placeholder until the owner's measurement of Photos**: #B3FFFFFF light and #733A3A3A dark, about #FBFBFB and #2C2C2C over
-    Mica's solid colour (#F3F3F3, #202020), so lighter than the default in both themes and still translucent. The Mica page names
-    this brush for the commanding layer on Mica Alt, not for a content layer on Mica. When the measurement arrives, the brush
-    becomes the WinUI brush whose value over Mica matches Photos, or the measured colours with their source.
+  - It matches the Photos app's content area, so it is kept with no override. Measured by the owner (2026-10-24, Windows 11 build
+    26300, 150%, dark wallpaper, constant across 7 window positions): Photos' content is #F9F9F9 light and #272727 dark over a pane
+    and backdrop of #F3F3F3 and #202020, a separate layer with a 1 px stroke at its left and top (#E5E5E5 light, #1D1D1D dark) and
+    an 8 px rounded top-left corner. The owner's run of 2026-10-24 measured this layer at exactly those colours and that stroke.
+    The owner had found the content "too dark"; that came from Settings showing no layer next to the content pages, which is gone.
   - The earlier version switched the layer off for Settings in code (`PageLayout.HasContentLayer`, `MainWindow.ApplyContentLayer`);
     that switch is gone.
   - The smoke run shows the window and reads `ContentGrid`'s background on Home and again after opening Settings: a brush with
@@ -981,8 +981,7 @@ fix/windows-window-chrome.
 The owner's 8 findings of 2026-10-24 (on main cfa83b9), fixed on fix/windows-shell-defaults. Run each case at three widths: wide
 (1008 px or more, e.g. 1400 or maximised), medium (e.g. 800) and the minimum (500), in light and in dark theme. Compare with Photos
 (back button, overlay pane, content background) and Windows Settings (pane width, centred column). Widths are effective pixels (at
-150%, 1008 px is 1512 physical). Two values are placeholders until the owner's measurements: the full pane's width (280) and the
-content background (`LayerOnMicaBaseAltFillColorDefaultBrush`).
+150%, 1008 px is 1512 physical).
 1. Back button inset: the title bar's back button no longer touches the window's left edge. Hover it: its backplate starts a few
    px (4 effective) inside the border, and its arrow is about 16 px from the border. Compare with Photos' back button. The pane
    button sits right of it, as before.
@@ -993,11 +992,11 @@ content background (`LayerOnMicaBaseAltFillColorDefaultBrush`).
      Esc, a click on the page, or the button closes it. At 500 px the rail and the pane button are still there.
    - With the pane open over the page, the title bar's Back, Alt+Left and the mouse Back button only close it; with it closed,
      they go back. "Open Navigation" and "Close Navigation" as before.
-3. Pane width: the full pane (wide, and opened over the page) is narrower than before (280 against 320). Measure Windows Settings'
-   full pane at the same scale and send the value.
+3. Pane width: the full pane (wide, and opened over the page) is 300 px, as Windows Settings' (measured by the owner), against 320
+   before.
 4. Content background: Home, Add a server, Sign in and Settings all show the same content background (a surface with a thin border
-   at its top and left and a rounded top-left corner, under the title bar), lighter than before in both themes. Home -> Settings ->
-   Home: it does not change. Measure Photos' content area in light and dark and send both colours.
+   at its top and left and a rounded top-left corner, under the title bar): #F9F9F9 light, #272727 dark, with a #E5E5E5 / #1D1D1D
+   stroke, as in Photos. Home -> Settings -> Home: it does not change. Switch light/dark on Settings: it follows.
 5. Overrides removed: nothing else in the window looks different from the control's own look except what cases 1-4, 7 and 8
    describe; the 48 px title bar with 46 × 32 caption buttons, the 500 × 500 minimum, the dimmed transparent Back button at Home
    and "All rights reserved." in Settings > About are unchanged.

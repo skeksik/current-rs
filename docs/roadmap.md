@@ -105,8 +105,8 @@ recorded with sources and dates, and a decision record where it decides somethin
     check"). Rules: the controls' defaults first, sizes from Microsoft's guidelines, else from Microsoft's apps.
     - [ ] 1. The title bar's back and pane buttons inset from the window's left edge, as the guideline and Photos
     - [ ] 2. The pane never hidden: the full pane or the icon rail at every width, with the pane button always shown
-    - [ ] 3. A narrower full pane, matched to Windows Settings (placeholder 280 until the owner's measurement)
-    - [ ] 4. One lighter content background on every page, Settings included, matched to Photos (placeholder until measured)
+    - [ ] 3. A narrower full pane: 300 px, Windows Settings' as the owner measured it
+    - [ ] 4. One content background on every page, Settings included: the control's own layer, which matches Photos
     - [ ] 5. The overrides that are not needed removed (layer switch, pane colour and border, header margins, `PageLayout.cs`)
     - [ ] 6. Every size from Microsoft's guidelines or apps, with its source
     - [ ] 7. The pane opened over the page translucent acrylic, as in Photos
