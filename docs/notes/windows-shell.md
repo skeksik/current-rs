@@ -881,6 +881,52 @@ navigation view 4 physical px narrower than the frame at 150% (noted, not change
      dimmed.
    - After closing the pane this way on a medium window, widening to wide keeps the rail (the navigation view's forced close).
 
+### Windows run (2026-10-24)
+Head fix/windows-window-chrome 05d77bf (Narrator merged in), built with the four scripts: binding tests 34 passed, smoke run passed.
+Windows 11 26H2, 10.0.26300.9711, x64; main display at 150%. The cases ran `out/app/Current.exe` with the saved server, in dark
+theme and, where noted, light. Window widths (the visible frame): 1400, 900, 686 (Settings only), 600, and maximised; Windows
+Settings at 1400, 686 and 600. Measured from full-resolution captures (physical px / 1.5) and UI Automation (Back's IsEnabled,
+the page heading); the mouse Back button was sent as XButton1 with SendInput.
+1. **Pass.**
+   - Home, Add a server and Sign in show the layer at 1400, 900 and 600 px (dark #272727, light #F9F9F9), with a 1.3 px border
+     at the top and left (dark #1D1D1D, light #E5E5E5) from 48.7 px below the window's top, and the layer runs to the window's
+     right and bottom edges. Wide and medium: rounded top-left corner (about 8 px). Small: top border only, no left border and no
+     rounded corner. Settings shows no layer: the same colour as the pane and the title bar (#202020, light #F3F3F3).
+   - Home -> Settings -> Home, and Settings -> Home with Alt+Left twice: the layer went and came back each time. Light on
+     Settings, then Home: #F9F9F9 with the #E5E5E5 border; back to dark on Settings, then Home: #272727 with #1D1D1D.
+   - Against Task Manager's Users page (same scale, both themes): the border is the same (1.3 px, same colours), but Task
+     Manager's layer is darker in dark (#191919 against its #202020 title bar; here #272727) and white in light (#FFFFFF; here
+     #F9F9F9). Title glyphs: here 19.3 px from the layer's inner left edge and 18.7 px below its inner top; Task Manager 16.7
+     and 20.7, so 2.7 px further right and 2 px higher here (the first card's box is 17.3 px from the inner left edge). Right
+     gap 16.7 px from the card to the layer's edge at 900 and 600 px (Task Manager's "..." glyph is 18 px from its right edge).
+     At 1400 px the Home card stops at its maximum width (920 px), so the right gap is larger there.
+2. **Partial: margins pass, the title sits about 3 px higher than in Windows Settings.**
+   - Wide (1400): the cards and the title's glyphs start 25.3 and 26 px after the pane; medium (900, 686): 25.3 px after the
+     rail. Windows Settings at 1400 starts its cards 4 px further right (349.3 px from the window's left edge, here 345.3); its
+     pane edge is not visible, so its gap after the pane is not measured.
+   - Small (600): the cards keep 24 px at both window edges (Windows Settings 25.3 at the left, 24.7 at the right), the title's
+     glyphs start 24.7 px from the left edge (Windows Settings 26).
+   - Title's glyphs below the 48 px title bar: here 2.7 px at every width; Windows Settings 5.3 px at 600 and 686, and 16 px at
+     1400. The top of `PageLayout.PlainHeader` (-8) would take about 3 px less for the small width.
+3. **Pass.** Opened over the page at 900 and 600 px, the pane is #202020 (light #F3F3F3), the title bar's colour, not acrylic.
+   Under the title bar there is only a 1-level difference (#1F1F1F, light #F1F1F1) that does not show. At the pane's right edge
+   a 1.3 px line (#2E2E2E, light #DFDFDF) and a 4 px shadow stay; Windows Settings' opened pane (600, 686) has neither a line nor
+   a shadow at its right edge, and none under its title bar. The opened pane also has a 1.3 px line at its left edge inside the
+   window border (#1D1D1D, light #E7E7E7). Wide: the full pane and the rail look as before.
+4. **Pass.** Close's hover box is 46 × 32 px at the top of the 48 px title bar, restored and maximised (69 × 48 physical px);
+   minimise and maximise sit beside it in the same row (not measured one by one). Dragging the title bar moves the window, double-click maximises and restores, and snap layouts show on
+   hovering maximise.
+5. **Pass**, at 900 and 600 px.
+   - After a start, at Home: Back is disabled. Pane opened over the page: Back enabled; pressed: the pane closed, Home stayed,
+     Back disabled again.
+   - Settings with the pane open: the title bar's Back closed the pane and stayed on Settings (Back still enabled); pressed
+     again: Home, Back disabled. The same with Alt+Left, and with the mouse Back button with the pointer over the pane and over
+     the page.
+   - After closing the pane this way at 900, widening to 1400 kept the rail.
+   - Wide, after a restart with the full pane: Back disabled at Home; on Settings Back went straight to Home and the full pane
+     stayed open.
+Not run: Add a server and Sign in in light theme (only Home and Settings were checked in light); the second display.
+
 
 ## Quick Connect code and Narrator: owner's check
 For fix/narrator-quick-connect-code (the code announced by a notification, see "Keyboard and Narrator" under Screens), on a build
