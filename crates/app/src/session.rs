@@ -1049,20 +1049,23 @@ fn record(
                 Some(index) => {
                     let saved = &mut servers[index];
                     if !saved.addresses.iter().any(|a| a.url == address.url) {
-                        saved.addresses.push(address.clone());
+                        saved.add_address(address.clone());
                     }
                     saved.name.clone_from(name);
                     index
                 }
                 None => {
-                    servers.push(SavedServer {
+                    let mut saved = SavedServer {
                         server: ServerRef::new(ServiceType::JELLYFIN, next_key(servers, last_key)),
                         id: id.clone(),
                         name: name.clone(),
-                        addresses: vec![address.clone()],
+                        addresses: Vec::new(),
                         users: Vec::new(),
                         active_user: None,
-                    });
+                        last_address_id: 0,
+                    };
+                    saved.add_address(address.clone());
+                    servers.push(saved);
                     servers.len() - 1
                 }
             };
@@ -1126,12 +1129,10 @@ mod tests {
             server: ServerRef::new(ServiceType::JELLYFIN, ServerKey::new(key)),
             id: ServerId::new(id),
             name: "Test Server".into(),
-            addresses: vec![ServerAddress {
-                url: "http://192.168.1.10:8096".into(),
-                plain_http_confirmed: false,
-            }],
+            addresses: vec![ServerAddress::new("http://192.168.1.10:8096", false)],
             users: Vec::new(),
             active_user: None,
+            last_address_id: 0,
         }
     }
 
@@ -1149,10 +1150,7 @@ mod tests {
         Target::New {
             id: ServerId::new(id),
             name: "Renamed Server".into(),
-            address: ServerAddress {
-                url: url.into(),
-                plain_http_confirmed: true,
-            },
+            address: ServerAddress::new(url, true),
             version: "12.2.0".into(),
         }
     }
@@ -1290,10 +1288,7 @@ mod tests {
         // A sign-in adds an address: the next caller gets a provider over both, whatever list it read earlier.
         shared
             .commit(|servers, _| {
-                servers[0].addresses.push(ServerAddress {
-                    url: "https://media.example.com".into(),
-                    plain_http_confirmed: false,
-                });
+                servers[0].add_address(ServerAddress::new("https://media.example.com", false));
             })
             .unwrap();
         let second = shared.provider(&server).await.unwrap();

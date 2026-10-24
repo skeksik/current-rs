@@ -464,10 +464,7 @@ async fn roaming_with_the_jellyfin_identity_skips_another_server() {
     .await;
     let addresses: Vec<ServerAddress> = [&other, &right]
         .iter()
-        .map(|stand_in| ServerAddress {
-            url: stand_in.address(""),
-            plain_http_confirmed: false,
-        })
+        .map(|stand_in| ServerAddress::new(stand_in.address(""), false))
         .collect();
     let roaming = ok(RoamingAddresses::new(
         ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),

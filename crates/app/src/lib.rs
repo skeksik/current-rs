@@ -535,10 +535,7 @@ mod tests {
                 });
             }
         });
-        ServerAddress {
-            url: format!("http://127.0.0.1:{port}"),
-            plain_http_confirmed: false,
-        }
+        ServerAddress::new(format!("http://127.0.0.1:{port}"), false)
     }
 
     fn network(key: &str) -> NetworkFacts {
@@ -615,10 +612,7 @@ mod tests {
     #[tokio::test]
     async fn an_invalid_address_is_refused() {
         let app = App::new();
-        let address = ServerAddress {
-            url: "not an address".into(),
-            plain_http_confirmed: false,
-        };
+        let address = ServerAddress::new("not an address", false);
         let result = app.jellyfin_addresses(
             jellyfin(),
             ServerId::new(ID),

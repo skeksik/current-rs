@@ -1115,10 +1115,7 @@ fn set_addresses(app: &App, addresses: &[&str]) {
         .update(|settings| {
             settings.servers[0].addresses = addresses
                 .iter()
-                .map(|url| current_model::ServerAddress {
-                    url: (*url).to_owned(),
-                    plain_http_confirmed: false,
-                })
+                .map(|url| current_model::ServerAddress::new((*url).to_owned(), false))
                 .collect();
         })
         .unwrap();

@@ -14,8 +14,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use current_model::{
-    AppTheme, SavedServer, SavedUser, ServerAddress, ServerId, ServerKey, ServerRef, ServiceType,
-    UserId,
+    AddressId, AppTheme, GatewayKind, SavedServer, SavedUser, ServerAddress, ServerId, ServerKey,
+    ServerRef, ServiceType, UserId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -125,6 +125,9 @@ struct StoredServer {
     users: Vec<StoredUser>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     active_user: Option<String>,
+    /// Added with gateway secrets (ADR 0017, 2026-10-24); older files have none: the highest id in `addresses` stands in.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    last_address_id: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -132,6 +135,12 @@ struct StoredAddress {
     url: String,
     #[serde(default)]
     plain_http_confirmed: bool,
+    /// Added with gateway secrets (ADR 0017, 2026-10-24); an address without one gets one when the file is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<u64>,
+    /// The kinds of gateway credential the address has, never a value. Added with `id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    gateway: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -153,6 +162,8 @@ impl From<StoredServer> for SavedServer {
                 .map(|address| ServerAddress {
                     url: address.url,
                     plain_http_confirmed: address.plain_http_confirmed,
+                    id: address.id.map(AddressId::new),
+                    gateway: address.gateway.into_iter().map(GatewayKind::new).collect(),
                 })
                 .collect(),
             users: stored
@@ -164,6 +175,7 @@ impl From<StoredServer> for SavedServer {
                 })
                 .collect(),
             active_user: stored.active_user.map(UserId::new),
+            last_address_id: stored.last_address_id,
         }
     }
 }
@@ -181,6 +193,12 @@ impl From<&SavedServer> for StoredServer {
                 .map(|address| StoredAddress {
                     url: address.url.clone(),
                     plain_http_confirmed: address.plain_http_confirmed,
+                    id: address.id.map(AddressId::get),
+                    gateway: address
+                        .gateway
+                        .iter()
+                        .map(|kind| kind.as_str().to_owned())
+                        .collect(),
                 })
                 .collect(),
             users: saved
@@ -192,6 +210,7 @@ impl From<&SavedServer> for StoredServer {
                 })
                 .collect(),
             active_user: saved.active_user.as_ref().map(ToString::to_string),
+            last_address_id: saved.last_address_id,
         }
     }
 }
@@ -257,11 +276,12 @@ impl SettingsStore {
                 )
             }
             Parsed::Newer { found, stored } => {
-                // Never written, so a missing id made here lasts only for this run.
-                let settings = match stored {
+                // Never written, so a missing id made here (device or address) lasts only for this run.
+                let mut settings = match stored {
                     Some(stored) => from_stored(stored)?.0,
                     None => Settings::new(DeviceId::generate()?),
                 };
+                assign_address_ids(&mut settings);
                 (
                     settings,
                     Some(found),
@@ -270,7 +290,8 @@ impl SettingsStore {
                 )
             }
             Parsed::Current { from, stored } => {
-                let (settings, made_id) = from_stored(stored)?;
+                let (mut settings, made_id) = from_stored(stored)?;
+                let made_id = assign_address_ids(&mut settings) | made_id;
                 if from < current {
                     (settings, None, LoadReport::Migrated { from }, true)
                 } else {
@@ -308,6 +329,8 @@ impl SettingsStore {
         }
         let mut next = state.settings.clone();
         change(&mut next);
+        // A safety net: callers add addresses with `SavedServer::add_address`, which gives the id.
+        assign_address_ids(&mut next);
         if next.app_theme != state.settings.app_theme {
             // The theme was picked here: an unknown stored value no longer stands.
             next.unknown_app_theme = None;
@@ -409,6 +432,13 @@ fn from_stored(stored: Stored) -> Result<(Settings, bool), StoreError> {
         extra: stored.extra,
     };
     Ok((settings, made))
+}
+
+/// Gives every saved address without a valid id one (ADR 0017). Returns whether any changed.
+fn assign_address_ids(settings: &mut Settings) -> bool {
+    settings.servers.iter_mut().fold(false, |changed, server| {
+        server.assign_address_ids() | changed
+    })
 }
 
 /// The `app_theme` to write: an unknown value read from the file as it was, else the theme's name. The default is left out.
@@ -705,10 +735,14 @@ mod tests {
                 ServerAddress {
                     url: "https://media.example.com".into(),
                     plain_http_confirmed: false,
+                    id: Some(AddressId::new(3)),
+                    gateway: vec![GatewayKind::BASIC, GatewayKind::HEADERS],
                 },
                 ServerAddress {
                     url: "http://192.168.1.10:8096".into(),
                     plain_http_confirmed: true,
+                    id: Some(AddressId::new(1)),
+                    gateway: Vec::new(),
                 },
             ],
             users: vec![
@@ -722,6 +756,7 @@ mod tests {
                 },
             ],
             active_user: Some(UserId::new("5d1c0000000000000000000000000002")),
+            last_address_id: 3,
         }
     }
 
@@ -827,6 +862,93 @@ mod tests {
             .update(|s| s.device_id = DeviceId::parse("def").unwrap())
             .unwrap();
         assert!(read_json(temp.path()).get("servers").is_none());
+    }
+
+    #[test]
+    fn addresses_without_ids_get_them_on_load_and_the_file_is_saved() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(
+            temp.path(),
+            r#"{"version": 1, "device_id": "abc", "servers": [{"service": "jellyfin", "key": "1", "addresses": [
+                {"url": "https://media.example.com"}, {"url": "http://192.168.1.10:8096", "id": 7}, {"url": "http://127.0.0.1:8096"}]}]}"#,
+        );
+        let (store, report) = SettingsStore::open(temp.path()).unwrap();
+        assert_eq!(report, LoadReport::Loaded);
+        let ids: Vec<_> = store.get().servers[0]
+            .addresses
+            .iter()
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(ids, [8, 7, 9].map(|id| Some(AddressId::new(id))));
+        let json = read_json(temp.path());
+        assert_eq!(json["servers"][0]["addresses"][0]["id"], 8);
+        assert_eq!(json["servers"][0]["last_address_id"], 9);
+        // Reopening keeps them.
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        assert_eq!(
+            store.get().servers[0].addresses[2].id,
+            Some(AddressId::new(9))
+        );
+    }
+
+    #[test]
+    fn address_ids_survive_reordering_and_are_never_given_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        store.update(|s| s.servers = vec![saved_server()]).unwrap();
+        store.update(|s| s.servers[0].addresses.reverse()).unwrap();
+        store
+            .update(|s| {
+                s.servers[0].addresses.remove(1);
+            })
+            .unwrap();
+        // An address pushed without an id (not through `add_address`) still gets a new one on save.
+        store
+            .update(|s| {
+                s.servers[0]
+                    .addresses
+                    .push(ServerAddress::new("http://127.0.0.1:8096", true))
+            })
+            .unwrap();
+        drop(store);
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        let server = &store.get().servers[0];
+        let ids: Vec<_> = server.addresses.iter().map(|a| a.id).collect();
+        assert_eq!(ids, [Some(AddressId::new(1)), Some(AddressId::new(4))]);
+        assert_eq!(server.last_address_id, 4);
+    }
+
+    #[test]
+    fn gateway_kinds_round_trip_including_unknown_ones_and_never_a_value() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(
+            temp.path(),
+            r#"{"version": 1, "device_id": "abc", "servers": [{"service": "jellyfin", "key": "1", "last_address_id": 1,
+                "addresses": [{"url": "https://media.example.com", "id": 1, "gateway": ["cookies", "client-certificate"]}]}]}"#,
+        );
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        let kinds = store.get().servers[0].addresses[0].gateway.clone();
+        assert_eq!(
+            kinds,
+            [GatewayKind::COOKIES, GatewayKind::new("client-certificate")]
+        );
+        store
+            .update(|s| s.servers[0].addresses[0].gateway.push(GatewayKind::BASIC))
+            .unwrap();
+        let json = read_json(temp.path());
+        assert_eq!(
+            json["servers"][0]["addresses"][0]["gateway"],
+            serde_json::json!(["cookies", "client-certificate", "basic"])
+        );
+        // An address without a gateway credential leaves the field out.
+        store
+            .update(|s| s.servers[0].addresses[0].gateway.clear())
+            .unwrap();
+        assert!(
+            read_json(temp.path())["servers"][0]["addresses"][0]
+                .get("gateway")
+                .is_none()
+        );
     }
 
     #[test]

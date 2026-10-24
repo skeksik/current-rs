@@ -21,7 +21,7 @@ pub use identity::{
 };
 pub use network::{Connectivity, InterfaceKind, LocalInterface, NetworkFacts, NetworkKey};
 pub use saved::{SavedServer, SavedUser};
-pub use server::{PublicServerInfo, ServerAddress};
+pub use server::{AddressId, GatewayKind, PublicServerInfo, ServerAddress};
 pub use user::{Permission, User};
 
 /// Version of the core, from the workspace manifest.
