@@ -5,6 +5,10 @@
 
 use std::error::Error as _;
 
+use reqwest::header::HeaderMap;
+
+use crate::challenge::{AuthChallenge, challenges};
+
 /// Longest server message kept, in characters.
 const MESSAGE_LIMIT: usize = 300;
 
@@ -20,11 +24,15 @@ pub enum NetError {
     /// The secure connection failed: an untrusted or mismatched certificate, or a failed handshake.
     #[error("the secure connection to the server failed")]
     Tls,
-    /// 401 or 403: the user must sign in again or lacks the right.
+    /// 401 or 403: the user must sign in again or lacks the right, or a gateway in front of the server wants a sign-in (ADR 0017).
+    /// `challenges` are the answer's `WWW-Authenticate` challenges (Debug shows their schemes only); `page` says whether the answer
+    /// was an HTML page.
     #[error("the server refused access ({status})")]
     Auth {
         status: u16,
         message: Option<String>,
+        challenges: Vec<AuthChallenge>,
+        page: bool,
     },
     /// Any other non-success status, with the server's own message when it sent one.
     #[error("the server answered with status {status}")]
@@ -65,10 +73,14 @@ impl std::fmt::Debug for NetError {
             Self::Auth {
                 status,
                 message: text,
+                challenges,
+                page,
             } => f
                 .debug_struct("Auth")
                 .field("status", status)
                 .field("message", &format_args!("{}", message(text)))
+                .field("challenges", challenges)
+                .field("page", page)
                 .finish(),
             Self::Status {
                 status,
@@ -94,11 +106,16 @@ impl std::fmt::Debug for NetError {
 }
 
 impl NetError {
-    /// The error for a non-success status and its body.
-    pub(crate) fn from_status(status: u16, body: &[u8]) -> Self {
+    /// The error for a non-success status, its headers and its body.
+    pub(crate) fn from_status(status: u16, headers: &HeaderMap, body: &[u8]) -> Self {
         let message = server_message(body);
         match status {
-            401 | 403 => Self::Auth { status, message },
+            401 | 403 => Self::Auth {
+                status,
+                message,
+                challenges: challenges(headers),
+                page: is_html(headers, body),
+            },
             _ => Self::Status { status, message },
         }
     }
@@ -181,6 +198,19 @@ fn is_tls(error: &reqwest::Error) -> bool {
     false
 }
 
+/// Whether an answer is an HTML page: its content type says so, or its body starts with `<`.
+pub(crate) fn is_html(headers: &HeaderMap, body: &[u8]) -> bool {
+    let declared = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            let essence = value.split(';').next().unwrap_or("").trim();
+            essence.eq_ignore_ascii_case("text/html")
+                || essence.eq_ignore_ascii_case("application/xhtml+xml")
+        });
+    declared || body.trim_ascii_start().starts_with(b"<")
+}
+
 /// The server's own explanation from an error body: a `message`, `detail`, `title` or `error` string field of a JSON object, or a
 /// short plain-text body. Shown to the user; never written to the request log.
 fn server_message(body: &[u8]) -> Option<String> {
@@ -216,30 +246,72 @@ fn server_message(body: &[u8]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use reqwest::header::{CONTENT_TYPE, HeaderValue, WWW_AUTHENTICATE};
+
     use super::*;
+    use crate::challenge::AuthScheme;
+
+    fn from_status(status: u16, body: &[u8]) -> NetError {
+        NetError::from_status(status, &HeaderMap::new(), body)
+    }
 
     #[test]
     fn auth_statuses_are_auth_errors() {
         assert_eq!(
-            NetError::from_status(401, b""),
+            from_status(401, b""),
             NetError::Auth {
                 status: 401,
-                message: None
+                message: None,
+                challenges: Vec::new(),
+                page: false,
             }
         );
         assert!(matches!(
-            NetError::from_status(403, b""),
+            from_status(403, b""),
             NetError::Auth { status: 403, .. }
         ));
         assert!(matches!(
-            NetError::from_status(404, b""),
+            from_status(404, b""),
             NetError::Status { status: 404, .. }
         ));
     }
 
     #[test]
+    fn auth_errors_carry_challenges_and_whether_they_were_a_page() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            WWW_AUTHENTICATE,
+            HeaderValue::from_static(r#"Basic realm="Private Realm Text""#),
+        );
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        let error = NetError::from_status(401, &headers, b"sign in");
+        let NetError::Auth {
+            challenges, page, ..
+        } = &error
+        else {
+            panic!("{error:?}")
+        };
+        assert_eq!(challenges[0].scheme, AuthScheme::BASIC);
+        assert_eq!(challenges[0].realm.as_deref(), Some("Private Realm Text"));
+        assert!(*page);
+        let text = format!("{error:?} {error}");
+        assert!(!text.contains("Private Realm Text"), "{text}");
+        assert_eq!(
+            format!("{error:?}"),
+            "Auth { status: 401, message: [omitted], challenges: [basic], page: true }"
+        );
+        assert!(matches!(
+            from_status(403, b"  <!doctype html><p>no</p>"),
+            NetError::Auth { page: true, .. }
+        ));
+    }
+
+    #[test]
     fn server_messages_come_from_known_fields() {
-        let message = |body: &[u8]| match NetError::from_status(500, body) {
+        let message = |body: &[u8]| match from_status(500, body) {
             NetError::Status { message, .. } => message,
             _ => None,
         };
@@ -263,14 +335,14 @@ mod tests {
 
     #[test]
     fn debug_leaves_out_the_server_message() {
-        let error = NetError::from_status(500, br#"{"message":"Some Library Title is missing"}"#);
+        let error = from_status(500, br#"{"message":"Some Library Title is missing"}"#);
         assert_eq!(
             format!("{error:?}"),
             "Status { status: 500, message: [omitted] }"
         );
         assert_eq!(
-            format!("{:?}", NetError::from_status(401, b"")),
-            "Auth { status: 401, message: None }"
+            format!("{:?}", from_status(401, b"")),
+            "Auth { status: 401, message: None, challenges: [], page: false }"
         );
     }
 

@@ -241,6 +241,8 @@ mod tests {
             SignInProblem::from(&SignInError::Auth(AuthError::Network(NetError::Auth {
                 status: 403,
                 message: Some("a server message".into()),
+                challenges: Vec::new(),
+                page: false,
             }))),
             SignInProblem::Network {
                 problem: NetProblem::Auth { status: 403 }
