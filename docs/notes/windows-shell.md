@@ -49,14 +49,31 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
 
 ## Shell behaviour (ADR 0001: the platform's default)
 - **Window:** `MicaBackdrop` (Base), `ExtendsContentIntoTitleBar` and `SetTitleBar` on a WinUI `TitleBar` control titled "Current";
-  the system caption buttons stay the system's. Theme: no `RequestedTheme` anywhere, so the app follows the Windows light/dark setting.
+  the system caption buttons stay the system's, with their hover and pressed backgrounds in the app's theme (below). Theme: no
+  `RequestedTheme` anywhere, so the app follows the Windows light/dark setting.
+- **Caption button colours (owner's new finding 3, 2026-10-24).** WinUI sets only the caption buttons' `ButtonBackgroundColor` and
+  `ButtonInactiveBackgroundColor` (transparent) and leaves the rest unset (read from `AppWindow.TitleBar` in a throwaway build). The
+  system then drew a light theme's hover in dark mode, #191919 on the #202020 title bar, from the start, and kept it after a switch
+  to light while the app ran; after a restart in light it was #E5E5E5. `AppWindowTitleBar.PreferredTheme` (`UseDefaultAppMode`,
+  "The Windows default app mode theme is used", and `Dark`; learn.microsoft.com, read 2026-10-24) did not change it. Photos and
+  Windows Settings hover at #2D2D2D dark and #EAEAEA light (Settings #E9E9E9; measured on the owner's PC, 2026-10-24), which is
+  WinUI's `SubtleFillColorSecondary` (#0FFFFFFF dark, #09000000 light) over the title bar (`Common_themeresources_any.xaml`,
+  microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24). `MainWindow.ApplyCaptionButtonColors` sets
+  `ButtonHoverBackgroundColor` to it and `ButtonPressedBackgroundColor` to `SubtleFillColorTertiary`, on load and on every
+  `ActualThemeChanged`, as the WinUI Gallery re-applies its caption colours "as AppWindow TitleBar doesn't update caption button
+  colors correctly when changed while app is running" (`TitleBarHelper.cs`, main at 14061ee, read 2026-10-24; the Gallery uses its
+  own fixed colours). Measured after the change: #2D2D2D dark, #EAEAEA light, after a live switch and after a restart. The pressed
+  colour is not measured. High contrast resets both to the system's own; `AccessibilitySettings.HighContrastChanged` cannot be
+  subscribed to in a desktop window (`COMException` 0x80070490 in the smoke run), so a switch to high contrast while the app runs is
+  caught only if it changes `ActualTheme` (not verified).
 - **Tall title bar (48 px).** The owner found the title bar lower than Windows Settings', which with a back button uses the taller
   one (owner's run, 2026-10-24; its exact height is not verified). "Windows app title bar" (learn.microsoft.com, ms.date 2024-07-31,
   read 2026-10-24): "The standard title bar has a height of 32px", and "Increase the size of the title bar to 48px" when it holds a
-  search box or a person picture. The caption buttons stay standard: "Title bar customization" (ms.date 2026-10-13, read
-  2026-10-24) offers `PreferredHeightOption = Tall` "so the caption buttons are the same height as the title bar", which the first
-  version of this change set; the owner's run (2026-10-24) measured Windows Settings' caption buttons at 46 × 32 px in its 48 px
-  title bar, against 48 × 48 here, so `PreferredHeightOption` is left at its default (Standard). The `TitleBar`
+  search box or a person picture. The caption buttons are as tall as the title bar, 48 × 48 as Photos' (owner's new finding 1,
+  2026-10-24, measured on the owner's PC): "Set PreferredHeightOption to Tall so the caption buttons are the same height as the
+  title bar" ("Title bar customization", ms.date 2026-10-13, read 2026-10-24), as the WinUI Gallery's `MainWindow` does after
+  `ExtendsContentIntoTitleBar` (main at 14061ee, read 2026-10-24). An earlier version kept them Standard, 46 × 32 as Windows
+  Settings' (owner's run, 2026-10-24); the owner chose Photos' (2026-10-24). The `TitleBar`
   control's layout root is `TitleBarCompactHeight` (32) and becomes `TitleBarExpandedHeight` (48) only when `Content`, `LeftHeader`
   or `RightHeader` is set (`TitleBar.xaml`, `UpdateHeight` in `TitleBar.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read
   2026-10-24). Ours has none, so `MainWindow.xaml` raises `TitleBarCompactHeight` to 48 on `AppTitleBar` (lightweight styling).
@@ -69,7 +86,13 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   `TitleBar.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24). With an inset of 0 the backplate started 2 px from
   the border and the glyph 14 px; `Margin="2,0,0,0"` on `AppTitleBar` puts the backplate at 4 px and the glyph at the guideline's
   16. A property of the control, not a resource override. That the left inset is 0 in a left-to-right window is not verified on
-  screen; the 2 px left of the title bar are not part of its drag region. Photos' inset is not verified; the owner compares.
+  screen; the 2 px left of the title bar are not part of its drag region. Photos shows no back button in its title bar; Windows
+  Settings' has the same 4 px inset.
+  - Height (owner's new finding 1, 2026-10-24): the control's styles stretch the back and pane buttons to the bar's height less a
+    2 px margin (`TitleBarBackButtonStyle`, `TitleBarPaneToggleButtonStyle`, `VerticalAlignment` Stretch, `Margin` 2; same file),
+    40 × 44 in a 48 px bar, touching the border. Windows Settings' back button is 40 × 36, 6 px below the top of its 48 px title bar
+    (measured on the owner's PC, 2026-10-24). `MainWindow.xaml` bases both styles on the control's own and sets `Margin` to 2,6:
+    40 × 36, 6 px from the top, as Settings'.
 - **Minimum window size: 500 × 500 effective px** (manager, 2026-10-24): the narrowest page column (Sign in, 400 px plus 24 on
   each side) and the title bar (back and pane buttons, title, caption buttons) fit. `OverlappedPresenter.PreferredMinimumWidth` and
   `PreferredMinimumHeight` ("Gets or sets the preferred minimum width for the window", learn.microsoft.com, Windows App SDK 1.7 and
@@ -85,7 +108,11 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   mouse Back button alike, as the control's own back button does ("clicking the back button will close the Pane and raise the
   PaneClosing event instead", same page, read 2026-10-24); with the pane closed, back goes back. The title bar's Back button is
   enabled while the Frame can go back or the pane overlays the page, so it also closes the pane on a page with no history (Home at
-  start); `MainWindow.UpdateBackButton` runs on navigation, `PaneOpened`, `PaneClosed` and `DisplayModeChanged`. The full pane
+  start); `MainWindow.UpdateBackButton` runs on navigation, and on `PaneOpening`, `PaneOpened`, `PaneClosed` and
+  `DisplayModeChanged` queued on the dispatcher, so Back is enabled as the pane starts to open, as Windows Settings' is (owner's
+  recording, 2026-10-24). Read at once, crossing 1008 px it saw Compact while the full pane was still open (the navigation view
+  closes it after raising `DisplayModeChanged`) and Back flashed enabled for up to 16 ms (owner's recording; a traced build logged
+  it on every crossing, the queued update on none, 2026-10-24). The full pane
   inline on a wide window is not a back step. The first version followed the example, which does not go back while the pane
   overlays the content, and left the title bar's Back button without effect and Alt+Left only closing the pane (owner's run,
   2026-10-24). Closing the pane this way counts as the navigation view's forced close, so after it a medium window widened to wide
@@ -124,21 +151,35 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
     while it is open (`NavigationButtonClosedName` and `NavigationButtonOpenName`, NavigationView's `Resources.resw`), with the
     same tooltip (manager, 2026-10-24). The TitleBar names it "Toggle Navigation" whatever the state (`NavigationButtonToggleName`,
     `LoadPaneToggleButton` in `TitleBar.cpp`, same tag) and has no property for it, so `MainWindow` looks up its template part
-    `PART_PaneToggleButton` after loading and sets the name on `PaneOpened` and `PaneClosed`. A future WinUI that renames that
-    part leaves the default name; nothing fails.
+    `PART_PaneToggleButton` after loading and sets the name with Back (`PaneOpening`, `PaneOpened`, `PaneClosed` and
+    `DisplayModeChanged`, queued; see "Navigation"). A future WinUI that renames that part leaves the default name; nothing fails.
 - **Pane opened over the page: the control's own acrylic (owner's finding 7, 2026-10-24).** The NavigationView page (ms.date
   2026-10-02, read 2026-10-24): "the pane uses in-app acrylic when open as an overlay on top of content (in Top, Minimal, or Compact
   mode)", through `NavigationViewDefaultPaneBackground`, which is `AcrylicInAppFillColorDefaultBrush`; the full pane inline uses
   `NavigationViewExpandedPaneBackground` (`SolidBackgroundFillColorTransparent`, so Mica) (`NavigationView_themeresources.xaml`,
   microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24). Nothing is overridden. The earlier version made the overlay pane
   solid (`SolidBackgroundFillColorBaseBrush`) and set `NavigationViewBorderThickness` to 0,0,1,0; both overrides are gone.
-  - The line under the title bar that the owner disliked earlier: it is the overlay pane's own border. The template gives
-    `RootSplitView` `BorderThickness="{ThemeResource NavigationViewBorderThickness}"` (1 on every side) and
+  - The 1 px line at its edges is the overlay pane's own border. The template gives `RootSplitView`
+    `BorderThickness="{ThemeResource NavigationViewBorderThickness}"` (1 on every side) and
     `BorderBrush="{ThemeResource NavigationViewItemSeparatorForeground}"` (`NavigationView.xaml`, same tag), and the SplitView draws
-    it around its pane while the pane overlays the page. Its top edge sits under our title bar because the TitleBar is above the
-    NavigationView, which is the layout the NavigationView page recommends ("place a TitleBar control above the NavigationView",
-    "the pattern used by the WinUI 3 Gallery app"). It is part of the control's default look in that layout, so it stays (owner's
-    rule: defaults first, 2026-10-24); the only way to remove it is the override that was removed. The owner compares with Photos.
+    it around its pane while the pane overlays the page. With the navigation view under the title bar (below) the pane, its acrylic
+    and that line reach the window's top: the line runs up the pane's right edge, and its top row is barely visible (dark #323232
+    over #2E2E2E acrylic, owner's PC, 2026-10-24). With the TitleBar above the navigation view the line sat under the title bar,
+    which the owner disliked earlier. It stays, as the control's default look (owner, 2026-10-24).
+- **The navigation view fills the window, under the title bar (owner's new finding 2, 2026-10-24).** With the pane open over the
+  page, the title bar's back and pane buttons showed no hover or pressed state and a click on them only closed the pane, which
+  would also break any future control in the title bar (a search box; owner). The cause: a SplitView whose pane can be
+  light-dismissed puts a popup "outer dismiss layer" over everything outside its own bounds while the pane is open, and skips it
+  only if "the SplitView doesn't need any of the 4 elements, then it takes up the entire window" (`SetupOuterDismissLayer`,
+  `SplitView_Partial.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24). With the TitleBar above the
+  NavigationView, as the NavigationView page recommends ("place a TitleBar control above the NavigationView", "the pattern used by
+  the WinUI 3 Gallery app"), the title bar was under that layer. Windows Settings keeps its title bar buttons working with the pane
+  open (owner's recording, 2026-10-24). So the NavigationView spans the whole window and the TitleBar is above it in z-order
+  (`Canvas.ZIndex`). The navigation view's own top padding for a title bar is set only on UWP (`UpdateTitleBarPadding` in
+  `NavigationView.cpp`: "null in win32", same tag), so the pane's items and the content layer start below the 48 px title bar
+  through the template's own margins, `NavigationViewPaneContentGridMargin` (-1,3 → -1,51,-1,3) and `NavigationViewContentMargin`
+  (0 → 0,48,0,0) (`NavigationView_themeresources.xaml`, same tag). Measured afterwards: the title, content layer and colours as
+  before (Windows run below); the pane's background now reaches the window's top behind the title bar.
 - **One content background on every page (owner's finding 4, 2026-10-24).** Settings included: no page opts out. "Mica material"
   (learn.microsoft.com, ms.date 2026-07-22, read 2026-10-24): "The content layer should pick up the material behind it, Mica, using
   the `LayerFillColorDefaultBrush`, a low-opacity solid color, as its background", and "By default, NavigationView in Left mode
@@ -245,6 +286,10 @@ actions; nothing is decided in C#.
     width and the title's left edge lines up with the column's. Each page here does the same with `PageTitleTextBlockStyle` and
     `PageColumnStyle` (`App.xaml`), the title outside the `ScrollViewer`, so it stays while the page scrolls. The title is the
     page's Level 1 heading for Narrator; headings inside a page are Level 2 ("No servers yet" on Home, "Sign in to <server>").
+  - The column sits in a plain `Border` inside the `ScrollViewer`, as the Gallery's column sits in a `Border` inside its
+    `ScrollView`. As the `ScrollViewer`'s direct content it was placed off-centre once it reached 1064 px, by an amount that
+    depended on the page, and ran past the window's right edge (owner's run, case 8, 2026-10-24); in the `Border` it is centred
+    under the title on every page (maximised: title and column both from x 906, 1064 wide).
   - Maximum width: 1064 px (`PageMaxWidth`, `App.xaml`), the Gallery's value, within the guideline's "constrained max width
     (around 1000–1100 px)". Used on every page; the earlier per-page columns (Home 920) go. The forms keep their own width at the
     left of the column, under the title: Add a server 560 px, Sign in 400 px (a `Grid` whose one `*` column has that `MaxWidth`;
@@ -983,8 +1028,8 @@ The owner's 8 findings of 2026-10-24 (on main cfa83b9), fixed on fix/windows-she
 (back button, overlay pane, content background) and Windows Settings (pane width, centred column). Widths are effective pixels (at
 150%, 1008 px is 1512 physical).
 1. Back button inset: the title bar's back button no longer touches the window's left edge. Hover it: its backplate starts a few
-   px (4 effective) inside the border, and its arrow is about 16 px from the border. Compare with Photos' back button. The pane
-   button sits right of it, as before.
+   px (4 effective) inside the border, and its arrow is about 16 px from the border. Compare with Windows Settings' back button
+   (Photos has none in its title bar). The pane button sits right of it, as before. Both are 40 × 36, 6 px from the top (case 9).
 2. Pane never hidden:
    - Wide: the full pane shows; the pane button switches between the full pane and the icon rail, and the page moves with it
      (nothing covers the page).
@@ -998,17 +1043,25 @@ The owner's 8 findings of 2026-10-24 (on main cfa83b9), fixed on fix/windows-she
    at its top and left and a rounded top-left corner, under the title bar): #F9F9F9 light, #272727 dark, with a #E5E5E5 / #1D1D1D
    stroke, as in Photos. Home -> Settings -> Home: it does not change. Switch light/dark on Settings: it follows.
 5. Overrides removed: nothing else in the window looks different from the control's own look except what cases 1-4, 7 and 8
-   describe; the 48 px title bar with 46 × 32 caption buttons, the 500 × 500 minimum, the dimmed transparent Back button at Home
-   and "All rights reserved." in Settings > About are unchanged.
+   and 9-11 describe; the 48 px title bar, the 500 × 500 minimum, the dimmed transparent Back button at Home and "All rights
+   reserved." in Settings > About are unchanged.
 6. Sizes: the page title sits 24 px below the content's top, the column 24 px from the left, right and bottom (at the minimum
    width too), the first item about as far below the title as before.
 7. Pane opened over the page (medium and minimum): translucent acrylic (the wallpaper and the page show through, softly), as in
-   Photos, not the title bar's solid colour. Note the 1 px line at its edges, including under the title bar: it is the control's
-   own border and stays unless the owner decides otherwise (docs above, "Pane opened over the page").
+   Photos, not the title bar's solid colour. It reaches the window's top behind the title bar (case 10). Note the 1 px line at its
+   edges, up its right edge to the window's top: it is the control's own border and stays unless the owner decides otherwise (docs
+   above, "Pane opened over the page").
 8. Centred content: on a wide window (maximised on a wide display) every page's column stops at 1064 px and is centred in the space
    right of the pane, with the page title over its left edge; the forms (Add a server, Sign in) keep their width at the left of
    that column. At medium and minimum widths the column fills the width less 24 px on each side. A notice, if one shows, lines up
    with the column. Narrator: each page's title is read as heading level 1 ("Home", "Settings", "Add a server", "Sign in").
+The owner's new findings of the first run (below), fixed on the same branch:
+9. Title bar buttons: the caption buttons are 48 × 48, as tall as the title bar, as Photos'; the back and pane buttons are 40 × 36
+   with 6 px above and below, as Windows Settings' back button.
+10. Pane open over the page (medium and minimum): the title bar's Back and pane buttons show their hover and pressed backplates and
+    work as with the pane closed; a click on them does not only light-dismiss the pane. Back is enabled as soon as the pane starts
+    to open. Resizing across 1008 px: Back does not flash enabled.
+11. Caption button hover: #2D2D2D dark, #EAEAEA light, as Photos'. Switch Windows' mode with the app running: the hover follows.
 Anything above that cannot be measured is not verified.
 
 ### Windows run (2026-10-24)
@@ -1068,3 +1121,34 @@ New findings from the owner during the run (not fixed here):
    bar; after a restart in light they hover #E5E5E5 (Photos: #EAEAEA). Expected: the caption buttons follow a theme change while
    the app runs. Likely element: the caption button colours of the window's title bar, which are not refreshed on a theme change
    (MainWindow.xaml.cs handles no theme change).
+
+### Windows run (2026-10-24, final)
+Code at fix/windows-shell-defaults fe74762 in a local worktree, built with the four scripts: binding tests 34 passed, smoke run
+passed (again before each commit). Windows 11 26H2, 10.0.26300.9711, x64, display scale 150% (3840 × 2160); `out/app/Current.exe`
+with the saved server. Widths (effective px of the window frame): 1400, 800 and 500 in light and dark, maximised (2560) in dark,
+and steps across 1008 (900 to 1100). Measured from UI Automation bounds and screen pixels of Current's window, side by side with
+Photos and Windows Settings; the owner looked at every change and sent two screen recordings of Windows Settings and of Current.
+1. **Pass.** Back's backplate 4 px inside the window's edge, as Windows Settings'.
+2. **Pass.** As in the first run; the owner checked resizing and the open pane on the full-window layout.
+3. **Pass.** Full pane 300 px, rail 48.
+4. **Pass.** Light #F9F9F9 layer, #E5E5E5 stroke at y 48, #F3F3F3 title bar and pane; dark #272727, #1D1D1D, #202020, at 1400,
+   800 and 500, with the navigation view under the title bar.
+5. **Pass.** 48 px title bar, 500 × 500 minimum, dimmed Back at Home with no backplate, "All rights reserved." unchanged.
+6. **Pass.** Title 24 px inside the layer's stroke at its top and left (x 325.3 at 1400 with the full pane, 73.3 with the rail;
+   y 73.3), as in the first run.
+7. **Pass.** Acrylic over the page, dark #2E2E2E; it now reaches the window's top behind the title bar's left 300 px. Its 1 px
+   line runs up the pane's right edge (#303030-#353535 dark), its top row barely visible (#323232). **The owner keeps it as it
+   is.**
+8. **Pass** after the fix (the column in a `Border`, see "Page layout"). Maximised, Home's and Settings' columns start at x 906
+   with the title and are 1064 wide; the owner checked every page, Add a server and Sign in included.
+9. **Pass.** Caption buttons 48 × 48 (Photos 48 × 48); back and pane buttons 40 × 36 at 4, 6 (Windows Settings' back button
+   40 × 36 at 4, 6).
+10. **Pass.** With the navigation view under the title bar, the title bar's buttons get hover and clicks with the pane open
+    (owner); Back enabled as the pane starts to open, as in the owner's recording of Windows Settings. Resizing across 1008:
+    a traced build of the earlier code logged Back enabled for up to 16 ms on every Expanded to Compact crossing (3 of 3), the
+    final code on none; the owner saw no flash.
+11. **Pass.** Minimize hover #2D2D2D dark (Photos and Windows Settings #2D2D2D), #EAEAEA light (Photos #EAEAEA, Windows Settings
+    #E9E9E9), after a live switch to light and after a restart in light; back to dark live: #2D2D2D. Pressed not measured.
+
+Not verified: the pressed caption colour; a switch to high contrast while the app runs; Narrator read aloud (the titles have UI
+Automation heading level 1). The owner considers the M1 window and page layout done (2026-10-24).
