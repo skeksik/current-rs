@@ -735,3 +735,52 @@ pixels (at 150% scale, 1008 px is 1512 physical and 641 is 962).
    stays 500 × 500 effective px. Note how narrow Windows Settings goes, for comparison.
 Anything above that cannot be measured is not verified: the owner compares with Task Manager (pane, layer) or Windows Settings
 (title gap, title bar height).
+
+### Windows run (2026-10-24)
+Heads fix/windows-window-chrome 2be79a6 and fix/narrator-quick-connect-code 9d970f8, merged in a throwaway local worktree (never
+pushed) and built with the four scripts: binding tests 34 passed, smoke run passed. Windows 11 26H2, 10.0.26300.9711, x64; main
+display at 150%, second display at 100%. The cases ran `out/app/Current.exe` with the saved server, in light and dark theme.
+Window widths (the visible frame): 1400, 1011/1010, 900, 644/643, 641, 600 and the minimum. Measured from full-resolution captures
+and UI Automation bounds; the owner looked and listened with Narrator.
+1. **Pass.**
+   - Pane button: Narrator reads "Close Navigation" and the tooltip says the same. Pressed, the pane narrows to the 48 px rail and
+     the page moves with it; the button and tooltip read "Open Navigation". Pressed again, the full pane returns. With the pane
+     closed, narrowing to 900 and widening to 1400 keeps the rail; after a restart the full pane is back.
+   - Title bar 48 px, caption buttons 48 × 48 px, also maximised. Drag, double-click to maximise and back, and snap layouts on
+     hovering maximise work. Windows Settings' title bar is also about 48 px, but its caption buttons are 46 × 32 px.
+   - Gap under the title: on Home, Settings, Add a server and Sign in the first element's box starts 24 px below the title's box.
+     From the title's baseline to the first text: Settings 56 physical px, Add a server 55; Windows Settings' Accessibility, title
+     baseline to "Vision", 55. Title and content start 57.3 px from the pane or the rail (56 plus 1.3).
+   - About: "© 2026 Skeksik. All rights reserved."
+2. **Pass** (900 px): the rail shows; the pane button opens the full pane over the page (the title does not move); Esc, a click on
+   the page and the button close it; Home and Settings in it navigate. Title and content 57.3 px from the rail. On the window's
+   visible frame the thresholds are about 3 px above the documented ones: the rail from 644 px (navigation view 641.3), the full
+   pane from 1011 px (1008), as the navigation view is 4 physical px narrower than the frame.
+3. **Pass** (600 px): no pane and no rail; title and content start 24 px from the left edge, content keeps 24 px at the right.
+   Pane open: Alt+Left does not go back but closes the pane; the mouse Back button does not go back (over the page it closes the
+   pane). Pane closed: both go back, Alt+Right goes forward.
+4. **Fail.** No content layer on any page, at any width, in either theme: Home, Add a server and Sign in show the same Mica as the
+   pane and Settings (dark #202020, light #F3F3F3; no surface, border or rounded corner; scanned at 1400, 900 and 600 px).
+   `ApplyContentLayer` (`MainWindow.xaml.cs`, the content grid of the template part `RootSplitView`) has no visible effect; the
+   smoke run only reads `PageLayout.GetHasContentLayer` and never reaches the template. Whether the "RootSplitView not found" trace
+   fired was not checked.
+   Task Manager's Users page (light, 150%), for the layer's inside: the layer starts about 51 px below the window's top, has a
+   1.3 px border at the top and left only, and runs to the window's right and bottom edges with no gap. Its title "Users" is a
+   smaller heading (cap height 10 px, here 19.3) whose glyphs start 17.3 px from the layer's inner left edge and 20.7 px below
+   its inner top; here 56 and 44 px, and 24 px at the right and bottom.
+5. **Pass.** The window stops at 500 × 500 px (outer frame) at 150% and on the 100% display; the visible frame is 488 × 494 px at
+   150% and 486 × 493 px at 100% (the rest is the invisible resize border). On Home, Settings and Add a server nothing is cut off
+   and there is no horizontal scroll bar; the title bar keeps the back and pane buttons, "Current" and the caption buttons.
+   Windows Settings goes down to about 349 × 322 px (visible frame).
+
+New findings from the owner during the run (not fixed here):
+- The pane should always have the title bar's colour. Opened over the page (medium and small) it is acrylic (light #F7-#FA) with
+  a line (#E4E4E4) below the title bar; Windows Settings' opened pane is #F3F3F3 like its title bar, with no line.
+- The caption buttons: Windows Settings' are smaller (46 × 32 px) with space around them; here they are 48 × 48 px and fill the
+  title bar.
+- With the pane open, the title bar's Back button should be clickable and close the pane; now it is not.
+- With the pane open, Alt+Left should go back and close the pane; now it only closes the pane.
+- The content's margins from the window's edges should be smaller, as on Windows Settings. Windows Settings at 686 px, pane
+  closed: content 25 px from the left and right edges, the title's glyphs 54 px from the window's top (6 px below its 48 px title
+  bar). Here at 600 px: 24 px at both sides, but the title's glyphs 105 px from the top (57 px below the title bar). On a wide
+  window Windows Settings' content starts about 26 px after its pane (its pane edge estimated, not verified), here 56 px.
