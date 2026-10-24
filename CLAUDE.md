@@ -16,7 +16,7 @@ libadwaita in Rust on Linux; Android, iOS, tvOS and the web later. **Desktop fir
 ## Layout
 ```
 crates/model        current-model: domain types (pure, no I/O)
-crates/net          current-net: HTTP client per server, typed errors, redacted request log, plain-HTTP rule
+crates/net          current-net: HTTP client per server, typed errors, redacted request log, plain-HTTP rule, gateway credentials (ADR 0017)
 crates/store        current-store: settings file, secrets in the OS keyring, device id (ADR 0013)
 crates/jellyfin     current-jellyfin: Jellyfin client; so far server setup (ADR 0012), discovery (ADR 0016) and sign-in (ADR 0015)
 crates/app          current-app: composition root (App), capabilities state, observable lists, add-a-server and sign-in flows, sessions, local discovery

@@ -50,6 +50,13 @@ reports in a public repo, so neither may carry a server's address or a secret.
   `system-configuration`, `system-configuration-sys`, `core-foundation` 0.9 (macOS) and `windows-registry`, `windows-result`,
   `windows-strings` (Windows), all MIT OR Apache-2.0.
 
+## Amendment (2026-10-24, from ADR 0017)
+Approved by the owner as ADR 0017's "Proposed amendments" lists it:
+- `NetError::Auth` carries the challenge schemes (from `WWW-Authenticate`: `Basic`, others by name; no realm or parameters in
+  Debug).
+- `ServerClient` gains the per-address gateway layer (ADR 0017's "Where the credentials go").
+- `Redirected` and HTML answers feed the classification (ADR 0017's "Classifying the answer").
+
 ## Consequences
 - A UI can map each error to one message and action (sign in again, retry, check the connection) without parsing text.
 - Diagnostics are safe to paste, at the cost of hiding query values that would sometimes help debugging.
