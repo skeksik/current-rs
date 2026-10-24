@@ -18,9 +18,40 @@
             <Border>
                 <Grid Style="{StaticResource PageColumnStyle}">
                     <StackPanel Spacing="4">
+                        <!-- Personalization first, as the WinUI Gallery's settings page puts "Appearance & behavior" before About
+                             (WinUIGallery/Pages/SettingsPage.xaml, github.com/microsoft/WinUI-Gallery, main, read 2026-10-24) and as the
+                             owner's example, Photos, names it (owner, 2026-10-24). The guideline: "present these options using a combo box
+                             inside a SettingsCard" ("Guidelines for app settings", learn.microsoft.com, ms.date 2026-04-08, read
+                             2026-10-24). Header and description as the WinUI Gallery's card ("App theme", "Select which app theme to
+                             display"). Labels as Photos: Light, Dark, Windows default (owner, 2026-10-24). The guideline's third label is
+                             "Use system setting" (same page), as the WinUI Gallery's (Task Manager's too, per the manager; not verified);
+                             the owner chose Photos'. The
+                             combo applies a choice at once and the core saves it: "When a user changes a setting, the app should
+                             immediately reflect the change" (same page). -->
                         <TextBlock
                             Style="{StaticResource BodyStrongTextBlockStyle}"
                             Margin="0,0,0,4"
+                            AutomationProperties.HeadingLevel="Level2"
+                            Text="Personalization" />
+                        <toolkit:SettingsCard
+                            Header="App theme"
+                            Description="Select which app theme to display"
+                            AutomationProperties.Name="App theme">
+                            <ComboBox
+                                x:Name="ThemeBox"
+                                AutomationProperties.Name="App theme"
+                                IsEnabled="False"
+                                SelectionChanged="OnThemeChanged">
+                                <ComboBoxItem Content="Light" />
+                                <ComboBoxItem Content="Dark" />
+                                <ComboBoxItem Content="Windows default" />
+                            </ComboBox>
+                        </toolkit:SettingsCard>
+                        <InfoBar x:Name="ThemeInfo" Margin="0,8,0,0" IsOpen="False" />
+
+                        <TextBlock
+                            Style="{StaticResource BodyStrongTextBlockStyle}"
+                            Margin="0,24,0,4"
                             AutomationProperties.HeadingLevel="Level2"
                             Text="Accounts" />
                         <toolkit:SettingsCard

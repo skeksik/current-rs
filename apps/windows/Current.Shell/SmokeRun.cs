@@ -94,6 +94,21 @@ internal static class SmokeRun
             Check(
                 Alpha(settingsLayer) > 0 && ReferenceEquals(settingsLayer, homeLayer),
                 $"settings shows the same content layer (alpha {Alpha(settingsLayer)})");
+            // The app theme reaches the window and its caption buttons without a restart (core that stores nothing: only published).
+            window.FollowAppTheme(core);
+            var themes = new[]
+            {
+                (AppTheme.Dark, ElementTheme.Dark, Microsoft.UI.Colors.White),
+                (AppTheme.Light, ElementTheme.Light, Microsoft.UI.Colors.Black),
+            };
+            foreach (var (theme, element, glyph) in themes)
+            {
+                await core.SetAppThemeAsync(theme);
+                var applied = await WaitUntilAsync(() =>
+                    window.ActualTheme == element && window.CaptionButtonForeground is { } color && color.Equals(glyph));
+                Check(applied, $"the {theme} app theme reaches the window and its caption buttons ({window.ActualTheme})");
+            }
+            await core.SetAppThemeAsync(AppTheme.System);
             window.Close();
             Check(true, "main window built");
         }

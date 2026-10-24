@@ -49,8 +49,9 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
 
 ## Shell behaviour (ADR 0001: the platform's default)
 - **Window:** `MicaBackdrop` (Base), `ExtendsContentIntoTitleBar` and `SetTitleBar` on a WinUI `TitleBar` control titled "Current";
-  the system caption buttons stay the system's, with their hover and pressed backgrounds in the app's theme (below). Theme: no
-  `RequestedTheme` anywhere, so the app follows the Windows light/dark setting.
+  the system caption buttons stay the system's, with their glyphs and their hover and pressed backgrounds in the app's theme
+  (below). Theme: the user's choice in Settings, "Windows default" (the Windows light/dark setting) until one is made ("App theme",
+  below).
 - **Caption button colours (owner's new finding 3, 2026-10-24).** WinUI sets only the caption buttons' `ButtonBackgroundColor` and
   `ButtonInactiveBackgroundColor` (transparent) and leaves the rest unset (read from `AppWindow.TitleBar` in a throwaway build). The
   system then drew a light theme's hover in dark mode, #191919 on the #202020 title bar, from the start, and kept it after a switch
@@ -223,7 +224,8 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   the network observer.
 
 ## Start (M1)
-- The window shows at once; `App.OpenCoreAsync` then awaits `CoreHost.OpenAsync(AppIdentity.DataFolder, DeviceName.Get(),
+- The window shows as soon as the core is open, or after 300 ms if opening takes longer, so the saved app theme is applied before
+  the window is first drawn ("App theme", below); `App.OpenCoreAsync` then awaits `CoreHost.OpenAsync(AppIdentity.DataFolder, DeviceName.Get(),
   SecretStore.Keyring)` on the UI thread (the adapter runs the file and keyring work on the core's threads). Pages wait for
   `App.CoreReady`; Home shows a `ProgressRing` only if opening takes more than 0.5 s.
 - The load report shows as a notice above every page only when the user should know: `ResetCorrupt` ("Your settings couldn't be
@@ -517,7 +519,8 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
 9. the network facts, the device name and the local interfaces can be read (none is printed beyond the connectivity level);
 10. last, the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and is shown (its content loads within 10 s); the
     navigation view's content layer (`ContentGrid`) has a visible background on Home and the same one after opening Settings;
-    then it closes: closing the only window ends XAML's message loop, so nothing can be awaited after it (CI run 39883272147
+    the window follows the core's app theme (`FollowAppTheme`): Dark, then Light, reach `Root.ActualTheme` and the caption buttons'
+    glyph colour (white, then black) within 10 s, then it goes back to System; then it closes: closing the only window ends XAML's message loop, so nothing can be awaited after it (CI run 39883272147
     stopped at the next await and exited 0 without a result).
 No check sends anything over the network; discovery (UDP) is left out.
 `smoke.ps1` fails on a non-zero exit code, a missing "smoke run passed" line or a run longer than 120 s.
@@ -1152,3 +1155,52 @@ Photos and Windows Settings; the owner looked at every change and sent two scree
 
 Not verified: the pressed caption colour; a switch to high contrast while the app runs; Narrator read aloud (the titles have UI
 Automation heading level 1). The owner considers the M1 window and page layout done (2026-10-24).
+
+## App theme (M1)
+The owner asked (2026-10-24) for a theme choice in Settings like the one in Windows' own Photos app: Settings → "Personalization" →
+an "App theme" card, "Select which app theme to display", with a combo box: Light, Dark, Windows default.
+
+- **The setting is the core's.** `AppTheme` (`System`, `Light`, `Dark`) is a field of the settings file (ADR 0013, `app_theme`,
+  2026-10-24), saved at once by `CoreHost.SetAppThemeAsync` and observed with `CoreHost.ObserveAppTheme`. A value from a newer
+  version reads as `System` and stays in the file until the theme is changed here. If it cannot be saved (a newer version's file, a
+  failed write) the combo returns to the theme the core still has and a notice under the card says why.
+- **The card.** "Guidelines for app settings" (learn.microsoft.com, ms.date 2026-04-08, read 2026-10-24): "If your app allows users
+  to choose the app's color mode, present these options using a combo box inside a SettingsCard. The options should read: Light,
+  Dark, Use system setting", and "When a user changes a setting, the app should immediately reflect the change". The header and
+  description are the WinUI Gallery's ("App theme", "Select which app theme to display"; `WinUIGallery/Pages/SettingsPage.xaml`,
+  github.com/microsoft/WinUI-Gallery, main, read 2026-10-24), and the section comes first, as the Gallery's "Appearance & behavior".
+  **Labels:** Photos' "Windows default" for the third option, as the owner asked, not the guideline's "Use system setting" (which the
+  Gallery uses; Task Manager too, per the manager, not verified). The page does not link to "Windows color settings"
+  (`ms-settings:colors`), which the guideline says "you may also want to add"; the owner's example has none (not verified).
+  Narrator: the card and the combo are both named "App theme" (`AutomationProperties.Name`).
+- **The whole window.** `MainWindow.FollowAppTheme` sets `Root.RequestedTheme` (Light, Dark, or Default for Windows default) and
+  follows every change. "The RequestedTheme value you set on a FrameworkElement will inherit to any elements that are nested within
+  the element", and it can change "at run-time", unlike `Application.RequestedTheme` (FrameworkElement.RequestedTheme,
+  learn.microsoft.com, updated 2026-09-30, read 2026-10-24). The title bar, the pane and the pages are all inside `Root`. Windows
+  default is `ElementTheme.Default`, as the WinUI Gallery maps "Use system setting" (`SettingsPage.xaml.cs`, main, read 2026-10-24).
+  The same API page notes "On Windows, setting RequestedTheme to ElementTheme.Default will always result in "Dark" being the
+  theme", which the owner's check settles (not verified). High contrast ignores `RequestedTheme` (same page).
+- **Caption buttons.** The system draws their glyphs for the system's theme, so in the other app theme they would be white on light
+  or black on dark (not seen yet: the owner's check). `ApplyCaptionButtonColors`, which already runs on load and on every
+  `ActualThemeChanged`, now also sets `ButtonForegroundColor`, `ButtonHoverForegroundColor` and `ButtonPressedForegroundColor`
+  (white in dark, black in light, as the WinUI Gallery's `TitleBarHelper.ApplySystemThemeToCaptionButtons`, main, read
+  2026-10-24) and `ButtonInactiveForegroundColor` (WinUI's `TextFillColorDisabled`, #5DFFFFFF dark, #5C000000 light; not
+  measured against Windows' own apps). "If you set any title bar color, we recommend that you explicitly set all the colors"
+  ("Title bar customization", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-24). A change of `Root.RequestedTheme` changes
+  `ActualTheme` and so raises `ActualThemeChanged`; a live system change under Windows default did so in the owner's run of PR 38
+  (item 11 above), which is how the hover colours followed.
+- **At start.** The window is activated once the core is open (one small file) or after 300 ms; the theme is set on `Root` before
+  `Activate`, so the first frame is in the saved theme. A slower open shows the system's theme first and switches when it is open.
+
+### App theme: what the owner checks
+1. Settings opens with "Personalization" first: the "App theme" card, "Select which app theme to display", the combo showing
+   "Windows default" on a first run.
+2. Light, then Dark, then Windows default: the whole window (title bar, pane, page, Mica) changes at once, without a restart, with
+   Windows itself in light and in dark.
+3. The caption buttons in each case: glyphs readable (black in Light, white in Dark), hover #EAEAEA light and #2D2D2D dark as in
+   PR 38's item 11; also with the window inactive (dimmed glyphs).
+4. Windows default: switch Windows between light and dark while the app runs; the window and the caption buttons follow. Confirm
+   that `ElementTheme.Default` follows Windows in light mode (the API page's note says it would always be Dark).
+5. Restart with Light or Dark chosen while Windows uses the other: the window opens in the chosen theme without a flash of the other.
+6. Narrator on the combo: "App theme, combo box, Light" (or the current value) and the options read as their labels.
+7. Not on the owner's run unless chosen: high contrast with a theme chosen (should look as without the setting).

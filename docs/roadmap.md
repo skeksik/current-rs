@@ -117,6 +117,9 @@ recorded with sources and dates, and a decision record where it decides somethin
     - [x] 11. Caption button hover in the app's theme, also after a switch while the app runs
   - [ ] Not verified on the owner's run: the pressed caption colour, a switch to high contrast while the app runs, Narrator read
         aloud
+- [ ] App theme in Settings, as in Photos: Personalization → "App theme", Light / Dark / Windows default (owner, 2026-10-24); saved
+      in the core (ADR 0013), applied to the whole window and its caption buttons without a restart, and before the window shows
+      (feat/app-theme; docs/notes/windows-shell.md, "App theme")
 
 Done when: sign in and out of Jellyfin on Windows, and the app restarts signed in; and the owner's open layout items above are
 fixed.

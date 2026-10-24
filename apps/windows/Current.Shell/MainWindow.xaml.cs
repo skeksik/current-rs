@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Current.Bindings;
 using Current.Shell.Pages;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
@@ -47,6 +48,9 @@ public sealed partial class MainWindow : Window
 
     private readonly AccessibilitySettings _accessibility = new();
 
+    /// <summary>The core's app theme, followed from <see cref="FollowAppTheme"/> until the window closes.</summary>
+    private ValueSubscription<AppTheme>? _appTheme;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -67,6 +71,11 @@ public sealed partial class MainWindow : Window
         Root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(OnPointerPressed), true);
 
         Activated += OnActivated;
+        Closed += (_, _) =>
+        {
+            _appTheme?.Dispose();
+            _appTheme = null;
+        };
         Root.Loaded += OnRootLoaded;
 
         NavView.SelectedItem = HomeItem;
@@ -81,6 +90,42 @@ public sealed partial class MainWindow : Window
         notice.Closed += (_, _) => Notices.Children.Remove(notice);
         Notices.Children.Add(notice);
     }
+
+    /// <summary>
+    /// Shows the core's app theme now and follows every change (Settings, Personalization). Called once the core is open, before the
+    /// window is first shown when the core opens in time (App.OnLaunched).
+    /// </summary>
+    internal void FollowAppTheme(CoreHost core)
+    {
+        _appTheme?.Dispose();
+        var theme = core.ObserveAppTheme(new DispatcherQueueUi(DispatcherQueue));
+        theme.PropertyChanged += (_, _) => ApplyAppTheme(theme.Value);
+        _appTheme = theme;
+        ApplyAppTheme(theme.Value);
+    }
+
+    /// <summary>
+    /// The theme on the window's root element, which the title bar, the pane and the pages inherit: "The RequestedTheme value you set on
+    /// a FrameworkElement will inherit to any elements that are nested within the element", and unlike Application.RequestedTheme it
+    /// can change "at run-time" (FrameworkElement.RequestedTheme, learn.microsoft.com, updated 2026-09-30, read 2026-10-24). "Windows
+    /// default" is ElementTheme.Default, as the WinUI Gallery's "Use system setting" is (SettingsPage.xaml.cs, main, read 2026-10-24),
+    /// so the window takes the app's theme, which follows the system while App.xaml sets no RequestedTheme. The same page notes "On
+    /// Windows, setting RequestedTheme to ElementTheme.Default will always result in "Dark" being the theme"; that and a live system
+    /// change are on the owner's check (docs/notes/windows-shell.md). The change raises ActualThemeChanged, which recolours the caption
+    /// buttons (ApplyCaptionButtonColors). High contrast ignores RequestedTheme (same page).
+    /// </summary>
+    private void ApplyAppTheme(AppTheme theme) => Root.RequestedTheme = theme switch
+    {
+        AppTheme.Light => ElementTheme.Light,
+        AppTheme.Dark => ElementTheme.Dark,
+        _ => ElementTheme.Default,
+    };
+
+    /// <summary>The theme the window shows now (the smoke run).</summary>
+    internal ElementTheme ActualTheme => Root.ActualTheme;
+
+    /// <summary>The caption buttons' glyph colour now (the smoke run).</summary>
+    internal Color? CaptionButtonForeground => AppWindow.TitleBar.ButtonForegroundColor;
 
     /// <summary>Completes when the window's content has loaded and the navigation view's template is applied (the smoke run).</summary>
     internal Task Shown => _shown.Task;
@@ -134,7 +179,15 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The caption buttons' hover and pressed backgrounds in the app's theme, set again when it changes. WinUI sets only their
+    /// The caption buttons' glyphs, and their hover and pressed backgrounds, in the app's theme, set again when it changes.
+    /// Glyphs: the system draws them for its own theme, so with the app in the other theme (Settings, Personalization) they would be
+    /// white on light or black on dark. They follow the window's theme, white in dark and black in light, as the WinUI Gallery sets
+    /// ButtonForegroundColor and ButtonHoverForegroundColor in its app-theme setting (TitleBarHelper.ApplySystemThemeToCaptionButtons,
+    /// github.com/microsoft/WinUI-Gallery, main, read 2026-10-24). Pressed takes the same colour; an inactive window's glyphs take
+    /// WinUI's TextFillColorDisabled (#5DFFFFFF dark, #5C000000 light, Common_themeresources_any.xaml, same tag as below; not measured
+    /// against Windows' own apps). "If you set any title bar color, we recommend that you explicitly set all the colors" ("Title bar
+    /// customization", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-24).
+    /// Backgrounds: WinUI sets only their
     /// background and inactive background (transparent) and leaves these unset, and the system then drew a light theme's hover in
     /// dark mode, #191919 on the #202020 title bar, and kept dark colours after a switch to light while the app ran (owner's new
     /// finding 3; measured on the owner's PC, 2026-10-24). Photos and Windows Settings hover at #2D2D2D dark and #EAEAEA light,
@@ -151,11 +204,20 @@ public sealed partial class MainWindow : Window
         var titleBar = AppWindow.TitleBar;
         if (_accessibility.HighContrast)
         {
+            titleBar.ButtonForegroundColor = null;
+            titleBar.ButtonHoverForegroundColor = null;
+            titleBar.ButtonPressedForegroundColor = null;
+            titleBar.ButtonInactiveForegroundColor = null;
             titleBar.ButtonHoverBackgroundColor = null;
             titleBar.ButtonPressedBackgroundColor = null;
             return;
         }
         var dark = Root.ActualTheme == ElementTheme.Dark;
+        var glyph = dark ? Microsoft.UI.Colors.White : Microsoft.UI.Colors.Black;
+        titleBar.ButtonForegroundColor = glyph;
+        titleBar.ButtonHoverForegroundColor = glyph;
+        titleBar.ButtonPressedForegroundColor = glyph;
+        titleBar.ButtonInactiveForegroundColor = dark ? Color.FromArgb(0x5D, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x5C, 0x00, 0x00, 0x00);
         titleBar.ButtonHoverBackgroundColor = dark ? Color.FromArgb(0x0F, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x09, 0x00, 0x00, 0x00);
         titleBar.ButtonPressedBackgroundColor = dark ? Color.FromArgb(0x0A, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x06, 0x00, 0x00, 0x00);
     }
