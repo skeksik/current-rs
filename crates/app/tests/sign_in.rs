@@ -10,10 +10,13 @@ use std::time::Duration;
 use current_app::{AddServerState, App, NewServer, Removal, SignIn, SignInError, SignInState};
 use current_jellyfin::AuthError;
 use current_jellyfin::ProbeError;
-use current_model::{Permission, Reachability, ServerKey, ServerRef, ServiceType, UserId};
+use current_model::{
+    GatewayKind, Permission, Reachability, ServerAddress, ServerKey, ServerRef, ServiceType, UserId,
+};
 use current_net::NetError;
 use current_store::{
-    MemorySecrets, Secret, SecretKey, Secrets, SecretsError, SettingsStore, StoreError,
+    GatewayKey, GatewaySecret, MemorySecrets, Secret, SecretKey, Secrets, SecretsError,
+    SettingsStore, StoreError, get_gateway_secret, set_gateway_secret,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -1620,6 +1623,71 @@ async fn a_keyring_that_cannot_delete_still_lets_the_server_go_and_says_so() {
     assert!(app.settings().unwrap().get().servers.is_empty());
     // The token left in the keyring no longer works: the server was told.
     eventually(|| server.tokens.lock().unwrap().is_empty()).await;
+}
+
+/// Signs in, then, with the app closed, marks the saved server's first address as having a Basic gateway secret and adds a
+/// second address without kinds, and stores a gateway secret for each: the second stands for an orphan left by a crash before
+/// the settings save. Returns the reopened app and both keys.
+async fn with_gateway_secrets(
+    dir: &Path,
+    secrets: &Arc<MemorySecrets>,
+    address: &str,
+) -> (App, [GatewayKey; 2]) {
+    signed_in_with_password(&open(dir, secrets), address).await;
+    let (settings, _) = SettingsStore::open(dir).unwrap();
+    settings
+        .update(|s| {
+            s.servers[0].addresses[0].gateway = vec![GatewayKind::BASIC];
+            s.servers[0].add_address(ServerAddress::new("https://media.example.com", false));
+        })
+        .unwrap();
+    let saved = &settings.get().servers[0];
+    let keys =
+        [0, 1].map(|index| GatewayKey::new(jellyfin("1"), saved.addresses[index].id.unwrap()));
+    for key in &keys {
+        set_gateway_secret(secrets.as_ref(), key, &GatewaySecret::new("x".repeat(3000))).unwrap();
+    }
+    drop(settings);
+    (open(dir, secrets), keys)
+}
+
+#[tokio::test]
+async fn removing_a_server_deletes_every_address_s_gateway_secret() {
+    let (_server, address) = start(SERVER_ID).await;
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let (app, keys) = with_gateway_secrets(temp.path(), &secrets, &address).await;
+
+    assert_eq!(app.remove_server(&jellyfin("1")).await, Ok(REMOVED));
+    for key in &keys {
+        assert_eq!(get_gateway_secret(secrets.as_ref(), key), Ok(None));
+    }
+    assert!(secrets.accounts().is_empty(), "{:?}", secrets.accounts());
+}
+
+#[tokio::test]
+async fn a_gateway_secret_that_cannot_be_deleted_counts_only_for_an_address_with_kinds() {
+    for (failing, left) in [(0, true), (1, false)] {
+        let (_server, address) = start(SERVER_ID).await;
+        let temp = tempfile::tempdir().unwrap();
+        let secrets = Arc::new(MemorySecrets::new());
+        let (app, keys) = with_gateway_secrets(temp.path(), &secrets, &address).await;
+        secrets.fail_accounts_starting_with(&format!("{}/", keys[failing].account()));
+
+        assert_eq!(
+            app.remove_server(&jellyfin("1")).await,
+            Ok(Removal::Removed {
+                credentials_left: left
+            }),
+            "failing address {failing}"
+        );
+        assert!(app.settings().unwrap().get().servers.is_empty());
+        // The other address's secret is gone either way.
+        assert_eq!(
+            get_gateway_secret(secrets.as_ref(), &keys[1 - failing]),
+            Ok(None)
+        );
+    }
 }
 
 #[tokio::test]
