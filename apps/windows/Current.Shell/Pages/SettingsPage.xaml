@@ -86,7 +86,16 @@
                                                 <TextBlock Text="{x:Bind Connection, Mode=OneWay}" />
                                             </StackPanel>
                                         </toolkit:SettingsExpander.Description>
-                                        <Grid>
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <!-- The gateway in front of the address wants a sign-in again (ADR 0017): the session is kept. -->
+                                            <Button
+                                                Style="{StaticResource AccentButtonStyle}"
+                                                Content="Sign in to the gateway"
+                                                AutomationProperties.Name="{x:Bind GatewaySignInLabel, Mode=OneWay}"
+                                                Visibility="{x:Bind GatewaySignInVisibility, Mode=OneWay}"
+                                                IsEnabled="{x:Bind Idle, Mode=OneWay}"
+                                                Click="OnSignInToGateway" />
+                                            <Grid>
                                             <Button
                                                 Content="Sign out"
                                                 AutomationProperties.Name="{x:Bind SignOutLabel, Mode=OneWay}"
@@ -99,8 +108,20 @@
                                                 Visibility="{x:Bind SignInVisibility, Mode=OneWay}"
                                                 IsEnabled="{x:Bind Idle, Mode=OneWay}"
                                                 Click="OnSignInAgain" />
-                                        </Grid>
+                                            </Grid>
+                                        </StackPanel>
                                         <toolkit:SettingsExpander.Items>
+                                            <!-- Extra headers (ADR 0017, "Mechanism 3"): advanced, shown only on request, with a short explanation. -->
+                                            <toolkit:SettingsCard
+                                                Header="Advanced: extra headers"
+                                                Description="For a gateway that lets apps through with a secret header, such as a service token, instead of a sign-in.">
+                                                <Button
+                                                    Content="Edit headers"
+                                                    Tag="{x:Bind Self}"
+                                                    AutomationProperties.Name="{x:Bind HeadersLabel, Mode=OneWay}"
+                                                    IsEnabled="{x:Bind Idle, Mode=OneWay}"
+                                                    Click="OnEditHeaders" />
+                                            </toolkit:SettingsCard>
                                             <toolkit:SettingsCard
                                                 Header="Remove this server"
                                                 Description="Signs out every user here and forgets the server's addresses on this PC.">

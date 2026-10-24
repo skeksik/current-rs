@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Current.Bindings;
+using Current.Shell.Gateway;
 using Current.Shell.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -7,8 +8,8 @@ using Microsoft.UI.Xaml.Controls;
 namespace Current.Shell.Pages;
 
 /// <summary>
-/// Settings: the app theme under Personalization, the saved servers under Accounts (sign out, sign in again, remove), diagnostics,
-/// and About. It waits for the core to open (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
+/// Settings: the app theme under Personalization, the saved servers under Accounts (sign out, sign in again, sign in to the gateway
+/// again, extra headers, remove), diagnostics, and About. It waits for the core to open (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
 /// </summary>
 public sealed partial class SettingsPage : Page
 {
@@ -19,6 +20,9 @@ public sealed partial class SettingsPage : Page
 
     /// <summary>A Remove confirmation is open: a second one is not started.</summary>
     private bool _confirmingRemoval;
+
+    /// <summary>A gateway sign-in is running (its dialog or window is open): a second one is not started.</summary>
+    private bool _gatewayRunning;
 
     public SettingsPage()
     {
@@ -118,6 +122,55 @@ public sealed partial class SettingsPage : Page
         if (App.Core is { } core && (sender as FrameworkElement)?.DataContext is ServerRow row)
         {
             SignInRequest.SignInAgain(Frame, core, row);
+        }
+    }
+
+    /// <summary>"Sign in to the gateway": the session was kept and resumes once the gateway lets it through (ADR 0017).</summary>
+    private void OnSignInToGateway(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { DataContext: ServerRow row } button)
+        {
+            RunGatewaySignIn(row, button, false);
+        }
+    }
+
+    /// <summary>"Advanced: extra headers": the headers editor whenever the gateway asks for anything (ADR 0017, "Mechanism 3").</summary>
+    private void OnEditHeaders(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: ServerRow row } button)
+        {
+            RunGatewaySignIn(row, button, true);
+        }
+    }
+
+    // async void, as event handlers are: it catches everything itself.
+    private async void RunGatewaySignIn(ServerRow row, Button origin, bool headersFirst)
+    {
+        if (App.Core is not { } core || _gatewayRunning || XamlRoot is null)
+        {
+            return;
+        }
+        _gatewayRunning = true;
+        AccountsInfo.IsOpen = false;
+        try
+        {
+            var outcome = await new GatewaySignInRunner(XamlRoot, new DispatcherQueueUi(DispatcherQueue))
+                .RunAsync(core, row.Server, headersFirst);
+            if (outcome.Message is { } message)
+            {
+                ShowAccountsInfo(outcome.Severity, row.Name, message);
+            }
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: signing in to the gateway failed: {error.GetType().Name}");
+            ShowAccountsInfo(InfoBarSeverity.Error, row.Name, ProblemText.Unexpected);
+        }
+        finally
+        {
+            _gatewayRunning = false;
+            // The dialog or window that had focus is gone: back to the button that started it, while it is shown.
+            origin.Focus(FocusState.Programmatic);
         }
     }
 
