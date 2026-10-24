@@ -1,6 +1,7 @@
 //! What the app remembers about a server it signed in to: kept in the settings by `current-store`, never with a secret.
 
 use crate::identity::{ServerId, ServerRef, UserId};
+use crate::open::open_value;
 use crate::server::{AddressId, ServerAddress};
 
 /// A user who signed in to a saved server. The access token is not here: it lives only in the OS keyring (ADR 0013).
@@ -28,6 +29,26 @@ pub struct SavedServer {
     pub active_user: Option<UserId>,
     /// The highest address id ever given out on this server, so a removed address's id is never given to another one.
     pub last_address_id: u64,
+    /// Which header carries the service's own credentials (Jellyfin's, ADR 0015 as amended by ADR 0017). An unknown value is used
+    /// as [`AuthHeader::AUTHORIZATION`] and kept as it is.
+    pub header_placement: AuthHeader,
+}
+
+open_value! {
+    /// The header a service's own credentials go in (ADR 0017, "Jellyfin's header placement"). Open: a value a newer version
+    /// stored passes through unchanged.
+    AuthHeader {
+        /// `Authorization`, the default.
+        AUTHORIZATION = "authorization",
+        /// `X-Emby-Authorization`, leaving `Authorization` to a gateway.
+        X_EMBY_AUTHORIZATION = "x-emby-authorization",
+    }
+}
+
+impl Default for AuthHeader {
+    fn default() -> Self {
+        Self::AUTHORIZATION
+    }
 }
 
 impl SavedServer {
@@ -93,6 +114,7 @@ mod tests {
             users: Vec::new(),
             active_user: None,
             last_address_id: 0,
+            header_placement: AuthHeader::default(),
         }
     }
 

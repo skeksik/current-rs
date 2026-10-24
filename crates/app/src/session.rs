@@ -23,8 +23,8 @@ use current_jellyfin::{
     SignedIn,
 };
 use current_model::{
-    Capabilities, NetworkFacts, Reachability, SavedServer, SavedUser, ServerAddress, ServerId,
-    ServerKey, ServerRef, ServerStatus, ServiceType, User, UserId,
+    AuthHeader, Capabilities, NetworkFacts, Reachability, SavedServer, SavedUser, ServerAddress,
+    ServerId, ServerKey, ServerRef, ServerStatus, ServiceType, User, UserId,
 };
 use current_net::{
     FixedAddress, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError,
@@ -1086,6 +1086,7 @@ fn record(
                         users: Vec::new(),
                         active_user: None,
                         last_address_id: 0,
+                        header_placement: AuthHeader::default(),
                     };
                     saved.add_address(address.clone());
                     servers.push(saved);
@@ -1156,6 +1157,7 @@ mod tests {
             users: Vec::new(),
             active_user: None,
             last_address_id: 0,
+            header_placement: AuthHeader::default(),
         }
     }
 

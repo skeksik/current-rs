@@ -20,7 +20,7 @@ pub use identity::{
     ItemId, ItemRef, MediaKind, ServerId, ServerKey, ServerRef, ServiceType, UserId,
 };
 pub use network::{Connectivity, InterfaceKind, LocalInterface, NetworkFacts, NetworkKey};
-pub use saved::{SavedServer, SavedUser};
+pub use saved::{AuthHeader, SavedServer, SavedUser};
 pub use server::{AddressId, GatewayKind, PublicServerInfo, ServerAddress};
 pub use user::{Permission, User};
 

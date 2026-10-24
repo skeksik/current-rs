@@ -14,8 +14,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use current_model::{
-    AddressId, AppTheme, GatewayKind, SavedServer, SavedUser, ServerAddress, ServerId, ServerKey,
-    ServerRef, ServiceType, UserId,
+    AddressId, AppTheme, AuthHeader, GatewayKind, SavedServer, SavedUser, ServerAddress, ServerId,
+    ServerKey, ServerRef, ServiceType, UserId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -128,6 +128,10 @@ struct StoredServer {
     /// Added with gateway secrets (ADR 0017, 2026-10-24); older files have none: the highest id in `addresses` stands in.
     #[serde(default, skip_serializing_if = "is_zero")]
     last_address_id: u64,
+    /// The header the service's own credentials go in (ADR 0017, 2026-10-24), an open value. Older files have none: the default,
+    /// which is not written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    header_placement: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -176,6 +180,9 @@ impl From<StoredServer> for SavedServer {
                 .collect(),
             active_user: stored.active_user.map(UserId::new),
             last_address_id: stored.last_address_id,
+            header_placement: stored
+                .header_placement
+                .map_or_else(AuthHeader::default, AuthHeader::new),
         }
     }
 }
@@ -211,6 +218,8 @@ impl From<&SavedServer> for StoredServer {
                 .collect(),
             active_user: saved.active_user.as_ref().map(ToString::to_string),
             last_address_id: saved.last_address_id,
+            header_placement: (saved.header_placement != AuthHeader::default())
+                .then(|| saved.header_placement.as_str().to_owned()),
         }
     }
 }
@@ -757,6 +766,7 @@ mod tests {
             ],
             active_user: Some(UserId::new("5d1c0000000000000000000000000002")),
             last_address_id: 3,
+            header_placement: AuthHeader::X_EMBY_AUTHORIZATION,
         }
     }
 
@@ -788,6 +798,45 @@ mod tests {
             "5d1c0000000000000000000000000002"
         );
         assert!(json["servers"][1].get("active_user").is_none());
+    }
+
+    #[test]
+    fn the_header_placement_is_an_open_value_written_only_when_not_the_default() {
+        let temp = tempfile::tempdir().unwrap();
+        write_file(
+            temp.path(),
+            r#"{"version": 1, "device_id": "abc", "servers": [
+                {"service": "jellyfin", "key": "1"},
+                {"service": "jellyfin", "key": "2", "header_placement": "x-emby-authorization"},
+                {"service": "jellyfin", "key": "3", "header_placement": "a-newer-header"}
+            ]}"#,
+        );
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        let placements: Vec<_> = store
+            .get()
+            .servers
+            .iter()
+            .map(|server| server.header_placement.clone())
+            .collect();
+        assert_eq!(
+            placements,
+            [
+                AuthHeader::AUTHORIZATION,
+                AuthHeader::X_EMBY_AUTHORIZATION,
+                AuthHeader::new("a-newer-header")
+            ]
+        );
+        // Written back unchanged; the default is left out.
+        store
+            .update(|s| s.servers[0].name = "Renamed".into())
+            .unwrap();
+        let json = read_json(temp.path());
+        assert!(json["servers"][0].get("header_placement").is_none());
+        assert_eq!(
+            json["servers"][1]["header_placement"],
+            "x-emby-authorization"
+        );
+        assert_eq!(json["servers"][2]["header_placement"], "a-newer-header");
     }
 
     #[test]
