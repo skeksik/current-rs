@@ -10,6 +10,8 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
 using Windows.System;
+using Windows.UI;
+using Windows.UI.ViewManagement;
 
 namespace Current.Shell;
 
@@ -42,6 +44,8 @@ public sealed partial class MainWindow : Window
     private Grid? _contentLayer;
 
     private readonly TaskCompletionSource _shown = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private readonly AccessibilitySettings _accessibility = new();
 
     public MainWindow()
     {
@@ -90,6 +94,8 @@ public sealed partial class MainWindow : Window
     private void OnRootLoaded(object sender, RoutedEventArgs e)
     {
         Root.Loaded -= OnRootLoaded;
+        ApplyCaptionButtonColors();
+        Root.ActualThemeChanged += (_, _) => ApplyCaptionButtonColors();
         // The template is applied by now. The template's items name parts "ContentGrid" too, so the layer is taken from the SplitView
         // it is the content of.
         _contentLayer = (FindDescendant(NavView, "RootSplitView") as SplitView)?.Content as Grid;
@@ -125,6 +131,33 @@ public sealed partial class MainWindow : Window
         var scale = Root.XamlRoot.RasterizationScale;
         presenter.PreferredMinimumWidth = (int)Math.Ceiling(MinWindowWidth * scale);
         presenter.PreferredMinimumHeight = (int)Math.Ceiling(MinWindowHeight * scale);
+    }
+
+    /// <summary>
+    /// The caption buttons' hover and pressed backgrounds in the app's theme, set again when it changes. WinUI sets only their
+    /// background and inactive background (transparent) and leaves these unset, and the system then drew a light theme's hover in
+    /// dark mode, #191919 on the #202020 title bar, and kept dark colours after a switch to light while the app ran (owner's new
+    /// finding 3; measured on the owner's PC, 2026-10-24). Photos and Windows Settings hover at #2D2D2D dark and #EAEAEA light,
+    /// which is WinUI's SubtleFillColorSecondary over the title bar; pressed takes SubtleFillColorTertiary (not measured). Values
+    /// from Common_themeresources_any.xaml (microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24). The WinUI Gallery
+    /// re-applies its caption colours on ActualThemeChanged in the same way, "as AppWindow TitleBar doesn't update caption button
+    /// colors correctly when changed while app is running" (TitleBarHelper.cs, main at 14061ee, read 2026-10-24). High contrast
+    /// keeps the system's own colours; AccessibilitySettings.HighContrastChanged cannot be subscribed to in a desktop window
+    /// (0x80070490 in the smoke run), so a switch to high contrast while the app runs is caught only if it changes ActualTheme (not
+    /// verified). Setting PreferredTheme (UseDefaultAppMode or Dark) did not change the hover (owner's PC, 2026-10-24).
+    /// </summary>
+    private void ApplyCaptionButtonColors()
+    {
+        var titleBar = AppWindow.TitleBar;
+        if (_accessibility.HighContrast)
+        {
+            titleBar.ButtonHoverBackgroundColor = null;
+            titleBar.ButtonPressedBackgroundColor = null;
+            return;
+        }
+        var dark = Root.ActualTheme == ElementTheme.Dark;
+        titleBar.ButtonHoverBackgroundColor = dark ? Color.FromArgb(0x0F, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x09, 0x00, 0x00, 0x00);
+        titleBar.ButtonPressedBackgroundColor = dark ? Color.FromArgb(0x0A, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x06, 0x00, 0x00, 0x00);
     }
 
     /// <summary>Also on PaneOpening: Back is enabled as the pane starts to open over the page, as Windows Settings' back button is
