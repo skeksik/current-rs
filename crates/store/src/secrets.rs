@@ -33,22 +33,33 @@ impl std::fmt::Debug for Secret {
     }
 }
 
-/// Which secret: a user on a server. `user` is the id the server gave the user, never a user name, so the keyring viewer shows
-/// nothing private.
+/// Which secret: a keyring account. Opaque, so every account is made by one of its constructors and none names anything private
+/// (ADR 0013).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SecretKey {
-    pub server: ServerRef,
-    pub user: UserId,
+    account: String,
 }
 
 impl SecretKey {
+    /// A user's access token on a server. `user` is the id the server gave the user, never a user name, so the keyring viewer
+    /// shows nothing private.
     pub fn new(server: ServerRef, user: UserId) -> Self {
-        Self { server, user }
+        Self {
+            account: format!("{server}/{user}"),
+        }
     }
 
-    /// The keyring account: `<service type>/<server key>/<user id>`, e.g. `jellyfin/1/5d1c...`.
-    pub fn account(&self) -> String {
-        format!("{}/{}", self.server, self.user)
+    /// One chunk of a gateway secret (see [`GatewayKey`](crate::GatewayKey)).
+    pub(crate) fn chunk(gateway_account: &str, index: usize) -> Self {
+        Self {
+            account: format!("{gateway_account}/{index}"),
+        }
+    }
+
+    /// The keyring account: for a token `<service type>/<server key>/<user id>`, e.g. `jellyfin/1/5d1c...`; for a gateway secret's
+    /// chunk `gateway/<server key>/<address id>/<chunk>`, e.g. `gateway/1/2/0`.
+    pub fn account(&self) -> &str {
+        &self.account
     }
 }
 
@@ -81,41 +92,79 @@ pub trait Secrets: Send + Sync + std::fmt::Debug {
     }
 }
 
-/// Secrets kept in memory for the life of the process: for tests.
+/// Secrets kept in memory for the life of the process: for tests. It can refuse secrets over a size, as Windows does, and fail
+/// writes to chosen accounts.
 #[derive(Debug, Default)]
 pub struct MemorySecrets {
     entries: Mutex<HashMap<SecretKey, Secret>>,
+    /// The largest secret taken, in bytes of UTF-16, as Windows Credential Manager counts a password.
+    size_limit: Option<usize>,
+    /// Accounts starting with one of these fail to be written or deleted.
+    failing: Mutex<Vec<String>>,
 }
 
 impl MemorySecrets {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Refuses secrets larger than `bytes` (as UTF-16) with [`SecretsError::TooLong`], like Windows Credential Manager at 2,560.
+    pub fn with_size_limit(bytes: usize) -> Self {
+        Self {
+            size_limit: Some(bytes),
+            ..Self::default()
+        }
+    }
+
+    /// Makes every later write or delete of an account starting with `prefix` fail with [`SecretsError::Failed`].
+    pub fn fail_accounts_starting_with(&self, prefix: &str) {
+        lock(&self.failing).push(prefix.to_owned());
+    }
+
+    /// The accounts stored, sorted.
+    pub fn accounts(&self) -> Vec<String> {
+        let mut accounts: Vec<_> = lock(&self.entries)
+            .keys()
+            .map(|key| key.account().to_owned())
+            .collect();
+        accounts.sort();
+        accounts
+    }
+
+    fn check_writable(&self, key: &SecretKey) -> Result<(), SecretsError> {
+        if lock(&self.failing)
+            .iter()
+            .any(|prefix| key.account().starts_with(prefix.as_str()))
+        {
+            return Err(SecretsError::Failed);
+        }
+        Ok(())
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Secrets for MemorySecrets {
     fn get(&self, key: &SecretKey) -> Result<Option<Secret>, SecretsError> {
-        Ok(self
-            .entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(key)
-            .cloned())
+        Ok(lock(&self.entries).get(key).cloned())
     }
 
     fn set(&self, key: &SecretKey, secret: &Secret) -> Result<(), SecretsError> {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(key.clone(), secret.clone());
+        self.check_writable(key)?;
+        if let Some(limit) = self.size_limit
+            && secret.expose().encode_utf16().count() * 2 > limit
+        {
+            return Err(SecretsError::TooLong);
+        }
+        lock(&self.entries).insert(key.clone(), secret.clone());
         Ok(())
     }
 
     fn delete(&self, key: &SecretKey) -> Result<(), SecretsError> {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(key);
+        self.check_writable(key)?;
+        lock(&self.entries).remove(key);
         Ok(())
     }
 }
@@ -173,7 +222,7 @@ mod platform {
     pub(super) fn entry(store: &CredentialStore, key: &SecretKey) -> Result<Entry, SecretsError> {
         let modifiers: HashMap<&str, &str> = MODIFIERS.iter().copied().collect();
         store
-            .build(SERVICE_NAME, &key.account(), Some(&modifiers))
+            .build(SERVICE_NAME, key.account(), Some(&modifiers))
             .map_err(map_error)
     }
 
