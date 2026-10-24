@@ -68,6 +68,14 @@ end; "Jellyfin" means the server at tag `v12.2`.
   Unreachable); `TooOld` and `SetupIncomplete` end the search, since a Jellyfin server answered. No error holds an address.
   Amended 2026-10-23: a `Tls` from https on a host and port where plain http then answered (`NotJellyfin`, `Status`, `Redirected`,
   `Unavailable`) does not count, since that port speaks plain http.
+  Amended 2026-10-24 (ADR 0017, approved by the owner): `ProbeError` gains `GatewayPassword { realm }` (401 or 403 with a Basic
+  challenge; the realm is untrusted text, never in Display or Debug), `GatewaySignIn` (an HTML page where Jellyfin's JSON was
+  expected, also at the end of a followed redirect, or a 401 or 403 without a Basic challenge), `GatewayRefused` (403 without a
+  challenge or a page) and `UnsupportedChallenge` (401 with other schemes only), classified by `current-net`'s `classify`. A web
+  page at the endpoint is therefore `GatewaySignIn`, no longer `NotJellyfin`. A gateway's answer beats `Unavailable` and
+  `Redirected` when several candidates fail. A redirect to another host or port stays `Redirected` (a moved server or a portal), and
+  setup offers "Sign in" next to "use this address" (`ProbeError::offers_sign_in`). Once the address has gateway credentials,
+  `probe_url_with` and `probe_expecting_with` carry them, never the Jellyfin token.
 - **Identity:** `ServerId` (model) is the server's `Id`, compared byte for byte; `same_server` compares two answers and
   `probe_expecting` checks an address leads to a known server; it is the identity check roaming runs on every address (ADR 0014),
   and credentials go only to addresses that passed it. Probes carry no credentials. The id is public, so it catches mistakes (another
@@ -109,6 +117,7 @@ Current follows Chrome's split: silent for private addresses, one confirmation p
   removes that wait.
 - `LocalAddress` is not used; roaming may use it as a hint (ADR 0014).
 - A server behind a login portal on another host fails with `Redirected` until the user enters the address it points to (ADR 0006).
+  Amended 2026-10-24: setup also offers "Sign in" for it (ADR 0017).
 - The https upgrade path is tested at the level of URL handling only: there is no TLS stand-in server in the tests.
 
 ## Sources (read 2026-10-22)
