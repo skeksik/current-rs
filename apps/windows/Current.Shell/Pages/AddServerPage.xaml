@@ -2,6 +2,7 @@
     x:Class="Current.Shell.Pages.AddServerPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:shell="using:Current.Shell"
     xmlns:bindings="using:Current.Bindings">
     <!-- Esc stops a running probe (docs/notes/windows-shell.md, "Keyboard and Narrator"). -->
     <Page.KeyboardAccelerators>
@@ -9,7 +10,7 @@
     </Page.KeyboardAccelerators>
 
     <ScrollViewer>
-        <Grid Padding="{StaticResource PageColumnPadding}">
+        <Grid shell:PageLayout.IsColumn="True">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MaxWidth="560" />
             </Grid.ColumnDefinitions>

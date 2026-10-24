@@ -1,4 +1,7 @@
 //! Tests for the bridge: delivery, threading, release of listeners, list diffs and cancellation.
+//!
+//! Every test in this binary shares the core's one runtime and its two worker threads (`runtime.rs`), and listener callbacks run on
+//! them. A test must not block a worker, or every other test's deliveries stall with it.
 
 use std::future::Future;
 use std::pin::pin;
@@ -280,6 +283,13 @@ fn a_list_subscription_starts_with_a_reset_and_mirrors_the_core() {
     eventually("the task ends", || handle.is_finished());
 }
 
+/// Stands in for a foreign callback that threw: UniFFI turns the exception into a panic, which the bridge catches. Unwinds without
+/// running the panic hook, which would otherwise capture a backtrace on a core worker (`RUST_BACKTRACE` is set in some
+/// environments): two tests failing at once kept both workers in the hook and stalled every delivery past [`WAIT`].
+fn foreign_exception() -> ! {
+    std::panic::resume_unwind(Box::new("the foreign callback threw"))
+}
+
 /// Counts its own drop: stands in for a foreign listener the core must release.
 struct DropCounter(Arc<AtomicUsize>);
 
@@ -299,7 +309,7 @@ fn a_failing_listener_keeps_its_subscription() {
     impl CapabilitiesListener for FailsOnce {
         fn on_value(&self, value: CapabilitiesSnapshot) {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                panic!("the foreign callback threw");
+                foreign_exception();
             }
             let _ = self.tx.lock().unwrap().send(value);
         }
@@ -336,7 +346,7 @@ fn a_failing_list_listener_gets_a_reset_next() {
     let _handle = subscribe::watch_list(&runtime, list.subscribe(), move |batch| {
         // The second batch (the first diffs) is lost.
         if calls.fetch_add(1, Ordering::SeqCst) == 1 {
-            panic!("the foreign callback threw");
+            foreign_exception();
         }
         let _ = tx.send(
             batch

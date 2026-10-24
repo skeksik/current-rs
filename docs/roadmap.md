@@ -49,11 +49,21 @@ before merging, and its PR carries only the record.
       If it recurs, capture the test names and fix the flake. Very likely the refused-port race in `current-net`'s tests (seen again
       in CI on PR 29): a port one test freed to be refused was handed to another test's stand-in. Stand-ins now bind under a lock
       that a test holds while it relies on a freed port (`crates/net/tests/ports`; test/roaming-refused-port-race)
-- [ ] `current-ffi`'s tests: three list-subscription tests in `crates/ffi/src/tests.rs`
+- [x] `current-ffi`'s tests: three list-subscription tests in `crates/ffi/src/tests.rs`
       (`a_list_subscription_starts_with_a_reset_and_mirrors_the_core`, `a_failing_listener_keeps_its_subscription`,
       `a_failing_list_listener_gets_a_reset_next`) once failed together in a cloud container, each on `recv_timeout(WAIT)` (5 s)
-      with no value, the binary taking 6 s instead of about 2.4 s (2026-10-23, PR 29's worker; five reruns passed; never seen in
-      CI). Guess: container load starving the core runtime (not verified). If it recurs, find the cause
+      with no value, the binary taking 6 s instead of about 2.4 s (2026-10-23, PR 29's worker; never seen in CI). Cause: the two
+      failing-listener tests simulated a foreign exception with `panic!`, so the panic hook ran on the core's two worker threads,
+      both at once (the tests sort first and run together), stalling every task on the runtime; the cloud container sets
+      `RUST_BACKTRACE=1`, so the hook captures and prints a backtrace. Proven with a hook forced to take 6 s: the same three tests
+      fail on the same lines, 10 of 10 runs, the binary taking 6.5 s. That the real hook took over 5 s is not measured, and why
+      (first symbolization in a large debug test binary on a loaded host) is not verified: 70 unforced runs passed. The tests now
+      unwind with `resume_unwind`, which skips the hook (test/ffi-list-subscription-timeouts)
+- [ ] A foreign exception from a C# or Swift listener becomes a panic in UniFFI's generated code (`uniffi_core` 0.31.0,
+      `ffi_converter_traits.rs`), so the panic hook runs on one of the core's two worker threads. With `RUST_BACKTRACE` set, or a
+      costly custom hook added later, that could stall the core for every subscription (not verified in production). Possible
+      fixes: deliver listener callbacks off the core workers, or keep the panic hook cheap. Decide when the playback work raises
+      the worker count
 - [ ] Linux: choose how to ship (Flatpak, per-distro packages, AppImage or tarball; ADR 0011) before M5's release work
 - [ ] Windows: move `CommunityToolkit.WinUI.Controls.SettingsControls` from 8.3.260402-preview2 to 8.3 stable when it ships with the
       same component-package dependency (docs/notes/windows-shell.md, "Windows Community Toolkit")

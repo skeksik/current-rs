@@ -2,6 +2,7 @@
     x:Class="Current.Shell.Pages.HomePage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:shell="using:Current.Shell"
     xmlns:vm="using:Current.Shell.ViewModels">
     <Page.Resources>
         <Style x:Key="Card" TargetType="Border">
@@ -73,7 +74,7 @@
 
         <!-- Signed-in servers: the server and user for now; browsing comes with M2 (docs/roadmap.md). -->
         <ScrollViewer Visibility="{x:Bind ViewModel.ListVisibility, Mode=OneWay, FallbackValue=Collapsed}">
-            <Grid Padding="{StaticResource PageColumnPadding}">
+            <Grid shell:PageLayout.IsColumn="True">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" MaxWidth="920" />
                 </Grid.ColumnDefinitions>
