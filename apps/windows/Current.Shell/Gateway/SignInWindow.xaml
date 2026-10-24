@@ -48,10 +48,7 @@
                 Style="{StaticResource BodyTextBlockStyle}"
                 TextWrapping="Wrap"
                 AutomationProperties.LiveSetting="Assertive" />
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button x:Name="GoogleBackButton" Content="Back to the sign-in page" Click="OnGoogleBack" />
-                <Button x:Name="GoogleCloseButton" Content="Close" Click="OnGoogleClose" />
-            </StackPanel>
+            <Button x:Name="GoogleBackButton" Content="Back to the sign-in page" Click="OnGoogleBack" />
         </StackPanel>
     </Grid>
 </Window>

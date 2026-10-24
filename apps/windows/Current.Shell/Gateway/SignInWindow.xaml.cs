@@ -19,12 +19,6 @@ public sealed partial class SignInWindow : Window
     /// <summary>The one host name the app knows, and only for a message (ADR 0017, "Google").</summary>
     private const string GoogleSignInHost = "accounts.google.com";
 
-    /// <summary>
-    /// How soon after "Back to the sign-in page" a new turn to Google means the gateway forwards straight there (Google its only
-    /// method, as the owner's run had it, 2026-10-24): Back is then of no use and goes away.
-    /// </summary>
-    private static readonly TimeSpan BackLoop = TimeSpan.FromSeconds(5);
-
     /// <summary>The open sign-in windows: closed with the main window, which owns the core they talk to.</summary>
     private static readonly List<SignInWindow> Open = [];
 
@@ -36,7 +30,6 @@ public sealed partial class SignInWindow : Window
     private uint _browserProcess;
     private bool _closingFromApp;
     private bool _closed;
-    private DateTime? _backAt;
 
     /// <param name="url">Where the window starts: the server's address the core probed.</param>
     /// <param name="origin">The server's origin as the core writes it (<c>scheme://host[:port]</c>): the title names it, and pages that
@@ -215,7 +208,6 @@ public sealed partial class SignInWindow : Window
 
     private void OnGoogleBack(object sender, RoutedEventArgs e)
     {
-        _backAt = DateTime.UtcNow;
         ShowGoogle(false);
         if (Web.CoreWebView2 is { } web)
         {
@@ -230,34 +222,20 @@ public sealed partial class SignInWindow : Window
         }
     }
 
-    /// <summary>"Close": the user cancels, as with the window's own close button.</summary>
-    private void OnGoogleClose(object sender, RoutedEventArgs e) => Close();
-
     private void ShowGoogle(bool shown)
     {
         if (shown == (GooglePanel.Visibility == Visibility.Visible))
         {
             return;
         }
-        // Back led straight to Google again: the gateway has no other method to go back to.
-        var looped = shown && _backAt is { } backAt && DateTime.UtcNow - backAt < BackLoop;
-        _backAt = null;
         GooglePanel.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
         Web.Visibility = shown ? Visibility.Collapsed : Visibility.Visible;
         // Set when shown, so the live region is read each time (Announce.Shown).
-        GoogleText.Text = !shown ? ""
-            : looped ? $"{ProblemText.GoogleRefusesWebViews} This gateway sends straight back to Google, so it has no other "
-                + "sign-in method here."
-            : ProblemText.GoogleRefusesWebViews;
-        if (looped)
-        {
-            GoogleBackButton.Visibility = Visibility.Collapsed;
-        }
+        GoogleText.Text = shown ? ProblemText.GoogleRefusesWebViews : "";
         if (shown)
         {
             Announce.Shown(GoogleText);
-            var focus = GoogleBackButton.Visibility == Visibility.Visible ? GoogleBackButton : GoogleCloseButton;
-            DispatcherQueue.TryEnqueue(() => focus.Focus(FocusState.Programmatic));
+            DispatcherQueue.TryEnqueue(() => GoogleBackButton.Focus(FocusState.Programmatic));
         }
     }
 
