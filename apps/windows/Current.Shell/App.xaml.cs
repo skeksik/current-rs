@@ -68,6 +68,15 @@ public partial class App : Application
         }
     }
 
+    /// <summary>Has Narrator speak <paramref name="text"/> from the window, for a result that outlives the page (Announce.Say).</summary>
+    internal static void Announce(string text, string activityId)
+    {
+        if (!_closed)
+        {
+            _window?.Announce(text, activityId);
+        }
+    }
+
     /// <summary>Drops the back and forward history (after a finished sign-in). Called on the UI thread.</summary>
     internal static void ClearNavigationHistory() => _window?.ClearHistory();
 

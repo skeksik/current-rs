@@ -95,6 +95,9 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>Announces from the navigation view, which every page is shown in, so a page that was just left can still be heard.</summary>
+    internal void Announce(string text, string activityId) => Shell.Announce.Say(NavView, text, activityId);
+
     /// <summary>Drops the back and forward history, after a finished sign-in, and keeps the title bar's back button in step.</summary>
     internal void ClearHistory()
     {
