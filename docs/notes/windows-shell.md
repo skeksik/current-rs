@@ -1010,3 +1010,61 @@ The owner's 8 findings of 2026-10-24 (on main cfa83b9), fixed on fix/windows-she
    that column. At medium and minimum widths the column fills the width less 24 px on each side. A notice, if one shows, lines up
    with the column. Narrator: each page's title is read as heading level 1 ("Home", "Settings", "Add a server", "Sign in").
 Anything above that cannot be measured is not verified.
+
+### Windows run (2026-10-24)
+Head fix/windows-shell-defaults 97d8aff in a throwaway local worktree, built with the four scripts: binding tests 34 passed, smoke
+run passed. Windows 11 26H2, 10.0.26300.9711, x64, display scale 150% (3840 × 2160); the cases ran `out/app/Current.exe` with the
+saved server; for Sign in the owner signed out and back in. Widths (visible frame, effective px): 1400, 1420, 1500 and 1600,
+maximised (2560 × 1392), 800 and 500 (the minimum: 488 × 494 visible); dark, then light (the owner switched Windows' mode with the
+app running). Measured from full-resolution captures and UI Automation bounds, side by side with Photos and Windows Settings at
+the same widths. Px are effective; a 1 px stroke is 2 physical px (1.3 effective) at 150%.
+1. **Pass.** Hovered, the back button's backplate (#2D2D2D dark) starts 4 px inside the window's edge, 40 × 44 at 2 px from the
+   top; the arrow's 16 px glyph box starts 16 px in (its ink 18 px). Windows Settings' back button: the same 4 px inset, 40 px
+   wide. Photos showed no back button in its title bar (Gallery, a folder, its Settings, the viewer); the owner accepted the
+   Windows Settings comparison. See new finding 1.
+2. **Pass**, with new finding 2. At 1400 the pane button switches between the full pane (300) and the rail (48) inline, and the
+   page moves with it. At 800 and 500 the rail always shows, and the pane button opens the full pane over the page, which does
+   not move. Esc, a click on the page, the title bar's Back, Alt+Left and the mouse Back button each close it and the page
+   stays. With the pane closed, they go back. "Open Navigation" / "Close Navigation" as before.
+3. **Pass.** The full pane is 300 px, inline and over the page; Windows Settings' pane is 300 px (1400 wide). Photos' is 320.
+4. **Pass.** Home, Add a server, Sign in and Settings show the same layer: dark #272727 with a #1D1D1D stroke at its top and left
+   under a #202020 title bar and pane; light #F9F9F9, #E5E5E5 stroke, #F3F3F3. The rounded top-left corner has a radius of about
+   8 px. Photos: the same three colours in both themes, its stroke at the same place. Home -> Settings -> Home: unchanged. It
+   followed Windows' switch from dark to light without a restart.
+5. **Pass.** 48 px title bar, 46 × 32 caption buttons; the minimum 500 × 500 (outer frame; 488 × 494 visible, as in earlier runs);
+   after a start, Back at Home is disabled and dimmed (arrow #535353 dark, #C7C7C7 light) with no backplate; "All rights
+   reserved." in Settings > About. New findings 1 and 3 are about the caption buttons.
+6. **Pass.** The page title starts 24 px inside the layer's stroke, at its top and left (25.3 from the layer's outer edge). At 500,
+   Settings scrolled to its end: 24 px left, 24 right, 24.7 below the last card. The first item sits 24 px below the title's box.
+   It was not compared with main ("as before" is not verified).
+7. **Pass.** Acrylic over the page: dark #2D2D2D-#303030 grain, light #F8F8F8-#FAFAFA. Photos' pane over its gallery takes on
+   the photos' colours, the same material. The 1 px line: dark #353535 on the right edge and #2F2F2F under the title bar; light
+   #E1E1E1 with a soft shadow, and #D5D5D5 under the title bar. Photos' pane over the page has the same line (dark #3E3E3E).
+   **The owner keeps the line.**
+8. **Fail** at wide widths. At 800 and 500 the column fills the width less 24 px on each side, and the forms keep their width
+   (560 Add a server, 400 Sign in) at its left. From the moment the column reaches 1064 px (window wider than about 1413 with the
+   full pane, or 1400 with the rail), the title is centred correctly but the column is pushed right, by an amount that depends
+   on the page. Maximised, the title starts at x 906: Settings' column starts at 1122 (+216), Add a server's form at 1203
+   (+297), Sign in's at 1254 (+348) and Home's card at about 1361 (+455, 1050 px free on its left, 143 on its right). At 1420 to
+   1600, Home's card runs past the window's right edge and is cut off; at 1400 with the rail, Settings' column also runs to the
+   edge. The same in light. Narrator: each page title has UI Automation heading level 1 (Home, Settings, Add a server, Sign in),
+   which Narrator reads; it was not listened to.
+   Seen: the column is off-centre and clipped at wide widths. Expected: centred under the title, its left edge at the title's.
+   Likely element: the `PageColumnStyle` grid (App.xaml, MaxWidth 1064, Margin 24) inside each page's `ScrollViewer`
+   (Pages/*.xaml). The offset changes with the page's content, as if the ScrollViewer arranged its content wider than its
+   viewport.
+
+New findings from the owner during the run (not fixed here):
+1. Seen: the caption buttons are 46 × 32 at the top of the 48 px title bar. The back and pane buttons look as tall as the title
+   bar and touch the window's border (measured 40 × 44, 2 px from the top, 4 px from the left). Expected: caption buttons as tall
+   as the title bar (Photos' are 48 × 48), and a small gap between the back and pane buttons and the window's border. Likely
+   element: `AppTitleBar` (MainWindow.xaml) and `PreferredHeightOption` kept at Standard (MainWindow.xaml.cs); the TitleBar's
+   back and pane buttons.
+2. Seen: with the pane open over the page (800, 500), the title bar's Back and pane buttons show no hover or pressed state (the
+   title bar stays #202020 under the pointer; with the pane closed the backplate is #2D2D2D). A click only light-dismisses the
+   pane. Expected: both stay interactive, as with the pane closed. Likely element: the NavigationView's light-dismiss layer for
+   the open pane covering the TitleBar's `PART_BackButton` and `PART_PaneToggleButton` (MainWindow.xaml).
+3. Seen: after Windows switched from dark to light with the app running, the caption buttons hover #191919 on the #F3F3F3 title
+   bar; after a restart in light they hover #E5E5E5 (Photos: #EAEAEA). Expected: the caption buttons follow a theme change while
+   the app runs. Likely element: the caption button colours of the window's title bar, which are not refreshed on a theme change
+   (MainWindow.xaml.cs handles no theme change).
