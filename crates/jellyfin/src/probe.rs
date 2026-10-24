@@ -577,7 +577,9 @@ mod tests {
         assert_eq!(
             ProbeError::from(NetError::Auth {
                 status: 403,
-                message: None
+                message: None,
+                challenges: Vec::new(),
+                page: false,
             }),
             ProbeError::Status { status: 403 }
         );

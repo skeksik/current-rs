@@ -5,7 +5,8 @@
 //! use fails, when the network changes, and every few minutes while a better address is down; it remembers the winner per network.
 //!
 //! Credentials go only to an address that passed its identity check in the race that selected it: probes carry none, and nothing is
-//! served while a race after a failure or a network change runs. An address that needs the user's confirmation for plain HTTP (ADR
+//! served while a race after a failure or a network change runs. The one exception is an address's own gateway credentials (ADR
+//! 0017): its probe carries them, as a browser would, and no other address ever gets them. An address that needs the user's confirmation for plain HTTP (ADR
 //! 0012) and lacks it is never probed. Addresses never appear in logs, errors or Debug output: the log names an address by its position
 //! in the user's list.
 
@@ -26,6 +27,7 @@ use url::Url;
 
 use crate::address::{AddressOutcome, AddressProvider, ProbeAddress, Selected};
 use crate::client::{ClientConfig, ServerClient};
+use crate::gateway::Gateway;
 use crate::log::RequestLog;
 use crate::scope::transport;
 
@@ -48,7 +50,8 @@ pub enum IdentityCheck {
 
 /// Checks that an address leads to the expected server; implemented by the service crates (Jellyfin compares its server id).
 pub trait IdentityProbe: Send + Sync {
-    /// Probes the address `client` is bound to. `client` carries no credentials and logs to the shared request log.
+    /// Probes the address `client` is bound to. `client` carries no service credentials, only that address's own gateway
+    /// credentials if it has any (ADR 0017), and logs to the shared request log.
     fn check<'a>(
         &'a self,
         client: &'a ServerClient,
@@ -152,6 +155,9 @@ struct Candidate {
     position: u8,
     /// `None` for an address that is never used: plain HTTP that needs a confirmation the user did not give.
     client: Option<Arc<ServerClient>>,
+    /// This address's own gateway credentials, for its probe client and for requests while it is selected.
+    gateway: Option<Arc<Gateway>>,
+    plain_http_confirmed: bool,
 }
 
 /// State shared between the provider's handle and its driver task.
@@ -245,6 +251,27 @@ impl RoamingAddresses {
         config: RoamingConfig,
         runtime: &RuntimeHandle,
     ) -> Result<Arc<Self>, RoamingError> {
+        let addresses: Vec<(ServerAddress, Option<Arc<Gateway>>)> = addresses
+            .iter()
+            .map(|address| (address.clone(), None))
+            .collect();
+        Self::with_gateways(server, &addresses, probe, log, config, runtime)
+    }
+
+    /// Like [`RoamingAddresses::new`], with each address's own gateway credentials (ADR 0017). An address's identity probe carries
+    /// that address's gateway credentials and never the service's, and requests carry only the selected address's: no address ever
+    /// receives another's.
+    ///
+    /// # Errors
+    /// As [`RoamingAddresses::new`].
+    pub fn with_gateways(
+        server: ServerRef,
+        addresses: &[(ServerAddress, Option<Arc<Gateway>>)],
+        probe: Arc<dyn IdentityProbe>,
+        log: Arc<RequestLog>,
+        config: RoamingConfig,
+        runtime: &RuntimeHandle,
+    ) -> Result<Arc<Self>, RoamingError> {
         if addresses.len() > usize::from(u8::MAX) {
             return Err(RoamingError::TooManyAddresses);
         }
@@ -253,7 +280,7 @@ impl RoamingAddresses {
             connect_timeout: config.probe_timeout,
         };
         let mut candidates = Vec::with_capacity(addresses.len());
-        for (index, address) in addresses.iter().enumerate() {
+        for (index, (address, gateway)) in addresses.iter().enumerate() {
             // At most 255 addresses, checked above.
             let position = u8::try_from(index + 1).map_err(|_| RoamingError::TooManyAddresses)?;
             let url = Url::parse(&address.url)
@@ -268,7 +295,8 @@ impl RoamingAddresses {
                 .ok_or(RoamingError::InvalidAddress(position))?;
             let usable = !transport(&url).needs_confirmation() || address.plain_http_confirmed;
             let client = if usable {
-                let selected = Selected::new(url.clone(), Some(position), 0);
+                let selected = Selected::new(url.clone(), Some(position), 0)
+                    .with_gateway(gateway.clone(), address.plain_http_confirmed);
                 let client = ServerClient::new(
                     server.clone(),
                     Arc::new(ProbeAddress(selected)),
@@ -285,6 +313,8 @@ impl RoamingAddresses {
                 url,
                 position,
                 client,
+                gateway: gateway.clone(),
+                plain_http_confirmed: address.plain_http_confirmed,
             });
         }
         let shared = Arc::new(Shared {
@@ -747,7 +777,8 @@ impl Driver {
                 self.backoff = None;
                 let candidate = &self.candidates[index];
                 let selected =
-                    Selected::new(candidate.url.clone(), Some(candidate.position), epoch);
+                    Selected::new(candidate.url.clone(), Some(candidate.position), epoch)
+                        .with_gateway(candidate.gateway.clone(), candidate.plain_http_confirmed);
                 let published = self.shared.update(|published| {
                     if published.epoch != epoch {
                         return false;

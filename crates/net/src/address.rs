@@ -2,18 +2,41 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use tokio::time::Instant;
 use url::Url;
 
+use crate::gateway::Gateway;
+
 /// The address a request goes to, as chosen by an [`AddressProvider`]. Its Debug output shows the position only, never the address.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Selected {
     url: Url,
     position: Option<u8>,
     /// The race that chose it: a report about an older choice is ignored.
     pub(crate) generation: u64,
+    /// This address's own gateway credentials (ADR 0017), never another address's.
+    gateway: Option<Arc<Gateway>>,
+    /// The user accepted plain HTTP to this address (ADR 0012), so gateway credentials may go over it.
+    plain_http_confirmed: bool,
 }
+
+impl PartialEq for Selected {
+    fn eq(&self, other: &Self) -> bool {
+        self.url == other.url
+            && self.position == other.position
+            && self.generation == other.generation
+            && self.plain_http_confirmed == other.plain_http_confirmed
+            && match (&self.gateway, &other.gateway) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for Selected {}
 
 impl Selected {
     pub(crate) fn new(url: Url, position: Option<u8>, generation: u64) -> Self {
@@ -21,7 +44,33 @@ impl Selected {
             url,
             position,
             generation,
+            gateway: None,
+            plain_http_confirmed: false,
         }
+    }
+
+    /// The same address with its gateway credentials.
+    pub(crate) fn with_gateway(
+        mut self,
+        gateway: Option<Arc<Gateway>>,
+        plain_http_confirmed: bool,
+    ) -> Self {
+        self.gateway = gateway;
+        self.plain_http_confirmed = plain_http_confirmed;
+        self
+    }
+
+    pub(crate) fn gateway(&self) -> Option<&Arc<Gateway>> {
+        self.gateway.as_ref()
+    }
+
+    pub(crate) fn plain_http_confirmed(&self) -> bool {
+        self.plain_http_confirmed
+    }
+
+    /// Whether requests to this address carry gateway credentials.
+    pub fn has_gateway(&self) -> bool {
+        self.gateway.is_some()
     }
 
     /// The server's base address, including any path prefix it is served under.
@@ -41,6 +90,7 @@ impl std::fmt::Debug for Selected {
         f.debug_struct("Selected")
             .field("position", &self.position)
             .field("url", &format_args!("[redacted]"))
+            .field("gateway", &self.gateway.is_some())
             .finish()
     }
 }
@@ -91,6 +141,44 @@ impl AddressProvider for FixedAddress {
     fn report(&self, _selected: &Selected, _outcome: AddressOutcome) {}
 }
 
+/// A server with one address behind an authentication gateway (ADR 0017): always selected, its requests carry `gateway`'s
+/// credentials. Like the Jellyfin token, they go over plain HTTP only to the local network, or to another address once the user
+/// confirmed it (`plain_http_confirmed`, ADR 0012).
+pub struct GatewayAddress {
+    selected: Selected,
+}
+
+impl GatewayAddress {
+    pub fn new(url: Url, gateway: Arc<Gateway>, plain_http_confirmed: bool) -> Self {
+        Self {
+            selected: Selected::new(url, None, 0).with_gateway(Some(gateway), plain_http_confirmed),
+        }
+    }
+}
+
+impl std::fmt::Debug for GatewayAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("GatewayAddress")
+            .field(&self.selected)
+            .finish()
+    }
+}
+
+impl AddressProvider for GatewayAddress {
+    fn current(&self) -> Option<Selected> {
+        Some(self.selected.clone())
+    }
+
+    fn wait(
+        &self,
+        _deadline: Instant,
+    ) -> Pin<Box<dyn Future<Output = Option<Selected>> + Send + '_>> {
+        Box::pin(std::future::ready(self.current()))
+    }
+
+    fn report(&self, _selected: &Selected, _outcome: AddressOutcome) {}
+}
+
 /// One address of a server with several, for the probe client of that address: always selected, with its position for the log.
 #[derive(Debug)]
 pub(crate) struct ProbeAddress(pub(crate) Selected);
@@ -119,7 +207,7 @@ mod tests {
         let selected = Selected::new(Url::parse("http://192.168.1.10:8096").unwrap(), Some(2), 7);
         assert_eq!(
             format!("{selected:?}"),
-            "Selected { position: Some(2), url: [redacted] }"
+            "Selected { position: Some(2), url: [redacted], gateway: false }"
         );
     }
 
