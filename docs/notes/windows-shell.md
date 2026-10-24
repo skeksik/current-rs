@@ -660,11 +660,11 @@ of that branch, signed out of a server that offers Quick Connect:
    not again as a number. Note whether "Cancel, button" is also read and whether it cuts the code short.
 2. Press Cancel, then "Use Quick Connect" again: the new code is read digit by digit, once.
 3. In scan mode (Caps Lock+Space), arrow to the code: Narrator reads "Quick Connect code" and the digits, once, and not the code
-   again as a number.
+   again as a number. With Narrator off, the code can still be selected with the mouse and copied with Ctrl+C.
 4. Tab to "Copy" next to the code: Narrator reads "Copy code, button". Press it (Enter or Space): "Code copied to the clipboard."
-   is shown and read. Paste into Notepad (not saved): the bare code, without spaces.
+   is shown, and Narrator reads it. Paste into Notepad (not saved): the bare code, without spaces.
 5. Approve the code from another Jellyfin client: Home opens and Narrator reads "Signed in to <server> as <user>.", once, whole.
-   Note whether the title bar is read before or after it, or cuts it short.
+   Note whether the title bar or the element focused on Home is read before or after it, or cuts it short.
 6. Sign out, then sign in with the password: the same announcement.
 
 ### Windows run (2026-10-24)
