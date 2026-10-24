@@ -2,6 +2,7 @@ using Current.Bindings;
 using Current.Shell.Pages;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 
 namespace Current.Shell;
@@ -65,11 +66,17 @@ internal static class SmokeRun
             await StorageChecksAsync(ui, Check);
 
             // The pages' XAML loads; Settings uses the Community Toolkit's SettingsCard, so this also shows the toolkit loads.
-            _ = new HomePage();
-            _ = new AddServerPage();
-            _ = new SignInPage();
-            _ = new SettingsPage();
+            var home = new HomePage();
+            var addServer = new AddServerPage();
+            var signIn = new SignInPage();
+            var settings = new SettingsPage();
             Check(true, "home, add-server, sign-in and settings pages built");
+            // Which pages show the navigation view's content layer (MainWindow.ApplyContentLayer); the window is never shown here, so
+            // the template part itself is not reached.
+            Check(
+                PageLayout.GetHasContentLayer(home) && PageLayout.GetHasContentLayer(addServer) && PageLayout.GetHasContentLayer(signIn)
+                    && !PageLayout.GetHasContentLayer(settings),
+                "content pages have the content layer, settings has none");
 
             // The network observer reads the facts without asking for anything; the facts themselves are not printed.
             var facts = NetworkObserver.Read();
@@ -80,8 +87,15 @@ internal static class SmokeRun
             Check(true, "local interfaces read");
 
             // Last: closing the only window ends XAML's message loop, so nothing may be awaited after it (seen in CI: the run stopped at
-            // the next await and exited without a result).
+            // the next await and exited without a result). The window is shown so the navigation view's template applies, and the
+            // content layer is read from the template part itself: on Home it has a visible background, on Settings none.
             var window = new MainWindow();
+            window.Activate();
+            var shown = await Task.WhenAny(window.Shown, Task.Delay(Timeout)) == window.Shown;
+            Check(shown, "main window shown");
+            Check(Alpha(window.ContentLayerBackground) > 0, $"home shows the content layer (alpha {Alpha(window.ContentLayerBackground)})");
+            window.ShowSettings();
+            Check(Alpha(window.ContentLayerBackground) == 0, $"settings shows no content layer (alpha {Alpha(window.ContentLayerBackground)})");
             window.Close();
             Check(true, "main window built");
         }
@@ -95,6 +109,9 @@ internal static class SmokeRun
         Program.SetExitCode(failures == 0 ? 0 : 1);
         Application.Current.Exit();
     }
+
+    /// <summary>The opacity of a solid brush; -1 for no brush or another kind.</summary>
+    private static int Alpha(Brush? brush) => brush is SolidColorBrush solid ? solid.Color.A : -1;
 
     /// <summary>
     /// The core on a data folder of its own, with secrets in memory and no network: a first open creates the settings, a second loads

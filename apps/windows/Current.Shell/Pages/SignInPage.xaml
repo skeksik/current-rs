@@ -9,7 +9,7 @@
     </Page.KeyboardAccelerators>
 
     <ScrollViewer>
-        <Grid Padding="{StaticResource PageColumnPadding}">
+        <Grid shell:PageLayout.IsColumn="True">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MaxWidth="400" />
             </Grid.ColumnDefinitions>

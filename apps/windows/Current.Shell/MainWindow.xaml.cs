@@ -1,8 +1,13 @@
+using System.Diagnostics;
 using Current.Shell.Pages;
 using Microsoft.UI.Input;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
 using Windows.System;
@@ -25,13 +30,33 @@ public sealed partial class MainWindow : Window
         [typeof(SignInPage)] = "Sign in",
     };
 
+    /// <summary>
+    /// The smallest window, in effective pixels: the narrowest page column (Sign in, 400 plus 24 on each side) and the title bar with
+    /// its back and pane buttons, title and caption buttons fit (manager, 2026-10-24; the WinUI Gallery uses
+    /// 640 by 500, github.com/microsoft/WinUI-Gallery MainWindow.xaml.cs, main at 14061ee, read 2026-10-24).
+    /// </summary>
+    private const double MinWindowWidth = 500;
+
+    private const double MinWindowHeight = 500;
+
     private bool _wasDeactivated;
+
+    private FrameworkElement? _paneToggleButton;
+
+    /// <summary>The navigation view's content layer: ContentGrid, the content of its template part RootSplitView.</summary>
+    private Grid? _contentLayer;
+
+    private readonly SolidColorBrush _transparent = new(Microsoft.UI.Colors.Transparent);
+
+    private readonly TaskCompletionSource _shown = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public MainWindow()
     {
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+        // The caption buttons keep their standard height (PreferredHeightOption stays Standard): Windows Settings' are 46 × 32 px in
+        // its 48 px title bar (owner's run, 2026-10-24).
 
         // XAML cannot parse "GoBack" as a VirtualKey (XamlParseException in CI), so this one is added here.
         var goBack = new KeyboardAccelerator { Key = VirtualKey.GoBack };
@@ -42,6 +67,9 @@ public sealed partial class MainWindow : Window
         Root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler(OnPointerPressed), true);
 
         Activated += OnActivated;
+        Root.Loaded += OnRootLoaded;
+        // A handler of its own, so the one that keeps the selection and header in step stays as it is.
+        ContentFrame.Navigated += (_, _) => ApplyContentLayer();
 
         NavView.SelectedItem = HomeItem;
         Navigate(typeof(HomePage), new EntranceNavigationTransitionInfo());
@@ -54,6 +82,145 @@ public sealed partial class MainWindow : Window
         var notice = new InfoBar { Severity = severity, Title = title, Message = message, IsOpen = true, Margin = new Thickness(0, 8, 0, 0) };
         notice.Closed += (_, _) => Notices.Children.Remove(notice);
         Notices.Children.Add(notice);
+    }
+
+    /// <summary>Completes when the window's content has loaded and the navigation view's template is applied (the smoke run).</summary>
+    internal Task Shown => _shown.Task;
+
+    /// <summary>The content layer's background now, or null if its template part was not found (the smoke run).</summary>
+    internal Brush? ContentLayerBackground => _contentLayer?.Background;
+
+    /// <summary>Opens Settings, as its item in the pane does (the smoke run).</summary>
+    internal void ShowSettings() => Navigate(typeof(SettingsPage), new SuppressNavigationTransitionInfo());
+
+    private void OnRootLoaded(object sender, RoutedEventArgs e)
+    {
+        Root.Loaded -= OnRootLoaded;
+        // The template is applied by now: a missing part is only traced, and the page keeps the control's default look.
+        ApplyContentLayer();
+        if (_contentLayer is null)
+        {
+            Trace.TraceWarning("Current: NavigationView template part RootSplitView not found; every page keeps the content layer");
+        }
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            NamePaneToggleButton();
+            if (_paneToggleButton is null)
+            {
+                Trace.TraceWarning("Current: TitleBar template part PART_PaneToggleButton not found; the pane button keeps its name");
+            }
+        });
+        ApplyMinimumSize();
+        // The scale changes when the window moves to a display with another scale or the user changes it.
+        Root.XamlRoot.Changed += (_, _) => ApplyMinimumSize();
+        _shown.TrySetResult();
+    }
+
+    /// <summary>
+    /// Sets the window's minimum size through its presenter (OverlappedPresenter.PreferredMinimumWidth and PreferredMinimumHeight,
+    /// Windows App SDK 1.7 and later, learn.microsoft.com, read 2026-10-24). The API page gives no unit; the WinUI Gallery's
+    /// WindowHelper.SetWindowMinSize multiplies by XamlRoot.RasterizationScale, so these are physical pixels (not verified otherwise).
+    /// </summary>
+    private void ApplyMinimumSize()
+    {
+        if (AppWindow.Presenter is not OverlappedPresenter presenter || Root.XamlRoot is null)
+        {
+            return;
+        }
+        var scale = Root.XamlRoot.RasterizationScale;
+        presenter.PreferredMinimumWidth = (int)Math.Ceiling(MinWindowWidth * scale);
+        presenter.PreferredMinimumHeight = (int)Math.Ceiling(MinWindowHeight * scale);
+    }
+
+    /// <summary>
+    /// Shows the content layer behind content pages and Mica behind pages of settings cards (PageLayout.HasContentLayer), and places
+    /// the page's title, notices and column for it. The layer is the template's ContentGrid, whose Background and BorderBrush come
+    /// from ThemeResources (NavigationViewContentBackground, NavigationViewContentGridBorderBrush; NavigationView.xaml,
+    /// microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) and no visual state sets either. Values set by a template are
+    /// local values in WinUI's property system, which knows only default, style and local sources (GetBaseValueSource,
+    /// PropertySystem.cpp, same tag), so ClearValue would leave no brush at all: that hid the layer on every page in the owner's run
+    /// (2026-10-24). Content pages bind both to ContentLayerBrushes (MainWindow.xaml) instead, which follows the theme.
+    /// </summary>
+    private void ApplyContentLayer()
+    {
+        if (ContentFrame.Content is not Page page)
+        {
+            return;
+        }
+        var hasLayer = PageLayout.GetHasContentLayer(page);
+        PageLayout.SetContentLayer(hasLayer);
+        Notices.Margin = PageLayout.NoticesMargin;
+
+        // The template's items name parts "ContentGrid" too, so the layer is taken from the SplitView it is the content of.
+        _contentLayer ??= (FindDescendant(NavView, "RootSplitView") as SplitView)?.Content as Grid;
+        if (_contentLayer is null)
+        {
+            return;
+        }
+        if (hasLayer)
+        {
+            _contentLayer.SetBinding(Panel.BackgroundProperty, new Binding { Source = ContentLayerBrushes, Path = new PropertyPath("Background") });
+            _contentLayer.SetBinding(Grid.BorderBrushProperty, new Binding { Source = ContentLayerBrushes, Path = new PropertyPath("BorderBrush") });
+        }
+        else
+        {
+            _contentLayer.Background = _transparent;
+            _contentLayer.BorderBrush = _transparent;
+        }
+    }
+
+    private void OnPaneOpenedOrClosed(NavigationView sender, object args)
+    {
+        NamePaneToggleButton();
+        UpdateBackButton();
+    }
+
+    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) => UpdateBackButton();
+
+    /// <summary>
+    /// The pane open over the page (Compact or Minimal): it counts as a back step, which back closes. The full pane inline on a wide
+    /// window does not (owner, 2026-10-24).
+    /// </summary>
+    private bool PaneOverlaysPage =>
+        NavView.IsPaneOpen && NavView.DisplayMode is NavigationViewDisplayMode.Compact or NavigationViewDisplayMode.Minimal;
+
+    /// <summary>The title bar's Back button is enabled while there is a page to go back to or the pane overlays the page.</summary>
+    private void UpdateBackButton() => AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack || PaneOverlaysPage;
+
+    /// <summary>
+    /// Names the title bar's pane button as the navigation view names its own: "Open Navigation" while the pane is closed, "Close
+    /// Navigation" while it is open (NavigationButtonClosedName and NavigationButtonOpenName, NavigationView's Resources.resw), with
+    /// the same tooltip. The TitleBar names it "Toggle Navigation" whatever the state and has no property for it, so its template part
+    /// PART_PaneToggleButton is looked up (TitleBar.h and TitleBar.cpp, LoadPaneToggleButton; microsoft-ui-xaml, tag
+    /// winui3/release/2.5.1, read 2026-10-24).
+    /// </summary>
+    private void NamePaneToggleButton()
+    {
+        _paneToggleButton ??= FindDescendant(AppTitleBar, "PART_PaneToggleButton");
+        if (_paneToggleButton is null)
+        {
+            return;
+        }
+        var name = NavView.IsPaneOpen ? "Close Navigation" : "Open Navigation";
+        AutomationProperties.SetName(_paneToggleButton, name);
+        ToolTipService.SetToolTip(_paneToggleButton, name);
+    }
+
+    private static FrameworkElement? FindDescendant(DependencyObject parent, string name)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is FrameworkElement element && element.Name == name)
+            {
+                return element;
+            }
+            if (FindDescendant(child, name) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
     }
 
     /// <summary>
@@ -103,7 +270,7 @@ public sealed partial class MainWindow : Window
     {
         ContentFrame.BackStack.Clear();
         ContentFrame.ForwardStack.Clear();
-        AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack;
+        UpdateBackButton();
     }
 
     /// <summary>
@@ -127,7 +294,7 @@ public sealed partial class MainWindow : Window
     private void OnNavigated(object sender, NavigationEventArgs e)
     {
         DropSignInHistory();
-        AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack;
+        UpdateBackButton();
         if (ContentFrame.SourcePageType == typeof(SettingsPage))
         {
             // The settings item is not in MenuItems and has no tag.
@@ -149,12 +316,16 @@ public sealed partial class MainWindow : Window
 
     private bool TryGoBack()
     {
-        if (!ContentFrame.CanGoBack)
+        // With the pane open over the page, back only closes the pane, from the title bar's Back button, Alt+Left, the GoBack key and
+        // the mouse Back button alike (owner, 2026-10-24), as the navigation view's own back button does then ("clicking the back
+        // button will close the Pane and raise the PaneClosing event instead", NavigationView page, learn.microsoft.com, ms.date
+        // 2026-10-02, read 2026-10-24).
+        if (PaneOverlaysPage)
         {
-            return false;
+            NavView.IsPaneOpen = false;
+            return true;
         }
-        // Don't go back while the pane overlays the content.
-        if (NavView.IsPaneOpen && NavView.DisplayMode is NavigationViewDisplayMode.Compact or NavigationViewDisplayMode.Minimal)
+        if (!ContentFrame.CanGoBack)
         {
             return false;
         }
