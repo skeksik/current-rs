@@ -12,12 +12,14 @@ mod session;
 mod sign_in;
 
 use std::path::Path;
-use std::sync::{Arc, PoisonError, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use current_jellyfin::{
     AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, platform_name,
 };
-use current_model::{Capabilities, NetworkFacts, SavedServer, ServerAddress, ServerId, ServerRef};
+use current_model::{
+    AppTheme, Capabilities, NetworkFacts, SavedServer, ServerAddress, ServerId, ServerRef,
+};
 use current_net::{
     NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError, RuntimeHandle, Url,
 };
@@ -53,6 +55,10 @@ pub enum Removal {
 pub struct App {
     shared: Arc<Shared>,
     device_id: Option<DeviceId>,
+    /// The app theme, published after each successful save.
+    app_theme: watch::Sender<AppTheme>,
+    /// Serializes [`App::set_app_theme`], so the published theme is the one saved last.
+    theme_write: Mutex<()>,
 }
 
 impl std::fmt::Debug for App {
@@ -89,6 +95,8 @@ impl App {
                 0,
             )),
             device_id: None,
+            app_theme: watch::Sender::new(AppTheme::System),
+            theme_write: Mutex::new(()),
         }
     }
 
@@ -115,6 +123,8 @@ impl App {
                 stored.last_server_key,
             )),
             device_id: Some(stored.device_id),
+            app_theme: watch::Sender::new(stored.app_theme),
+            theme_write: Mutex::new(()),
         };
         Ok((app, report))
     }
@@ -160,6 +170,33 @@ impl App {
                 true
             }
         });
+    }
+
+    /// The theme the app shows: the saved choice now, and every change after. An unchanged theme notifies no one.
+    pub fn app_theme(&self) -> watch::Receiver<AppTheme> {
+        self.app_theme.subscribe()
+    }
+
+    /// Changes the app theme and saves it at once (an atomic save, ADR 0013); subscribers see it once it is saved. A core that
+    /// stores nothing ([`App::new`], as in the smoke run) only publishes it. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved (a newer version's file, a failed write): the theme stays as it was.
+    pub fn set_app_theme(&self, theme: AppTheme) -> Result<(), StoreError> {
+        // Held only for the save and the publish; a panic in between leaves nothing half-changed.
+        let _order = self
+            .theme_write
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(settings) = self.settings() {
+            settings.update(|settings| settings.app_theme = theme)?;
+        }
+        self.app_theme.send_if_modified(|current| {
+            let changed = *current != theme;
+            *current = theme;
+            changed
+        });
+        Ok(())
     }
 
     /// The saved servers, in the order they were added.
@@ -405,6 +442,54 @@ mod tests {
         let (app, report) = App::open(temp.path(), secrets, "Office PC").unwrap();
         assert_eq!(report, LoadReport::Loaded);
         assert_eq!(app.device_id(), Some(&id));
+    }
+
+    #[test]
+    fn the_app_theme_is_saved_at_once_and_survives_reopening() {
+        let temp = tempfile::tempdir().unwrap();
+        let secrets: Arc<dyn Secrets> = Arc::new(MemorySecrets::new());
+        let (app, _) = App::open(temp.path(), secrets.clone(), "").unwrap();
+        let rx = app.app_theme();
+        assert_eq!(*rx.borrow(), AppTheme::System);
+        app.set_app_theme(AppTheme::Dark).unwrap();
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow(), AppTheme::Dark);
+        assert_eq!(app.settings().unwrap().get().app_theme, AppTheme::Dark);
+        drop((rx, app));
+
+        let (app, _) = App::open(temp.path(), secrets, "").unwrap();
+        assert_eq!(*app.app_theme().borrow(), AppTheme::Dark);
+    }
+
+    #[test]
+    fn an_unchanged_app_theme_notifies_no_one() {
+        let app = App::new();
+        let mut rx = app.app_theme();
+        app.set_app_theme(AppTheme::System).unwrap();
+        assert!(!rx.has_changed().unwrap());
+        // A core that stores nothing still publishes a change.
+        app.set_app_theme(AppTheme::Light).unwrap();
+        assert_eq!(*rx.borrow_and_update(), AppTheme::Light);
+    }
+
+    #[test]
+    fn an_app_theme_that_cannot_be_saved_is_not_published() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join(current_store::SETTINGS_FILE),
+            r#"{"version": 99, "device_id": "abc", "app_theme": "light"}"#,
+        )
+        .unwrap();
+        let (app, report) = App::open(temp.path(), Arc::new(MemorySecrets::new()), "").unwrap();
+        assert_eq!(report, LoadReport::NewerVersion { found: 99 });
+        let rx = app.app_theme();
+        assert_eq!(*rx.borrow(), AppTheme::Light);
+        assert_eq!(
+            app.set_app_theme(AppTheme::Dark),
+            Err(StoreError::NewerVersion { found: 99 })
+        );
+        assert!(!rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow(), AppTheme::Light);
     }
 
     #[test]

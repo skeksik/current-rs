@@ -38,7 +38,7 @@ pub use problems::{
     AddressProblem, DiscoveryProblem, NetProblem, ProbeProblem, SignInProblem, StoreProblem,
 };
 pub use records::{
-    AppInfo, CapabilitiesSnapshot, Connectivity, InterfaceKind, LoadReport, NetworkFacts,
+    AppInfo, AppTheme, CapabilitiesSnapshot, Connectivity, InterfaceKind, LoadReport, NetworkFacts,
     Reachability, RemoveServerResult, SavedServerSnapshot, SavedUserSnapshot, SecretStore,
     ServerRef, ServerStatusSnapshot, SignOutResult, UserSnapshot,
 };
@@ -55,6 +55,13 @@ uniffi::setup_scaffolding!();
 #[uniffi::export(callback_interface)]
 pub trait CapabilitiesListener: Send + Sync {
     fn on_value(&self, value: CapabilitiesSnapshot);
+}
+
+/// Receives the app theme. Called with the current value first, then on every change, on a core worker thread. It must only hand
+/// the value to the UI thread and return, and must never throw.
+#[uniffi::export(callback_interface)]
+pub trait AppThemeListener: Send + Sync {
+    fn on_value(&self, value: AppTheme);
 }
 
 /// Receives the saved servers: `[Reset]` first, then batches of diffs, on a core worker thread. Apply each batch in order. It must
@@ -176,6 +183,37 @@ impl Core {
                     .on_value(CapabilitiesSnapshot::from(&capabilities));
             },
         )
+    }
+
+    /// The theme the app shows now: the saved choice, `System` until one is made. Apply it before the window first shows.
+    pub fn app_theme(&self) -> AppTheme {
+        (*self.app.app_theme().borrow()).into()
+    }
+
+    /// Subscribes to the app theme. Keep the handle while listening; cancel it when the view goes away.
+    pub fn subscribe_app_theme(&self, listener: Box<dyn AppThemeListener>) -> Arc<TaskHandle> {
+        let listener = self.listeners.track(listener);
+        subscribe::watch_value(&self.runtime, self.app.app_theme(), move |theme| {
+            listener.listener.on_value(theme.into());
+        })
+    }
+
+    /// Changes the app theme and saves it at once, on the core's blocking pool; subscribers see it once it is saved. A core that
+    /// stores nothing ([`Core::new`]) only publishes it. Not cancellable: it is one small write.
+    ///
+    /// # Errors
+    /// [`CoreError::Store`] if the settings could not be saved (a newer version's file, a failed write): the theme stays as it was.
+    pub async fn set_app_theme(&self, theme: AppTheme) -> Result<(), CoreError> {
+        let app = self.app.clone();
+        self.runtime
+            .spawn_blocking(move || app.set_app_theme(theme.into()))
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| CoreError::Store {
+                problem: (&error).into(),
+            })
     }
 
     /// The saved servers now, in the order they were added: read from the app, so a change shows here as soon as the call that made

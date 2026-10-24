@@ -16,6 +16,13 @@ public partial class App : Application
     private static bool _closed;
     private static readonly TaskCompletionSource<CoreHost?> CoreOpened = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    /// <summary>
+    /// How long the first showing of the window waits for the core, so the saved app theme is applied before anything is drawn rather
+    /// than switching after. Opening reads one small file; a slower open shows the window in the system's theme and switches once it
+    /// is open.
+    /// </summary>
+    private static readonly TimeSpan ThemeWait = TimeSpan.FromMilliseconds(300);
+
     public App(bool smoke)
     {
         _smoke = smoke;
@@ -36,7 +43,8 @@ public partial class App : Application
     /// <summary>Completes on the UI thread when the core is open, with null if it could not start at all.</summary>
     internal static Task<CoreHost?> CoreReady => CoreOpened.Task;
 
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    // async void, as event handlers are: it catches everything itself.
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         _ui = DispatcherQueue.GetForCurrentThread();
         if (_smoke)
@@ -45,7 +53,7 @@ public partial class App : Application
             return;
         }
 
-        // The window shows at once; its pages wait for CoreReady.
+        // The window shows as soon as the core is open (its app theme applied) or after ThemeWait; its pages wait for CoreReady.
         _window = new MainWindow();
         _window.Closed += (_, _) =>
         {
@@ -55,8 +63,16 @@ public partial class App : Application
             Core?.Dispose();
             Core = null;
         };
-        _window.Activate();
         _ = OpenCoreAsync(_ui);
+        try
+        {
+            await Task.WhenAny(CoreReady, Task.Delay(ThemeWait));
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: waiting for the core failed: {error.GetType().Name}");
+        }
+        _window.Activate();
     }
 
     /// <summary>A notice above every page: closed by the user. Called on the UI thread; dropped once the window has closed.</summary>
@@ -125,6 +141,17 @@ public partial class App : Application
             core = null;
         }
         Core = core;
+        if (core is not null)
+        {
+            try
+            {
+                _window?.FollowAppTheme(core);
+            }
+            catch (Exception error)
+            {
+                Trace.TraceError($"Current: following the app theme failed: {error.GetType().Name}");
+            }
+        }
         CoreOpened.TrySetResult(core);
         if (core is null)
         {

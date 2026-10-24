@@ -97,6 +97,42 @@ internal static class FlowTests
         }
     }
 
+    public static async Task AppThemeIsSavedAndReadAtTheNextOpen()
+    {
+        using var folder = new DataFolder();
+        var ui = new ManualDispatcher();
+        using (var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory))
+        {
+            Check(core.AppTheme == AppTheme.System, "System until one is chosen");
+            using var theme = core.ObserveAppTheme(ui);
+            Check(theme.Value == AppTheme.System, "starts at the current theme");
+            await core.SetAppThemeAsync(AppTheme.Dark);
+            Check(core.AppTheme == AppTheme.Dark, "read back at once");
+            await Eventually("the observer sees Dark", ui, () => theme.Value == AppTheme.Dark);
+        }
+        using (var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory))
+        {
+            Check(core.AppTheme == AppTheme.Dark, "kept for the next open");
+        }
+    }
+
+    public static async Task AppThemeThatCannotBeSavedIsRefused()
+    {
+        using var folder = new DataFolder();
+        File.WriteAllText(Path.Combine(folder.Path, "settings.json"), "{\"version\": 99, \"device_id\": \"abc\"}");
+        using var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory);
+        try
+        {
+            await core.SetAppThemeAsync(AppTheme.Light);
+            Check(false, "saving fails");
+        }
+        catch (CoreStoreException error)
+        {
+            Check(error.Problem is StoreProblem.NewerVersion { Found: 99 }, $"a newer version, not {error.Problem}");
+        }
+        Check(core.AppTheme == AppTheme.System, "unchanged");
+    }
+
     public static async Task OpenReportsAFolderItCannotUse()
     {
         using var folder = new DataFolder();

@@ -26,7 +26,9 @@ directory-lookup crate could not cover Android or tvOS anyway.
 ### The settings file
 - `settings.json` in the data folder: a JSON object with `"version"` (the format, now 1) and the settings' fields (now `device_id`;
   `servers` came with ADR 0015, and `last_server_key`, the highest server key ever given out, with removing a server on
-  2026-10-23, both defaulted).
+  2026-10-23, both defaulted; `app_theme` on 2026-10-24: `"light"`, `"dark"` or `"system"`, left out while it is the default,
+  system; a value this version does not know, of any JSON type, reads as system and is written back unchanged until the theme is
+  changed here, so it never makes the file corrupt).
 - **Adding a field** gives it `#[serde(default)]`: older files read without a migration. Fields this version does not know are kept
   and written back, so an older build never drops what a newer one wrote. The server list (several addresses per server, users with a
   reference to their secret) arrives this way in the server-setup and sign-in tasks.

@@ -46,6 +46,15 @@ extension Core {
         }
     }
 
+    /// The app theme, mirrored on the main actor. Starts at the theme the core holds now; changes follow. `setAppTheme(theme:)`
+    /// needs no wrapper: it is not cancellable.
+    @MainActor
+    public func observeAppTheme() -> ObservedValue<AppTheme> {
+        ObservedValue(initial: appTheme()) { forwarder in
+            self.subscribeAppTheme(listener: forwarder)
+        }
+    }
+
     /// The saved servers, mirrored on the main actor with diffs. Starts empty; the core's list follows at once.
     @MainActor
     public func observeServers() -> ObservedList<SavedServerSnapshot> {

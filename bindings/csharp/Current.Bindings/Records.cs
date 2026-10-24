@@ -72,6 +72,14 @@ public abstract record LoadReport
     public sealed record NewerVersion(ulong Found) : LoadReport;
 }
 
+/// <summary>The theme the app shows. <see cref="System"/> follows the Windows theme, including a change while the app runs.</summary>
+public enum AppTheme
+{
+    System,
+    Light,
+    Dark,
+}
+
 /// <summary>Where the core keeps sign-in tokens.</summary>
 public enum SecretStore
 {
@@ -183,6 +191,21 @@ internal static class Map
         Ffi.LoadReport.ResetCorrupt reset => new LoadReport.ResetCorrupt(reset.BackupFile),
         Ffi.LoadReport.NewerVersion newer => new LoadReport.NewerVersion(newer.Found),
         _ => throw new ArgumentException($"unknown load report {report.GetType().Name}", nameof(report)),
+    };
+
+    public static AppTheme From(Ffi.AppTheme theme) => theme switch
+    {
+        Ffi.AppTheme.Light => AppTheme.Light,
+        Ffi.AppTheme.Dark => AppTheme.Dark,
+        _ => AppTheme.System,
+    };
+
+    public static Ffi.AppTheme ToFfi(AppTheme theme) => theme switch
+    {
+        AppTheme.Light => Ffi.AppTheme.Light,
+        AppTheme.Dark => Ffi.AppTheme.Dark,
+        AppTheme.System => Ffi.AppTheme.System,
+        _ => throw new ArgumentOutOfRangeException(nameof(theme), theme, "unknown app theme"),
     };
 
     /// <summary>Both values explicitly: an unknown one must never fall back to memory and lose the user's sign-ins.</summary>

@@ -21,6 +21,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a cancel the caller did not ask for is not an OperationCanceledException", Tests.UnrequestedCancelIsItsOwnException),
     ("opening creates, then loads the settings", FlowTests.OpenCreatesThenLoads),
     ("opening reports a folder it cannot use", FlowTests.OpenReportsAFolderItCannotUse),
+    ("the app theme is saved and read at the next open", FlowTests.AppThemeIsSavedAndReadAtTheNextOpen),
+    ("an app theme that cannot be saved is refused", FlowTests.AppThemeThatCannotBeSavedIsRefused),
     ("adding a server and signing in with a password", FlowTests.PasswordSignInEndToEnd),
     ("a wrong password fails and saves nothing", FlowTests.WrongPasswordFails),
     ("a bad address fails with its reason", FlowTests.BadAddressFailsWithItsReason),

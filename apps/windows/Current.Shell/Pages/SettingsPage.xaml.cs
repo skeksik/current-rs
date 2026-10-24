@@ -7,12 +7,15 @@ using Microsoft.UI.Xaml.Controls;
 namespace Current.Shell.Pages;
 
 /// <summary>
-/// Settings: the saved servers under Accounts (sign out, sign in again, remove), diagnostics, and About. It waits for the core to open
-/// (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
+/// Settings: the app theme under Personalization, the saved servers under Accounts (sign out, sign in again, remove), diagnostics,
+/// and About. It waits for the core to open (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
 /// </summary>
 public sealed partial class SettingsPage : Page
 {
     private bool _loaded;
+
+    /// <summary>The theme combo is being set from the core: its SelectionChanged is not a choice of the user's.</summary>
+    private bool _showingTheme;
 
     /// <summary>A Remove confirmation is open: a second one is not started.</summary>
     private bool _confirmingRemoval;
@@ -40,6 +43,8 @@ public sealed partial class SettingsPage : Page
                 return;
             }
             VersionText = $"Version {core.AppInfo.Version}";
+            ShowTheme(core.AppTheme);
+            ThemeBox.IsEnabled = true;
             Servers ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
             Servers.Start();
             Bindings.Update();
@@ -54,6 +59,54 @@ public sealed partial class SettingsPage : Page
     {
         _loaded = false;
         Servers?.Stop();
+    }
+
+    /// <summary>The combo's items in order: Light, Dark, Windows default (SettingsPage.xaml).</summary>
+    private static readonly AppTheme[] ThemeItems = [AppTheme.Light, AppTheme.Dark, AppTheme.System];
+
+    private void ShowTheme(AppTheme theme)
+    {
+        _showingTheme = true;
+        ThemeBox.SelectedIndex = Array.IndexOf(ThemeItems, theme);
+        _showingTheme = false;
+    }
+
+    /// <summary>
+    /// Applies the chosen theme at once: the core saves it and the window follows (MainWindow.FollowAppTheme). If it cannot be saved,
+    /// the combo goes back to the theme the core still has, and the notice says why. async void, as event handlers are: it catches
+    /// everything itself.
+    /// </summary>
+    private async void OnThemeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var index = ThemeBox.SelectedIndex;
+        if (_showingTheme || App.Core is not { } core || index < 0 || index >= ThemeItems.Length)
+        {
+            return;
+        }
+        ThemeInfo.IsOpen = false;
+        try
+        {
+            await core.SetAppThemeAsync(ThemeItems[index]);
+        }
+        catch (CoreStoreException error)
+        {
+            ShowTheme(core.AppTheme);
+            ShowThemeInfo(ProblemText.Store(error.Problem));
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing the app theme failed: {error.GetType().Name}");
+            ShowTheme(core.AppTheme);
+            ShowThemeInfo(ProblemText.Unexpected);
+        }
+    }
+
+    private void ShowThemeInfo(string message)
+    {
+        ThemeInfo.Severity = InfoBarSeverity.Error;
+        ThemeInfo.Title = "Couldn't change the app theme.";
+        ThemeInfo.Message = message;
+        ThemeInfo.IsOpen = true;
     }
 
     private void OnAddServer(object sender, RoutedEventArgs e) => Frame.Navigate(typeof(AddServerPage));

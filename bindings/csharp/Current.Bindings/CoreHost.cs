@@ -54,6 +54,33 @@ public sealed class CoreHost : IDisposable
         return subscription;
     }
 
+    /// <summary>The theme the app shows now: the saved choice, <see cref="AppTheme.System"/> until one is made. Apply it before the
+    /// window first shows.</summary>
+    public AppTheme AppTheme => Map.From(_core.AppTheme());
+
+    /// <summary>
+    /// The app theme, mirrored on the UI thread through <paramref name="ui"/>. Starts at <see cref="AppTheme"/>; changes follow.
+    /// Dispose it when the window goes away.
+    /// </summary>
+    public ValueSubscription<AppTheme> ObserveAppTheme(IUiDispatcher ui)
+    {
+        var subscription = new ValueSubscription<AppTheme>(AppTheme);
+        subscription.Attach(_core.SubscribeAppTheme(new AppThemeForwarder(subscription, ui)));
+        return subscription;
+    }
+
+    /// <summary>
+    /// Changes the app theme and saves it at once, on the core's threads; observers see it once it is saved. A core that stores
+    /// nothing (<see cref="Create"/>) only publishes it. Not cancellable: it is one small write.
+    /// </summary>
+    /// <exception cref="CoreStoreException">The settings could not be saved; the theme stays as it was.</exception>
+    public Task SetAppThemeAsync(AppTheme theme) =>
+        CoreCall.RunUncancellableAsync(async () =>
+        {
+            await _core.SetAppTheme(Map.ToFfi(theme)).ConfigureAwait(false);
+            return true;
+        });
+
     /// <summary>
     /// The saved servers now, in the order they were added, read from the core: a change shows here as soon as its call returns.
     /// </summary>
