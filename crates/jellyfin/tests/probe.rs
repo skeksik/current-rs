@@ -234,7 +234,10 @@ async fn a_starting_or_refusing_server_is_unavailable() {
 async fn other_servers_are_not_jellyfin() {
     // A web page where the endpoint should be: a web sign-in gateway's page, as far as the probe can tell (ADR 0017).
     let page = StandIn::start(vec![("/System/Info/Public", html(200))]).await;
-    assert_eq!(probe(&page.address("")).await, Err(ProbeError::GatewaySignIn));
+    assert_eq!(
+        probe(&page.address("")).await,
+        Err(ProbeError::GatewaySignIn)
+    );
     // JSON without the fields Jellyfin always sends.
     let other = StandIn::start(vec![(
         "/System/Info/Public",
