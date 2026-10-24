@@ -2,6 +2,7 @@ using Current.Bindings;
 using Current.Shell.Pages;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 using Windows.ApplicationModel.DataTransfer;
 
 namespace Current.Shell;
@@ -86,8 +87,15 @@ internal static class SmokeRun
             Check(true, "local interfaces read");
 
             // Last: closing the only window ends XAML's message loop, so nothing may be awaited after it (seen in CI: the run stopped at
-            // the next await and exited without a result).
+            // the next await and exited without a result). The window is shown so the navigation view's template applies, and the
+            // content layer is read from the template part itself: on Home it has a visible background, on Settings none.
             var window = new MainWindow();
+            window.Activate();
+            var shown = await Task.WhenAny(window.Shown, Task.Delay(Timeout)) == window.Shown;
+            Check(shown, "main window shown");
+            Check(Alpha(window.ContentLayerBackground) > 0, $"home shows the content layer (alpha {Alpha(window.ContentLayerBackground)})");
+            window.ShowSettings();
+            Check(Alpha(window.ContentLayerBackground) == 0, $"settings shows no content layer (alpha {Alpha(window.ContentLayerBackground)})");
             window.Close();
             Check(true, "main window built");
         }
@@ -101,6 +109,9 @@ internal static class SmokeRun
         Program.SetExitCode(failures == 0 ? 0 : 1);
         Application.Current.Exit();
     }
+
+    /// <summary>The opacity of a solid brush; -1 for no brush or another kind.</summary>
+    private static int Alpha(Brush? brush) => brush is SolidColorBrush solid ? solid.Color.A : -1;
 
     /// <summary>
     /// The core on a data folder of its own, with secrets in memory and no network: a first open creates the settings, a second loads

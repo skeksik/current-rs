@@ -2,6 +2,7 @@
     x:Class="Current.Shell.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:shell="using:Current.Shell"
     Title="Current">
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="Base" />
@@ -18,6 +19,15 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
+
+        <!-- The content layer's brushes, which follow the theme: the navigation view's ContentGrid is bound to them on content
+             pages (MainWindow.ApplyContentLayer). The same values as the template's ContentGrid (NavigationView.xaml, tag
+             winui3/release/2.5.1, read 2026-10-24). -->
+        <Border
+            x:Name="ContentLayerBrushes"
+            Visibility="Collapsed"
+            Background="{ThemeResource NavigationViewContentBackground}"
+            BorderBrush="{ThemeResource NavigationViewContentGridBorderBrush}" />
 
         <!-- With a custom title bar, the navigation view's back and pane buttons move into it (the TitleBar control's page). -->
         <TitleBar
@@ -67,7 +77,6 @@
             IsPaneToggleButtonVisible="False"
             IsSettingsVisible="True"
             ItemInvoked="OnItemInvoked"
-            DisplayModeChanged="OnDisplayModeChanged"
             PaneOpened="OnPaneOpenedOrClosed"
             PaneClosed="OnPaneOpenedOrClosed">
             <NavigationView.Resources>
@@ -94,12 +103,19 @@
                          same tag), so the pane's top edge showed as a line under the title bar. Only the edge towards the page stays,
                          the SplitView's own default (SplitViewLeftBorderThemeThickness 0,0,1,0). -->
                     <Thickness x:Key="NavigationViewBorderThickness">0,0,1,0</Thickness>
-                    <!-- In Minimal the header's margin is -24,44,0,0, which assumes the navigation view's own pane and back buttons to
-                         its left (NavigationView_themeresources.xaml, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24).
-                         Those are hidden here, so the header takes the page's Minimal left inset instead (PageLayout.cs). -->
-                    <Thickness x:Key="NavigationViewMinimalHeaderMargin">24,44,0,0</Thickness>
+                    <!-- The header's own margins are 56,44,0,0 and, in Minimal, -24,44,0,0, which assumes the navigation view's own
+                         pane and back buttons to its left (NavigationView_themeresources.xaml, same tag). Both are 0 here: the header
+                         is placed by PageLayout.cs through the HeaderTemplate, the same in every display mode. -->
+                    <Thickness x:Key="NavigationViewHeaderMargin">0</Thickness>
+                    <Thickness x:Key="NavigationViewMinimalHeaderMargin">0</Thickness>
                 </ResourceDictionary>
             </NavigationView.Resources>
+            <NavigationView.HeaderTemplate>
+                <DataTemplate>
+                    <!-- Font size and weight come from the template's header style (28 px SemiBold). -->
+                    <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis" shell:PageLayout.IsHeader="True" />
+                </DataTemplate>
+            </NavigationView.HeaderTemplate>
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
             </NavigationView.MenuItems>

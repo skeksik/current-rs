@@ -5,6 +5,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
@@ -47,6 +48,8 @@ public sealed partial class MainWindow : Window
 
     private readonly SolidColorBrush _transparent = new(Microsoft.UI.Colors.Transparent);
 
+    private readonly TaskCompletionSource _shown = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public MainWindow()
     {
         InitializeComponent();
@@ -65,7 +68,6 @@ public sealed partial class MainWindow : Window
 
         Activated += OnActivated;
         Root.Loaded += OnRootLoaded;
-        Notices.Margin = PageLayout.NoticesMargin;
         // A handler of its own, so the one that keeps the selection and header in step stays as it is.
         ContentFrame.Navigated += (_, _) => ApplyContentLayer();
 
@@ -82,11 +84,18 @@ public sealed partial class MainWindow : Window
         Notices.Children.Add(notice);
     }
 
+    /// <summary>Completes when the window's content has loaded and the navigation view's template is applied (the smoke run).</summary>
+    internal Task Shown => _shown.Task;
+
+    /// <summary>The content layer's background now, or null if its template part was not found (the smoke run).</summary>
+    internal Brush? ContentLayerBackground => _contentLayer?.Background;
+
+    /// <summary>Opens Settings, as its item in the pane does (the smoke run).</summary>
+    internal void ShowSettings() => Navigate(typeof(SettingsPage), new SuppressNavigationTransitionInfo());
+
     private void OnRootLoaded(object sender, RoutedEventArgs e)
     {
         Root.Loaded -= OnRootLoaded;
-        // A window that opens narrow stays in the navigation view's initial Minimal mode, which raises no DisplayModeChanged.
-        ApplyDisplayMode(NavView.DisplayMode);
         // The template is applied by now: a missing part is only traced, and the page keeps the control's default look.
         ApplyContentLayer();
         if (_contentLayer is null)
@@ -104,6 +113,7 @@ public sealed partial class MainWindow : Window
         ApplyMinimumSize();
         // The scale changes when the window moves to a display with another scale or the user changes it.
         Root.XamlRoot.Changed += (_, _) => ApplyMinimumSize();
+        _shown.TrySetResult();
     }
 
     /// <summary>
@@ -122,35 +132,35 @@ public sealed partial class MainWindow : Window
         presenter.PreferredMinimumHeight = (int)Math.Ceiling(MinWindowHeight * scale);
     }
 
-    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) =>
-        ApplyDisplayMode(args.DisplayMode);
-
-    /// <summary>The page's insets follow the display mode: only Minimal hides both the pane and the icon rail (PageLayout).</summary>
-    private void ApplyDisplayMode(NavigationViewDisplayMode mode)
-    {
-        PageLayout.SetMinimal(mode == NavigationViewDisplayMode.Minimal);
-        Notices.Margin = PageLayout.NoticesMargin;
-    }
-
     /// <summary>
-    /// Shows the content layer behind content pages and Mica behind pages of settings cards (PageLayout.HasContentLayer). The layer
-    /// is the template's ContentGrid, whose Background and BorderBrush come from ThemeResources (NavigationViewContentBackground,
-    /// NavigationViewContentGridBorderBrush; NavigationView.xaml, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) and
-    /// no visual state sets either. A local value hides them; ClearValue brings the template's values back, which rank below local
-    /// ones ("Dependency properties overview", learn.microsoft.com, ms.date 2026-07-27, read 2026-10-24).
+    /// Shows the content layer behind content pages and Mica behind pages of settings cards (PageLayout.HasContentLayer), and places
+    /// the page's title, notices and column for it. The layer is the template's ContentGrid, whose Background and BorderBrush come
+    /// from ThemeResources (NavigationViewContentBackground, NavigationViewContentGridBorderBrush; NavigationView.xaml,
+    /// microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) and no visual state sets either. Values set by a template are
+    /// local values in WinUI's property system, which knows only default, style and local sources (GetBaseValueSource,
+    /// PropertySystem.cpp, same tag), so ClearValue would leave no brush at all: that hid the layer on every page in the owner's run
+    /// (2026-10-24). Content pages bind both to ContentLayerBrushes (MainWindow.xaml) instead, which follows the theme.
     /// </summary>
     private void ApplyContentLayer()
     {
-        // The template's items name parts "ContentGrid" too, so the layer is taken from the SplitView it is the content of.
-        _contentLayer ??= (FindDescendant(NavView, "RootSplitView") as SplitView)?.Content as Grid;
-        if (_contentLayer is null || ContentFrame.Content is not Page page)
+        if (ContentFrame.Content is not Page page)
         {
             return;
         }
-        if (PageLayout.GetHasContentLayer(page))
+        var hasLayer = PageLayout.GetHasContentLayer(page);
+        PageLayout.SetContentLayer(hasLayer);
+        Notices.Margin = PageLayout.NoticesMargin;
+
+        // The template's items name parts "ContentGrid" too, so the layer is taken from the SplitView it is the content of.
+        _contentLayer ??= (FindDescendant(NavView, "RootSplitView") as SplitView)?.Content as Grid;
+        if (_contentLayer is null)
         {
-            _contentLayer.ClearValue(Panel.BackgroundProperty);
-            _contentLayer.ClearValue(Grid.BorderBrushProperty);
+            return;
+        }
+        if (hasLayer)
+        {
+            _contentLayer.SetBinding(Panel.BackgroundProperty, new Binding { Source = ContentLayerBrushes, Path = new PropertyPath("Background") });
+            _contentLayer.SetBinding(Grid.BorderBrushProperty, new Binding { Source = ContentLayerBrushes, Path = new PropertyPath("BorderBrush") });
         }
         else
         {

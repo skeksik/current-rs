@@ -126,10 +126,18 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   (`NavigationView_themeresources.xaml`); the Minimal state sets the border to 0,1,0,0 and the corner to 0. It holds the header and
   the Frame and lies inside the NavigationView, which is below our TitleBar's row, so the layer starts under the title bar. A page
   sets `shell:PageLayout.HasContentLayer="False"` (Settings); on each navigation `MainWindow` sets `ContentGrid`'s `Background` and
-  `BorderBrush` to transparent for such a page (the navigation view has no background of its own, so the window's Mica shows) and
-  clears them for the others. No visual state sets either property, and the template's values return on `ClearValue`: "the
-  template-set values must be distinguishable from a true local value, so that any new local value can overwrite it" ("Dependency
-  properties overview", learn.microsoft.com, ms.date 2026-07-27, read 2026-10-24). A theme switch while Settings shows is not
+  `BorderBrush` to transparent for such a page (the navigation view has no background of its own, so the window's Mica shows) and,
+  for the others, binds them to `ContentLayerBrushes`, a collapsed `Border` in `MainWindow.xaml` with the same two ThemeResources,
+  so they follow the theme. No visual state sets either property.
+  - Why the first version showed no layer on any page (owner's run, 2026-10-24, case 4): it called `ClearValue` on content pages,
+    expecting the template's values back, as "Dependency properties overview" (learn.microsoft.com, ms.date 2026-07-27, read
+    2026-10-24) describes ("the template-set values must be distinguishable from a true local value"). WinUI's property system has
+    no such source: `GetBaseValueSource` (`PropertySystem.cpp`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-24) knows
+    only default, style and local values, so a value set in a template is a local one and `ClearValue` dropped it to the property's
+    default, no brush. The 1 px border kept its thickness, which is why the owner measured 57.3 px for 56.
+  - The smoke run now shows the window and reads `ContentGrid`'s background on Home (a brush with some opacity) and after opening
+    Settings (fully transparent), so CI catches this.
+  A theme switch while Settings shows is not
   verified on screen. That the layer matches Task Manager's is not verified, the owner compares with Task Manager. If a WinUI
   version renames `RootSplitView` or `PART_PaneToggleButton`, nothing fails: `MainWindow` traces the part's name once loaded
   (`Trace.TraceWarning`) and the control keeps its default look or name.
@@ -210,29 +218,36 @@ Sources, read 2026-10-23 on learn.microsoft.com: "Dialog controls" (ms.date 2026
 (ms.date 2026-04-08), "Keyboard accessibility" (ms.date 2026-10-04). Each screen renders the core's state and sends the user's
 actions; nothing is decided in C#.
 - **Page layout:** each page's content is one column left-aligned under the page title, not centred. One rule in every display
-  mode (`PageLayout.cs`): the page title, the notices and the column start at the same left inset, the column keeps 24 px on its
-  right and below, and its first item (a card or a section header) is 24 px below the title on every page. On a content page all
-  of it sits inside the content layer.
-  - Expanded with the pane open, and Expanded with it closed or Compact (the 48 px icon rail): left 56 px from the content's left
-    edge, that is from the pane or the rail, where the NavigationView puts its header (`NavigationViewHeaderMargin` 56,44,0,0,
-    `NavigationView_themeresources.xaml`, microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-23; the Expanded and Compact
-    states leave the header's margin as it is, and the content starts after the pane or the rail in both); right 24.
-  - Minimal (narrower, pane hidden): left and right 24 px, equal margins at both window edges (owner's run, 2026-10-24). The
-    control's own Minimal header margin is -24,44,0,0 (same file, read 2026-10-24), which assumes its pane and back buttons to the
-    header's left; those are hidden here, so `MainWindow.xaml` sets `NavigationViewMinimalHeaderMargin` to 24,44,0,0 on `NavView`.
-    The NavigationView page recommends "12px margins for your content area when NavigationView is in Minimal mode and 24px margins
-    otherwise"; 24 keeps the right margin the same in both modes (manager, 2026-10-24).
-  - The gap: 24 px of top padding on the column, and Settings' first section header has no top margin of its own (later ones keep
-    24 above). The owner found the old gap (0, plus 8 above Settings' first header) too small next to Windows Settings'
-    Accessibility page. The WinUI Gallery's settings page has 30 above its first section header (`SettingsSectionHeaderTextBlockStyle`
-    margin 1,30,0,6, `Pages/SettingsPage.xaml`, main at 14061ee, read 2026-10-24); 24 was chosen to keep the 4 px grid and one
-    value on every page (manager, 2026-10-24). Windows Settings' own gap is not verified.
-  - A static resource cannot change with the display mode, so each page marks its column `Grid` with
-    `shell:PageLayout.IsColumn="True"`; `PageLayout` sets its padding and keeps a weak reference, and `MainWindow` calls
-    `PageLayout.SetMinimal` on `DisplayModeChanged` (true only for Minimal), which updates the live columns and the notices' margin.
+  mode (`PageLayout.cs`), measured from the content's left edge (the pane, the icon rail or the window's edge), and one of two by
+  the page (owner, 2026-10-24, after the owner's run of that day measured the first version, which put the title and content
+  56 px from the pane and the title's glyphs 57 px below the title bar):
+  - Without the content layer (Settings), as Windows Settings: title, notices and column 24 px from the left, the column 24 px from
+    the right and the bottom; the title's glyphs 6 px below the title bar. The owner measured Windows Settings at 686 px: 25 px at
+    both sides, the title's glyphs 6 px below its 48 px title bar; on a wide window its content about 26 px after its pane.
+  - With the content layer (Home, Add a server, Sign in), as Task Manager's Users page inside its layer: title, notices and column
+    17 px from the layer's inner left edge, the column 17 px from its right and bottom; the title's glyphs 21 px below its inner
+    top. The owner measured Task Manager's at 17.3 and 20.7 px. Task Manager's heading is smaller (cap height 10 px against 19.3
+    here); the title's size is unchanged, not verified against Task Manager's style.
+  - How: the navigation view's header margins (`NavigationViewHeaderMargin` 56,44,0,0 and `NavigationViewMinimalHeaderMargin`
+    -24,44,0,0, `NavigationView_themeresources.xaml`, microsoft-ui-xaml, tag winui3/release/2.5.1) are 0 in `MainWindow.xaml`, so
+    the display mode no longer matters, and the header is a `TextBlock` in `NavigationView.HeaderTemplate` that `PageLayout`
+    places (`shell:PageLayout.IsHeader`). Worked from the owner's run: the header's 28 px glyphs start about 13 px below the top of
+    its box, which is at least 36 px high (`MinHeight="{StaticResource PaneToggleButtonHeight}"` on `HeaderContent`,
+    `NavigationView.xaml`). Without the layer the box is 8 px above the content's top (1 px of transparent layer border + 13 - 8 =
+    6); with it, 8 px below the layer's inner top (8 + 13 = 21).
+  - The gap: the distance from the title's glyphs to the first item stays what the owner's run measured against Windows Settings'
+    Accessibility page (title baseline to first text 55 physical px here and there, at 150%), which was 24 px between the boxes
+    with the header at margin 0. With the layer the header's box grows with its 8 px margin, so the column's top padding stays 24;
+    without it the 36 px box ends 7 px higher than before (its glyphs rise 8), so the top padding is 17. Settings' first section
+    header has no top margin of its own (later ones keep 24 above). The WinUI Gallery's settings page has 30 above its first section
+    header (`SettingsSectionHeaderTextBlockStyle` margin 1,30,0,6, `Pages/SettingsPage.xaml`, main at 14061ee, read 2026-10-24).
+  - Each page marks its column `Grid` with `shell:PageLayout.IsColumn="True"`, and `PageLayout` keeps weak references to the live
+    columns and headers; on every navigation `MainWindow` calls `PageLayout.SetContentLayer` with the page's
+    `PageLayout.HasContentLayer`, which places them and the notices.
+  - Not verified: the 13 px glyph offset and the 36 px box at other display scales and text sizes; the owner compares.
   The column is a `Grid` with that padding and one `*` column with a `MaxWidth`: the column fills the page up to its maximum and
-  stays at the left. Max widths, padding included: Settings and Home 1000 px (column 920; "a scrollable layout with a constrained
-  max width (around 1000–1100 px)", "Guidelines for app settings"), Add a server 640 (560), Sign in 480 (400). Why not a
+  stays at the left. Column widths at most: Settings and Home 920 px (about 970 with the padding; "a scrollable layout with a
+  constrained max width (around 1000–1100 px)", "Guidelines for app settings"), Add a server 560, Sign in 400. Why not a
   StackPanel: "Stretch is the default for both properties, and elements fill all of the space they're provided in the parent
   container" ("Alignment, margin, padding", learn.microsoft.com, ms.date 2024-09-26, read 2026-10-23). With `Left` the panel
   takes its content's width, so cards would differ in width, and a stretched panel with a `MaxWidth` is centred, which was the
@@ -432,10 +447,13 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
 7. on a temporary data folder with secrets in memory: a first `OpenAsync` reports `Created`, a second `Loaded`; the saved servers
    arrive on the UI thread, empty; probing an empty address fails with `InvalidAddress(Empty)` without a request; the folder is
    deleted after;
-8. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`), and only settings opts out of the content layer (`PageLayout.HasContentLayer`; the window is not shown, so `ContentGrid` itself is not reached);
+8. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`), and only settings opts out
+   of the content layer (`PageLayout.HasContentLayer`);
 9. the network facts, the device name and the local interfaces can be read (none is printed beyond the connectivity level);
-10. last, the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes: closing the only window ends XAML's message
-    loop, so nothing can be awaited after it (CI run 39883272147 stopped at the next await and exited 0 without a result).
+10. last, the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and is shown (its content loads within 10 s); the
+    navigation view's content layer (`ContentGrid`) has a visible background on Home and a transparent one after opening Settings;
+    then it closes: closing the only window ends XAML's message loop, so nothing can be awaited after it (CI run 39883272147
+    stopped at the next await and exited 0 without a result).
 No check sends anything over the network; discovery (UDP) is left out.
 `smoke.ps1` fails on a non-zero exit code, a missing "smoke run passed" line or a run longer than 120 s.
 
@@ -803,3 +821,34 @@ New findings from the owner during the run (not fixed here):
   closed: content 25 px from the left and right edges, the title's glyphs 54 px from the window's top (6 px below its 48 px title
   bar). Here at 600 px: 24 px at both sides, but the title's glyphs 105 px from the top (57 px below the title bar). On a wide
   window Windows Settings' content starts about 26 px after its pane (its pane edge estimated, not verified), here 56 px.
+
+## Window chrome: owner's re-check
+The fixes for the run above (case 4 and the new findings), on fix/windows-window-chrome. Light and dark theme; compare side by side
+with Task Manager's Users page (layer) and Windows Settings (everything else). Widths are the navigation view's; on the window's
+visible frame the thresholds sit about 3 px higher (the rail from about 644 px, the full pane from about 1011), as the run found the
+navigation view 4 physical px narrower than the frame at 150% (noted, not changed).
+1. Content layer (case 4 of the run), at a wide, a medium and a small width:
+   - Home (with a server), Add a server and Sign in show the layer: a surface slightly different from the pane, with a thin
+     border at its top and left and a rounded top-left corner, starting under the title bar and running to the window's right and
+     bottom edges. At the small width it has a top border only and no rounded corner.
+   - Settings shows no layer: the same Mica as the pane and the title bar.
+   - Home -> Settings -> Home, and back with Alt+Left: the layer goes and comes back each time. Switch light/dark while on Settings,
+     then go Home: the layer has the new theme's colours; and the other way round.
+   - Inside the layer, against Task Manager's Users page: the title's glyphs about 17 px from the layer's inner left edge and
+     21 px below its inner top; the cards and boxes 17 px from its right edge. Note any difference (the title stays the larger
+     28 px heading).
+2. Margins without the layer (Settings), against Windows Settings at about the same widths: wide, the title and cards about 24 px
+   after the pane (Windows Settings about 26); small (around 600 to 690 px), 24 px at both window edges (Windows Settings 25) and
+   the title's glyphs about 6 px below the title bar. The distance from the title to the first section header looks as before
+   (it passed in the run). Same in every display mode, with the pane open or closed.
+3. Pane colour: at a medium and a small width, open the pane over the page: it is the title bar's colour (#F3F3F3 light, #202020
+   dark), not acrylic, and there is no line between the title bar and the pane. Note whether Windows Settings shows a line at the
+   pane's right edge (here a 1 px line stays there). Wide: the full pane and the rail look as before.
+4. Caption buttons: minimise, maximise and close are the standard 46 × 32 px at the top of the 48 px title bar, as in Windows
+   Settings; drag, double-click and snap layouts still work.
+5. Back with the pane open (medium and small widths), from Home -> Settings with the pane opened over the page:
+   - the title bar's Back button closes the pane and goes back to Home;
+   - again with Alt+Left, then with the mouse Back button: each closes the pane and goes back.
+   - With the pane closed, back works as before. After closing the pane this way on a medium window, widening to wide keeps the
+     rail (the navigation view's forced close).
+
