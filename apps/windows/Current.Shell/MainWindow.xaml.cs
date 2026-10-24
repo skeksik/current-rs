@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Current.Shell.Pages;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
@@ -87,8 +88,20 @@ public sealed partial class MainWindow : Window
         Root.Loaded -= OnRootLoaded;
         // A window that opens narrow stays in the navigation view's initial Minimal mode, which raises no DisplayModeChanged.
         ApplyDisplayMode(NavView.DisplayMode);
+        // The template is applied by now: a missing part is only traced, and the page keeps the control's default look.
         ApplyContentLayer();
-        DispatcherQueue.TryEnqueue(NamePaneToggleButton);
+        if (_contentLayer is null)
+        {
+            Trace.TraceWarning("Current: NavigationView template part RootSplitView not found; every page keeps the content layer");
+        }
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            NamePaneToggleButton();
+            if (_paneToggleButton is null)
+            {
+                Trace.TraceWarning("Current: TitleBar template part PART_PaneToggleButton not found; the pane button keeps its name");
+            }
+        });
         ApplyMinimumSize();
         // The scale changes when the window moves to a display with another scale or the user changes it.
         Root.XamlRoot.Changed += (_, _) => ApplyMinimumSize();

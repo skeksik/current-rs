@@ -111,7 +111,9 @@ copied into the app's output and publish folder. The pitfalls in `docs/notes/uni
   clears them for the others. No visual state sets either property, and the template's values return on `ClearValue`: "the
   template-set values must be distinguishable from a true local value, so that any new local value can overwrite it" ("Dependency
   properties overview", learn.microsoft.com, ms.date 2026-07-27, read 2026-10-24). A theme switch while Settings shows is not
-  verified on screen. That the layer matches Task Manager's is not verified, the owner compares with Task Manager.
+  verified on screen. That the layer matches Task Manager's is not verified, the owner compares with Task Manager. If a WinUI
+  version renames `RootSplitView` or `PART_PaneToggleButton`, nothing fails: `MainWindow` traces the part's name once loaded
+  (`Trace.TraceWarning`) and the control keeps its default look or name.
 - **Alt+Left, the GoBack key and the mouse Back button** call the same `TryGoBack`; **Alt+Right and the mouse Forward button** call
   `TryGoForward` (`Frame.GoForward` when `CanGoForward`). The WinUI 3 page "Navigation history and backwards navigation" (ms.date
   2026-09-19, read 2026-10-22) no longer lists these inputs; the UWP page (learn.microsoft.com/windows/uwp/ui-input/back-navigation,
@@ -411,7 +413,7 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
 7. on a temporary data folder with secrets in memory: a first `OpenAsync` reports `Created`, a second `Loaded`; the saved servers
    arrive on the UI thread, empty; probing an empty address fails with `InvalidAddress(Empty)` without a request; the folder is
    deleted after;
-8. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`);
+8. the home, add-server, sign-in and settings pages build (settings uses the toolkit's `SettingsCard`), and only settings opts out of the content layer (`PageLayout.HasContentLayer`; the window is not shown, so `ContentGrid` itself is not reached);
 9. the network facts, the device name and the local interfaces can be read (none is printed beyond the connectivity level);
 10. last, the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and closes: closing the only window ends XAML's message
     loop, so nothing can be awaited after it (CI run 39883272147 stopped at the next await and exited 0 without a result).
@@ -724,6 +726,9 @@ pixels (at 150% scale, 1008 px is 1512 physical and 641 is 962).
    Users page. Settings shows no layer: the same Mica as the pane, with no border. Go Home -> Settings -> Home: the layer goes and
    comes back each time. Switch light/dark on Settings and go Home: the layer has the new theme's colours. At the small width
    the layer has a top border only and no rounded corner (the navigation view's Minimal state).
+   Inside the layer, compare with Task Manager's Users page: where the page title sits (here 56 px from the layer's left edge, the
+   navigation view's own header position, and 44 px below its top), and the gap between the content and the layer's right and
+   bottom edges (here 24 px). If Task Manager's is tighter, note by how much: it is one constant in `PageLayout.cs`.
 5. The minimum (drag a corner inwards as far as it goes): the window stops at 500 × 500 px. On each page nothing is cut off at the
    right edge and there is no horizontal scroll bar: the cards and boxes shrink, and the title bar still shows the back and pane
    buttons, "Current" and the caption buttons. Move the window to a display with another scale (or change the scale): the minimum

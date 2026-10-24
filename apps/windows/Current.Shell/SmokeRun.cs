@@ -65,11 +65,17 @@ internal static class SmokeRun
             await StorageChecksAsync(ui, Check);
 
             // The pages' XAML loads; Settings uses the Community Toolkit's SettingsCard, so this also shows the toolkit loads.
-            _ = new HomePage();
-            _ = new AddServerPage();
-            _ = new SignInPage();
-            _ = new SettingsPage();
+            var home = new HomePage();
+            var addServer = new AddServerPage();
+            var signIn = new SignInPage();
+            var settings = new SettingsPage();
             Check(true, "home, add-server, sign-in and settings pages built");
+            // Which pages show the navigation view's content layer (MainWindow.ApplyContentLayer); the window is never shown here, so
+            // the template part itself is not reached.
+            Check(
+                PageLayout.GetHasContentLayer(home) && PageLayout.GetHasContentLayer(addServer) && PageLayout.GetHasContentLayer(signIn)
+                    && !PageLayout.GetHasContentLayer(settings),
+                "content pages have the content layer, settings has none");
 
             // The network observer reads the facts without asking for anything; the facts themselves are not printed.
             var facts = NetworkObserver.Read();
