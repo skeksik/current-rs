@@ -55,14 +55,19 @@
             </TitleBar.Resources>
         </TitleBar>
 
-        <!-- The navigation view's own adaptive behaviour, as in Task Manager (owner, 2026-10-24): the full pane from 1008 px, the
-             icon rail from 641 px, hidden below that (the default thresholds, NavigationView page, learn.microsoft.com, ms.date
-             2026-10-02, read 2026-10-24). The title bar's pane button opens and closes it: inline on a wide window, over the
-             content on a narrower one. -->
+        <!-- The navigation view's "Compact" adaptive pattern, so the pane is never hidden (owner, 2026-10-24): "an expanded left pane
+             on large window widths, and a LeftCompact, icon-only, nav pane on both medium and small window widths … set
+             CompactModeThresholdWidth to 0" (NavigationView page, learn.microsoft.com, ms.date 2026-10-02, read 2026-10-24). From
+             1008 px (the default ExpandedModeThresholdWidth) the title bar's pane button switches between the full pane and the icon
+             rail inline; below that the rail shows and the opened pane covers the page.
+             OpenPaneLength: Windows Settings' full pane (owner, 2026-10-24). 280 is a placeholder until the owner's measurement; the
+             control's default is 320, and no Microsoft guideline gives a value. -->
         <NavigationView
             x:Name="NavView"
             Grid.Row="1"
             PaneDisplayMode="Auto"
+            CompactModeThresholdWidth="0"
+            OpenPaneLength="280"
             IsBackButtonVisible="Collapsed"
             IsPaneToggleButtonVisible="False"
             IsSettingsVisible="True"

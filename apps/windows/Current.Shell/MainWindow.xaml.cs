@@ -133,11 +133,10 @@ public sealed partial class MainWindow : Window
     private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) => UpdateBackButton();
 
     /// <summary>
-    /// The pane open over the page (Compact or Minimal): it counts as a back step, which back closes. The full pane inline on a wide
-    /// window does not (owner, 2026-10-24).
+    /// The pane open over the page (Compact; Minimal is never reached, CompactModeThresholdWidth is 0): it counts as a back step,
+    /// which back closes. The full pane inline on a wide window does not (owner, 2026-10-24).
     /// </summary>
-    private bool PaneOverlaysPage =>
-        NavView.IsPaneOpen && NavView.DisplayMode is NavigationViewDisplayMode.Compact or NavigationViewDisplayMode.Minimal;
+    private bool PaneOverlaysPage => NavView.IsPaneOpen && NavView.DisplayMode == NavigationViewDisplayMode.Compact;
 
     /// <summary>The title bar's Back button is enabled while there is a page to go back to or the pane overlays the page.</summary>
     private void UpdateBackButton() => AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack || PaneOverlaysPage;
