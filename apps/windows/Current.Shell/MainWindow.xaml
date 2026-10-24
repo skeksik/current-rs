@@ -27,7 +27,28 @@
             IsBackButtonEnabled="False"
             BackRequested="OnTitleBarBackRequested"
             IsPaneToggleButtonVisible="True"
-            PaneToggleRequested="OnTitleBarPaneToggleRequested" />
+            PaneToggleRequested="OnTitleBarPaneToggleRequested">
+            <!-- A disabled back button keeps its transparent background and only dims its glyph, as the navigation view's own back
+                 button does: its Disabled state sets only the glyph's foreground (NavigationBackButton.xaml), while the title bar's
+                 fills the button with ControlFillColorDisabledBrush (TitleBarBackButtonBackgroundDisabled,
+                 TitleBar_themeresources.xaml; both microsoft-ui-xaml, tag winui3/release/2.5.1, read 2026-10-23). High contrast
+                 keeps the control's own value, which is the same as its enabled one. -->
+            <TitleBar.Resources>
+                <ResourceDictionary>
+                    <ResourceDictionary.ThemeDictionaries>
+                        <ResourceDictionary x:Key="Default">
+                            <StaticResource x:Key="TitleBarBackButtonBackgroundDisabled" ResourceKey="SubtleFillColorTransparentBrush" />
+                        </ResourceDictionary>
+                        <ResourceDictionary x:Key="Light">
+                            <StaticResource x:Key="TitleBarBackButtonBackgroundDisabled" ResourceKey="SubtleFillColorTransparentBrush" />
+                        </ResourceDictionary>
+                        <ResourceDictionary x:Key="HighContrast">
+                            <StaticResource x:Key="TitleBarBackButtonBackgroundDisabled" ResourceKey="SystemControlBackgroundBaseLowBrush" />
+                        </ResourceDictionary>
+                    </ResourceDictionary.ThemeDictionaries>
+                </ResourceDictionary>
+            </TitleBar.Resources>
+        </TitleBar>
 
         <NavigationView
             x:Name="NavView"
@@ -46,7 +67,7 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <!-- Notices about the app's state that every page shows (App.ShowNotice): settings reset, a sign-in not remembered. -->
-                <StackPanel x:Name="Notices" Margin="24,0,24,0" Spacing="8" />
+                <StackPanel x:Name="Notices" Margin="{StaticResource PageNoticesMargin}" Spacing="8" />
                 <Frame x:Name="ContentFrame" Grid.Row="1" IsTabStop="True" Navigated="OnNavigated" />
             </Grid>
         </NavigationView>

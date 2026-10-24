@@ -8,6 +8,14 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+            <!-- A page's content column starts under the page title: the navigation view puts its header at 56 px from the content's
+                 left edge (NavigationViewHeaderMargin 56,44,0,0, NavigationView_themeresources.xaml, microsoft-ui-xaml, tag
+                 winui3/release/2.5.1, read 2026-10-23). With PaneDisplayMode="Left" it is always in its Expanded state, which keeps
+                 that margin at any window width (NavigationView.cpp, same tag). Each page puts this padding on a Grid whose one star
+                 column has the page's MaxWidth: the column fills the width up to that maximum and stays at the left. A StackPanel
+                 with HorizontalAlignment="Left" would size to its content instead, and one stretched with a MaxWidth centres. -->
+            <Thickness x:Key="PageColumnPadding">56,0,24,24</Thickness>
+            <Thickness x:Key="PageNoticesMargin">56,0,24,0</Thickness>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
