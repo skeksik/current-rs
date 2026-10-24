@@ -1,5 +1,6 @@
 using Current.Shell.Pages;
 using Microsoft.UI.Input;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -32,6 +33,9 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+        // Tall caption buttons, the same height as the title bar; this needs the content extended into the title bar first ("Title bar
+        // customization", "Tall title bar support for custom title bars", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-24).
+        AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
 
         // XAML cannot parse "GoBack" as a VirtualKey (XamlParseException in CI), so this one is added here.
         var goBack = new KeyboardAccelerator { Key = VirtualKey.GoBack };

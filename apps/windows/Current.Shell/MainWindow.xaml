@@ -46,6 +46,11 @@
                             <StaticResource x:Key="TitleBarBackButtonBackgroundDisabled" ResourceKey="SystemControlBackgroundBaseLowBrush" />
                         </ResourceDictionary>
                     </ResourceDictionary.ThemeDictionaries>
+                    <!-- The tall title bar, 48 px like the caption buttons (PreferredHeightOption, MainWindow.xaml.cs). The control's
+                         layout root takes TitleBarCompactHeight (32) and switches to TitleBarExpandedHeight (48) only when Content,
+                         LeftHeader or RightHeader is set (TitleBar.xaml, UpdateHeight in TitleBar.cpp, microsoft-ui-xaml, tag
+                         winui3/release/2.5.1, read 2026-10-24). This one has none, so the compact height itself is raised. -->
+                    <x:Double x:Key="TitleBarCompactHeight">48</x:Double>
                 </ResourceDictionary>
             </TitleBar.Resources>
         </TitleBar>
