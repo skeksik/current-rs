@@ -129,13 +129,20 @@ public sealed partial class MainWindow : Window
 
     /// <summary>Also on PaneOpening: Back is enabled as the pane starts to open over the page, as Windows Settings' back button is
     /// (owner's recording, 2026-10-24), not once its animation has ended.</summary>
-    private void OnPaneOpenedOrClosed(NavigationView sender, object args)
+    private void OnPaneOpenedOrClosed(NavigationView sender, object args) => QueuePaneStateUpdate();
+
+    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) => QueuePaneStateUpdate();
+
+    /// <summary>
+    /// Updates the pane button's name and Back once the navigation view has finished the change. Crossing 1008 px, it raises
+    /// DisplayModeChanged while the full pane is still open and closes or reopens the pane after; read at once, the pane counted as
+    /// over the page for that moment and Back flashed enabled (owner's recording, 2026-10-24).
+    /// </summary>
+    private void QueuePaneStateUpdate() => DispatcherQueue.TryEnqueue(() =>
     {
         NamePaneToggleButton();
         UpdateBackButton();
-    }
-
-    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) => UpdateBackButton();
+    });
 
     /// <summary>
     /// The pane open over the page (Compact; Minimal is never reached, CompactModeThresholdWidth is 0): it counts as a back step,
