@@ -141,8 +141,12 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
         gateway secrets in the keyring (PR 41), Jellyfin probe classification, header placement and the 400 diagnosis (PR 43),
         add-a-server gateway states, saved credentials and cookie rotation, the 401 rule (PR 44), the ffi surface and C# adapters
         (PR 45); ADRs 0006, 0012-0015 amended as ADR 0017 proposed
-  - [ ] Windows UI: password dialog, WebView2 sign-in window with the origin bar, extra headers editor, "Sign in to the gateway
-        again"; checked live on the owner's Nginx and Cloudflare test setups
+  - [x] Windows UI (2026-10-24, PR 47): password dialog, WebView2 sign-in window with the origin bar on a throw-away profile, extra
+        headers editor, "Sign in to the gateway again"; checked live on the owner's Nginx and Cloudflare test setups (all six cases
+        passed, docs/notes/windows-shell.md). A typed bare host keeps today's probe order, which may pick a direct plain-http port
+        over an https gateway; typing `https://` reaches the gateway (owner, 2026-10-24)
+  - [ ] Windows installer: make sure the WebView2 Runtime is present (Windows 10); today the app links to Microsoft's download
+        (owner: not now, 2026-10-24)
   - [ ] Images and the player carry gateway credentials (with the image path and the libmpv engine)
 
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
