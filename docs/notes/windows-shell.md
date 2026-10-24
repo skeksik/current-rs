@@ -169,7 +169,8 @@ actions; nothing is decided in C#.
     is cleared when the page is left.
   - "Use Quick Connect" below the form: shown once `CheckQuickConnectAsync` says the server offers it (disabled while unknown,
     hidden when off). Waiting shows the code in `TitleLargeTextBlockStyle`, selectable, named for Narrator digit by digit ("Quick
-    Connect code 1 2 3 4 5 6"), with "Waiting for approval…" and "Cancel" (Esc too).
+    Connect code 1 2 3 4 5 6"), with "Copy" next to it (named "Copy code" for Narrator: it copies the bare code and confirms in an
+    `InfoBar`, "Code copied to the clipboard.", as Copy diagnostics does), "Waiting for approval…" and "Cancel" (Esc too).
   - `SigningIn`: a ring with "Signing in…" (the progress page's example of a ring); Cancel or Esc.
   - Each `SignInProblem` in plain words (`ProblemText.SignIn`) in an error `InfoBar`.
   - `SignedIn`: back to Home and the back and forward history cleared (`MainWindow.ClearHistory`, which also updates the title
@@ -216,9 +217,19 @@ actions; nothing is decided in C#.
   Windows App SDK 0.8 to 2.0, AutomationPeer.RaiseNotificationEvent; both learn.microsoft.com, read 2026-10-23) when it appears and
   when a new code replaces it, once each, instead of "Waiting for approval…", so the two do not cut each other off. It is not a
   live region: the owner's runs found the code first unread, then, as a live region, read by its visible text as one number
-  ("six hundred ninety-seven …"), not by its name. The same text stays its `AutomationProperties.Name`, for when the user reaches
-  it. Not verified by ear: whether Narrator says "6 9 7" as single digits (if not, commas between the digits are the next try),
-  and whether focus moving to "Cancel" at the same moment cuts the notification short; found servers are named by
+  ("six hundred ninety-seven …"), not by its name. The same text is the `AutomationProperties.Name` of a `SpokenText` around the
+  code, for when the user reaches it: a named `TextBlock` was read twice in scan mode, by its name and then by its text (owner's
+  run, 2026-10-24). TextBlock is sealed ("public sealed class TextBlock", TextBlock page), so `SpokenText` derives from `Grid`
+  ("public class Grid : Panel", Grid page) and gives its own peer ("override OnCreateAutomationPeer so it returns a new instance of
+  your peer type", "Custom automation peers"): control type Text, the name, and no children (`GetChildrenCore`: "The collection of
+  AutomationPeer objects for child elements"); the `TextBlock` inside is also `AccessibilityView="Raw"` ("The primary use case is
+  omitting template parts that do not contribute meaningful accessibility semantics", "Custom automation peers"); all on
+  learn.microsoft.com, read 2026-10-24. Of the options weighed, a `Run` per digit still exposes the code as one text, and a hidden
+  second element is read where nothing is shown. The owner heard the digits read one by one, once, and again for a new code
+  (2026-10-24); not verified by ear: whether focus moving to "Cancel" at the same moment cuts the notification short. A finished
+  sign-in is announced, "Signed in to <server> as <user>.", from the window's `NavigationView` (`App.Announce`), which outlives the
+  sign-in page: Home has no live text, and the owner's run found Narrator reading only the title bar. Not verified by ear: whether
+  that is cut short by the title bar or by the "Signed in for this session only." notice; found servers are named by
   their server's name on the list item (`ContainerContentChanging`); an error `InfoBar` is closed and opened again when its message changes, because "Once the control is
   open, any changes made to the various properties … will not raise a notification event … we recommend you close and re-open the
   control" (InfoBar). Focus goes to the address box, and to the user name box (the password box when signing in again), once the page is
@@ -417,7 +428,9 @@ PR, starting with no `%LOCALAPPDATA%\Current` folder:
 10. Settings: the cards look like Windows Settings' cards (SettingsCard); About opens to show "© 2026 Skeksik". "Copy diagnostics"
     now copies the version, platform and settings state even without requests.
 11. Narrator on, start Quick Connect: the code is read once, digit by digit ("Quick Connect code 6 9 7 …", not "six hundred
-    ninety-seven"); Cancel and start it again: the new code is read once more (see "Quick Connect code and Narrator" below).
+    ninety-seven"), in scan mode too; Cancel and start it again: the new code is read once more; "Copy code" copies it and Narrator
+    reads the confirmation; a finished sign-in is read as "Signed in to <server> as <user>." (see "Quick Connect code and Narrator"
+    below).
 
 ## Windows shell: owner's run
 2026-10-22, head 4e56bcd, Windows 11 Pro 25H2 (build 26200.9711), x64. Built locally as above, since CI keeps no installer artifact:
@@ -580,7 +593,13 @@ of that branch, signed out of a server that offers Quick Connect:
 1. Narrator on (Win+Ctrl+Enter); open the sign-in page and press "Use Quick Connect". The code is read digit by digit, once, and
    not again as a number. Note whether "Cancel, button" is also read and whether it cuts the code short.
 2. Press Cancel, then "Use Quick Connect" again: the new code is read digit by digit, once.
-3. In scan mode (Caps Lock+Space), arrow to the code: Narrator reads "Quick Connect code" and the digits.
+3. In scan mode (Caps Lock+Space), arrow to the code: Narrator reads "Quick Connect code" and the digits, once, and not the code
+   again as a number.
+4. Tab to "Copy" next to the code: Narrator reads "Copy code, button". Press it (Enter or Space): "Code copied to the clipboard."
+   is shown and read. Paste into Notepad (not saved): the bare code, without spaces.
+5. Approve the code from another Jellyfin client: Home opens and Narrator reads "Signed in to <server> as <user>.", once, whole.
+   Note whether the title bar is read before or after it, or cuts it short.
+6. Sign out, then sign in with the password: the same announcement.
 
 ### Windows run (2026-10-24)
 Heads fix/narrator-quick-connect-code efa74f9 and fix/windows-layout-polish 6f1770b, merged in a throwaway local worktree (never
@@ -599,4 +618,4 @@ the run: 6-8 are 1-3 above, 9 is approving the code from another Jellyfin client
 10. **Pass.** Settings -> Accounts -> the server -> "Remove": after Esc, Enter and "Cancel", focus is back on "Remove" and
     Narrator says "Remove <name>, button" each time.
 
-New finding from the owner during the run (not fixed here): add a copy button for the Quick Connect code, next to `CodeText`.
+New finding from the owner during the run (not fixed here): add a copy button for the Quick Connect code, next to `CodeText`. Cases 8 and 9 and the copy button were fixed afterwards in the same branch (owner, 2026-10-24); cases 3-6 above check them.
