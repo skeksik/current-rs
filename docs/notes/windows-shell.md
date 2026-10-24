@@ -520,9 +520,15 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
 10. last, the main window (XAML, Mica, TitleBar, NavigationView, Home) builds and is shown (its content loads within 10 s); the
     navigation view's content layer (`ContentGrid`) has a visible background on Home and the same one after opening Settings;
     the window follows the core's app theme (`FollowAppTheme`): Dark, then Light, reach `Root.ActualTheme` and the caption buttons'
-    glyph colour (white, then black) within 10 s, then it goes back to System; then it closes: closing the only window ends XAML's message loop, so nothing can be awaited after it (CI run 39883272147
+    glyph colour (white, then black) within 10 s, then it goes back to System; before it closes, while it is still open (closing
+    the sign-in window must not be the last window closing), the sign-in window check below runs; then it closes: closing the only window ends XAML's message loop, so nothing can be awaited after it (CI run 39883272147
     stopped at the next await and exited 0 without a result).
-No check sends anything over the network; discovery (UDP) is left out.
+11. with `-StandIn` (CI passes it; `CURRENT_STAND_IN` for the app), the sign-in window (ADR 0017) against the Jellyfin stand-in's
+    portal on 127.0.0.1: the WebView2 Runtime is installed (its version printed); setup finds the web sign-in; the window opens the
+    portal's page, titled "Sign in to 127.0.0.1:<port>", its origin bar showing the origin with the warning (plain http); following
+    the portal's link sets its HttpOnly cookie, the window hands it over and setup reaches Ready; the window's throw-away profile
+    folder is deleted after it closes. Without `-StandIn` it prints a "skip" line (the install test's run has no stand-in).
+No check sends anything over the network beyond 127.0.0.1; discovery (UDP) is left out.
 `smoke.ps1` fails on a non-zero exit code, a missing "smoke run passed" line or a run longer than 120 s.
 
 ## Licences of what ships
@@ -1225,3 +1231,79 @@ and Light reaching the window and the caption-button glyphs). The owner compared
 7. High contrast and Narrator: the owner tried them: **pass**.
 
 The owner accepted the app theme and considers M1 done (2026-10-24).
+
+## Gateways (ADR 0017, implementation step 6)
+The Windows screens for servers behind an authentication gateway; all logic is the core's (PRs 41-45).
+- **Password gateway:** a `ContentDialog` ("Sign in"): "<origin> asks for a user name and password.", the realm only as "The site
+  says: “…”" in the body (cut at 200 characters), never as the title; user name and `PasswordBox`. A refused password shows the
+  dialog again with "The user name or password is incorrect." inside it. Over plain public http a warning shows and the button
+  reads "Sign in without encryption", which is the user's confirmation (`confirmPlainHttp`).
+- **Web sign-in:** add-server says what the address shows (ProblemText.GatewayWebPage) and offers "Sign in"; after a redirect to
+  another host it names the target origin and also offers "Use the address it points to" (`FollowRedirectAsync`). "Sign in" opens
+  the sign-in window (`Gateway/SignInWindow`): the system title bar, the window's default size and place, Mica; the title "Sign in
+  to <host[:port]>" (ADR 0017's example names the host; the origin bar shows the scheme); an origin bar with Segoe Fluent Icons
+  E72E (lock) for https and E7BA (warning) otherwise, named for Narrator ("Page address <origin>, secure connection"), updated on
+  `SourceChanged` and `NavigationCompleted`; the web view below it. A certificate this PC does not trust is refused
+  (`ServerCertificateErrorDetected` → `Cancel`), never offered to proceed, so the lock only ever shows on verified https. No script
+  bridge (`IsWebMessageEnabled` and `AreHostObjectsAllowed` off), no developer tools, no autofill or password saving, downloads
+  cancelled with a notice, pop-ups navigated in the same window (`NewWindowRequested`). After each navigation that lands on the
+  server's origin, `CookieManager.GetCookiesAsync(<server URL>)` (HttpOnly included) goes to `SubmitCookiesAsync`; the page closes
+  the window when the state leaves the web sign-in. The user closing it cancels: the page offers "Sign in" again. A navigation to
+  `accounts.google.com` is cancelled and the window shows ProblemText.GoogleRefusesWebViews with "Back to the sign-in page". The
+  main window's closing closes every sign-in window.
+- **Profile:** a new, empty WebView2 user data folder per window under `%LOCALAPPDATA%\Current\SignIn\<guid>`, deleted once the
+  window's browser process has exited (and leftovers at the next start or sign-in), not an InPrivate controller. Microsoft documents
+  what a user data folder holds and how to delete it: "WebView2 apps use user data folders to store browser data, such as cookies,
+  permissions, and cached resources"; "Each WebView2 session has exactly one UDF"; "If your app doesn't reuse user data from app
+  sessions, you can delete the UDF"; "wait for the browser process and all child processes to exit before deleting the UDF"; and
+  for an unpackaged WinUI 3 app in a protected folder "you must specify a custom UDF location" ("Manage user data folders",
+  learn.microsoft.com, ms.date 2026-06-26, read 2026-10-24). The InPrivate option's reference says only "Manage the controller's
+  InPrivate mode." (CoreWebView2ControllerOptions.IsInPrivateModeEnabled, learn.microsoft.com, read 2026-10-24), so what it keeps
+  is not documented.
+- **Extra headers** (`Gateway/ExtraHeadersEditor`): rows of a name (`TextBox`) and a value (`PasswordBox`), each named by its row
+  for Narrator, "Add a header", the core's reason when it refuses (`GatewayInputException` → ProblemText.GatewayInput). In
+  add-server behind an `Expander` "Advanced: extra headers" in any gateway state that takes them, opened by itself for
+  GatewayRefused; in Settings → Accounts → the server's expander, an "Advanced: extra headers" card whose "Edit headers" runs the
+  gateway sign-in with the editor in a dialog. The core takes headers only while the gateway asks for something (Password,
+  WebSignIn or Refused): when the gateway lets Current through already, Settings says nothing needed changing.
+- **Sign in to the gateway again:** `ServerStatus.GatewaySignInNeeded` shows as the server's connection text ("Sign in to the
+  gateway again") on Home and in Settings, and in Settings an accent "Sign in to the gateway" button runs `SignInToGateway`
+  through the same dialog, window or headers (`Gateway/GatewaySignInRunner`). The sign-in page offers the same as its error's
+  action when a saved server's gateway answers its sign-in (owner's run, case 1). The Jellyfin session is kept throughout (the core).
+- **Unsupported** and **EmbyHeaderIgnored**: ProblemText.GatewayUnsupported; ProblemText.EmbyHeaderIgnored names both server-side
+  fixes from `docs/notes/gateway-auth.md`.
+- **WebView2 Runtime:** WinUI's `Microsoft.Web.WebView2` 1.0.3719.77 (BSD-3-Clause, its licence and notice already shipped by
+  `build.ps1`) is the SDK; no package was added. The runtime is part of Windows 11; on Windows 10 "The vast majority of Windows 10
+  devices have the WebView2 Runtime installed already … A small number of Windows 10 devices don't have the WebView2 Runtime
+  installed", and Microsoft suggests deploying it with the app or redirecting users to its download page ("Distribute your app and
+  the WebView2 Runtime", learn.microsoft.com, updated 2026-10-02, read 2026-10-24). The app does the second
+  (`CoreWebView2Environment.GetAvailableBrowserVersionString`; the message links to Microsoft's page). The installer is unchanged
+  (owner, 2026-10-24: "Not now"); checking Microsoft's registry key and running its bootstrapper is a follow-up.
+
+### Gateways: Windows run (2026-10-25, owner's PC, Windows 11 Pro 10.0.26300.9711, WebView2 Runtime 155.0.4283.62)
+feat/gateway-windows, final build at c170a26, built with the four scripts (C# tests 40 passed; the smoke run passed, including the
+sign-in window against the stand-in's portal). The owner's own data folder; the owner typed every address and credential into the
+app; Claude read only the request log's paths and statuses. Example addresses only here.
+1. Basic password (Nginx): **pass** after one fix. The owner's first try had the server already saved and the password put in front
+   of it afterwards: its Jellyfin sign-in got the gateway's challenge and the page had nothing to offer. Fixed (c6903df): the error
+   says what the gateway wants and offers "Sign in to the gateway"; the dialog showed the origin and "The site says: …", a wrong
+   password showed it again with the error, the right one let the Jellyfin sign-in through. Typed with `https://`, setup shows the
+   password dialog without the plain-http warning. The legacy-authorization error was not checked separately. Found: typed without
+   a scheme, setup took Jellyfin's direct `http://media.example.com:8096` (reachable at the same name through a local DNS alias)
+   over the https gateway and asked to confirm plain http, since the core prefers any candidate where Jellyfin answers over a
+   gateway's answer. Reported to the manager as a `current-jellyfin` follow-up.
+2. Cloudflare Access, one-time PIN: **pass.** Setup named the redirect target and offered "Sign in" and "Use the address it points
+   to"; the window's title and its origin bar with the lock followed the pages; after the PIN the window closed by itself and the
+   Jellyfin sign-in followed. After "Revoke existing tokens" and a restart, Settings showed "Sign in to the gateway again"; signing
+   in to the gateway resumed the server without a Jellyfin sign-in. Seen: the status appears after a restart (or a network change,
+   or the core's periodic check), not at once: the app sends no requests of its own before M2's browsing.
+3. Cloudflare Access with Google: **pass**: the explanation showed instead of Google's page, the origin bar on the Access host with
+   the lock. Known limit: with Google as the only method and instant authentication on, "Back to the sign-in page" goes straight
+   back to the explanation. A Close button and a loop check were tried (99fac74) and withdrawn at the owner's request (c170a26).
+4. Cloudflare service token: **pass**: `CF-Access-Client-Id` and `CF-Access-Client-Secret` under extra headers added the server;
+   `Cookie`, `Host` and `Authorization` refused (the owner's report).
+5. The LAN address (`192.168.1.10:8096` style) for the same server: no gateway sign-in asked; diagnostics showed no secret; removing
+   the server deleted its `gateway/...` entries in Credential Manager: **pass**.
+6. Narrator, keyboard only and high contrast on the dialog, the window's origin bar and the headers editor: **pass**.
+Also changed on the run: one accent button per step on add-server ("Sign in" while offered, Connect otherwise; "Use these headers"
+not accent), and no example name in the headers editor (7f52cd1).
