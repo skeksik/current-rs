@@ -97,7 +97,18 @@ internal sealed class StandIn : IDisposable
     /// <c>fail &lt;path or page&gt;</c>, <c>unfail &lt;path or page&gt;</c> (answers 500 until unfailed; a page of the generated library is
     /// <c>/Items@&lt;start&gt;</c>).
     /// </summary>
+    /// <remarks>
+    /// The stand-in reads commands on a thread of its own, so a request sent right after a bare write could arrive before the command
+    /// applies (a probe could miss a gate just turned on). Each command is therefore followed by a count, which the stand-in answers
+    /// only after every earlier line: when this returns, the command has taken effect.
+    /// </remarks>
     public void Send(string command)
+    {
+        Write(command);
+        Ask("count", "/");
+    }
+
+    private void Write(string command)
     {
         _process.StandardInput.WriteLine(command);
         _process.StandardInput.Flush();
@@ -111,7 +122,7 @@ internal sealed class StandIn : IDisposable
 
     private int Ask(string command, string path)
     {
-        Send($"{command} {path}");
+        Write($"{command} {path}");
         var read = _process.StandardOutput.ReadLineAsync();
         var prefix = command + " ";
         if (!read.Wait(TimeSpan.FromSeconds(10)) || read.Result is not { } line || !line.StartsWith(prefix, StringComparison.Ordinal))
