@@ -23,8 +23,9 @@ use current_jellyfin::{
     SignedIn,
 };
 use current_model::{
-    AddressId, AuthHeader, Capabilities, NetworkFacts, Reachability, SavedServer, SavedUser,
-    ServerAddress, ServerId, ServerKey, ServerRef, ServerStatus, ServiceType, User, UserId,
+    AddressId, AuthHeader, Capabilities, ItemRef, NetworkFacts, Reachability, SavedServer,
+    SavedUser, ServerAddress, ServerId, ServerKey, ServerRef, ServerStatus, ServiceType, User,
+    UserId,
 };
 use current_net::{
     AddressProvider, FixedAddress, Gateway, GatewayAddress, NetError, RequestLog, RoamingAddresses,
@@ -773,6 +774,13 @@ impl Shared {
         // never saves, or a server removed meanwhile.
         if let Ok((client, provider)) = self.saved_client(&server).await {
             client.set_token(signed_in.token);
+            // Made by the sign-in's client, whose server key a new server's save may have replaced.
+            let excludes = signed_in
+                .latest_excludes
+                .into_iter()
+                .map(|library| ItemRef::new(server.clone(), library.id))
+                .collect();
+            client.set_latest_excludes(excludes);
             self.install(Arc::new(client), user.id.clone(), CHECKED);
             // Race now, so that the status soon shows the address in use.
             provider.retry_now();

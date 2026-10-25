@@ -83,6 +83,9 @@ pub struct SignedIn {
     pub token: AccessToken,
     /// The server's id as the sign-in reported it.
     pub server_id: Option<ServerId>,
+    /// The libraries the user keeps out of "latest" ([`JellyfinClient::latest_excludes`]), for the client that carries the session
+    /// when it is not the one that signed in.
+    pub latest_excludes: Vec<ItemRef>,
 }
 
 /// A Quick Connect request waiting for approval: the user enters `code` in another signed-in client.
@@ -200,7 +203,8 @@ impl JellyfinClient {
             .clone()
     }
 
-    fn set_latest_excludes(&self, libraries: Vec<ItemRef>) {
+    /// Sets the libraries the user keeps out of "latest": a sign-in's [`SignedIn::latest_excludes`], when another client made it.
+    pub fn set_latest_excludes(&self, libraries: Vec<ItemRef>) {
         // A single assignment under the lock: a poisoned one still holds a usable value.
         *self
             .latest_excludes
@@ -528,6 +532,7 @@ impl JellyfinClient {
         let result: wire::AuthenticationResult = response.json()?;
         self.keep_latest_excludes(&result.user);
         Ok(SignedIn {
+            latest_excludes: self.latest_excludes(),
             user: map_user(result.user, self.server()),
             token: AccessToken::new(result.access_token),
             server_id: result
