@@ -21,20 +21,28 @@ public sealed class ListSubscription<T> : INotifyPropertyChanged, IDisposable
 
     public static readonly TimeSpan RecoveryWindow = TimeSpan.FromSeconds(10);
 
-    private readonly Func<ListSubscription<T>, int, uniffi.current_ffi.TaskHandle> _subscribe;
+    private readonly Func<ListSubscription<T>, int, uniffi.current_ffi.TaskHandle?> _subscribe;
     private readonly Queue<DateTime> _recent = new();
     private uniffi.current_ffi.TaskHandle? _handle;
     private int _generation;
 
-    /// <param name="subscribe">Subscribes a forwarder for this mirror, tagged with a generation; called again to recover.</param>
-    internal ListSubscription(Func<ListSubscription<T>, int, uniffi.current_ffi.TaskHandle> subscribe)
+    /// <param name="subscribe">Subscribes a forwarder for this mirror, tagged with a generation; called again to recover. Null when the
+    /// core's list no longer exists: the mirror then stays as it is.</param>
+    /// <param name="items">The collection to fill, empty; a new one when null.</param>
+    internal ListSubscription(
+        Func<ListSubscription<T>, int, uniffi.current_ffi.TaskHandle?> subscribe,
+        DiffObservableCollection<T>? items = null)
     {
         _subscribe = subscribe;
+        Items = items ?? new();
         Subscribe();
     }
 
     /// <summary>Starts empty; the core's list follows at once as a Reset.</summary>
-    public DiffObservableCollection<T> Items { get; } = new();
+    public DiffObservableCollection<T> Items { get; }
+
+    /// <summary>Whether the core's list existed at the last subscription.</summary>
+    internal bool IsSubscribed => _handle is not null;
 
     public bool IsDisposed { get; private set; }
 

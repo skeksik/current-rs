@@ -36,6 +36,21 @@ public sealed class GatewayInputException(GatewayInputProblem problem) : Excepti
     public GatewayInputProblem Problem { get; } = problem;
 }
 
+/// <summary>The server is not a Jellyfin server that is signed in with a live session: browsing needs one (ADR 0018).</summary>
+public sealed class NotSignedInException() : Exception("not signed in to this server");
+
+/// <summary>A browse request failed (ADR 0018). Holds no address and no server message.</summary>
+public sealed class BrowseRequestException(BrowseProblem problem) : Exception("the request failed")
+{
+    public BrowseProblem Problem { get; } = problem;
+}
+
+/// <summary>An image could not be loaded (ADR 0018). Holds no address and no path.</summary>
+public sealed class ImageLoadException(ImageProblem problem) : Exception("the image could not be loaded")
+{
+    public ImageProblem Problem { get; } = problem;
+}
+
 /// <summary>
 /// Runs core calls and maps the generated exceptions to public ones: <c>Cancelled</c> becomes
 /// <see cref="OperationCanceledException"/>, every other variant its own public exception.
@@ -108,6 +123,9 @@ internal static class CoreCall
         Ffi.CoreException.NoAddress => new ServerHasNoAddressException(),
         Ffi.CoreException.InvalidAddress => new InvalidServerAddressException(),
         Ffi.CoreException.Gateway gateway => new GatewayInputException(MapProblems.From(gateway.@problem)),
+        Ffi.CoreException.NotSignedIn => new NotSignedInException(),
+        Ffi.CoreException.Browse browse => new BrowseRequestException(MapBrowse.From(browse.@problem)),
+        Ffi.CoreException.Image image => new ImageLoadException(MapBrowse.From(image.@problem)),
         _ => new CoreRuntimeException(error.Message),
     };
 }

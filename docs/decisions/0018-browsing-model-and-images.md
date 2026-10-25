@@ -20,7 +20,7 @@ What the research found:
   item, image type, index, tag and size never needs revalidation.
 - **`fillWidth`/`fillHeight`** return an image that covers the box at the source's aspect ratio, never upscaled.
 - **WinUI**: `GridView` supports random-access data virtualisation with `IItemsRangeInfo` and placeholders, which must not be `null` in
-  WinUI 3. A collection `Reset` costs the scroll position. `BitmapImage` reads JPEG, PNG, BMP, GIF, TIFF, JPEG XR and ICO, not WebP,
+  WinUI 3 (not verified: see the correction in section 3). A collection `Reset` costs the scroll position. `BitmapImage` reads JPEG, PNG, BMP, GIF, TIFF, JPEG XR and ICO, not WebP,
   from a URI or from a stream through `SetSourceAsync`.
 - **`Artwork.url` cannot stay a URL**: the address changes with roaming (ADR 0014) and addresses must not cross the bridge.
 
@@ -92,7 +92,10 @@ the session so Home can skip them. (Corrected 2026-10-25: sign-in did not read i
 
 ### 3. Paged lists in `current-app`
 A library grid is a **`PagedItems`**: an `ObservableList<Slot>` sized to the query's total, where `Slot` is `Loading`, `Item(ItemSummary)`
-or `Failed`. Placeholders are records, never null (WinUI 3 crashes on null placeholders).
+or `Failed`. Placeholders are records, never null.
+(Corrected 2026-10-25, task 4: "ListView and GridView data virtualization", learn.microsoft.com, ms.date 2026-03-16, says a source
+may "return either `null` or a placeholder item"; that WinUI 3 crashes on null placeholders is not verified. Current uses placeholder
+records anyway, so a tile template always has a slot to bind to.)
 
 - **Loading.** The first request asks for page 0 with the total count, then the list is reset once to `total` slots (page 0 filled, the
   rest `Loading`). The UI reports what it shows with `set_visible_range(first, last)`; the core loads the pages that cover it plus one
