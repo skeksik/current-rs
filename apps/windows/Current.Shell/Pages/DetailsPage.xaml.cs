@@ -4,7 +4,6 @@ using Current.Bindings;
 using Current.Shell.Browsing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 
 namespace Current.Shell.Pages;
@@ -100,9 +99,9 @@ public sealed partial class DetailsPage : Page
     /// <summary>A list's own ScrollViewer, the template part it scrolls with; null before its template is applied.</summary>
     private static ScrollViewer? ScrollerOf(DependencyObject parent)
     {
-        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        for (var i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
         {
-            var child = VisualTreeHelper.GetChild(parent, i);
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
             if (child is ScrollViewer scroller)
             {
                 return scroller;
