@@ -117,11 +117,13 @@ pub type SessionHook = Arc<dyn Fn(SessionEvent) + Send + Sync>;
 
 /// A Jellyfin client for one server, signed in or not. Every request carries the client's identity; once a token is set, it too.
 pub struct JellyfinClient {
-    http: ServerClient,
+    pub(crate) http: ServerClient,
     /// The server's addresses, shared with `http`, for the unauthenticated probe that confirms a gateway refused Jellyfin's header.
     address: Arc<dyn AddressProvider>,
     log: Arc<RequestLog>,
-    token: TokenSlot,
+    pub(crate) token: TokenSlot,
+    /// The device id the client identifies with: the server keeps one session per device id and user.
+    pub(crate) device_id: String,
     placement: PlacementSlot,
     on_event: Mutex<Option<SessionHook>>,
     /// The token whose unconfirmed answer the app is checking, if a check runs ([`SessionEvent::Unconfirmed`]).
@@ -150,6 +152,7 @@ impl JellyfinClient {
     ) -> Result<Self, NetError> {
         let token = TokenSlot::default();
         let placement = PlacementSlot::default();
+        let device_id = identity.device_id.clone();
         let auth = Arc::new(JellyfinAuth {
             identity,
             token: token.clone(),
@@ -167,6 +170,7 @@ impl JellyfinClient {
             address,
             log,
             token,
+            device_id,
             placement,
             on_event: Mutex::new(None),
             checking: Mutex::new(None),

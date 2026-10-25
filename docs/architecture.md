@@ -59,6 +59,12 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
   request with the token signs the server out and deletes the token; `App::sign_out` deletes it whatever the server answers. Each
   saved server's session and sign-ins go through its one `RoamingAddresses` over all its addresses (ADR 0014). It serves an address
   only after the identity check passed there, so no token goes anywhere else, and the capabilities state follows its status.
+- **Playback, Jellyfin side** (ADR 0019): `current-jellyfin` asks `POST /Items/{id}/PlaybackInfo` with a device profile generated
+  from the engine's `EngineCapabilities` (one direct-play profile per container, HLS fMP4 then HLS MPEG-TS, `MaxStreamingBitrate`
+  always set) and reads the answer as direct play or a server stream, with the reasons from the `TranscodingUrl` query. The stream
+  URL (the static URL for direct play, or the `TranscodingUrl` on the selected address) carries the token as `ApiKey` and stays in a
+  `StreamUrl` whose Debug is redacted and which never enters the request log. It also sends playstate reports and reads media
+  segments, the session's transcoding information and the user's playback preferences.
 - **`current-ffi`** is the UniFFI surface. It owns the one tokio runtime (`core-worker` threads, I/O and time enabled) and exports
   `Core`, `TaskHandle` (cancel and abort on drop), `CancelToken` and one error enum, `CoreError`. Values are pumped from `watch`
   channels to listeners, lists as diff batches (`list_diff!` declares the per-item diff enum). `Core::live_listeners` counts the
