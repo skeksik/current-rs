@@ -1446,17 +1446,17 @@ owner's PC, 2026-10-25: a video opened from Explorer replaced its library view i
 
 ### Player: Windows run (2026-10-25)
 feat/windows-player, built with the four scripts at 82dd3e1 (C# tests 56 passed, the smoke run passed with the libmpv engine). Windows
-11 Pro 10.0.26300.9711; NVIDIA GeForce RTX 5090, driver 621.01 (32.0.16.2101); monitors: Samsung Odyssey G70B 3840×2160, 150 %,
-Windows HDR on (peak 390 nits, SDR white 204 nits, 143.99 Hz as the display path reports it) and Samsung S24E450 1920×1080, 100 %, SDR
-(270 nits, 60 Hz). libmpv: the D6 artifact of run 39826795669. The owner's own data folder and Jellyfin server (12.3.0); Claude drove
+11 Pro 10.0.26300.9711; an NVIDIA GPU, driver 621.01 (32.0.16.2101); an HDR monitor at 3840×2160, 150 %, Windows HDR on (peak 390
+nits, SDR white 204 nits, 143.99 Hz as the display path reports it) and an SDR monitor at 1920×1080, 100 % (270 nits, 60 Hz). libmpv:
+the D6 artifact of run 39826795669. The owner's own data folder and Jellyfin server; Claude drove
 the app through computer use and UI Automation, the owner judged the picture, sound and the cases below. Media: the owner's library,
 whose titles are not recorded, and synthetic files made with FFmpeg for this run (frame-rate pans, HLG, two audio tracks with SRT, ASS
 and PGS subtitles, files that do not play). Visual C++ runtime on this PC: `HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64`
 Installed 1, v14.51.36247.00.
 1. Direct play (a 1080p HEVC 10-bit SDR film in Matroska with AC-3 5.1, SubRip and PGS subtitles) and transcode (the quality menu at 2
    Mbit/s: HLS, video to HEVC, audio to AAC) over the LAN: **pass**. Remux: **not checked** (no file the server remuxes). Through the
-   gateway (Cloudflare Access with a service token, the extra-headers route) from a phone's hotspot: direct play **pass**; a transcode
-   through it, a cookie gateway and Basic: **not checked** (the hotspot's connection broke; the owner has no Basic gateway). Resume:
+   owner's header gateway (credentials in extra headers) from a phone's hotspot: direct play **pass**; a transcode through it, a
+   sign-in portal gateway and Basic: **not checked** (the hotspot's connection broke; the owner has no Basic gateway). Resume:
    **pass** (Resume and "Play from the beginning" on the details page and in tile menus after the core fix below). The Jellyfin dashboard
    showed the session with a moving position, and another client the resume point: **pass**; a paused player stays a session (reports
    every 10 s, ADR 0019 choice 7), as intended.

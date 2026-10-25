@@ -127,7 +127,7 @@ composition mode, the same two monitors as above (now driver 621.01).
 - **Dolby Vision (profiles 5, 7, 8) and HDR10+:** not checked: no such files on the owner's server. HLG (synthetic 2160p50) played
   through the app on the HDR monitor (the owner: right) and was tone-mapped on the SDR one, with the display facts following a move
   between them.
-- **Direct play over HTTP:** works through the app (LAN, and through the owner's Cloudflare Access gateway with a service token).
+- **Direct play over HTTP:** works through the app (LAN, and through the owner's header gateway: credentials in extra headers).
 - **23.976 and 24 fps on 60, 120 and 144 Hz:** 60 and 144 Hz as above; 120 Hz not checked.
 - **The one-row gap:** WinUI places the content's window one row below the client area's top while the content is extended into the
   title bar, in full screen too; the player turns the extension off for full screen, and the panel fills the screen (3840×2160,
