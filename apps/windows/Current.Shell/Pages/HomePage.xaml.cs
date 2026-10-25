@@ -42,16 +42,24 @@ public sealed partial class HomePage : Page
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
-        if (e.NavigationMode is NavigationMode.Back or NavigationMode.Forward)
-        {
-            return;
-        }
+        _toStart = e.NavigationMode is not (NavigationMode.Back or NavigationMode.Forward);
+    }
+
+    /// <summary>Opened anew: scroll to the top once the page is back in the window (OnLoaded).</summary>
+    private bool _toStart;
+
+    /// <summary>
+    /// The top of the page and the start of every row. Queued at low priority after Loaded: the kept page's scroll viewers ignored a
+    /// ChangeView asked for in OnNavigatedTo, before the page was back in the window (the owner's run, 2026-10-25).
+    /// </summary>
+    private void ScrollToStart() => DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+    {
         Feed.ChangeView(null, 0, null, true);
         foreach (var list in _rowLists)
         {
             ScrollerOf(list)?.ChangeView(0, null, null, true);
         }
-    }
+    });
 
     /// <summary>The list's own ScrollViewer, the template part it scrolls with.</summary>
     private static ScrollViewer? ScrollerOf(DependencyObject parent)
@@ -105,6 +113,11 @@ public sealed partial class HomePage : Page
             {
                 hub.Changed += OnBrowseChanged;
                 ShowFeed(hub, refreshStale: true);
+                if (_toStart)
+                {
+                    _toStart = false;
+                    ScrollToStart();
+                }
             }
         }
         catch (Exception error)
