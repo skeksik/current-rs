@@ -54,6 +54,9 @@ pub enum NetError {
     /// calling crate, not a server problem.
     #[error("the request could not be built")]
     InvalidRequest,
+    /// The response's body was longer than the request allows ([`crate::Request::max_body`]); the rest was not read.
+    #[error("the server's response is too large")]
+    TooLarge,
 }
 
 impl std::fmt::Debug for NetError {
@@ -101,6 +104,7 @@ impl std::fmt::Debug for NetError {
                 .field("column", column)
                 .finish(),
             Self::InvalidRequest => f.write_str("InvalidRequest"),
+            Self::TooLarge => f.write_str("TooLarge"),
         }
     }
 }
@@ -154,6 +158,7 @@ impl NetError {
             Self::Redirected { .. } => "redirected",
             Self::Decode { .. } => "decode",
             Self::InvalidRequest => "invalid request",
+            Self::TooLarge => "too large",
         }
     }
 }
