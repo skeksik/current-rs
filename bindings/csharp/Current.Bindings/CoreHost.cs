@@ -6,7 +6,7 @@ namespace Current.Bindings;
 /// The core, created once per process by the app (ADR 0004). The only public way into the generated bindings: everything it returns
 /// is a public type of this library.
 /// </summary>
-public sealed class CoreHost : IDisposable
+public sealed partial class CoreHost : IDisposable
 {
     private readonly Ffi.Core _core;
 

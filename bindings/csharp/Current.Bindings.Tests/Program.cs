@@ -47,6 +47,14 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a header gate takes extra headers", GatewayTests.HeaderGateTakesExtraHeaders),
     ("a portal's cookies sign in, and again after its session ended", GatewayTests.PortalSignInAndAgain),
     ("gateway inputs hide their values", GatewayTests.GatewayInputsHideTheirValues),
+    ("a paged grid is sized to the total and loads the visible range", BrowseTests.PagedGridLoadsTheVisibleRange),
+    ("a mapped grid gets an item for every slot", BrowseTests.MappedGridGetsAnItemForEverySlot),
+    ("a failed page becomes Failed and retry fills it", BrowseTests.FailedPageAndRetry),
+    ("images arrive as bytes and a cancelled load stops its fetch", BrowseTests.ImageBytesAndCancellation),
+    ("a refused toggle rolls back with a notice that hides the name", BrowseTests.RefusedToggleRollsBack),
+    ("Home rows each have their own list", BrowseTests.HomeRowsHaveTheirOwnLists),
+    ("no browse without a signed-in server", BrowseTests.NoBrowseWithoutASignedInServer),
+    ("browse subscriptions are released", BrowseTests.BrowseSubscriptionsAreReleased),
 };
 
 var failed = 0;
