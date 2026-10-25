@@ -6,7 +6,7 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use jellyfin_stand_in::library::{FILM_IDS, FILMS_LIBRARY_ID};
+use jellyfin_stand_in::library::{FILM_IDS, FILMS_LIBRARY_ID, SHOWS_LIBRARY_ID};
 use jellyfin_stand_in::paging::{BIG_LIBRARY_ID, BIG_LIBRARY_SIZE, big_item_name, page_key};
 use jellyfin_stand_in::{IMAGE, PASSWORD, StandIn, USER_NAME};
 
@@ -609,6 +609,52 @@ fn signing_in_again_as_the_same_user_names_a_new_session_and_ends_the_old_browse
 
     block_on(core.sign_out(server)).unwrap();
     assert_eq!(status(&core).session, None, "no session after a sign-out");
+}
+
+impl LibrariesListener for Recorder<Option<Vec<Library>>> {
+    fn on_value(&self, value: Option<Vec<Library>>) {
+        self.send(value);
+    }
+}
+
+/// Waits for the libraries `rx` hears until their ids are `ids`.
+fn libraries_become(rx: &Receiver<Option<Vec<Library>>>, ids: &[&str]) -> Vec<Library> {
+    loop {
+        let value = rx.recv_timeout(WAIT).expect("the libraries");
+        let libraries = value.unwrap_or_default();
+        if libraries
+            .iter()
+            .map(|library| library.item.id.as_str())
+            .eq(ids.iter().copied())
+        {
+            return libraries;
+        }
+    }
+}
+
+#[test]
+fn the_libraries_follow_the_server_and_a_gone_one_is_not_available() {
+    const ADDED: &str = "57a2d1e0000000000000000000001003";
+    let stand_in = stand_in();
+    let (core, server) = signed_in(&stand_in);
+    let browse = core.browse(server.clone()).unwrap();
+    let (listener, rx) = recorder();
+    let _libraries = browse.subscribe_libraries(listener);
+    let first = libraries_become(&rx, &[FILMS_LIBRARY_ID, SHOWS_LIBRARY_ID]);
+
+    stand_in.add_library(ADDED, "examplekind", "Example Added");
+    browse.refresh();
+    let added = libraries_become(&rx, &[FILMS_LIBRARY_ID, SHOWS_LIBRARY_ID, ADDED]);
+    assert_eq!(added[2].collection.as_deref(), Some("examplekind"));
+
+    // The films library removed, its stale entry opened: the session stays, the grid says "not available", and the list drops it.
+    stand_in.remove_library(FILMS_LIBRARY_ID);
+    let grid = browse.open_library(first[0].clone(), library_query(first[0].clone()));
+    eventually("not available", || {
+        grid.state().failed == Some(BrowseProblem::NotAvailable)
+    });
+    libraries_become(&rx, &[SHOWS_LIBRARY_ID, ADDED]);
+    assert!(status(&core).signed_in);
 }
 
 #[test]

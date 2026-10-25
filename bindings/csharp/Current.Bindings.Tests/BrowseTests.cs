@@ -366,4 +366,41 @@ internal static class BrowseTests
         }
         await Eventually("every listener is released", ui, () => core.LiveListeners == before);
     }
+
+    private static string[] Ids(IReadOnlyList<Library>? libraries) => [.. (libraries ?? []).Select(library => library.Item.Id)];
+
+    public static async Task LibrariesFollowTheServer()
+    {
+        const string added = "57a2d1e0000000000000000000001003";
+        using var standIn = StandIn.Start();
+        using var core = await SignedIn(standIn);
+        using var browse = core.Browse(FirstServer);
+        var ui = new ManualDispatcher();
+        using var libraries = browse.ObserveLibraries(ui);
+        await Eventually("the libraries load at once", ui,
+            () => Ids(libraries.Value).SequenceEqual([StandIn.FilmsLibraryId, StandIn.ShowsLibraryId]));
+        var films = libraries.Value![0];
+
+        // Added on the server, then renamed and moved first: the list follows on a refresh, its unknown kind passed through.
+        standIn.Send($"library add {added} examplekind Example Added");
+        browse.Refresh();
+        await Eventually("the added library", ui,
+            () => Ids(libraries.Value).SequenceEqual([StandIn.FilmsLibraryId, StandIn.ShowsLibraryId, added]));
+        Check(libraries.Value![2].Collection == "examplekind", "an unknown kind passes through");
+        standIn.Send($"library rename {added} Example Renamed");
+        standIn.Send($"library order {added},{StandIn.FilmsLibraryId},{StandIn.ShowsLibraryId}");
+        core.ReturnedToForeground();
+        await Eventually("renamed and moved", ui,
+            () => libraries.Value?.FirstOrDefault() is { Name: "Example Renamed" } first && first.Item.Id == added);
+
+        // The films library removed; its stale entry opened: "not available", the list drops it, and the user stays signed in.
+        standIn.Send($"library remove {StandIn.FilmsLibraryId}");
+        using var items = browse.OpenLibrary(films);
+        using var state = items.ObserveState(ui);
+        await Eventually("not available", ui, () => state.Value.Failed is BrowseProblem.NotAvailable);
+        await Eventually("the list drops it", ui,
+            () => Ids(libraries.Value).SequenceEqual([added, StandIn.ShowsLibraryId]));
+        // A Browse is only given for a server signed in with a live session.
+        using var again = core.Browse(FirstServer);
+    }
 }

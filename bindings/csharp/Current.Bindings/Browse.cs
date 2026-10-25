@@ -75,7 +75,9 @@ public sealed class Browse : IDisposable
 
     public ServerRef Server => Map.From(_browse.Server());
 
-    /// <summary>The user's libraries, in the user's order, for the app's navigation.</summary>
+    /// <summary>
+    /// The user's libraries, in the user's order, as a load that starts now reads them; <see cref="ObserveLibraries"/> hears them too.
+    /// </summary>
     /// <exception cref="BrowseRequestException">The session ended, or the server's or the network's failure.</exception>
     public async Task<IReadOnlyList<Library>> LibrariesAsync(CancellationToken ct = default)
     {
@@ -84,8 +86,22 @@ public sealed class Browse : IDisposable
     }
 
     /// <summary>
+    /// The user's libraries for the navigation, in the user's order, mirrored on the UI thread: null until first loaded, then the last
+    /// list loaded. The core reads them again on a refresh, on return to the foreground, when Home reloads, after a library request
+    /// the server refused, and when the server is reached again after a failed load; a library the user can no longer open leaves
+    /// the list. Dispose it with the session.
+    /// </summary>
+    public ValueSubscription<IReadOnlyList<Library>?> ObserveLibraries(IUiDispatcher ui)
+    {
+        var subscription = new ValueSubscription<IReadOnlyList<Library>?>(null);
+        subscription.Attach(_browse.SubscribeLibraries(new LibrariesForwarder(subscription, ui)));
+        return subscription;
+    }
+
+    /// <summary>
     /// A grid of <paramref name="library"/>'s items, sorted and filtered by <paramref name="query"/>; without one, what
-    /// <see cref="ItemQuery.ForLibrary"/> gives. Starts loading at once.
+    /// <see cref="ItemQuery.ForLibrary"/> gives. Starts loading at once. When a request fails as it does for a library that is gone,
+    /// the core reads the libraries again; if the library left them, the state's failure is <see cref="BrowseProblem.NotAvailable"/>.
     /// </summary>
     public PagedItems OpenLibrary(Library library, ItemQuery? query = null)
     {
@@ -485,6 +501,14 @@ internal sealed class ItemDetailsForwarder(ValueSubscription<ItemDetails?> targe
       Ffi.ItemDetailsListener
 {
     public void OnValue(Ffi.ItemDetails? value) => Forward(value);
+}
+
+internal sealed class LibrariesForwarder(ValueSubscription<IReadOnlyList<Library>?> target, IUiDispatcher ui)
+    : ValueForwarder<Ffi.Library[]?, IReadOnlyList<Library>?>(
+        target, ui, libraries => libraries is null ? null : Array.ConvertAll(libraries, library => MapBrowse.From(library))),
+      Ffi.LibrariesListener
+{
+    public void OnValue(Ffi.Library[]? value) => Forward(value);
 }
 
 internal sealed class BrowseNoticeForwarder(ValueSubscription<BrowseNotice?> target, IUiDispatcher ui)

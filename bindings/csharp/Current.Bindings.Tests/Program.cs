@@ -57,6 +57,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("no browse without a signed-in server", BrowseTests.NoBrowseWithoutASignedInServer),
     ("browse subscriptions are released", BrowseTests.BrowseSubscriptionsAreReleased),
     ("Play starts the item from where the core says", BrowseTests.PlayStartsTheItemFromWhereTheCoreSays),
+    ("the libraries follow the server, and a gone one is not available", BrowseTests.LibrariesFollowTheServer),
     ("the core's engine is the test engine", PlayerTests.EngineIsTheTestEngine),
     ("a player plays, reports and releases its swap chain", PlayerTests.PlaysReportsAndReleases),
     ("a second player waits, then is busy", PlayerTests.SecondPlayerIsBusy),

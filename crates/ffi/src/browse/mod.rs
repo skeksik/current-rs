@@ -82,6 +82,12 @@ pub trait PlayTargetListener: Send + Sync {
     fn on_value(&self, value: Option<PlayTarget>);
 }
 
+/// Receives the user's libraries (`None` until first loaded), as [`PagedStateListener`] does.
+#[uniffi::export(callback_interface)]
+pub trait LibrariesListener: Send + Sync {
+    fn on_value(&self, value: Option<Vec<Library>>);
+}
+
 /// Receives the latest browse notice (`None` until the first), as [`PagedStateListener`] does.
 #[uniffi::export(callback_interface)]
 pub trait BrowseNoticeListener: Send + Sync {
@@ -272,7 +278,8 @@ impl Browse {
         self.browse.server().into()
     }
 
-    /// The user's libraries, in the user's order, for the app's navigation.
+    /// The user's libraries, in the user's order, as a load that starts now reads them ([`Browse::subscribe_libraries`] hears
+    /// them too).
     ///
     /// # Errors
     /// [`CoreError::Browse`]: the session ended, or the server's or the network's failure; [`CoreError::Cancelled`] if `token` is
@@ -291,7 +298,26 @@ impl Browse {
         .await
     }
 
-    /// A grid of `library`'s items, sorted and filtered by `query`. Starts loading at once.
+    /// Subscribes to the user's libraries for the app's navigation, in the user's order: `None` until first loaded, then the last
+    /// list loaded. The core reads them again on a refresh, on return to the foreground, when Home reloads, after a library request
+    /// the server refused, and when the server is reached again after a failed load; a library the user can no longer open leaves
+    /// the list. Keep the handle while listening.
+    pub fn subscribe_libraries(&self, listener: Box<dyn LibrariesListener>) -> Arc<TaskHandle> {
+        let listener = self.host.listeners.track(listener);
+        subscribe::watch_value(
+            &self.host.runtime,
+            self.browse.library_list(),
+            move |libraries| {
+                listener.listener.on_value(
+                    libraries.map(|libraries| libraries.iter().map(Into::into).collect()),
+                );
+            },
+        )
+    }
+
+    /// A grid of `library`'s items, sorted and filtered by `query`. Starts loading at once. When a request fails as it does for a
+    /// library that is gone, the core reads the libraries again; if the library left them, the grid's state says
+    /// [`BrowseProblem::NotAvailable`].
     pub fn open_library(&self, library: Library, query: ItemQuery) -> Arc<PagedItems> {
         let items = self
             .browse
