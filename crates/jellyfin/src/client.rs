@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use current_model::{Permission, ServerId, ServerRef, User, UserId};
+use current_model::{ItemId, ItemRef, Permission, ServerId, ServerRef, User, UserId};
 use current_net::{
     AddressProvider, ClientConfig, GatewayShape, NetError, Request, RequestLog, Response,
     ServerClient, classify,
@@ -126,6 +126,9 @@ pub struct JellyfinClient {
     on_event: Mutex<Option<SessionHook>>,
     /// The token whose unconfirmed answer the app is checking, if a check runs ([`SessionEvent::Unconfirmed`]).
     checking: Mutex<Option<AccessToken>>,
+    /// The libraries the signed-in user keeps out of "latest" (`Configuration.LatestItemsExcludes`), as the last sign-in or
+    /// [`JellyfinClient::current_user`] read them.
+    latest_excludes: Mutex<Vec<ItemRef>>,
 }
 
 impl std::fmt::Debug for JellyfinClient {
@@ -167,6 +170,7 @@ impl JellyfinClient {
             placement,
             on_event: Mutex::new(None),
             checking: Mutex::new(None),
+            latest_excludes: Mutex::new(Vec::new()),
         })
     }
 
@@ -183,7 +187,39 @@ impl JellyfinClient {
     /// Forgets the token: requests go out unauthenticated.
     pub fn clear_token(&self) {
         auth::write(&self.token, None);
+        self.set_latest_excludes(Vec::new());
         self.resume();
+    }
+
+    /// The libraries the signed-in user keeps out of "latest", so Home can skip them (ADR 0018). Read again at each sign-in and
+    /// [`JellyfinClient::current_user`], since the user can change it on the server; empty before either and after the session ends.
+    pub fn latest_excludes(&self) -> Vec<ItemRef> {
+        self.latest_excludes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_latest_excludes(&self, libraries: Vec<ItemRef>) {
+        // A single assignment under the lock: a poisoned one still holds a usable value.
+        *self
+            .latest_excludes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = libraries;
+    }
+
+    /// Keeps `user`'s "exclude from latest" libraries.
+    fn keep_latest_excludes(&self, user: &wire::UserDto) {
+        let libraries = user
+            .configuration
+            .as_ref()
+            .and_then(|configuration| configuration.latest_items_excludes.as_ref())
+            .into_iter()
+            .flatten()
+            .filter(|id| !id.is_empty())
+            .map(|id| ItemRef::new(self.server().clone(), ItemId::new(id.as_str())))
+            .collect();
+        self.set_latest_excludes(libraries);
     }
 
     pub fn has_token(&self) -> bool {
@@ -338,6 +374,7 @@ impl JellyfinClient {
     pub async fn current_user(&self) -> Result<User, AuthError> {
         let response = self.send_authenticated(Request::get("/Users/Me")).await?;
         let user: wire::UserDto = response.json()?;
+        self.keep_latest_excludes(&user);
         Ok(map_user(user, self.server()))
     }
 
@@ -479,6 +516,8 @@ impl JellyfinClient {
         let mut slot = self.token.write().unwrap_or_else(PoisonError::into_inner);
         if slot.as_ref() == Some(token) {
             *slot = None;
+            drop(slot);
+            self.set_latest_excludes(Vec::new());
             true
         } else {
             false
@@ -487,6 +526,7 @@ impl JellyfinClient {
 
     fn signed_in(&self, response: &Response) -> Result<SignedIn, AuthError> {
         let result: wire::AuthenticationResult = response.json()?;
+        self.keep_latest_excludes(&result.user);
         Ok(SignedIn {
             user: map_user(result.user, self.server()),
             token: AccessToken::new(result.access_token),

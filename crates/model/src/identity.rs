@@ -127,6 +127,17 @@ open_value! {
         SCENE = "scene",
         COLLECTION = "collection",
         PERSON = "person",
+        MUSIC_ALBUM = "music_album",
+        /// A song or other audio track.
+        AUDIO = "audio",
+        MUSIC_ARTIST = "music_artist",
+        MUSIC_VIDEO = "music_video",
+        /// A video that is neither a film nor an episode: a home video, for example.
+        VIDEO = "video",
+        /// A folder in a library browsed by folders.
+        FOLDER = "folder",
+        /// A collection of films a server groups (a Jellyfin box set).
+        BOX_SET = "box_set",
     }
 }
 

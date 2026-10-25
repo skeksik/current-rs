@@ -284,6 +284,7 @@ version = "0.1.0"
 dependencies = [
  "current-model",
  "current-net",
+ "jellyfin-stand-in",
  "serde",
  "serde_json",
  "thiserror",

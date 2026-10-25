@@ -1,6 +1,6 @@
 [package]
 name = "current-jellyfin"
-description = "Jellyfin client: server setup (address parsing, probing, identity), local discovery and sign-in; wire types stay private."
+description = "Jellyfin client: server setup (address parsing, probing, identity), local discovery, sign-in and browsing; wire types stay private."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,6 +16,7 @@ tokio = { workspace = true, features = ["net", "time"] }
 url.workspace = true
 
 [dev-dependencies]
+jellyfin-stand-in.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
 
 [lints]
