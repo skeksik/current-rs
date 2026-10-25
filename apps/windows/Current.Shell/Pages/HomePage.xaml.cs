@@ -5,6 +5,8 @@ using Current.Shell.Browsing;
 using Current.Shell.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Navigation;
 
 namespace Current.Shell.Pages;
 
@@ -12,7 +14,9 @@ namespace Current.Shell.Pages;
 /// Home: with a signed-in Jellyfin server, its rows (ADR 0018, section 6: Continue watching, Next up, Latest per library; a row
 /// shows once it has items); without one, the M1 states: an invitation to add a server, or the saved servers with their user. It
 /// waits for the core to open (App.CoreReady); its subscriptions live from Loaded to Unloaded (ADR 0004). The feeds themselves stay
-/// with their sessions (BrowseHub), so Home shows again without reloading, and refreshes when shown after five minutes.
+/// with their sessions (BrowseHub), so Home shows again without reloading, and refreshes when shown after five minutes. Back and
+/// Forward return to where Home was left, its vertical offset and each row's sideways one, as a library's grid returns to its place;
+/// opened from the navigation it starts at the top.
 /// </summary>
 public sealed partial class HomePage : Page
 {
@@ -20,6 +24,15 @@ public sealed partial class HomePage : Page
     private static readonly TimeSpan RefreshAfter = TimeSpan.FromMinutes(5);
     private bool _loaded;
     private readonly ObservableCollection<HomeSection> _sections = [];
+
+    /// <summary>The rows' lists now in the window, to read their sideways offsets when Home is left.</summary>
+    private readonly List<ListViewBase> _rowLists = [];
+
+    /// <summary>Reached by Back or Forward: return to the saved offsets.</summary>
+    private bool _restore;
+
+    /// <summary>How long a return to a saved offset waits for the rows to be laid out far enough.</summary>
+    private static readonly TimeSpan RestoreWait = TimeSpan.FromSeconds(1);
 
     public HomePage()
     {
@@ -29,6 +42,91 @@ public sealed partial class HomePage : Page
     }
 
     public ServersViewModel? ViewModel { get; private set; }
+
+    protected override void OnNavigatedTo(NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        _restore = e.NavigationMode is NavigationMode.Back or NavigationMode.Forward;
+        if (!_restore && App.Browsing is { } hub)
+        {
+            hub.HomeOffset = 0;
+            hub.HomeRowOffsets.Clear();
+        }
+    }
+
+    /// <summary>Before the exit transition, while the rows are still in place: where Home is left.</summary>
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        base.OnNavigatedFrom(e);
+        if (App.Browsing is not { } hub)
+        {
+            return;
+        }
+        hub.HomeOffset = Feed.VerticalOffset;
+        hub.HomeRowOffsets.Clear();
+        foreach (var list in _rowLists)
+        {
+            if (RowKey(list) is { } key && ScrollerOf(list) is { } scroller)
+            {
+                hub.HomeRowOffsets[key] = scroller.HorizontalOffset;
+            }
+        }
+    }
+
+    /// <summary>A row's key across servers: its server's place on Home and the core's key for the row.</summary>
+    private string? RowKey(ListViewBase list)
+    {
+        if (list.DataContext is not TileRow row)
+        {
+            return null;
+        }
+        var section = _sections.IndexOf(_sections.FirstOrDefault(s => s.Rows.Contains(row))!);
+        return section < 0 ? null : $"{section}/{row.Key}";
+    }
+
+    /// <summary>The list's own ScrollViewer, the template part it scrolls with.</summary>
+    private static ScrollViewer? ScrollerOf(DependencyObject parent)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is ScrollViewer scroller)
+            {
+                return scroller;
+            }
+            if (ScrollerOf(child) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Scrolls to <paramref name="offset"/> once the content reaches it: the rows arrive and lay out a moment after the page is
+    /// shown, so it tries again each frame, for at most <see cref="RestoreWait"/>. Without animation, as a return to a place is.
+    /// </summary>
+    private async Task ScrollWhenLaidOutAsync(ScrollViewer scroller, double offset, bool horizontal)
+    {
+        var deadline = DateTime.UtcNow + RestoreWait;
+        while (_loaded && DateTime.UtcNow < deadline)
+        {
+            var reach = horizontal ? scroller.ScrollableWidth : scroller.ScrollableHeight;
+            if (reach >= offset - 0.5)
+            {
+                if (horizontal)
+                {
+                    scroller.ChangeView(offset, null, null, true);
+                }
+                else
+                {
+                    scroller.ChangeView(null, offset, null, true);
+                }
+                return;
+            }
+            await Task.Delay(16);
+        }
+    }
 
     // async void, as event handlers are: it catches everything itself.
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -64,6 +162,10 @@ public sealed partial class HomePage : Page
             {
                 hub.Changed += OnBrowseChanged;
                 ShowFeed(hub, refreshStale: true);
+                if (_restore && hub.HomeOffset > 0)
+                {
+                    _ = ScrollWhenLaidOutAsync(Feed, hub.HomeOffset, horizontal: false);
+                }
             }
         }
         catch (Exception error)
@@ -133,9 +235,20 @@ public sealed partial class HomePage : Page
 
     private void OnRowLoaded(object sender, RoutedEventArgs e)
     {
-        if (sender is ListViewBase list)
+        if (sender is not ListViewBase list)
         {
-            HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+            return;
+        }
+        HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+        if (!_rowLists.Contains(list))
+        {
+            _rowLists.Add(list);
+            list.Unloaded += (_, _) => _rowLists.Remove(list);
+        }
+        if (_restore && App.Browsing is { } hub && RowKey(list) is { } key
+            && hub.HomeRowOffsets.TryGetValue(key, out var offset) && offset > 0 && ScrollerOf(list) is { } scroller)
+        {
+            _ = ScrollWhenLaidOutAsync(scroller, offset, horizontal: true);
         }
     }
 
