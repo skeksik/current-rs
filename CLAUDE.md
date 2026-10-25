@@ -20,6 +20,7 @@ crates/playback     current-playback: playback logic (ADR 0019): Engine and Medi
 crates/net          current-net: HTTP client per server, typed errors, redacted request log, plain-HTTP rule, gateway credentials (ADR 0017)
 crates/store        current-store: settings file, secrets in the OS keyring, device id (ADR 0013)
 crates/jellyfin     current-jellyfin: Jellyfin client; so far server setup (ADR 0012), discovery (ADR 0016), sign-in (ADR 0015), gateway answers and header placement (ADR 0017), browse queries and images (ADR 0018), playback calls and the device profile (ADR 0019)
+crates/mpv          current-mpv: the libmpv engine (ADR 0019): client API declarations, event thread, options, display facts, swap chain, capabilities, log redaction; the only crate with `unsafe`; links libmpv only with its `libmpv` feature
 crates/app          current-app: composition root (App), capabilities state, observable lists, add-a-server and sign-in flows, sessions, local discovery, gateways (ADR 0017), image cache and browse state (ADR 0018)
 crates/ffi          current-ffi: UniFFI surface over current-app (runtime, TaskHandle, CancelToken, CoreError; ADR 0004); opening, setup, sign-in, sessions
 tools/uniffi-bindgen  UniFFI's generator at the workspace's uniffi version, for Swift
@@ -39,6 +40,7 @@ cargo test --workspace
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                                       # licences and sources (deny.toml, ADR 0003); install: cargo install --locked cargo-deny
+cargo test -p current-mpv --features libmpv            # the engine against a real libmpv (MPV_LIB_DIR for its import library; openssl on PATH); CI's "mpv (Windows)" job runs it on the D6 build
 pwsh bindings/csharp/build.ps1; pwsh bindings/csharp/test.ps1   # Windows: build current-ffi, generate C#, build and test the adapters
 pwsh apps/windows/build.ps1; pwsh apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe -StandIn target/x86_64-pc-windows-msvc/release/jellyfin-stand-in.exe   # Windows, after the C# build: publish and smoke-run the app (with the sign-in window on the stand-in)
 pwsh apps/windows/installer/build-installer.ps1 -Iscc <path to ISCC.exe>   # Windows: build the installer (Inno Setup 7)
@@ -47,7 +49,7 @@ sh bindings/swift/build.sh; swift test --package-path bindings/swift   # macOS: 
 The C# build needs uniffi-bindgen-cs: `cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag
 v0.11.1+v0.31.0 uniffi-bindgen-cs`.
 CI (`.github/workflows/ci.yml`) runs the Rust checks on Linux, Windows and macOS, cargo-deny on Linux, the bindings jobs "Bindings
-(C#, Windows)" and "Bindings (Swift, macOS)", and "App (Windows)" (publish, smoke run, installer, install/upgrade/uninstall test). C# and Swift cannot be built in a Linux cloud container: say so in the
+(C#, Windows)" and "Bindings (Swift, macOS)", "mpv (Windows)" (current-mpv against the D6 libmpv build), and "App (Windows)" (publish, smoke run, installer, install/upgrade/uninstall test). C# and Swift cannot be built in a Linux cloud container: say so in the
 PR and let CI build them.
 
 ## Conventions

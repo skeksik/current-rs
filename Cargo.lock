@@ -298,6 +298,16 @@ name = "current-model"
 version = "0.1.0"
 
 [[package]]
+name = "current-mpv"
+version = "0.1.0"
+dependencies = [
+ "current-model",
+ "rustls",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "current-net"
 version = "0.1.0"
 dependencies = [
