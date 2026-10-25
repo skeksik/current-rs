@@ -86,6 +86,9 @@ pub enum PlayerError {
     /// The call was outside the core's runtime.
     #[error("the player needs the core's runtime")]
     NoRuntime,
+    /// A later play or stop replaced this action before it was done: not a failure (the state shows what plays now).
+    #[error("a later play or stop replaced this action")]
+    Replaced,
     /// The player is closed.
     #[error("the player is closed")]
     Closed,
@@ -140,8 +143,8 @@ pub(crate) enum Command {
     },
     Action {
         action: PlayerAction,
-        /// `None` for an action sent without waiting: it is never given up.
-        done: Option<oneshot::Sender<()>>,
+        /// `None` for an action sent without waiting: it is never given up. Answered `Replaced` when a later play or stop replaced it.
+        done: Option<oneshot::Sender<Result<(), PlayerError>>>,
     },
     Info(oneshot::Sender<PlaybackInfo>),
     /// The details of the item playing loaded (after a next-episode play).
@@ -211,7 +214,7 @@ impl Player {
             action,
             done: Some(done),
         })?;
-        answer.await.map_err(|_| PlayerError::Closed)
+        answer.await.map_err(|_| PlayerError::Closed)?
     }
 
     /// Queues `action` without waiting for it: actions run in the order they are sent. For quick actions from the UI thread (a key, a

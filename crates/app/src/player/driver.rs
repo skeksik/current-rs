@@ -136,6 +136,7 @@ fn spawn<B: Backend>(context: Context, backend: B, raw: mpsc::UnboundedReceiver<
         summary: None,
         artwork: None,
         artwork_task: None,
+        artwork_for: None,
         revision: 0,
         last_revision: Instant::now(),
         auto_skip: Some(auto_skip_rx),
@@ -163,6 +164,8 @@ struct Driver<B: Backend> {
     summary: Option<ItemSummary>,
     artwork: Option<Arc<[u8]>>,
     artwork_task: Option<AbortHandle>,
+    /// The item the artwork task was started for.
+    artwork_for: Option<ItemRef>,
     revision: u64,
     last_revision: Instant,
     auto_skip: Option<watch::Receiver<Vec<String>>>,
@@ -309,12 +312,20 @@ impl<B: Backend> Driver<B> {
                     interruptible(self.play(item, start), caller_gone, commands, deferred).await
                 };
                 match outcome {
-                    Some(result) => {
-                        let _ = done.send(result);
+                    Some(Ok(())) => {
+                        let _ = done.send(Ok(()));
                         self.start_artwork();
                     }
+                    // Refused before the controller ran (not signed in): the state shown is the controller's again.
+                    Some(Err(error)) => {
+                        let _ = done.send(Err(error));
+                        self.publish_status(self.controller.status());
+                    }
                     // Given up or replaced while preparing: nothing half-started stays (the controller leaves it with a stop).
-                    None => self.controller.stop().await,
+                    None => {
+                        let _ = done.send(Err(PlayerError::Replaced));
+                        self.controller.stop().await;
+                    }
                 }
             }
             Command::Action {
@@ -325,9 +336,11 @@ impl<B: Backend> Driver<B> {
                 let ran = interruptible(self.action(action), caller_gone, commands, deferred)
                     .await
                     .is_some();
-                if ran {
-                    let _ = done.send(());
-                }
+                let _ = done.send(if ran {
+                    Ok(())
+                } else {
+                    Err(PlayerError::Replaced)
+                });
             }
             Command::Action { action, done: None } => {
                 interruptible(
@@ -411,15 +424,8 @@ impl<B: Backend> Driver<B> {
             Action::SelectSubtitle(choice) => controller.select_subtitle(choice).await,
             Action::SetQuality(quality) => controller.set_quality(quality).await,
             Action::SkipSegment => controller.skip_segment().await,
-            Action::PlayNext => {
-                controller.play_next().await;
-                // The next episode's details and artwork load in the background (`drain`).
-                self.summary = None;
-                self.artwork = None;
-                if let Some(task) = self.artwork_task.take() {
-                    task.abort();
-                }
-            }
+            // The next episode's details and artwork load in the background (`drain`).
+            Action::PlayNext => controller.play_next().await,
             Action::DismissNext => controller.dismiss_next(),
             Action::SetVolume(volume) => controller.set_volume(volume),
             Action::SetMuted(muted) => controller.set_muted(muted),
@@ -462,15 +468,15 @@ impl<B: Backend> Driver<B> {
                 }
             }
         }
-        // A play of the next episode (by the user or the countdown) replaced the item: its details load in the background.
+        // A play of the next episode (by the user or the countdown) replaced the item: its details and artwork load in the background,
+        // once per item (a failed load is not tried again on every drain).
         let item = self.state.borrow().item.clone();
-        if item.is_some()
-            && self
-                .summary
-                .as_ref()
-                .is_none_or(|summary| Some(&summary.item) != item.as_ref())
-            && self.artwork_task.is_none()
-        {
+        if item.is_some() && item != self.artwork_for {
+            if self.summary.as_ref().map(|summary| &summary.item) != item.as_ref() {
+                self.summary = None;
+            }
+            self.artwork = None;
+            self.refresh_now_playing();
             self.start_artwork();
         }
     }
@@ -527,6 +533,7 @@ impl<B: Backend> Driver<B> {
         if let Some(task) = self.artwork_task.take() {
             task.abort();
         }
+        self.artwork_for = Some(item.clone());
         let summary = self.summary.clone().filter(|summary| summary.item == item);
         let client = self.controller.server().client();
         let shared = self.context.shared.clone();

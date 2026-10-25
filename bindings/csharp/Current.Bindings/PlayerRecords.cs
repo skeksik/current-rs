@@ -30,6 +30,8 @@ public abstract record PlayerProblem
     public sealed record EngineFailed(string Kind) : PlayerProblem;
     /// <summary>The item's server is not signed in.</summary>
     public sealed record NotSignedIn : PlayerProblem;
+    /// <summary>A later play or stop replaced this action before it was done: not a failure; <c>State</c> shows what plays now.</summary>
+    public sealed record Replaced : PlayerProblem;
     public sealed record Closed : PlayerProblem;
 }
 
@@ -241,6 +243,7 @@ internal static class PlayerMap
         Ffi.PlayerProblem.Busy => new PlayerProblem.Busy(),
         Ffi.PlayerProblem.EngineFailed failed => new PlayerProblem.EngineFailed(failed.Kind),
         Ffi.PlayerProblem.NotSignedIn => new PlayerProblem.NotSignedIn(),
+        Ffi.PlayerProblem.Replaced => new PlayerProblem.Replaced(),
         _ => new PlayerProblem.Closed(),
     };
 

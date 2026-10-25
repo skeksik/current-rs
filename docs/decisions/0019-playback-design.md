@@ -144,6 +144,10 @@ fake engine, a fake server and a fake clock):
   (a follow-up task); `current-mpv` refuses a playlist URL with headers unless the caller marks it checked, and opens no nested
   reference at all for any other load with headers (`access-references=no`). mpv re-fetches the playlists itself, so this is a check,
   not enforcement; the loopback relay in M3 (shared with AVPlayer's header gap, ADR 0017) enforces it, on Windows too.
+  Cookies too (2026-10-25, task 4 review): FFmpeg 9.0.2 matches a cookie's `domain` as a plain suffix of the request's Host
+  (`libavformat/http.c`, `get_cookies`, as `current-mpv`'s `lavf_options` notes), so a playlist naming a look-alike host would get
+  the gateway cookie. The check, the refusal and `access-references=no` therefore apply to any load with a gateway credential,
+  headers or cookies, not to headers only.
   Built 2026-10-25: `JellyfinClient::check_playlist_origin` (`current-jellyfin`, `hls`) fetches the master and up to 32 media
   playlists through the address's client (4 MiB each, `ApiKey` out of the query and the log) and checks every URI line and every
   `URI`/`*-URI` attribute; the controller calls it through `MediaServer::check_playlist` for an HLS route with headers and marks

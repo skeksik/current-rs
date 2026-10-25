@@ -85,6 +85,8 @@ pub enum PlayerProblem {
     EngineFailed { kind: String },
     /// The item's server is not signed in.
     NotSignedIn,
+    /// A later play or stop replaced this action before it was done: not a failure; the state shows what plays now.
+    Replaced,
     /// The player is closed.
     Closed,
 }
@@ -99,6 +101,7 @@ impl From<&current_app::PlayerError> for PlayerProblem {
                 kind: kind.as_str().to_owned(),
             },
             E::NotSignedIn => Self::NotSignedIn,
+            E::Replaced => Self::Replaced,
             // Calls through the bridge always run on the core's runtime.
             E::NoRuntime | E::Closed => Self::Closed,
         }
@@ -307,10 +310,13 @@ impl From<Quality> for QualityChoice {
 }
 
 impl From<QualityChoice> for Quality {
+    /// A bitrate of zero is no limit the server could meet: read as "Maximum", as the settings file reads it.
     fn from(choice: QualityChoice) -> Self {
         match choice {
-            QualityChoice::Maximum => Self::Maximum,
-            QualityChoice::Bitrate { bits_per_second } => Self::Bitrate(bits_per_second),
+            QualityChoice::Bitrate { bits_per_second } if bits_per_second > 0 => {
+                Self::Bitrate(bits_per_second)
+            }
+            QualityChoice::Bitrate { .. } | QualityChoice::Maximum => Self::Maximum,
         }
     }
 }

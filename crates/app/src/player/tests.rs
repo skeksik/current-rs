@@ -11,6 +11,7 @@ use current_model::{
 };
 use current_playback::{EngineEvent, PlayerStatus, Quality};
 use current_store::{MemorySecrets, Secrets, StreamQuality};
+use jellyfin_stand_in::library::EPISODE_IDS;
 use jellyfin_stand_in::{
     DIRECT_PLAY_ITEM, DIRECT_PLAY_NAME, IMAGE, PASSWORD, StandIn, TRANSCODE_ITEM, USER_NAME,
 };
@@ -283,18 +284,115 @@ async fn one_engine_per_process_and_a_signed_out_item_is_refused() {
         app.open_player(SIZE, display()).await.unwrap_err(),
         PlayerError::Busy
     );
-    // An item of a server that is not signed in.
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    until(&player.state(), playing).await;
+    // An item of a server that is not signed in: refused, the item playing stays shown, and its id goes to no server.
     let other = ServerRef::new(server.service.clone(), current_model::ServerKey::new("99"));
+    let unknown = "57a2d1e000000000000000000000ee01";
     assert_eq!(
-        player
-            .play(item(&other, DIRECT_PLAY_ITEM), Duration::ZERO)
-            .await,
+        player.play(item(&other, unknown), Duration::ZERO).await,
         Err(PlayerError::NotSignedIn)
+    );
+    let status = until(&player.state(), |status| {
+        status.state != PlayerState::Preparing
+    })
+    .await;
+    assert_eq!(status.state, PlayerState::Playing);
+    assert_eq!(status.item, Some(item(&server, DIRECT_PLAY_ITEM)));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !stand_in.paths().iter().any(|path| path.contains(unknown)),
+        "{:?}",
+        stand_in.paths()
     );
     player.close().await;
     // Closed: the engine is free again.
     let (again, _) = open(&app).await;
     again.close().await;
+}
+
+#[tokio::test]
+async fn an_action_a_stop_replaces_answers_replaced_not_closed() {
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let (player, _) = open(&app).await;
+    let path = format!("/Items/{DIRECT_PLAY_ITEM}/PlaybackInfo");
+
+    // A play held at the plan, then a stop.
+    stand_in.hold(&path);
+    let stop_later = async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        player.stop().await
+    };
+    let (play, stop) = tokio::join!(
+        player.play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO),
+        stop_later
+    );
+    assert_eq!(play, Err(PlayerError::Replaced));
+    assert_eq!(stop, Ok(()));
+    stand_in.release(&path);
+    until(&player.state(), |status| status.state == PlayerState::Idle).await;
+
+    // A quality change re-plans; held there, a stop replaces it too.
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    until(&player.state(), playing).await;
+    stand_in.hold(&path);
+    let stop_later = async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        player.stop().await
+    };
+    let (quality, stop) = tokio::join!(player.set_quality(Quality::Bitrate(2_000_000)), stop_later);
+    assert_eq!(quality, Err(PlayerError::Replaced));
+    assert_eq!(stop, Ok(()));
+    stand_in.release(&path);
+    // The player goes on: the next play works.
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    until(&player.state(), playing).await;
+    player.close().await;
+}
+
+#[tokio::test]
+async fn after_the_autoplay_countdown_the_media_controls_show_the_next_episode() {
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let (player, control) = open(&app).await;
+    player
+        .play(item(&server, EPISODE_IDS[0]), Duration::ZERO)
+        .await
+        .unwrap();
+    until(&player.now_playing(), |now| {
+        now.title.as_deref() == Some("Example Episode One")
+    })
+    .await;
+    // The end of the file starts the 10 s countdown (the user's autoplay is on), then the next episode.
+    control.send(EngineEvent::Ended(current_playback::EndReason::Eof));
+    let mut now = player.now_playing();
+    let next = tokio::time::timeout(
+        Duration::from_secs(20),
+        now.wait_for(|now| {
+            now.item == Some(item(&server, EPISODE_IDS[1]))
+                && now.title.as_deref() == Some("Example Episode Two")
+        }),
+    )
+    .await
+    .expect("the next episode within 20 s")
+    .unwrap()
+    .clone();
+    assert_eq!(next.episode, Some(2));
+    player.close().await;
 }
 
 #[tokio::test]

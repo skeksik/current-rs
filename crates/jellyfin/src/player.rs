@@ -133,14 +133,28 @@ impl JellyfinClient {
         index: u32,
         codec: Option<&Codec>,
     ) -> Result<Vec<u8>, AuthError> {
+        // The source id and the codec come from the server: escaped, so neither can change the path.
         let path = format!(
             "/Videos/{}/{}/Subtitles/{index}/Stream.{}",
-            item.as_str(),
-            media_source,
-            subtitle_format(codec),
+            path_segment(item.as_str()),
+            path_segment(media_source),
+            path_segment(&subtitle_format(codec)),
         );
         Ok(self.send_authenticated(Request::get(path)).await?.body)
     }
+}
+
+/// `text` as one path segment: unreserved characters (RFC 3986 section 2.3) as they are, every other byte percent-encoded.
+fn path_segment(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 /// The format to ask for: the codec's own, so the server passes the file through (module doc). Jellyfin's codec names for PGS and
@@ -171,6 +185,13 @@ mod tests {
         assert_eq!(format("dvdsub"), "mks");
         assert_eq!(format("webvtt"), "webvtt");
         assert_eq!(subtitle_format(None), "srt");
+    }
+
+    #[test]
+    fn server_values_cannot_change_the_subtitle_path() {
+        assert_eq!(path_segment("2f0000b2"), "2f0000b2");
+        assert_eq!(path_segment("../x?y=1#z"), "..%2Fx%3Fy%3D1%23z");
+        assert_eq!(path_segment("sub rip"), "sub%20rip");
     }
 
     #[test]

@@ -787,8 +787,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             }
         };
         let planned = planner::plan(&item, &request, answer, &own, &session.permissions, local);
-        // FFmpeg sends the headers to every host a playlist names, so an HLS stream with headers is checked first (ADR 0019).
-        let playlist_checked = !planned.auth.headers.is_empty()
+        // FFmpeg sends the headers to every host a playlist names, and matches a cookie's domain as a plain suffix, so an HLS stream
+        // with any gateway credential is checked first (ADR 0019).
+        let playlist_checked = (!planned.auth.headers.is_empty()
+            || !planned.auth.cookies.is_empty())
             && matches!(
                 planned.plan.route,
                 Route::ServerStream {

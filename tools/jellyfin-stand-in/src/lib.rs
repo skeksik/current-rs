@@ -42,7 +42,7 @@ pub const GATE_SIGN_IN_PATH: &str = "/gate/sign-in";
 /// The header [`Gate::Header`] wants.
 pub const GATE_HEADER: &str = "x-stand-in-gate";
 pub const GATE_HEADER_VALUE: &str = "not-a-real-gate-header";
-/// An item PlaybackInfo answers with direct play. It has an intro and an outro segment.
+/// An item PlaybackInfo answers with direct play. It has an intro and an outro segment. The library's episodes play directly too.
 pub const DIRECT_PLAY_ITEM: &str = "57a2d1e0000000000000000000000010";
 /// An item PlaybackInfo answers with an HLS remux (`ContainerNotSupported`).
 pub const TRANSCODE_ITEM: &str = "57a2d1e0000000000000000000000011";
@@ -585,7 +585,12 @@ fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
             (204, String::new())
         }
         "/Sessions" => (200, sessions(received)),
-        _ if path == format!("/Items/{DIRECT_PLAY_ITEM}/PlaybackInfo") => {
+        // The library's episodes play directly too, for the next-episode autoplay.
+        _ if path == format!("/Items/{DIRECT_PLAY_ITEM}/PlaybackInfo")
+            || library::EPISODE_IDS
+                .iter()
+                .any(|episode| path == format!("/Items/{episode}/PlaybackInfo")) =>
+        {
             (200, playback_info(r#""SupportsDirectPlay":true"#.into()))
         }
         _ if path == format!("/Items/{TRANSCODE_ITEM}/PlaybackInfo") => {

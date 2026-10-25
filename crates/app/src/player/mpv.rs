@@ -608,7 +608,24 @@ mod tests {
                 .file_request(checked(file(url, auth.clone())))
                 .is_ok()
         );
-        // Without headers (cookies are scoped to the host by the engine) or for a file, nothing to check.
+        // Cookies alone are refused too: FFmpeg matches their domain as a suffix, so a look-alike host would get them.
+        let cookie_only = StreamAuth {
+            cookies: vec![PlaybackCookie {
+                name: "gate".into(),
+                value: "cookie-value".into(),
+                path: "/".into(),
+                secure: true,
+            }],
+            ..StreamAuth::default()
+        };
+        assert_eq!(
+            mapper
+                .file_request(file(url, cookie_only.clone()))
+                .unwrap_err(),
+            EngineErrorKind::GATEWAY_PLAYLIST_UNCHECKED
+        );
+        assert!(mapper.file_request(checked(file(url, cookie_only))).is_ok());
+        // Without credentials, or for a file, nothing to check.
         assert!(
             mapper
                 .file_request(file(url, StreamAuth::default()))

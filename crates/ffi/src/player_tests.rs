@@ -285,6 +285,18 @@ fn one_engine_per_process_and_a_cancelled_play() {
     eventually("idle after the cancel", || {
         player.state().state == PlayerStateKind::Idle
     });
+    // A stop that replaces a play held at its plan answers it `Replaced`, never `Closed`.
+    let stopper = player.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let _ = stopper.stop();
+    });
+    assert_eq!(
+        block_on(player.play(item(DIRECT_PLAY_ITEM), 0, CancelToken::new())),
+        Err(CoreError::Player {
+            problem: PlayerProblem::Replaced
+        })
+    );
     stand_in.release(&path);
     block_on(player.close());
     // The engine is free for the next player.

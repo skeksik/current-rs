@@ -299,11 +299,11 @@ impl FileRequest {
             .any(|ext| path.ends_with(ext))
     }
 
-    /// Refuses a playlist URL that carries gateway headers without [`FileRequest::playlist_checked_same_origin`]. Any other load with
-    /// headers and no mark gets mpv's `access-references=no` ([`FileRequest::file_options`]), so a stream that turns out to be a
-    /// playlist cannot open its segments with the headers either.
+    /// Refuses a playlist URL that carries gateway credentials (headers or cookies) without
+    /// [`FileRequest::playlist_checked_same_origin`]. Any other load with credentials and no mark gets mpv's `access-references=no`
+    /// ([`FileRequest::file_options`]), so a stream that turns out to be a playlist cannot open its segments with them either.
     pub fn check_header_scope(&self) -> Result<(), EngineError> {
-        if !self.headers.is_empty() && !self.playlist_checked && self.looks_like_playlist() {
+        if self.has_credentials() && !self.playlist_checked && self.looks_like_playlist() {
             return Err(EngineError::UncheckedPlaylist);
         }
         Ok(())
@@ -395,8 +395,9 @@ impl FileRequest {
             pairs.push(("sid".into(), sid.option_value()));
         }
         pairs.push(("stream-lavf-o".into(), self.lavf_options()));
-        if !self.headers.is_empty() && !self.playlist_checked {
-            // No nested opens (playlist entries, segments, references): they would carry the headers to any host. mpv's
+        if self.has_credentials() && !self.playlist_checked {
+            // No nested opens (playlist entries, segments, references): they would carry the headers to any host, and the cookies
+            // to any host whose name ends in the stream's (FFmpeg matches a cookie domain as a suffix). mpv's
             // `block_io_open` refuses them ("Not opening '%s' due to --access-references=no", `demux/demux_lavf.c`).
             pairs.push(("access-references".into(), "no".into()));
         }
@@ -737,7 +738,34 @@ mod tests {
                 .and_then(Node::as_str),
             Some("no")
         );
-        // Without headers nothing changes.
+        // Cookies alone need the check too: FFmpeg matches their domain as a suffix of the Host, so a look-alike host would get them.
+        let mut cookie_only = FileRequest::new("https://media.example.com/videos/1/master.m3u8");
+        cookie_only.cookies.push(StreamCookie {
+            name: "gate".into(),
+            value: "v".into(),
+            path: "/".into(),
+            secure: true,
+        });
+        assert!(matches!(
+            cookie_only.check_header_scope(),
+            Err(EngineError::UncheckedPlaylist)
+        ));
+        assert_eq!(
+            cookie_only
+                .file_options()
+                .get("access-references")
+                .and_then(Node::as_str),
+            Some("no")
+        );
+        let cookie_only = cookie_only.playlist_checked_same_origin();
+        assert!(cookie_only.check_header_scope().is_ok());
+        assert!(
+            cookie_only
+                .file_options()
+                .get("access-references")
+                .is_none()
+        );
+        // Without credentials nothing changes.
         let plain = FileRequest::new("https://media.example.com/master.m3u8");
         assert!(plain.check_header_scope().is_ok());
         assert!(plain.file_options().get("access-references").is_none());
