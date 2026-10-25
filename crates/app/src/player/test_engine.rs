@@ -6,6 +6,9 @@
 //! Like libmpv's engine it allows one engine per process: a start waits up to [`START_WAIT`] for the earlier one to shut down, then
 //! fails with `Busy`.
 
+// With libmpv built in too, players use libmpv and this engine is unused.
+#![cfg_attr(feature = "libmpv", allow(dead_code))]
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
