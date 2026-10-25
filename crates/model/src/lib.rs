@@ -33,9 +33,9 @@ pub use media::{MediaSummary, StreamSummary};
 pub use network::{Connectivity, InterfaceKind, LocalInterface, NetworkFacts, NetworkKey};
 pub use playback::{
     AudioFacts, Codec, EngineErrorKind, MediaSource, MediaStream, PlaybackPlan,
-    PlaybackPreferences, PlaybackProblem, Route, RouteLabel, RouteReason, Segment, SegmentKind,
-    StreamAction, StreamKind, StreamProtocol, SubtitleChoice, SubtitleDelivery, SubtitleMode,
-    TrackChoice, TranscodingFacts, VideoFacts, VideoRange, VideoRangeType,
+    PlaybackPreferences, PlaybackProblem, PlayerState, Route, RouteLabel, RouteReason, Segment,
+    SegmentKind, StreamAction, StreamKind, StreamProtocol, SubtitleChoice, SubtitleDelivery,
+    SubtitleMode, TrackChoice, TranscodingFacts, VideoFacts, VideoRange, VideoRangeType,
 };
 pub use query::{ItemFilter, ItemQuery, SortKey, SortOrder};
 pub use saved::{AuthHeader, SavedServer, SavedUser};

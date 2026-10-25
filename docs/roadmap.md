@@ -138,6 +138,8 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
 - [ ] Home, library grids, detail pages, search
 - [ ] `current-playback`: device profile from the engine's capabilities, route planner (direct play, direct stream, remux, transcode),
       playback controller (resume, progress reporting, tracks, quality, next episode, intro skip, fallback on engine errors)
+  - [x] `current-playback` (ADR 0019 task 2, feat/playback-core): the engine and server traits, planner and controller, tested with
+        a fake engine, server and clock; wired to Jellyfin and libmpv in task 4
 - [ ] The libmpv engine and the Windows player UI, media keys and the media flyout
   - [x] `current-mpv` (ADR 0019 task 3, feat/mpv-engine): the engine over hand-written client API declarations, linked against the
         D6 build in CI's "mpv (Windows)" job, with redirect, TLS and log-redaction tests (docs/notes/mpv-engine.md)

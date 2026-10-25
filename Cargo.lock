@@ -323,6 +323,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "current-playback"
+version = "0.1.0"
+dependencies = [
+ "current-model",
+]
+
+[[package]]
 name = "current-store"
 version = "0.1.0"
 dependencies = [

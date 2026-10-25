@@ -1,0 +1,13 @@
+[package]
+name = "current-playback"
+description = "Playback logic: the engine and media server traits, the route planner and the playback controller. No HTTP, no libmpv."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+current-model.workspace = true
+
+[lints]
+workspace = true
