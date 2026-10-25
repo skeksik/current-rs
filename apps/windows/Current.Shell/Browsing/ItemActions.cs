@@ -34,11 +34,18 @@ internal static class ItemActions
             }
         };
         var menu = new MenuFlyout();
-        var played = new MenuFlyoutItem { Icon = new FontIcon { Glyph = "" } };
+        // Play or Resume first, for an item that plays by itself (the core's PlayTarget; a series plays from its page). E768 "Play"
+        // ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-25).
+        var play = new MenuFlyoutItem { Icon = new FontIcon { Glyph = "\uE768" } };
+        var playSeparator = new MenuFlyoutSeparator();
+        var played = new MenuFlyoutItem { Icon = new FontIcon { Glyph = "\uE73E" } };
         var favourite = new MenuFlyoutItem();
+        menu.Items.Add(play);
+        menu.Items.Add(playSeparator);
         menu.Items.Add(played);
         menu.Items.Add(favourite);
         ItemSummary? target = null;
+        PlayTarget? playTarget = null;
         menu.Opening += (_, _) =>
         {
             target = menu.Target is DependencyObject container ? SummaryOf(list.ItemFromContainer(container)) : null;
@@ -48,11 +55,21 @@ internal static class ItemActions
                 return;
             }
             var state = server.Session.GetUserState(target.Item) ?? target.User;
+            playTarget = PlayTarget.ForItem(target with { User = state });
+            play.Visibility = playSeparator.Visibility = playTarget is null ? Visibility.Collapsed : Visibility.Visible;
+            play.Text = playTarget is { Resumes: true } ? "Resume" : "Play";
             played.Text = state.Played ? "Mark as unplayed" : "Mark as played";
             favourite.Text = state.Favourite ? "Remove from favourites" : "Add to favourites";
             favourite.Icon = new FontIcon { Glyph = state.Favourite ? "" : "" };
         };
         played.Click += (_, _) => Toggle(target, played: true);
+        play.Click += (_, _) =>
+        {
+            if (playTarget is { } chosen)
+            {
+                App.Play(chosen, fromStart: false);
+            }
+        };
         favourite.Click += (_, _) => Toggle(target, played: false);
         list.ContainerContentChanging += (_, args) =>
         {

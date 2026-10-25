@@ -22,7 +22,7 @@ namespace Current.Shell;
 /// Frame. Navigation follows the NavigationView page's example (learn.microsoft.com, ms.date 2026-10-02, read 2026-10-22): navigate
 /// on ItemInvoked without duplicate back stack entries, go back through the Frame, and keep the selection in step on Navigated.
 /// </summary>
-public sealed partial class MainWindow : Window
+public sealed partial class MainWindow : Window, Player.IPlayerHost
 {
     private static readonly Dictionary<string, Type> Pages = new() { ["home"] = typeof(HomePage) };
 
@@ -79,6 +79,9 @@ public sealed partial class MainWindow : Window
             _appTheme?.Dispose();
             _appTheme = null;
         };
+        Player.Attach(this, this);
+        AppWindow.Changed += OnAppWindowChanged;
+        AppWindow.Closing += OnClosing;
         Root.Loaded += OnRootLoaded;
 
         NavView.SelectedItem = HomeItem;
@@ -258,8 +261,88 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private bool PaneOverlaysPage => NavView.IsPaneOpen && NavView.DisplayMode == NavigationViewDisplayMode.Compact;
 
-    /// <summary>The title bar's Back button is enabled while there is a page to go back to or the pane overlays the page.</summary>
-    private void UpdateBackButton() => AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack || PaneOverlaysPage;
+    /// <summary>The title bar's Back button is enabled while there is a page to go back to, the pane overlays the page, or the player is
+    /// open (Back closes it).</summary>
+    private void UpdateBackButton() =>
+        AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack || PaneOverlaysPage || Player.IsOpen;
+
+    // The player ----------------------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Plays <paramref name="target"/>'s item over the pages, from its resume point or, with <paramref name="fromStart"/>, from its
+    /// beginning (ADR 0019: the details screen owns that choice). The pages and the pane leave the tab order and Narrator's view while it
+    /// plays: hidden, not removed, so the page comes back as it was.
+    /// </summary>
+    internal void Play(PlayTarget target, bool fromStart)
+    {
+        if (App.Core is not { } core)
+        {
+            return;
+        }
+        NavView.Visibility = Visibility.Collapsed;
+        AppTitleBar.IsPaneToggleButtonVisible = false;
+        _ = Player.PlayAsync(core, target.Item.Item, fromStart ? TimeSpan.Zero : target.Start);
+        UpdateBackButton();
+    }
+
+    public bool IsFullScreen => AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen;
+
+    /// <summary>Full screen through the AppWindow's full-screen presenter, on whichever monitor the window is (ADR 0007 item 3).</summary>
+    public void SetFullScreen(bool on)
+    {
+        if (on != IsFullScreen)
+        {
+            AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+        }
+    }
+
+    /// <summary>The title bar's subtitle names what plays, as Media Player shows the title of what it plays.</summary>
+    public void ShowPlaying(string? title) => AppTitleBar.Subtitle = title ?? "";
+
+    public void PlayerClosed()
+    {
+        NavView.Visibility = Visibility.Visible;
+        AppTitleBar.IsPaneToggleButtonVisible = true;
+        UpdateBackButton();
+        DispatcherQueue.TryEnqueue(() => ContentFrame.Focus(FocusState.Programmatic));
+    }
+
+    /// <summary>
+    /// The presenter changed (the player's button or keys, or Windows): in full screen the title bar goes and the player takes the whole
+    /// window, its row included.
+    /// </summary>
+    private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
+    {
+        if (!args.DidPresenterChange)
+        {
+            return;
+        }
+        var full = IsFullScreen;
+        AppTitleBar.Visibility = full ? Visibility.Collapsed : Visibility.Visible;
+        Grid.SetRow(Player, full ? 0 : 1);
+        Grid.SetRowSpan(Player, full ? 2 : 1);
+        Player.FullScreenChanged(full);
+    }
+
+    /// <summary>Closing the window while the player is open closes the player first (its stop is reported, the engine shut down), then
+    /// the window, so the core is not disposed under it. async void, as event handlers are: it catches everything itself.</summary>
+    private async void OnClosing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (!Player.IsOpen)
+        {
+            return;
+        }
+        args.Cancel = true;
+        try
+        {
+            await Player.CloseAsync();
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: closing the player with the window failed: {error.GetType().Name}");
+        }
+        Close();
+    }
 
     /// <summary>
     /// Names the title bar's pane button as the navigation view names its own: "Open Navigation" while the pane is closed, "Close
@@ -560,6 +643,12 @@ public sealed partial class MainWindow : Window
 
     private bool TryGoBack()
     {
+        // Back from the player closes it and shows the page it was played from (ADR 0007's closing order, PlayerView.CloseAsync).
+        if (Player.IsOpen)
+        {
+            _ = Player.CloseAsync();
+            return true;
+        }
         // With the pane open over the page, back only closes the pane, from the title bar's Back button, Alt+Left, the GoBack key and
         // the mouse Back button alike (owner, 2026-10-24), as the navigation view's own back button does then ("clicking the back
         // button will close the Pane and raise the PaneClosing event instead", NavigationView page, learn.microsoft.com, ms.date

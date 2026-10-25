@@ -1,0 +1,275 @@
+<UserControl
+    x:Class="Current.Shell.Player.PlayerView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    IsTabStop="True"
+    UseSystemFocusVisuals="False"
+    AutomationProperties.Name="Video player">
+    <!--
+      The player in the main window (ADR 0019 task 5), as Media Player plays a video in its own window (owner's PC, 2026-10-25). The
+      controls copy WinUI's own MediaTransportControls, which a MediaPlayerElement would show but which needs a Windows MediaPlayer, not
+      libmpv: its template and resources (MediaTransportControls_themeresources.xaml, microsoft-ui-xaml, tag winui3/release/2.5.1, read
+      2026-10-25) give the panel's acrylic background and stroke (MediaTransportControlsPanelBackground, MediaTransportControlsBorderBrush,
+      1 px), its 12 px margin, 296 to 720 px width and OverlayCornerRadius, the seek slider (32 px tall, margin 7,2,7,1, no thumb tool
+      tip) over two caption times in a 16 px row (margin 7,0,7,2), and a transparent CommandBar of 40 x 40 AppBarButtons with labels
+      collapsed (margin 0,3; AppBarThemeCompactHeight 40, AppBarButtonInnerBorderMargin 5, AppBarButtonContentViewboxCollapsedMargin
+      0,12), in its order: volume, subtitles, audio tracks, then skip back, play/pause, skip forward, then the rest. Glyphs as there:
+      ED1E subtitles, ED1F audio tracks, ED3C and ED3D skip, F5B0 play and F8AE pause, the Volume, Mute, FullScreen and BackToWindow
+      symbols. The panel fades in over 0.3 s and out over 0.7 s, 3 s after the last input (PlayerView.xaml.cs).
+    -->
+    <UserControl.Resources>
+        <Style x:Key="TransportButtonStyle" TargetType="AppBarButton" BasedOn="{StaticResource DefaultAppBarButtonStyle}">
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Width" Value="40" />
+            <Setter Property="AllowFocusOnInteraction" Value="True" />
+        </Style>
+        <Style x:Key="TransportToggleButtonStyle" TargetType="AppBarToggleButton" BasedOn="{StaticResource DefaultAppBarToggleButtonStyle}">
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Width" Value="40" />
+            <Setter Property="AllowFocusOnInteraction" Value="True" />
+        </Style>
+        <Storyboard x:Name="FadeIn">
+            <DoubleAnimation Storyboard.TargetName="ControlPanel" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.3" />
+        </Storyboard>
+        <Storyboard x:Name="FadeOut">
+            <DoubleAnimation Storyboard.TargetName="ControlPanel" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.7" />
+        </Storyboard>
+    </UserControl.Resources>
+
+    <Grid x:Name="Root" Background="Black" KeyboardAcceleratorPlacementMode="Hidden">
+        <SwapChainPanel x:Name="Video" AutomationProperties.AccessibilityView="Raw" />
+
+        <ProgressRing
+            x:Name="BusyRing"
+            Width="48"
+            Height="48"
+            IsActive="False"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            AutomationProperties.Name="Loading" />
+
+        <!-- A problem from the core, in plain words (PlayerText), with Back. -->
+        <InfoBar
+            x:Name="ProblemInfo"
+            MaxWidth="480"
+            Margin="24"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Severity="Error"
+            IsClosable="False"
+            IsOpen="False"
+            Title="Can't play this item.">
+            <InfoBar.ActionButton>
+                <Button Content="Back" Click="OnProblemBack" />
+            </InfoBar.ActionButton>
+        </InfoBar>
+
+        <!-- Playback info: what the core's playback_info() says, never a URL. On the right, over the video, in the panel's acrylic. -->
+        <Border
+            x:Name="InfoPanel"
+            Width="360"
+            Margin="12"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            Visibility="Collapsed"
+            Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+            BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+            BorderThickness="1"
+            CornerRadius="{ThemeResource OverlayCornerRadius}">
+            <ScrollViewer x:Name="InfoScroller" MaxHeight="480">
+                <StackPanel Padding="16,12" Spacing="2">
+                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="Playback info" />
+                    <TextBlock x:Name="InfoText" Style="{StaticResource CaptionTextBlockStyle}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <StackPanel VerticalAlignment="Bottom">
+            <!-- The skip button and the next-episode card, on the right above the controls, as the core reports them. They stay while
+                 the controls hide. -->
+            <StackPanel Margin="12,0" HorizontalAlignment="Right" Spacing="8">
+                <Button
+                    x:Name="SkipButton"
+                    HorizontalAlignment="Right"
+                    Style="{StaticResource AccentButtonStyle}"
+                    Visibility="Collapsed"
+                    Click="OnSkip" />
+                <Border
+                    x:Name="NextCard"
+                    Width="320"
+                    Padding="16"
+                    Visibility="Collapsed"
+                    Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{ThemeResource OverlayCornerRadius}">
+                    <StackPanel Spacing="4">
+                        <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="Next episode" />
+                        <TextBlock x:Name="NextName" Style="{StaticResource BodyTextBlockStyle}" TextWrapping="WrapWholeWords" />
+                        <TextBlock
+                            x:Name="NextCountdown"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            AutomationProperties.LiveSetting="Polite" />
+                        <StackPanel Margin="0,8,0,0" Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="NextPlayButton" Style="{StaticResource AccentButtonStyle}" Content="Play now" Click="OnPlayNext" />
+                            <Button Content="Dismiss" Click="OnDismissNext" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <Grid
+                x:Name="ControlPanel"
+                Margin="12"
+                MinWidth="296"
+                MaxWidth="720"
+                Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+                BorderThickness="1"
+                CornerRadius="{ThemeResource OverlayCornerRadius}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Slider
+                    x:Name="SeekBar"
+                    Margin="7,2,7,1"
+                    MinWidth="80"
+                    Height="32"
+                    VerticalAlignment="Center"
+                    IsThumbToolTipEnabled="False"
+                    AutomationProperties.Name="Seek"
+                    ValueChanged="OnSeekBarChanged" />
+                <Grid Grid.Row="1" Height="16" Margin="7,0,7,2">
+                    <TextBlock x:Name="ElapsedText" Style="{StaticResource CaptionTextBlockStyle}" HorizontalAlignment="Left" VerticalAlignment="Bottom" Text="0:00" />
+                    <TextBlock x:Name="RemainingText" Style="{StaticResource CaptionTextBlockStyle}" HorizontalAlignment="Right" VerticalAlignment="Bottom" Text="0:00" />
+                </Grid>
+                <CommandBar
+                    x:Name="Commands"
+                    Grid.Row="2"
+                    Margin="0,3"
+                    HorizontalAlignment="Center"
+                    Background="Transparent"
+                    DefaultLabelPosition="Collapsed"
+                    IsDynamicOverflowEnabled="False"
+                    OverflowButtonVisibility="Collapsed">
+                    <CommandBar.Resources>
+                        <Thickness x:Key="AppBarButtonInnerBorderMargin">5</Thickness>
+                        <Thickness x:Key="AppBarButtonContentViewboxCollapsedMargin">0,12</Thickness>
+                        <x:Double x:Key="AppBarThemeCompactHeight">40</x:Double>
+                        <x:Double x:Key="AppBarMoreButtonColumnMinWidth">0</x:Double>
+                    </CommandBar.Resources>
+                    <AppBarButton x:Name="VolumeButton" Style="{StaticResource TransportButtonStyle}" Label="Volume">
+                        <AppBarButton.Icon>
+                            <SymbolIcon x:Name="VolumeSymbol" Symbol="Volume" />
+                        </AppBarButton.Icon>
+                        <AppBarButton.Flyout>
+                            <Flyout x:Name="VolumeFlyout">
+                                <StackPanel Orientation="Horizontal" Padding="3,11">
+                                    <AppBarToggleButton
+                                        x:Name="MuteButton"
+                                        Style="{StaticResource TransportToggleButtonStyle}"
+                                        Label="Mute"
+                                        Click="OnMute">
+                                        <AppBarToggleButton.Icon>
+                                            <SymbolIcon x:Name="MuteSymbol" Symbol="Volume" />
+                                        </AppBarToggleButton.Icon>
+                                    </AppBarToggleButton>
+                                    <Slider
+                                        x:Name="VolumeSlider"
+                                        Width="190"
+                                        Height="32"
+                                        Margin="12,0,8,0"
+                                        VerticalAlignment="Center"
+                                        Maximum="100"
+                                        IsThumbToolTipEnabled="False"
+                                        AutomationProperties.Name="Volume"
+                                        ValueChanged="OnVolumeChanged" />
+                                    <TextBlock
+                                        x:Name="VolumeValue"
+                                        Width="24"
+                                        Margin="8,0,16,0"
+                                        VerticalAlignment="Center"
+                                        TextAlignment="Right"
+                                        Style="{StaticResource CaptionTextBlockStyle}"
+                                        AutomationProperties.AccessibilityView="Raw" />
+                                </StackPanel>
+                            </Flyout>
+                        </AppBarButton.Flyout>
+                    </AppBarButton>
+                    <AppBarButton x:Name="SubtitlesButton" Style="{StaticResource TransportButtonStyle}" Label="Subtitles">
+                        <AppBarButton.Icon>
+                            <FontIcon Glyph="&#xED1E;" />
+                        </AppBarButton.Icon>
+                        <AppBarButton.Flyout>
+                            <MenuFlyout x:Name="SubtitlesMenu" Opening="OnSubtitlesMenuOpening" />
+                        </AppBarButton.Flyout>
+                    </AppBarButton>
+                    <AppBarButton x:Name="AudioButton" Style="{StaticResource TransportButtonStyle}" Label="Audio tracks">
+                        <AppBarButton.Icon>
+                            <FontIcon Glyph="&#xED1F;" />
+                        </AppBarButton.Icon>
+                        <AppBarButton.Flyout>
+                            <MenuFlyout x:Name="AudioMenu" Opening="OnAudioMenuOpening" />
+                        </AppBarButton.Flyout>
+                    </AppBarButton>
+                    <AppBarSeparator />
+                    <AppBarButton x:Name="SkipBackButton" Style="{StaticResource TransportButtonStyle}" Label="Skip back 10 seconds" Click="OnSkipBack">
+                        <AppBarButton.Icon>
+                            <FontIcon Glyph="&#xED3C;" />
+                        </AppBarButton.Icon>
+                        <AppBarButton.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="Left" Modifiers="Control" />
+                        </AppBarButton.KeyboardAccelerators>
+                    </AppBarButton>
+                    <AppBarButton x:Name="PlayPauseButton" Style="{StaticResource TransportButtonStyle}" Label="Play" Click="OnPlayPause">
+                        <AppBarButton.Icon>
+                            <FontIcon x:Name="PlayPauseGlyph" Glyph="&#xF5B0;" />
+                        </AppBarButton.Icon>
+                        <AppBarButton.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="P" Modifiers="Control" />
+                        </AppBarButton.KeyboardAccelerators>
+                    </AppBarButton>
+                    <AppBarButton x:Name="SkipForwardButton" Style="{StaticResource TransportButtonStyle}" Label="Skip forward 30 seconds" Click="OnSkipForward">
+                        <AppBarButton.Icon>
+                            <FontIcon Glyph="&#xED3D;" />
+                        </AppBarButton.Icon>
+                        <AppBarButton.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="Right" Modifiers="Control" />
+                        </AppBarButton.KeyboardAccelerators>
+                    </AppBarButton>
+                    <AppBarSeparator />
+                    <!-- Quality: Segoe Fluent Icons E713 "Settings" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13,
+                         read 2026-10-25). -->
+                    <AppBarButton x:Name="QualityButton" Style="{StaticResource TransportButtonStyle}" Label="Quality">
+                        <AppBarButton.Icon>
+                            <FontIcon Glyph="&#xE713;" />
+                        </AppBarButton.Icon>
+                        <AppBarButton.Flyout>
+                            <MenuFlyout x:Name="QualityMenu" Opening="OnQualityMenuOpening" />
+                        </AppBarButton.Flyout>
+                    </AppBarButton>
+                    <!-- Playback info: E946 "Info" (same page). Ctrl+I, Media Player's Properties (owner's PC, 2026-10-25). -->
+                    <AppBarToggleButton x:Name="InfoButton" Style="{StaticResource TransportToggleButtonStyle}" Label="Playback info" Click="OnInfo">
+                        <AppBarToggleButton.Icon>
+                            <FontIcon Glyph="&#xE946;" />
+                        </AppBarToggleButton.Icon>
+                        <AppBarToggleButton.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="I" Modifiers="Control" />
+                        </AppBarToggleButton.KeyboardAccelerators>
+                    </AppBarToggleButton>
+                    <AppBarButton x:Name="FullScreenButton" Style="{StaticResource TransportButtonStyle}" Label="Full screen" Click="OnFullScreen">
+                        <AppBarButton.Icon>
+                            <SymbolIcon x:Name="FullScreenSymbol" Symbol="FullScreen" />
+                        </AppBarButton.Icon>
+                        <AppBarButton.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="F11" />
+                        </AppBarButton.KeyboardAccelerators>
+                    </AppBarButton>
+                </CommandBar>
+            </Grid>
+        </StackPanel>
+    </Grid>
+</UserControl>

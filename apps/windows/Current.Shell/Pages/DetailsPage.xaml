@@ -79,7 +79,7 @@
                     <TextBlock x:Name="FactsText" Style="{StaticResource BodyTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <TextBlock x:Name="GenresText" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <StackPanel x:Name="Actions" Margin="0,4,0,0" Orientation="Horizontal" Spacing="8">
-                        <!-- The Play button goes first here, with the player (ADR 0019, task 5). -->
+                        <!-- Play or Resume first, and "Play from the beginning" beside Resume (ADR 0019 task 5; DetailsPage.xaml.cs). -->
                         <StackPanel x:Name="PlayActions" Orientation="Horizontal" Spacing="8" />
                         <ToggleButton x:Name="PlayedButton" AutomationProperties.Name="Played" Click="OnPlayed">
                             <StackPanel Orientation="Horizontal" Spacing="8">

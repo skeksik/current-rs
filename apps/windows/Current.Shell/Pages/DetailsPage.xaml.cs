@@ -30,6 +30,10 @@ public sealed partial class DetailsPage : Page
     /// <summary>Reached by Back or Forward: scroll to where the page and its rows were once they are laid out.</summary>
     private bool _restore;
     private ValueSubscription<ItemDetails?>? _details;
+    private ValueSubscription<PlayTarget?>? _play;
+
+    /// <summary>What the Play buttons show now: rebuilt only when it changes, so focus on them stays.</summary>
+    private (ItemRef Item, TimeSpan Start, bool Resumes)? _shownPlay;
     private ValueSubscription<LoadState>? _state;
     private ListSubscription<ItemSummary>? _seasons;
     private ImageRef? _shownBackdrop;
@@ -64,6 +68,9 @@ public sealed partial class DetailsPage : Page
         _details.PropertyChanged += OnDetailsChanged;
         _state = _view.ObserveState(ui);
         _state.PropertyChanged += OnStateChanged;
+        _play = _view.ObservePlay(ui);
+        _play.PropertyChanged += (_, _) => ShowPlay();
+        _subscriptions.Add(_play);
         _seasons = _view.ObserveSeasons(ui);
         _seasons.Items.CollectionChanged += (_, _) => ShowSeasons();
         var episodes = _view.ObserveEpisodes(ui);
@@ -77,6 +84,7 @@ public sealed partial class DetailsPage : Page
         Similar.ItemsSource = _similarTiles;
         ShowDetails();
         ShowState();
+        ShowPlay();
         if (_restore)
         {
             _ = ScrollWhenLaidOutAsync(Scroller, _kept.Offset, horizontal: false);
@@ -247,6 +255,55 @@ public sealed partial class DetailsPage : Page
         PeoplePart.Visibility = details.People.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         SeriesPart.Visibility = item.Kind == "series" ? Visibility.Visible : Visibility.Collapsed;
         ShowPictures(details);
+    }
+
+    /// <summary>
+    /// The Play buttons from the core's PlayTarget (what plays and from where are its rule): "Play" or "Resume" first, in the accent
+    /// style as the page's main action (no Microsoft guideline found for that: the Buttons page, learn.microsoft.com, ms.date
+    /// 2026-10-13, read 2026-10-25, says nothing on accent buttons), and "Play from the beginning" beside "Resume". On a series' page
+    /// the buttons name the episode they play; Narrator hears its name too.
+    /// </summary>
+    private void ShowPlay()
+    {
+        var target = _play?.Value;
+        var shown = target is null ? ((ItemRef, TimeSpan, bool)?)null : (target.Item.Item, target.Start, target.Resumes);
+        if (shown == _shownPlay)
+        {
+            return;
+        }
+        _shownPlay = shown;
+        PlayActions.Children.Clear();
+        if (target is null)
+        {
+            return;
+        }
+        var number = _details?.Value?.Summary.Kind == "series" ? BrowseText.EpisodeNumber(target.Item) : "";
+        var verb = target.Resumes ? "Resume" : "Play";
+        var label = number.Length > 0 ? $"{verb} {number}" : verb;
+        var main = new Button
+        {
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+            Content = IconLabel("", label),
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(main, number.Length > 0 ? $"{label} {target.Item.Name}" : label);
+        main.Click += (_, _) => App.Play(target, fromStart: false);
+        PlayActions.Children.Add(main);
+        if (target.Resumes)
+        {
+            var again = new Button { Content = "Play from the beginning" };
+            again.Click += (_, _) => App.Play(target, fromStart: true);
+            PlayActions.Children.Add(again);
+        }
+    }
+
+    /// <summary>A glyph and a label, as the Played and Favourite buttons show theirs (DetailsPage.xaml). E768: "Play" ("Segoe Fluent
+    /// Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-25).</summary>
+    private static StackPanel IconLabel(string glyph, string label)
+    {
+        var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        content.Children.Add(new FontIcon { Glyph = glyph, FontSize = 16 });
+        content.Children.Add(new TextBlock { Text = label });
+        return content;
     }
 
     /// <summary>"Series name: S1:E2 Episode name" on an episode's own page.</summary>
