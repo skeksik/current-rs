@@ -132,6 +132,8 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
 - [ ] Home, library grids, detail pages, search
 - [ ] `current-playback`: device profile from the engine's capabilities, route planner (direct play, direct stream, remux, transcode),
       playback controller (resume, progress reporting, tracks, quality, next episode, intro skip, fallback on engine errors)
+  - [x] `current-playback` (ADR 0019 task 2, feat/playback-core): the engine and server traits, planner and controller, tested with
+        a fake engine, server and clock; wired to Jellyfin and libmpv in task 4
 - [ ] The libmpv engine and the Windows player UI, media keys and the media flyout
 - [ ] Playback information (route, codecs, reasons for the choice) and remembered track choices
 - [ ] Servers behind an authentication gateway (after M1; ADR 0017): a password prompt for Basic gateways, a sign-in
