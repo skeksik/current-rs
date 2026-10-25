@@ -22,7 +22,10 @@ public sealed partial class PersonCard : UserControl
         Unloaded += (_, _) => _loader.Recycle();
     }
 
-    /// <summary>The person shown now: bound again to the same one (Loaded after DataContextChanged), the card keeps its photo.</summary>
+    /// <summary>
+    /// The person shown now. Bound again to the same one (Loaded after DataContextChanged, or a DataContextChanged WinUI raises with
+    /// nothing changed, as StableSource describes), the card keeps its photo instead of going back to the initials.
+    /// </summary>
     private Person? _shown;
 
     private void Bind()
@@ -41,15 +44,13 @@ public sealed partial class PersonCard : UserControl
         }
         _loader.Recycle();
         Picture.ProfilePicture = null;
-        // The initials only once the photo is late, as a tile's BlurHash (TileImage.PlaceholderDelay): a photo the core has shows
-        // without initials before it (the owner's run, 2026-10-25).
-        Picture.DisplayName = "";
+        // The initials until the photo arrives, or for good without one.
+        Picture.DisplayName = person.Name;
         NameText.Text = person.Name;
         RoleText.Text = person.Role is { Length: > 0 } role ? role : BrowseText.PersonKind(person.Kind);
         AutomationProperties.SetName(this, RoleText.Text.Length > 0 ? $"{person.Name}, {RoleText.Text}" : person.Name);
         if (person.Image is not { } art)
         {
-            Picture.DisplayName = person.Name;
             _shown = person;
             return;
         }
@@ -60,16 +61,6 @@ public sealed partial class PersonCard : UserControl
         _shown = person;
         var size = (int)Math.Ceiling(Picture.Width * root.RasterizationScale);
         _ = LoadAsync(new ImageRequest(new ImageSource.Server(art.Image), size, size), person);
-        _ = ShowInitialsLaterAsync(person);
-    }
-
-    private async Task ShowInitialsLaterAsync(Person person)
-    {
-        await Task.Delay(TileImage.PlaceholderDelay);
-        if (ReferenceEquals(_shown, person) && Picture.ProfilePicture is null)
-        {
-            Picture.DisplayName = person.Name;
-        }
     }
 
     private async Task LoadAsync(ImageRequest request, Person person)
@@ -84,11 +75,7 @@ public sealed partial class PersonCard : UserControl
         }
         catch (ImageLoadException)
         {
-            // No photo: the initials, at once.
-            if (ReferenceEquals(_shown, person))
-            {
-                Picture.DisplayName = person.Name;
-            }
+            // The initials stay.
         }
         catch (Exception error)
         {
