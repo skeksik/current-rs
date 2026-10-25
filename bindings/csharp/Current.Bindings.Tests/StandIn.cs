@@ -23,6 +23,11 @@ internal sealed class StandIn : IDisposable
     public const string GateHeader = "x-stand-in-gate";
     public const string GateHeaderValue = "not-a-real-gate-header";
 
+    // Its playback items (tools/jellyfin-stand-in/src/lib.rs): direct play, and an HLS remux.
+    public const string DirectPlayItem = "57a2d1e0000000000000000000000010";
+    public const string DirectPlayName = "Stand-in Direct Play";
+    public const string TranscodeItem = "57a2d1e0000000000000000000000011";
+
     private readonly Process _process;
 
     private StandIn(Process process, string address)

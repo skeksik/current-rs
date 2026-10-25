@@ -108,6 +108,7 @@ internal static class CoreCall
         Ffi.CoreException.NoAddress => new ServerHasNoAddressException(),
         Ffi.CoreException.InvalidAddress => new InvalidServerAddressException(),
         Ffi.CoreException.Gateway gateway => new GatewayInputException(MapProblems.From(gateway.@problem)),
+        Ffi.CoreException.Player player => new PlayerException(PlayerMap.From(player.@problem)),
         _ => new CoreRuntimeException(error.Message),
     };
 }

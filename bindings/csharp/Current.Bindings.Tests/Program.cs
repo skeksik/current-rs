@@ -47,6 +47,12 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a header gate takes extra headers", GatewayTests.HeaderGateTakesExtraHeaders),
     ("a portal's cookies sign in, and again after its session ended", GatewayTests.PortalSignInAndAgain),
     ("gateway inputs hide their values", GatewayTests.GatewayInputsHideTheirValues),
+    ("the core's engine is the test engine", PlayerTests.EngineIsTheTestEngine),
+    ("a player plays, reports and releases its swap chain", PlayerTests.PlaysReportsAndReleases),
+    ("a second player waits, then is busy", PlayerTests.SecondPlayerIsBusy),
+    ("a cancelled play leaves nothing started", PlayerTests.CancelledPlayLeavesNothingStarted),
+    ("an HLS stream behind a header gateway is refused, and no URL crosses", PlayerTests.HlsBehindAHeaderGatewayIsRefused),
+    ("the skip switch is saved", PlayerTests.SkipSwitchIsSaved),
 };
 
 var failed = 0;
