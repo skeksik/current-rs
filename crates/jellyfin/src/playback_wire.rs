@@ -93,7 +93,7 @@ pub(crate) struct ProfileCondition {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct SubtitleProfile {
-    pub format: &'static str,
+    pub format: String,
     pub method: &'static str,
 }
 

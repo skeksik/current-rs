@@ -9,8 +9,8 @@ use current_jellyfin::{
     StopReport,
 };
 use current_model::{
-    Codec, Container, EngineCapabilities, ItemId, Route, RouteLabel, RouteReason, SegmentKind,
-    ServerKey, ServerRef, ServiceType, TrackChoice, VideoCodecSupport,
+    Codec, CodecSupport, Container, EngineCapabilities, ItemId, Route, RouteLabel, RouteReason,
+    SegmentKind, ServerKey, ServerRef, ServiceType, SubtitleFormat, TrackChoice,
 };
 use current_net::{FixedAddress, RequestLog, Url};
 use jellyfin_stand_in::{
@@ -32,13 +32,13 @@ async fn signed_in(stand_in: &StandIn, log: &Arc<RequestLog>) -> JellyfinClient 
 
 fn capabilities() -> EngineCapabilities {
     EngineCapabilities {
-        containers: vec![Container::MATROSKA, Container::MP4, Container::MPEG_TS],
-        video_codecs: vec![
-            VideoCodecSupport::any(Codec::HEVC),
-            VideoCodecSupport::any(Codec::H264),
+        containers: vec![Container::MKV, Container::MP4, Container::TS],
+        video: vec![
+            CodecSupport::any(Codec::HEVC),
+            CodecSupport::any(Codec::H264),
         ],
-        audio_codecs: vec![Codec::AAC, Codec::AC3],
-        subtitle_formats: vec![Codec::SUBRIP],
+        audio: vec![CodecSupport::any(Codec::AAC), CodecSupport::any(Codec::AC3)],
+        subtitles: vec![SubtitleFormat::SUBRIP, SubtitleFormat::SRT],
         external_subtitles: true,
     }
 }

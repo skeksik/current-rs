@@ -10,9 +10,9 @@ use current_jellyfin::{
     PlaybackError, PlaybackRequest, ProgressReport, StopReport,
 };
 use current_model::{
-    Codec, Container, EngineCapabilities, ItemId, Route, RouteLabel, RouteReason, SegmentKind,
-    ServerKey, ServerRef, ServiceType, StreamAction, StreamKind, StreamProtocol, SubtitleChoice,
-    SubtitleDelivery, SubtitleMode, TrackChoice, VideoCodecSupport, VideoRangeType,
+    Codec, CodecSupport, Container, EngineCapabilities, ItemId, Route, RouteLabel, RouteReason,
+    SegmentKind, ServerKey, ServerRef, ServiceType, StreamAction, StreamKind, StreamProtocol,
+    SubtitleChoice, SubtitleDelivery, SubtitleFormat, SubtitleMode, TrackChoice, VideoRangeType,
 };
 use current_net::{FixedAddress, RequestLog, Url};
 use serde_json::Value;
@@ -161,19 +161,27 @@ fn client(stand_in: &StandIn, log: &Arc<RequestLog>) -> JellyfinClient {
 /// The lists `current-mpv` reports for our Windows build (ADR 0019).
 fn capabilities() -> EngineCapabilities {
     EngineCapabilities {
-        containers: vec![Container::MATROSKA, Container::MP4, Container::MPEG_TS],
-        video_codecs: [Codec::H264, Codec::HEVC, Codec::AV1]
+        containers: vec![Container::MKV, Container::MP4, Container::TS],
+        video: [Codec::H264, Codec::HEVC, Codec::AV1]
             .into_iter()
-            .map(VideoCodecSupport::any)
+            .map(CodecSupport::any)
             .collect(),
-        audio_codecs: vec![
+        audio: [
             Codec::AAC,
             Codec::AC3,
             Codec::EAC3,
             Codec::FLAC,
             Codec::OPUS,
+        ]
+        .into_iter()
+        .map(CodecSupport::any)
+        .collect(),
+        subtitles: vec![
+            SubtitleFormat::ASS,
+            SubtitleFormat::SUBRIP,
+            SubtitleFormat::SRT,
+            SubtitleFormat::PGSSUB,
         ],
-        subtitle_formats: vec![Codec::ASS, Codec::SUBRIP, Codec::PGS],
         external_subtitles: true,
     }
 }
@@ -303,9 +311,9 @@ async fn direct_play_builds_the_static_url_and_sends_the_profile() {
     assert_eq!(audio.kind, StreamKind::AUDIO);
     assert_eq!(audio.audio.as_ref().unwrap().channels, Some(6));
     assert_eq!(audio.language.as_deref(), Some("eng"));
-    assert_eq!(source.stream(2).unwrap().codec, Some(Codec::PGS));
+    assert_eq!(source.stream(2).unwrap().codec, Some(Codec::new("PGSSUB")));
     let external = source.stream(3).unwrap();
-    assert_eq!(external.codec, Some(Codec::SUBRIP));
+    assert_eq!(external.codec, Some(Codec::new("srt")));
     assert!(external.is_external && external.is_forced);
     assert_eq!(external.subtitle_delivery, Some(SubtitleDelivery::EXTERNAL));
 

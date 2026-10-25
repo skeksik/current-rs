@@ -21,7 +21,7 @@ mod user;
 pub use appearance::AppTheme;
 pub use artwork::{Artwork, AspectRatio, ImageRef, ImageType};
 pub use capabilities::{Capabilities, Feature, Reachability, ServerStatus};
-pub use engine::{Container, EngineCapabilities, VideoCodecSupport};
+pub use engine::{CodecSupport, Container, EngineCapabilities, SubtitleFormat};
 pub use identity::{
     ItemId, ItemRef, MediaKind, ServerId, ServerKey, ServerRef, ServiceType, UserId,
 };

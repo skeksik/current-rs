@@ -24,8 +24,9 @@ open_value! {
 }
 
 open_value! {
-    /// A codec, by FFmpeg's codec name (what both a server's probe and the engine's decoder list report). Open: any codec passes
-    /// through; a service crate translates its server's own spellings to these names.
+    /// A codec, by the server's name (for Jellyfin, FFmpeg's codec name as its probe reports it; subtitle codecs it renames, for
+    /// example `PGSSUB`). Open: any codec passes through unchanged. Subtitle formats an engine renders are
+    /// [`SubtitleFormat`](crate::SubtitleFormat)s.
     Codec {
         H264 = "h264",
         HEVC = "hevc",
@@ -46,40 +47,33 @@ open_value! {
         ALAC = "alac",
         PCM_S16LE = "pcm_s16le",
         PCM_S24LE = "pcm_s24le",
-        ASS = "ass",
-        SSA = "ssa",
-        SUBRIP = "subrip",
-        WEBVTT = "webvtt",
-        MOV_TEXT = "mov_text",
-        PGS = "hdmv_pgs_subtitle",
-        DVD_SUBTITLE = "dvd_subtitle",
-        DVB_SUBTITLE = "dvb_subtitle",
     }
 }
 
 open_value! {
-    /// A video's dynamic range, coarse. Open.
+    /// A video's dynamic range, coarse, by Jellyfin's name (`VideoRange`). Open.
     VideoRange {
-        SDR = "sdr",
-        HDR = "hdr",
+        SDR = "SDR",
+        HDR = "HDR",
     }
 }
 
 open_value! {
-    /// A video's dynamic range format in detail: which HDR or Dolby Vision signalling it carries. Open.
+    /// A video's dynamic range format in detail, by Jellyfin's name (`VideoRangeType`): which HDR or Dolby Vision signalling it
+    /// carries. Open.
     VideoRangeType {
-        SDR = "sdr",
-        HDR10 = "hdr10",
-        HDR10_PLUS = "hdr10_plus",
-        HLG = "hlg",
-        DOVI = "dovi",
-        DOVI_WITH_HDR10 = "dovi_with_hdr10",
-        DOVI_WITH_HLG = "dovi_with_hlg",
-        DOVI_WITH_SDR = "dovi_with_sdr",
-        DOVI_WITH_EL = "dovi_with_el",
-        DOVI_WITH_HDR10_PLUS = "dovi_with_hdr10_plus",
-        DOVI_WITH_EL_HDR10_PLUS = "dovi_with_el_hdr10_plus",
-        DOVI_INVALID = "dovi_invalid",
+        SDR = "SDR",
+        HDR10 = "HDR10",
+        HDR10_PLUS = "HDR10Plus",
+        HLG = "HLG",
+        DOVI = "DOVI",
+        DOVI_WITH_HDR10 = "DOVIWithHDR10",
+        DOVI_WITH_HLG = "DOVIWithHLG",
+        DOVI_WITH_SDR = "DOVIWithSDR",
+        DOVI_WITH_EL = "DOVIWithEL",
+        DOVI_WITH_HDR10_PLUS = "DOVIWithHDR10Plus",
+        DOVI_WITH_EL_HDR10_PLUS = "DOVIWithELHDR10Plus",
+        DOVI_INVALID = "DOVIInvalid",
     }
 }
 

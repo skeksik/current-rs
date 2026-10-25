@@ -540,7 +540,7 @@ fn predict(
         value(key).is_some_and(|names| {
             names
                 .split(',')
-                .any(|name| codec_from_server(name) == *codec)
+                .any(|name| name.eq_ignore_ascii_case(codec.as_str()))
         })
     };
     let refused = |key: &str| value(key).is_some_and(|v| v.eq_ignore_ascii_case("false"));
@@ -602,22 +602,6 @@ fn route_reason(name: &str) -> RouteReason {
     }
 }
 
-/// A codec name from the server as the model's (FFmpeg's) name: the server renames some subtitle codecs
-/// (`ProbeResultNormalizer.NormalizeSubtitleCodec`), and external subtitle files carry their extension. Others pass through.
-fn codec_from_server(name: &str) -> Codec {
-    let renamed = [
-        ("PGSSUB", Codec::PGS),
-        ("DVDSUB", Codec::DVD_SUBTITLE),
-        ("DVBSUB", Codec::DVB_SUBTITLE),
-        ("srt", Codec::SUBRIP),
-        ("vtt", Codec::WEBVTT),
-    ];
-    renamed
-        .into_iter()
-        .find(|(server, _)| server.eq_ignore_ascii_case(name))
-        .map_or_else(|| Codec::new(name), |(_, codec)| codec)
-}
-
 pub(crate) fn map_source(source: &wire::MediaSourceInfo) -> MediaSource {
     MediaSource {
         id: source.id.clone().unwrap_or_default(),
@@ -663,11 +647,16 @@ fn map_stream(stream: &wire::MediaStream) -> Option<MediaStream> {
             .real_frame_rate
             .or(stream.average_frame_rate)
             .filter(|rate| *rate > 0.0),
-        range: stream.video_range.as_deref().and_then(video_range),
+        range: stream
+            .video_range
+            .as_deref()
+            .and_then(range_name)
+            .map(VideoRange::new),
         range_type: stream
             .video_range_type
             .as_deref()
-            .and_then(video_range_type),
+            .and_then(range_name)
+            .map(VideoRangeType::new),
         dv_profile: stream.dv_profile.and_then(|v| u32::try_from(v).ok()),
     });
     let audio = (kind == StreamKind::AUDIO).then(|| AudioFacts {
@@ -682,7 +671,7 @@ fn map_stream(stream: &wire::MediaStream) -> Option<MediaStream> {
     };
     Some(MediaStream {
         index,
-        codec: non_empty(stream.codec.clone()).map(|codec| codec_from_server(&codec)),
+        codec: non_empty(stream.codec.clone()).map(Codec::new),
         profile: non_empty(stream.profile.clone()),
         level: stream.level.filter(|level| *level > 0.0),
         language: non_empty(stream.language.clone()),
@@ -699,34 +688,9 @@ fn map_stream(stream: &wire::MediaStream) -> Option<MediaStream> {
     })
 }
 
-/// `VideoRange`: `Unknown`, `SDR`, `HDR`.
-fn video_range(name: &str) -> Option<VideoRange> {
-    match name {
-        "Unknown" | "" => None,
-        "SDR" => Some(VideoRange::SDR),
-        "HDR" => Some(VideoRange::HDR),
-        other => Some(VideoRange::new(other)),
-    }
-}
-
-/// `VideoRangeType` (`Jellyfin.Data.Enums`).
-fn video_range_type(name: &str) -> Option<VideoRangeType> {
-    Some(match name {
-        "Unknown" | "" => return None,
-        "SDR" => VideoRangeType::SDR,
-        "HDR10" => VideoRangeType::HDR10,
-        "HDR10Plus" => VideoRangeType::HDR10_PLUS,
-        "HLG" => VideoRangeType::HLG,
-        "DOVI" => VideoRangeType::DOVI,
-        "DOVIWithHDR10" => VideoRangeType::DOVI_WITH_HDR10,
-        "DOVIWithHLG" => VideoRangeType::DOVI_WITH_HLG,
-        "DOVIWithSDR" => VideoRangeType::DOVI_WITH_SDR,
-        "DOVIWithEL" => VideoRangeType::DOVI_WITH_EL,
-        "DOVIWithHDR10Plus" => VideoRangeType::DOVI_WITH_HDR10_PLUS,
-        "DOVIWithELHDR10Plus" => VideoRangeType::DOVI_WITH_EL_HDR10_PLUS,
-        "DOVIInvalid" => VideoRangeType::DOVI_INVALID,
-        other => VideoRangeType::new(other),
-    })
+/// `VideoRange` and `VideoRangeType` under Jellyfin's own names, as the model has them; `Unknown` means none.
+fn range_name(name: &str) -> Option<&str> {
+    (!name.is_empty() && name != "Unknown").then_some(name)
 }
 
 /// `SubtitleDeliveryMethod`: `Encode`, `Embed`, `External`, `Hls`, `Drop`.
@@ -771,8 +735,8 @@ fn map_transcoding(info: wire::TranscodingInfo) -> TranscodingFacts {
     TranscodingFacts {
         video_direct: info.is_video_direct,
         audio_direct: info.is_audio_direct,
-        video_codec: non_empty(info.video_codec).map(|codec| codec_from_server(&codec)),
-        audio_codec: non_empty(info.audio_codec).map(|codec| codec_from_server(&codec)),
+        video_codec: non_empty(info.video_codec).map(Codec::new),
+        audio_codec: non_empty(info.audio_codec).map(Codec::new),
         container: non_empty(info.container),
         bitrate: info.bitrate.and_then(|rate| u32::try_from(rate).ok()),
         frame_rate: info.framerate,

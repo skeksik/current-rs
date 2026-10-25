@@ -20,14 +20,6 @@ fn reasons_map_to_constants_and_unknown_ones_pass_through() {
 }
 
 #[test]
-fn server_codec_names_become_ffmpeg_names() {
-    assert_eq!(codec_from_server("PGSSUB"), Codec::PGS);
-    assert_eq!(codec_from_server("srt"), Codec::SUBRIP);
-    assert_eq!(codec_from_server("hevc"), Codec::HEVC);
-    assert_eq!(codec_from_server("SomeCodec").as_str(), "SomeCodec");
-}
-
-#[test]
 fn ticks_are_100_nanoseconds() {
     assert_eq!(ticks(Duration::from_secs(1)), 10_000_000);
     assert_eq!(duration(25_000_000), Duration::from_millis(2500));
