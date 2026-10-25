@@ -39,6 +39,28 @@ public sealed partial class CoreHost
         var native = MapBrowse.ToFfi(request);
         return CoreCall.RunAsync(token => _core.LoadImage(native, token), ct);
     }
+
+    /// <summary>
+    /// The image cache's size on disk in bytes, every server's images together: what Settings → Storage shows. 0 for a core that
+    /// stores nothing (<see cref="Create"/>).
+    /// </summary>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled first.</exception>
+    public async Task<long> ImageCacheSizeAsync(CancellationToken ct = default)
+    {
+        var size = await CoreCall.RunAsync(token => _core.ImageCacheSize(token), ct).ConfigureAwait(false);
+        return (long)Math.Min(size, long.MaxValue);
+    }
+
+    /// <summary>
+    /// Deletes every cached image of every server, in memory and on disk (Settings → Storage, "Clear"); they load again from the
+    /// servers when next shown. Safe while images load. Not cancellable: it runs to its end once started.
+    /// </summary>
+    public Task ClearImageCacheAsync() =>
+        CoreCall.RunUncancellableAsync(async () =>
+        {
+            await _core.ClearImageCache().ConfigureAwait(false);
+            return true;
+        });
 }
 
 /// <summary>Browsing one session of a signed-in Jellyfin server. Dispose it when no page uses it.</summary>
@@ -61,11 +83,14 @@ public sealed class Browse : IDisposable
         return Array.ConvertAll(libraries, library => MapBrowse.From(library));
     }
 
-    /// <summary>A grid of <paramref name="library"/>'s items, sorted and filtered by <paramref name="query"/>. Starts loading at once.</summary>
+    /// <summary>
+    /// A grid of <paramref name="library"/>'s items, sorted and filtered by <paramref name="query"/>; without one, what
+    /// <see cref="ItemQuery.ForLibrary"/> gives. Starts loading at once.
+    /// </summary>
     public PagedItems OpenLibrary(Library library, ItemQuery? query = null)
     {
         ArgumentNullException.ThrowIfNull(library);
-        return new(_browse.OpenLibrary(MapBrowse.ToFfi(library), MapBrowse.ToFfi(query ?? new ItemQuery())));
+        return new(_browse.OpenLibrary(MapBrowse.ToFfi(library), MapBrowse.ToFfi(query ?? ItemQuery.ForLibrary(library))));
     }
 
     /// <summary>Home's rows. Starts loading at once.</summary>
@@ -141,6 +166,15 @@ public sealed class PagedItems : IDisposable
 
     /// <summary>Reads the list again without resetting it: the scroll position stays.</summary>
     public void Refresh() => _items.Refresh();
+
+    /// <summary>The page showing the grid was left.</summary>
+    public void Hidden() => _items.Hidden();
+
+    /// <summary>
+    /// The page showing the grid is shown again: it refreshes, without a reset, if it was left five minutes or more ago (the core
+    /// decides). Returns whether it refreshed.
+    /// </summary>
+    public bool Shown() => _items.Shown();
 
     /// <summary>Reloads every failed page (the Retry button).</summary>
     public void Retry() => _items.Retry();
@@ -235,6 +269,12 @@ public sealed class HomeFeed : IDisposable
 
     /// <summary>Loads every row again, keeping what they show until the answers arrive.</summary>
     public void Refresh() => _feed.Refresh();
+
+    /// <summary>Home was left.</summary>
+    public void Hidden() => _feed.Hidden();
+
+    /// <summary>Home is shown again: its rows load again if it was left five minutes or more ago (the core decides).</summary>
+    public bool Shown() => _feed.Shown();
 
     /// <summary>The Retry button.</summary>
     public void Retry() => _feed.Retry();

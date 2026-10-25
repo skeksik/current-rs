@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Current.Bindings;
+using Current.Shell.Browsing;
 using Current.Shell.Pages;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
@@ -54,6 +55,8 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // The search box joins the navigation view once a Jellyfin server is signed in (ShowBrowsing).
+        NavView.AutoSuggestBox = null;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         // Caption buttons as tall as the 48 px title bar (owner's finding, 2026-10-24; Photos' are 48 × 48, measured on the owner's PC,
@@ -132,6 +135,16 @@ public sealed partial class MainWindow : Window
 
     /// <summary>The content layer's background now, or null if its template part was not found (the smoke run).</summary>
     internal Brush? ContentLayerBackground => _contentLayer?.Background;
+
+    /// <summary>Opens a library's grid, as its item in the pane does (the smoke run).</summary>
+    internal void ShowLibrary(Library library) =>
+        Navigate(typeof(LibraryPage), new SuppressNavigationTransitionInfo(), new LibraryArgs(library));
+
+    /// <summary>The page shown now (the smoke run).</summary>
+    internal Page? ShownPage => ContentFrame.Content as Page;
+
+    /// <summary>The navigation's library items now, headers left out (the smoke run).</summary>
+    internal int LibraryItemCount => _libraryItems.OfType<NavigationViewItem>().Count();
 
     /// <summary>Opens Settings, as its item in the pane does (the smoke run).</summary>
     internal void ShowSettings() => Navigate(typeof(SettingsPage), new SuppressNavigationTransitionInfo());
@@ -308,18 +321,165 @@ public sealed partial class MainWindow : Window
         {
             Navigate(typeof(SettingsPage), args.RecommendedNavigationTransitionInfo);
         }
+        else if (args.InvokedItemContainer?.Tag is LibraryArgs library)
+        {
+            Navigate(typeof(LibraryPage), args.RecommendedNavigationTransitionInfo, library);
+        }
         else if (args.InvokedItemContainer?.Tag is string tag && Pages.TryGetValue(tag, out var page))
         {
             Navigate(page, args.RecommendedNavigationTransitionInfo);
         }
     }
 
-    private void Navigate(Type page, NavigationTransitionInfo transition)
+    /// <summary>The parameter of the page shown now (a library's), so invoking its item again adds no history.</summary>
+    private object? _shownParameter;
+
+    private void Navigate(Type page, NavigationTransitionInfo transition, object? parameter = null)
     {
         // Only navigate if the page is not already shown, so the back stack gets no duplicates.
-        if (ContentFrame.CurrentSourcePageType != page)
+        var same = parameter is LibraryArgs library ? library.Shows(_shownParameter) : Equals(_shownParameter, parameter);
+        if (ContentFrame.CurrentSourcePageType != page || !same)
         {
-            ContentFrame.Navigate(page, null, transition);
+            ContentFrame.Navigate(page, parameter, transition);
+        }
+    }
+
+    /// <summary>
+    /// Follows the window's browse sessions (App.Browsing): the search box and one navigation item per library show while a Jellyfin
+    /// server is signed in, and pages of a server that is gone leave the history (a page shown now goes back to Home). Called once
+    /// the core is open.
+    /// </summary>
+    internal void FollowBrowsing(BrowseHub hub)
+    {
+        hub.Changed += (_, _) => ShowBrowsing(hub);
+        ShowBrowsing(hub);
+    }
+
+    private readonly List<object> _libraryItems = [];
+
+    private void ShowBrowsing(BrowseHub hub)
+    {
+        // Taken out of the navigation view, not only hidden: a hidden box still kept its place in the pane, a gap above Home (the
+        // owner's run, 2026-10-25).
+        SearchBox.Visibility = hub.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
+        NavView.AutoSuggestBox = hub.IsAvailable ? SearchBox : null;
+        foreach (var item in _libraryItems)
+        {
+            NavView.MenuItems.Remove(item);
+        }
+        _libraryItems.Clear();
+        var servers = hub.Servers;
+        foreach (var server in servers)
+        {
+            if (servers.Count > 1)
+            {
+                _libraryItems.Add(new NavigationViewItemHeader { Content = hub.ServerName(server.Server) });
+            }
+            foreach (var library in server.Libraries)
+            {
+                _libraryItems.Add(new NavigationViewItem
+                {
+                    Content = library.Name,
+                    Tag = new LibraryArgs(library),
+                    Icon = new FontIcon { Glyph = LibraryGlyph(library.Collection) },
+                });
+            }
+        }
+        foreach (var item in _libraryItems)
+        {
+            NavView.MenuItems.Add(item);
+        }
+        DropHistoryOfGoneServers(hub);
+        SelectShownPage();
+    }
+
+    /// <summary>
+    /// A library's icon by what it holds, from Segoe Fluent Icons ("Segoe Fluent Icons font", learn.microsoft.com, ms.date
+    /// 2026-10-13, read 2026-10-25): E8B2 Movies, E7F4 TVMonitor, E8D6 Audio, E714 Video, E91B Photo, E82D Dictionary, E8F1
+    /// Library, E8B7 Folder.
+    /// </summary>
+    private static string LibraryGlyph(string? collection) => collection switch
+    {
+        "movies" => "\uE8B2",
+        "tv_shows" => "\uE7F4",
+        "music" => "\uE8D6",
+        "music_videos" or "home_videos" => "\uE714",
+        "photos" => "\uE91B",
+        "books" => "\uE82D",
+        "box_sets" or "playlists" => "\uE8F1",
+        _ => "\uE8B7",
+    };
+
+    private static ServerRef? ServerOf(object? parameter) => parameter switch
+    {
+        LibraryArgs library => library.Library.Item.Server,
+        DetailsArgs details => details.Item.Server,
+        _ => null,
+    };
+
+    /// <summary>Detail views kept for history entries that are no longer in the history (a new page dropped the forward stack).</summary>
+    private void PruneKeptDetails()
+    {
+        if (App.Browsing is not { } hub)
+        {
+            return;
+        }
+        var live = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        foreach (var entry in ContentFrame.BackStack.Concat(ContentFrame.ForwardStack))
+        {
+            if (entry.Parameter is { } parameter)
+            {
+                live.Add(parameter);
+            }
+        }
+        if (_shownParameter is { } shown)
+        {
+            live.Add(shown);
+        }
+        foreach (var server in hub.Servers)
+        {
+            server.PruneDetails(live);
+        }
+        hub.PruneSearches(live);
+    }
+
+    /// <summary>Pages of a server whose session ended leave the back and forward stacks; the page shown now goes to Home.</summary>
+    private void DropHistoryOfGoneServers(BrowseHub hub)
+    {
+        bool Gone(Type? page, object? parameter) =>
+            (ServerOf(parameter) is { } server && hub.Find(server) is null) || (page == typeof(SearchPage) && !hub.IsAvailable);
+        foreach (var stack in new[] { ContentFrame.BackStack, ContentFrame.ForwardStack })
+        {
+            for (var i = stack.Count - 1; i >= 0; i--)
+            {
+                if (Gone(stack[i].SourcePageType, stack[i].Parameter))
+                {
+                    stack.RemoveAt(i);
+                }
+            }
+        }
+        if (Gone(ContentFrame.SourcePageType, _shownParameter))
+        {
+            ContentFrame.Navigate(typeof(HomePage), null, new SuppressNavigationTransitionInfo());
+        }
+        UpdateBackButton();
+    }
+
+    private void OnSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
+    {
+        var term = args.QueryText.Trim();
+        if (term.Length > 0)
+        {
+            Navigate(typeof(SearchPage), new SuppressNavigationTransitionInfo(), new SearchArgs(term));
+        }
+    }
+
+    private void OnSearchAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (SearchBox.Visibility == Visibility.Visible)
+        {
+            // In the icon rail the box shows as a search button; whether focusing it there opens the pane is not verified.
+            args.Handled = SearchBox.Focus(FocusState.Keyboard);
         }
     }
 
@@ -354,8 +514,34 @@ public sealed partial class MainWindow : Window
 
     private void OnNavigated(object sender, NavigationEventArgs e)
     {
+        _shownParameter = e.Parameter;
+        PruneKeptDetails();
         DropSignInHistory();
         UpdateBackButton();
+        SelectShownPage();
+    }
+
+    /// <summary>
+    /// The navigation's selection follows the page shown: its item, Home for Home's steps, none for search results; a detail page
+    /// keeps the item it was reached from.
+    /// </summary>
+    private void SelectShownPage()
+    {
+        if (ContentFrame.SourcePageType == typeof(DetailsPage))
+        {
+            return;
+        }
+        if (ContentFrame.SourcePageType == typeof(SearchPage))
+        {
+            NavView.SelectedItem = null;
+            return;
+        }
+        if (ContentFrame.SourcePageType == typeof(LibraryPage))
+        {
+            NavView.SelectedItem = _libraryItems.OfType<NavigationViewItem>()
+                .FirstOrDefault(item => item.Tag is LibraryArgs library && library.Shows(_shownParameter));
+            return;
+        }
         // Each page shows its own title (App.xaml, PageTitleTextBlockStyle); the navigation view's header is not used.
         if (ContentFrame.SourcePageType == typeof(SettingsPage))
         {

@@ -1,18 +1,31 @@
+using System.Collections.ObjectModel;
 using System.Diagnostics;
+using Current.Bindings;
+using Current.Shell.Browsing;
 using Current.Shell.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Navigation;
 
 namespace Current.Shell.Pages;
 
 /// <summary>
-/// Home: an invitation to add a server before there is one, else the saved servers with their user (browse is M2). It waits for the
-/// core to open (App.CoreReady); its subscriptions live from Loaded to Unloaded (ADR 0004).
+/// Home: with a signed-in Jellyfin server, its rows (ADR 0018, section 6: Continue watching, Next up, Latest per library; a row
+/// shows once it has items); without one, the M1 states: an invitation to add a server, or the saved servers with their user. It
+/// waits for the core to open (App.CoreReady); its subscriptions live from Loaded to Unloaded (ADR 0004). The feeds themselves stay
+/// with their sessions (BrowseHub), and refreshes when shown after five minutes. The frame keeps this page (NavigationCacheMode
+/// Required, HomePage.xaml): Back and Forward show it as it was left, scroll offsets included; opened from the navigation it scrolls
+/// to the top and its rows to their start, as a library does.
 /// </summary>
 public sealed partial class HomePage : Page
 {
     private static readonly TimeSpan OpeningDelay = TimeSpan.FromMilliseconds(500);
     private bool _loaded;
+    private readonly ObservableCollection<HomeSection> _sections = [];
+
+    /// <summary>The rows' lists now in the window, to scroll them to their start when Home is opened anew.</summary>
+    private readonly List<ListViewBase> _rowLists = [];
 
     public HomePage()
     {
@@ -22,6 +35,48 @@ public sealed partial class HomePage : Page
     }
 
     public ServersViewModel? ViewModel { get; private set; }
+
+    /// <summary>Opened anew (its navigation item), the kept page starts at the top, its rows at their start; Back and Forward leave
+    /// it as it was.</summary>
+    protected override void OnNavigatedTo(NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        _toStart = e.NavigationMode is not (NavigationMode.Back or NavigationMode.Forward);
+    }
+
+    /// <summary>Opened anew: scroll to the top once the page is back in the window (OnLoaded).</summary>
+    private bool _toStart;
+
+    /// <summary>
+    /// The top of the page and the start of every row. Queued at low priority after Loaded: the kept page's scroll viewers ignored a
+    /// ChangeView asked for in OnNavigatedTo, before the page was back in the window (the owner's run, 2026-10-25).
+    /// </summary>
+    private void ScrollToStart() => DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+    {
+        Feed.ChangeView(null, 0, null, true);
+        foreach (var list in _rowLists)
+        {
+            ScrollerOf(list)?.ChangeView(0, null, null, true);
+        }
+    });
+
+    /// <summary>The list's own ScrollViewer, the template part it scrolls with.</summary>
+    private static ScrollViewer? ScrollerOf(DependencyObject parent)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is ScrollViewer scroller)
+            {
+                return scroller;
+            }
+            if (ScrollerOf(child) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
+    }
 
     // async void, as event handlers are: it catches everything itself.
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -52,6 +107,22 @@ public sealed partial class HomePage : Page
             ViewModel ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
             ViewModel.Start();
             Bindings.Update();
+            Sections.ItemsSource = _sections;
+            if (App.Browsing is { } hub)
+            {
+                hub.Changed += OnBrowseChanged;
+                ShowFeed(hub);
+                // The core decides whether Home is stale: shown again five minutes or more after it was left.
+                foreach (var server in hub.Servers)
+                {
+                    server.Home.Shown();
+                }
+                if (_toStart)
+                {
+                    _toStart = false;
+                    ScrollToStart();
+                }
+            }
         }
         catch (Exception error)
         {
@@ -63,6 +134,150 @@ public sealed partial class HomePage : Page
     {
         _loaded = false;
         ViewModel?.Stop();
+        if (App.Browsing is { } hub)
+        {
+            hub.Changed -= OnBrowseChanged;
+            foreach (var server in hub.Servers)
+            {
+                server.Home.Hidden();
+            }
+        }
+        // The sections stay with the kept page, so it shows them as they were when it is shown again.
+    }
+
+    private void OnBrowseChanged(object? sender, EventArgs e)
+    {
+        if (_loaded && App.Browsing is { } hub)
+        {
+            ShowFeed(hub);
+        }
+    }
+
+    /// <summary>One section per signed-in server, kept while its session lasts; the M1 content while there is none.</summary>
+    private void ShowFeed(BrowseHub hub)
+    {
+        var servers = hub.Servers;
+        Feed.Visibility = hub.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
+        M1Content.Visibility = hub.IsAvailable ? Visibility.Collapsed : Visibility.Visible;
+        TitleText.Style = (Style)Application.Current.Resources[
+            hub.IsAvailable ? "WidePageTitleTextBlockStyle" : "PageTitleTextBlockStyle"];
+        var feeds = servers.Select(server => server.Home).ToList();
+        if (_sections.Count == feeds.Count && _sections.Select(section => section.Feed).SequenceEqual(feeds))
+        {
+            return;
+        }
+        ClearSections();
+        var ui = new DispatcherQueueUi(DispatcherQueue);
+        foreach (var server in servers)
+        {
+            var header = servers.Count > 1 ? hub.ServerName(server.Server) : "";
+            _sections.Add(new HomeSection(header, server.Home, ui));
+
+        }
+    }
+
+    private void ClearSections()
+    {
+        foreach (var section in _sections)
+        {
+            section.Dispose();
+        }
+        _sections.Clear();
+    }
+
+    private void OnSectionRowsLoaded(object sender, RoutedEventArgs e) =>
+        StableSource.Follow<HomeSection>((ItemsControl)sender, section => (section.Rows, null));
+
+    private void OnRowLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ListViewBase list)
+        {
+            return;
+        }
+        HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+        StableSource.Follow<TileRow>(list, row => (row.Items, row.ItemTemplate));
+        if (!_rowLists.Contains(list))
+        {
+            _rowLists.Add(list);
+            // A row that leaves for good (its row gone from the feed); while the page is away its rows stay.
+            list.Unloaded += (_, _) =>
+            {
+                if (_loaded)
+                {
+                    _rowLists.Remove(list);
+                }
+            };
+        }
+    }
+
+    /// <summary>A section's message: rows that failed (with Retry), or the server unreachable (its last rows stay).</summary>
+    private void OnSectionInfoLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not InfoBar { Tag: HomeSection section } info)
+        {
+            return;
+        }
+        void Show()
+        {
+            var state = section.State;
+            if (state.Offline)
+            {
+                SetInfo(info, InfoBarSeverity.Informational, "Can't reach the server.", "Showing what was loaded last.", retry: true);
+            }
+            else if (state.Failed is { } failed)
+            {
+                SetInfo(info, InfoBarSeverity.Error, "Some rows couldn't be loaded.", BrowseText.Problem(failed), retry: true);
+            }
+            else
+            {
+                info.IsOpen = false;
+            }
+        }
+        void OnChanged(object? s, System.ComponentModel.PropertyChangedEventArgs args) => Show();
+        // The page is kept (NavigationCacheMode Required) and its sections with it, while the bar loads again on every visit: the
+        // handler goes with the bar, so visits do not pile up handlers (review, 2026-10-25).
+        void OnUnloaded(object s, RoutedEventArgs args)
+        {
+            section.PropertyChanged -= OnChanged;
+            info.Unloaded -= OnUnloaded;
+        }
+        section.PropertyChanged += OnChanged;
+        info.Unloaded += OnUnloaded;
+        Show();
+    }
+
+    /// <summary>Opened again for a new message, so Narrator reads it (InfoBar page, learn.microsoft.com, ms.date 2025-02-26, read
+    /// 2026-10-25).</summary>
+    private static void SetInfo(InfoBar info, InfoBarSeverity severity, string title, string message, bool retry)
+    {
+        if (info.IsOpen && info.Title == title && info.Message == message)
+        {
+            return;
+        }
+        info.IsOpen = false;
+        info.Severity = severity;
+        info.Title = title;
+        info.Message = message;
+        info.ActionButton.Visibility = retry ? Visibility.Visible : Visibility.Collapsed;
+        info.IsOpen = true;
+    }
+
+    private void OnRefreshAccelerator(Microsoft.UI.Xaml.Input.KeyboardAccelerator sender,
+        Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
+    {
+        foreach (var section in _sections)
+        {
+            section.Feed.Refresh();
+        }
+        args.Handled = _sections.Count > 0;
+    }
+
+    private void OnRetrySection(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is HomeSection section)
+        {
+            section.Feed.Retry();
+        }
     }
 
     private void OnAddServer(object sender, RoutedEventArgs e) => Frame.Navigate(typeof(AddServerPage));

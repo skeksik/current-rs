@@ -37,8 +37,9 @@ pub use browse::{
     ImageSource, ItemAction, ItemDetails, ItemDetailsListener, ItemQuery, ItemRef, ItemSummary,
     ItemSummaryDiff, ItemsListener, Library, LoadState, LoadStateListener, MediaSummary,
     NoticeKind, PagedItems, PagedState, PagedStateListener, Person, SearchGroup, SearchGroupDiff,
-    SearchGroupsListener, SearchResults, Slot, SlotDiff, SlotsListener, SortOrder, StreamSummary,
-    UserState,
+    SearchGroupsListener, SearchResults, SeriesRun, Slot, SlotDiff, SlotsListener, SortChoice,
+    SortOrder, StreamSummary, UserState, library_filter_choices, library_query,
+    library_sort_choices,
 };
 pub use cancel::CancelToken;
 pub use error::CoreError;

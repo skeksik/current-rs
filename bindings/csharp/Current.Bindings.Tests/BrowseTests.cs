@@ -37,9 +37,10 @@ internal static class BrowseTests
 
     private static async Task Eventually(string what, Func<bool> done) => await Eventually(what, new ManualDispatcher(), done);
 
-    private static async Task<CoreHost> SignedIn(StandIn standIn)
+    private static Task<CoreHost> SignedIn(StandIn standIn) => SignIn(CoreHost.Create(), standIn);
+
+    private static async Task<CoreHost> SignIn(CoreHost core, StandIn standIn)
     {
-        var core = CoreHost.Create();
         using var add = core.AddServer();
         await add.ProbeAsync(standIn.Address);
         Check(add.State is AddServerState.Ready, $"ready, not {add.State}");
@@ -65,6 +66,11 @@ internal static class BrowseTests
         using var core = await SignedIn(standIn);
         using var browse = core.Browse(FirstServer);
         Check(browse.Server == FirstServer, "the browse's server");
+        var first = ItemQuery.ForLibrary(BigLibrary());
+        Check(first.Kinds.SequenceEqual(["movie"]) && first.Recursive && first.Sort.SequenceEqual(["sort_name"]),
+            "a film library's first query lists its films by name");
+        Check(ItemQuery.SortChoices[0] == new SortChoice("sort_name", SortOrder.Ascending), "the first sort choice is the first query's");
+        Check(ItemQuery.FilterChoices[0] is null && ItemQuery.FilterChoices.Contains("favourite"), "the filter choices");
         var ui = new ManualDispatcher();
         using var items = browse.OpenLibrary(BigLibrary());
         using var grid = items.Collect(ui);
@@ -79,6 +85,10 @@ internal static class BrowseTests
         await Eventually("the last page", ui, () => grid.Items[449] is Slot.Item);
         Check(Name(grid.Items[449]) == StandIn.BigItemName(449), "the last item's name");
         Check(grid.Subscription.Recoveries == 0, "no recovery");
+
+        // Left and shown again at once: not stale, so no refresh (the core's five-minute rule).
+        items.Hidden();
+        Check(!items.Shown(), "a grid shown again at once does not refresh");
     }
 
     /// <summary>A tile view model per slot, as a page binds; placeholders map to placeholder tiles, never null.</summary>
@@ -121,6 +131,49 @@ internal static class BrowseTests
         items.Retry();
         await Eventually("the retried page", ui, () => grid.Items[449] is Slot.Item);
         await Eventually("the state clears", ui, () => state.Value.Failed is null);
+    }
+
+    public static async Task ImageCacheSizeAndClear()
+    {
+        var folder = Directory.CreateTempSubdirectory("current-tests-").FullName;
+        try
+        {
+            using var standIn = StandIn.Start();
+            using var core = await SignIn(
+                await CoreHost.OpenAsync(Path.Combine(folder, "Data"), Path.Combine(folder, "Cache"), "", SecretStore.Memory),
+                standIn);
+            Check(await core.ImageCacheSizeAsync() == 0, "an empty cache");
+
+            var bytes = await core.LoadImageAsync(Poster(StandIn.FilmIds[0]));
+            // The disk write is not awaited by the load.
+            await Eventually("the image is on disk", () => core.ImageCacheSizeAsync().Result == bytes.Length);
+
+            await core.ClearImageCacheAsync();
+            Check(await core.ImageCacheSizeAsync() == 0, "cleared");
+            var path = $"/Items/{StandIn.FilmIds[0]}/Images/Primary";
+            var before = standIn.Count(path);
+            var again = await core.LoadImageAsync(Poster(StandIn.FilmIds[0]));
+            Check(again.AsSpan().SequenceEqual(bytes), "the same image after a clear");
+            Check(standIn.Count(path) == before + 1, "fetched from the server again");
+            await Eventually("stored again", () => core.ImageCacheSizeAsync().Result == bytes.Length);
+
+            await core.SignOutAsync(FirstServer);
+            Check(await core.ImageCacheSizeAsync() == 0, "a sign-out deletes the server's images");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+            catch (Exception)
+            {
+                // A file still open: the system cleans its temp folder later.
+            }
+        }
+
+        using var memoryOnly = CoreHost.Create();
+        Check(await memoryOnly.ImageCacheSizeAsync() == 0, "no disk cache without a cache folder");
     }
 
     public static async Task ImageBytesAndCancellation()

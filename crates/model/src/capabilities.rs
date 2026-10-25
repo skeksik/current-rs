@@ -37,6 +37,9 @@ pub struct ServerStatus {
     /// The address in use is behind an authentication gateway whose sign-in ended (ADR 0017): the UI shows "Sign in to the
     /// gateway again". The session and its token are kept and resume once the user has signed in to the gateway.
     pub gateway_sign_in_needed: bool,
+    /// Which live session the server has: a new number with each sign-in or restored session, `None` while it has none. Browsing
+    /// follows it: a browse object belongs to one session, so a new number means a new one is needed, even for the same user.
+    pub session: Option<u64>,
 }
 
 impl ServerStatus {
@@ -51,6 +54,7 @@ impl ServerStatus {
             version: None,
             features: Vec::new(),
             gateway_sign_in_needed: false,
+            session: None,
         }
     }
 

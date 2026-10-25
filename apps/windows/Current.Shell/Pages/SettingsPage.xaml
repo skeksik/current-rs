@@ -146,6 +146,19 @@
                             Click="OnAddServer" />
                         <InfoBar x:Name="AccountsInfo" Margin="0,8,0,0" IsOpen="False" />
 
+                        <!-- Storage (ADR 0018, owner's choice 4): the image cache's size, every server's images together, and Clear,
+                             a pattern like Windows' own storage settings (how Windows Settings words it was not verified). Images load
+                             again from the servers afterwards; signing out of a server deletes its images by itself. -->
+                        <TextBlock
+                            Style="{StaticResource BodyStrongTextBlockStyle}"
+                            Margin="0,24,0,4"
+                            AutomationProperties.HeadingLevel="Level2"
+                            Text="Storage" />
+                        <toolkit:SettingsCard x:Name="ImageCacheCard" Header="Image cache" Description="Calculating size…">
+                            <Button x:Name="ClearCacheButton" Content="Clear" AutomationProperties.Name="Clear the image cache" Click="OnClearCache" />
+                        </toolkit:SettingsCard>
+                        <InfoBar x:Name="StorageInfo" Margin="0,8,0,0" IsOpen="False" />
+
                         <TextBlock
                             Style="{StaticResource BodyStrongTextBlockStyle}"
                             Margin="0,24,0,4"

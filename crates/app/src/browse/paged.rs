@@ -146,6 +146,7 @@ impl Drop for Paged {
 #[derive(Clone)]
 pub struct PagedItems {
     inner: Arc<Paged>,
+    shown: Arc<super::ShownAgain>,
 }
 
 impl std::fmt::Debug for PagedItems {
@@ -171,7 +172,25 @@ impl PagedItems {
         let live: Weak<dyn Live> = Arc::downgrade(&inner) as Weak<Paged>;
         inner.ctx.register(live);
         inner.pump(&mut lock(&inner.control));
-        Self { inner }
+        Self {
+            inner,
+            shown: Arc::default(),
+        }
+    }
+
+    /// The page showing the grid was left (a UI calls it when it navigates away).
+    pub fn hidden(&self) {
+        self.shown.hidden();
+    }
+
+    /// The page showing the grid is shown again: refreshes, without a reset, if it was left five minutes or more ago (ADR 0018,
+    /// section 3: [`super::REFRESH_WHEN_SHOWN_AFTER`]). Returns whether it refreshed.
+    pub fn shown(&self) -> bool {
+        let stale = self.shown.shown();
+        if stale {
+            self.refresh();
+        }
+        stale
     }
 
     /// The slots, for the UI to subscribe to.

@@ -182,6 +182,7 @@ impl Drop for Home {
 #[derive(Clone)]
 pub struct HomeFeed {
     inner: Arc<Home>,
+    shown: Arc<super::ShownAgain>,
 }
 
 impl std::fmt::Debug for HomeFeed {
@@ -206,7 +207,25 @@ impl HomeFeed {
         let live: Weak<dyn Live> = Arc::downgrade(&inner) as Weak<Home>;
         inner.ctx.register(live);
         inner.load(true);
-        Self { inner }
+        Self {
+            inner,
+            shown: Arc::default(),
+        }
+    }
+
+    /// Home was left (a UI calls it when it navigates away).
+    pub fn hidden(&self) {
+        self.shown.hidden();
+    }
+
+    /// Home is shown again: loads every row again, keeping what they show, if it was left five minutes or more ago (ADR 0018,
+    /// section 3: [`super::REFRESH_WHEN_SHOWN_AFTER`]). Returns whether it refreshed.
+    pub fn shown(&self) -> bool {
+        let stale = self.shown.shown();
+        if stale {
+            self.refresh();
+        }
+        stale
     }
 
     /// The rows, in order.

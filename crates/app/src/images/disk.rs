@@ -168,8 +168,7 @@ impl DiskCache {
         }
         let path = self.path(id);
         let Ok(bytes) = fs::read(&path) else {
-            // Deleted behind our back (or by an eviction meanwhile): forget it.
-            self.lock().remove(id);
+            self.forget_if_missing(id);
             return None;
         };
         let now = SystemTime::now();
@@ -184,6 +183,16 @@ impl DiskCache {
             entry.stamped = now;
         }
         Some(bytes)
+    }
+
+    /// After a read of `id` failed: forgets it if its file is still missing now, under the index lock. Deleted behind our back, or
+    /// by an eviction or a clear meanwhile, it goes; but a write may have stored it again between the failed read and this lock
+    /// (after a clear, say), and that file is kept and stays indexed. Renames and deletions take the lock too, so the check holds.
+    fn forget_if_missing(&self, id: &FileId) {
+        let mut index = self.lock();
+        if fs::metadata(self.path(id)).is_err() {
+            index.remove(id);
+        }
     }
 
     /// Stores `bytes` as `id`: written to a temporary file, then renamed, if `wanted` still says so at that moment (it is checked
@@ -269,10 +278,72 @@ impl DiskCache {
         let _ = fs::remove_dir_all(self.root.join(folder));
     }
 
-    /// The indexed total, in bytes.
-    #[cfg(test)]
+    /// The indexed total, in bytes: what Settings → Storage shows. Every file the cache wrote is in the index until it is deleted.
     pub(crate) fn total(&self) -> u64 {
         self.lock().total
+    }
+
+    /// Deletes every cached file of every server (Settings → Storage, "Clear"), then the server folders left empty. Runs under the
+    /// index lock, as eviction does, so a write that renames meanwhile lands before or after it, never halfway: a write that was
+    /// under way when the clear ran either finds its folder gone and leaves nothing, or is stored after it and indexed. A file
+    /// that cannot be deleted (in use elsewhere on Windows) stays in the index, so the size still counts it.
+    pub(crate) fn clear(&self) {
+        let mut index = self.lock();
+        let ids: Vec<FileId> = index.files.keys().cloned().collect();
+        for id in ids {
+            match fs::remove_file(self.path(&id)) {
+                Ok(()) => index.remove(&id),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => index.remove(&id),
+                Err(_) => {}
+            }
+        }
+        let Ok(folders) = fs::read_dir(&self.root) else {
+            return;
+        };
+        for folder in folders.flatten() {
+            if folder.file_type().is_ok_and(|kind| kind.is_dir()) {
+                // Only an empty folder goes: one with a file still in use, or a write's temporary file, stays.
+                let _ = fs::remove_dir(folder.path());
+            }
+        }
+    }
+
+    /// Every indexed file exists with its indexed size, every image file in the folder is indexed, and the total is their sum.
+    /// `settled`: no write is under way, so no temporary file may be left either.
+    #[cfg(test)]
+    fn assert_consistent(&self, settled: bool) {
+        let index = self.lock();
+        let mut on_disk = HashMap::new();
+        for folder in fs::read_dir(&self.root).unwrap().flatten() {
+            let folder_name = folder.file_name().into_string().unwrap();
+            let Ok(files) = fs::read_dir(folder.path()) else {
+                continue;
+            };
+            for file in files.flatten() {
+                let name = file.file_name().into_string().unwrap();
+                if name.ends_with(TEMPORARY) {
+                    assert!(!settled, "a temporary file was left");
+                    continue;
+                }
+                let Ok(metadata) = file.metadata() else {
+                    continue;
+                };
+                let id = FileId {
+                    folder: folder_name.clone(),
+                    name,
+                };
+                on_disk.insert(id, metadata.len());
+            }
+        }
+        assert_eq!(
+            on_disk.len(),
+            index.files.len(),
+            "files on disk and in the index"
+        );
+        for (id, size) in &on_disk {
+            assert_eq!(index.files.get(id).map(|entry| entry.size), Some(*size));
+        }
+        assert_eq!(index.total, on_disk.values().sum::<u64>());
     }
 }
 
@@ -416,5 +487,101 @@ mod tests {
         cache.write(&id(OTHER, 2), b"late", || false);
         assert_eq!(cache.read(&id(OTHER, 2)), None);
         assert_eq!(fs::read_dir(temp.path().join(OTHER)).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_failed_read_forgets_a_missing_file_but_not_one_written_again_meanwhile() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = open(temp.path(), 1000);
+        cache.write(&id(FOLDER, 1), b"one", || true);
+        // Deleted behind the cache's back: a read fails and forgets it.
+        fs::remove_file(temp.path().join(FOLDER).join(id(FOLDER, 1).name)).unwrap();
+        assert_eq!(cache.read(&id(FOLDER, 1)), None);
+        assert_eq!(cache.total(), 0);
+        cache.assert_consistent(true);
+
+        // A read failed (the file was cleared), and before it took the lock a write stored the image again: that entry stays.
+        cache.write(&id(FOLDER, 2), b"again", || true);
+        cache.forget_if_missing(&id(FOLDER, 2));
+        assert_eq!(cache.total(), 5);
+        assert_eq!(cache.read(&id(FOLDER, 2)).as_deref(), Some(&b"again"[..]));
+        cache.assert_consistent(true);
+    }
+
+    #[test]
+    fn clearing_deletes_every_server_s_files_and_the_cache_works_after() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = open(temp.path(), 1000);
+        cache.write(&id(FOLDER, 1), b"one", || true);
+        cache.write(&id(OTHER, 1), b"other", || true);
+        assert_eq!(cache.total(), 8);
+        cache.clear();
+        assert_eq!(cache.total(), 0);
+        assert_eq!(cache.read(&id(FOLDER, 1)), None);
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+        cache.write(&id(FOLDER, 2), b"again", || true);
+        assert_eq!(cache.read(&id(FOLDER, 2)).as_deref(), Some(&b"again"[..]));
+        assert_eq!(cache.total(), 5);
+        cache.assert_consistent(true);
+    }
+
+    #[test]
+    fn a_clear_while_images_are_written_and_read_leaves_the_index_matching_the_folder() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let temp = tempfile::tempdir().unwrap();
+        let cache = Arc::new(open(temp.path(), 1_000_000));
+        // Every write a new file, so a file lost by a clear is not written again and healed.
+        let unique = |folder: &str, writer: u32, n: u32| FileId {
+            folder: folder.into(),
+            name: format!("{writer:016x}{n:016x}"),
+        };
+        let writers: Vec<_> = [FOLDER, OTHER]
+            .into_iter()
+            .enumerate()
+            .map(|(writer, folder)| {
+                let cache = cache.clone();
+                std::thread::spawn(move || {
+                    for n in 0..300 {
+                        cache.write(&unique(folder, writer as u32, n), &[7; 100], || true);
+                        let _ = cache.read(&unique(folder, writer as u32, n / 2));
+                    }
+                })
+            })
+            .collect();
+        // Clears while the writers run, and checks the index against the folder after each clear: a write that lands while a
+        // clear runs must be either gone from both or in both.
+        let writing = Arc::new(AtomicBool::new(true));
+        let clearer = {
+            let cache = cache.clone();
+            let writing = writing.clone();
+            std::thread::spawn(move || {
+                let mut clears = 0;
+                while writing.load(Ordering::Relaxed) {
+                    cache.clear();
+                    cache.assert_consistent(false);
+                    clears += 1;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                clears
+            })
+        };
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        writing.store(false, Ordering::Relaxed);
+        assert!(clearer.join().unwrap() > 0);
+        cache.assert_consistent(true);
+
+        // The index read from the folder at the next start agrees with it.
+        let total = cache.total();
+        drop(cache);
+        let reopened = open(temp.path(), 1_000_000);
+        assert_eq!(reopened.total(), total);
+        reopened.assert_consistent(true);
+        reopened.clear();
+        assert_eq!(reopened.total(), 0);
+        reopened.assert_consistent(true);
     }
 }

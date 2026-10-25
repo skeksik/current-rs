@@ -36,8 +36,9 @@ pub use add_server::{AddServer, AddServerState, NewServer};
 pub use browse::{
     BACKLOG_PAGES, Browse, BrowseNotice, DEPENDENT_RELOAD_DELAY, DetailsView, HomeFeed, HomeRow,
     HomeRowKind, HomeState, ItemAction, LATEST_LIMIT, LoadState, MAX_PAGE_REQUESTS, NEXT_UP_LIMIT,
-    NoticeKind, PAGE_SIZE, PagedItems, PagedState, RESUME_LIMIT, SIMILAR_LIMIT, SearchResults,
-    Slot,
+    NoticeKind, PAGE_SIZE, PagedItems, PagedState, REFRESH_WHEN_SHOWN_AFTER, RESUME_LIMIT,
+    SIMILAR_LIMIT, SearchResults, SeriesRun, Slot, SortChoice, TileShape, library_filters,
+    library_query, library_sorts, series_run, tile_artwork,
 };
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
@@ -373,6 +374,18 @@ impl App {
     /// or an empty box.
     pub async fn load_image(&self, load: &ImageLoad) -> Result<Arc<[u8]>, ImageError> {
         self.images.load(&self.shared, load).await
+    }
+
+    /// The image cache's size on disk, in bytes, every server's images together (Settings → Storage). 0 for an app that stores
+    /// nothing.
+    pub async fn image_cache_size(&self) -> u64 {
+        self.images.disk_size().await
+    }
+
+    /// Deletes every cached image of every server, in memory and on disk (Settings → Storage, "Clear"); they load again from the
+    /// servers when next shown. Safe while images load: the cache's index stays in step with its folder.
+    pub async fn clear_image_cache(&self) {
+        self.images.clear().await;
     }
 
     /// Opens a player for a window (ADR 0019) with the panel's size in physical pixels (needed before the engine starts, ADR 0007) and

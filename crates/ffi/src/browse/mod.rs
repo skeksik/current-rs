@@ -1,7 +1,7 @@
 //! Browsing across the bridge (ADR 0018, section 7): [`Core::browse`] gives a [`Browse`] for a signed-in Jellyfin server, with library
 //! grids ([`PagedItems`]), Home ([`HomeFeed`]), detail pages ([`DetailsView`]) and search ([`SearchResults`]); played and favourite
 //! changes go through it, and their notices through [`Core::subscribe_browse_notices`]. [`Core::load_image`] hands the UI an
-//! image's encoded bytes. Lists and values use the shapes of `subscribe` (ADR 0004).
+//! image's encoded bytes; [`Core::image_cache_size`] and [`Core::clear_image_cache`] serve Settings → Storage. Lists and values use the shapes of `subscribe` (ADR 0004).
 //!
 //! Each object holds its `current-app` counterpart: dropping it (every foreign reference, and every subscription it started)
 //! stops its requests.
@@ -21,8 +21,8 @@ pub use records::{
     Artwork, AspectRatio, BrowseNotice, CalendarDate, Chapter, EpisodeLinks, HomeRow, HomeRowDiff,
     HomeRowKind, HomeState, ImageRef, ImageRequest, ImageSource, ItemAction, ItemDetails,
     ItemQuery, ItemRef, ItemSummary, ItemSummaryDiff, Library, LoadState, MediaSummary, NoticeKind,
-    PagedState, Person, SearchGroup, SearchGroupDiff, Slot, SlotDiff, SortOrder, StreamSummary,
-    UserState,
+    PagedState, Person, SearchGroup, SearchGroupDiff, SeriesRun, Slot, SlotDiff, SortChoice,
+    SortOrder, StreamSummary, UserState,
 };
 
 /// Receives a grid's slots: `[Reset]` first, then batches of diffs, on a core thread. Apply each batch in order. It must only hand
@@ -180,6 +180,67 @@ impl Core {
         })
         .await
     }
+
+    /// The image cache's size on disk, in bytes, every server's images together: what Settings → Storage shows. 0 for a core that
+    /// stores nothing.
+    ///
+    /// # Errors
+    /// [`CoreError::Cancelled`] if `token` is cancelled first.
+    pub async fn image_cache_size(&self, token: Arc<CancelToken>) -> Result<u64, CoreError> {
+        let app = self.app.clone();
+        cancel::run_cancellable(&self.runtime, token, async move {
+            Ok(app.image_cache_size().await)
+        })
+        .await
+    }
+
+    /// Deletes every cached image of every server, in memory and on disk (Settings → Storage, "Clear"); they load again from the
+    /// servers when next shown. Safe while images load. Not cancellable: it runs to its end once started.
+    ///
+    /// # Errors
+    /// [`CoreError::Runtime`] if the core's runtime could not run it.
+    pub async fn clear_image_cache(&self) -> Result<(), CoreError> {
+        let app = self.app.clone();
+        self.runtime
+            .spawn(async move { app.clear_image_cache().await })
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })
+    }
+}
+
+/// The sorts a library grid offers, in the order to list them, each with its order: names A to Z first (the grid's first sort),
+/// then the newest added, the newest released and the best rated first. The UI names each key.
+#[uniffi::export]
+pub fn library_sort_choices() -> Vec<SortChoice> {
+    current_app::library_sorts()
+        .into_iter()
+        .map(|choice| SortChoice {
+            key: choice.key.as_str().to_owned(),
+            order: match choice.order {
+                current_model::SortOrder::Ascending => SortOrder::Ascending,
+                current_model::SortOrder::Descending => SortOrder::Descending,
+            },
+        })
+        .collect()
+}
+
+/// The filters a library grid offers, in the order to list them: everything first (`None`), then `unplayed`, `played` and
+/// `favourite`. The UI names each.
+#[uniffi::export]
+pub fn library_filter_choices() -> Vec<Option<String>> {
+    current_app::library_filters()
+        .into_iter()
+        .map(|filter| filter.map(|filter| filter.as_str().to_owned()))
+        .collect()
+}
+
+/// What `library`'s grid shows before the user sorts or filters it, by name: a film library its films and a TV library its series,
+/// wherever they sit below it; any other library its top level.
+#[uniffi::export]
+pub fn library_query(library: Library) -> ItemQuery {
+    (&current_app::library_query(&(&library).into())).into()
 }
 
 /// Browsing one session of a signed-in Jellyfin server.
@@ -322,6 +383,17 @@ impl PagedItems {
         self.items.refresh();
     }
 
+    /// The page showing the grid was left.
+    pub fn hidden(&self) {
+        self.items.hidden();
+    }
+
+    /// The page showing the grid is shown again: it refreshes, without a reset, if it was left five minutes or more ago. Returns
+    /// whether it refreshed.
+    pub fn shown(&self) -> bool {
+        self.items.shown()
+    }
+
     /// Reloads every failed page (the Retry button).
     pub fn retry(&self) {
         self.items.retry();
@@ -381,6 +453,17 @@ impl HomeFeed {
     /// Loads every row again, keeping what they show until the answers arrive.
     pub fn refresh(&self) {
         self.feed.refresh();
+    }
+
+    /// Home was left.
+    pub fn hidden(&self) {
+        self.feed.hidden();
+    }
+
+    /// Home is shown again: its rows load again, keeping what they show, if it was left five minutes or more ago. Returns whether
+    /// it refreshed.
+    pub fn shown(&self) -> bool {
+        self.feed.shown()
     }
 
     /// The Retry button.

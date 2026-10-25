@@ -37,8 +37,14 @@ public partial class App : Application
         };
     }
 
-    /// <summary>The core, one per process, once it is open; null before and after. Disposed when the main window closes.</summary>
-    internal static CoreHost? Core { get; private set; }
+    /// <summary>
+    /// The core, one per process, once it is open; null before and after. Disposed when the main window closes. The smoke run sets it to
+    /// its own core for its browse check.
+    /// </summary>
+    internal static CoreHost? Core { get; set; }
+
+    /// <summary>The main window's browse sessions (ADR 0018), once the core is open; null before, after, and in the smoke run.</summary>
+    internal static Browsing.BrowseHub? Browsing { get; set; }
 
     /// <summary>Completes on the UI thread when the core is open, with null if it could not start at all.</summary>
     internal static Task<CoreHost?> CoreReady => CoreOpened.Task;
@@ -60,6 +66,8 @@ public partial class App : Application
             _closed = true;
             // A sign-in window talks to the core, which goes with this window; open, it would also keep the app running.
             Gateway.SignInWindow.CloseAll();
+            Browsing?.Dispose();
+            Browsing = null;
             _network?.Dispose();
             _network = null;
             Core?.Dispose();
@@ -154,6 +162,16 @@ public partial class App : Application
             catch (Exception error)
             {
                 Trace.TraceError($"Current: following the app theme failed: {error.GetType().Name}");
+            }
+            // Before CoreReady completes, so pages waiting for the core find their browse sessions.
+            try
+            {
+                Browsing = new Browsing.BrowseHub(core, new DispatcherQueueUi(ui));
+                _window?.FollowBrowsing(Browsing);
+            }
+            catch (Exception error)
+            {
+                Trace.TraceError($"Current: starting browsing failed: {error.GetType().Name}");
             }
         }
         CoreOpened.TrySetResult(core);

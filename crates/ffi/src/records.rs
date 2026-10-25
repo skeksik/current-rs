@@ -43,6 +43,10 @@ pub struct ServerStatusSnapshot {
     /// The gateway in front of the address in use wants a sign-in again (ADR 0017): the UI shows "Sign in to the gateway again"
     /// and offers [`Core::sign_in_to_gateway`](crate::Core::sign_in_to_gateway). The session and its token are kept.
     pub gateway_sign_in_needed: bool,
+    /// Which live session the server has: a new number with each sign-in or restored session, `None` while it has none. A
+    /// [`Browse`](crate::Browse) belongs to one session: when this changes, ask [`Core::browse`](crate::Core::browse) for a new one.
+    #[uniffi(default = None)]
+    pub session: Option<u64>,
 }
 
 /// Whether the server answered the last time Current tried.
@@ -85,6 +89,7 @@ impl From<&model::ServerStatus> for ServerStatusSnapshot {
                 .map(|feature| feature.as_str().to_owned())
                 .collect(),
             gateway_sign_in_needed: status.gateway_sign_in_needed,
+            session: status.session,
         }
     }
 }
@@ -400,6 +405,7 @@ mod tests {
                 version: Some("10.11.0".into()),
                 features: vec!["Some_Feature".into()],
                 gateway_sign_in_needed: false,
+                session: None,
             }]
         );
     }

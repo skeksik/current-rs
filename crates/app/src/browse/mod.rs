@@ -13,6 +13,7 @@
 mod details;
 mod home;
 mod paged;
+mod present;
 mod search;
 mod states;
 
@@ -24,8 +25,8 @@ use std::time::Duration;
 
 use current_jellyfin::{AuthError, JellyfinClient};
 use current_model::{
-    ItemQuery, ItemRef, ItemSummary, Library, Reachability, ServerRef, ServerStatus, ServiceType,
-    UserState,
+    CollectionKind, ItemQuery, ItemRef, ItemSummary, Library, MediaKind, Reachability, ServerRef,
+    ServerStatus, ServiceType, SortKey, UserState,
 };
 use current_net::RuntimeHandle;
 use tokio::sync::watch;
@@ -39,6 +40,11 @@ pub use home::{
     HomeFeed, HomeRow, HomeRowKind, HomeState, LATEST_LIMIT, NEXT_UP_LIMIT, RESUME_LIMIT,
 };
 pub use paged::{BACKLOG_PAGES, MAX_PAGE_REQUESTS, PAGE_SIZE, PagedItems, PagedState, Slot};
+pub(crate) use present::ShownAgain;
+pub use present::{
+    REFRESH_WHEN_SHOWN_AFTER, SeriesRun, SortChoice, TileShape, library_filters, library_sorts,
+    series_run, tile_artwork,
+};
 pub use search::SearchResults;
 pub use states::{BrowseNotice, ItemAction, NoticeKind};
 
@@ -361,7 +367,8 @@ impl Browse {
         self.ctx.client()?.libraries().await
     }
 
-    /// A grid of `library`'s items: `query` with the library as its parent. Starts loading at once.
+    /// A grid of `library`'s items: `query` with the library as its parent. Starts loading at once. [`library_query`] is what a
+    /// grid shows before the user sorts or filters it.
     pub fn open_library(&self, library: &Library, query: ItemQuery) -> PagedItems {
         let query = ItemQuery {
             parent: Some(library.item.clone()),
@@ -472,9 +479,60 @@ fn patch_list(list: &ObservableList<ItemSummary>, item: &ItemRef, state: &UserSt
     let _ = list.change_many(diffs);
 }
 
+/// What `library`'s grid shows before the user sorts or filters it, by name: a film library its films and a TV library its series,
+/// wherever they sit below it, as the server's own web client lists them; any other library its top level, so folders, albums and
+/// collections show as themselves.
+pub fn library_query(library: &Library) -> ItemQuery {
+    let kinds = match &library.collection {
+        Some(kind) if *kind == CollectionKind::MOVIES => vec![MediaKind::MOVIE],
+        Some(kind) if *kind == CollectionKind::TV_SHOWS => vec![MediaKind::SERIES],
+        _ => Vec::new(),
+    };
+    ItemQuery {
+        parent: Some(library.item.clone()),
+        recursive: !kinds.is_empty(),
+        kinds,
+        sort: vec![SortKey::SORT_NAME],
+        ..ItemQuery::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_library_s_first_query_follows_what_it_holds() {
+        use current_model::{ItemId, ServerKey, SortOrder};
+        let library = |collection: Option<CollectionKind>| Library {
+            item: ItemRef::new(
+                ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+                ItemId::new("57a2d1e0000000000000000000001001"),
+            ),
+            name: "Example Library".into(),
+            collection,
+            artwork: Vec::new(),
+        };
+        let films = library_query(&library(Some(CollectionKind::MOVIES)));
+        assert_eq!(films.kinds, [MediaKind::MOVIE]);
+        assert!(films.recursive);
+        assert_eq!(films.sort, [SortKey::SORT_NAME]);
+        assert_eq!(films.order, SortOrder::Ascending);
+        assert_eq!(films.parent, Some(library(None).item));
+        let shows = library_query(&library(Some(CollectionKind::TV_SHOWS)));
+        assert_eq!(shows.kinds, [MediaKind::SERIES]);
+        assert!(shows.recursive);
+        for other in [
+            None,
+            Some(CollectionKind::MUSIC),
+            Some(CollectionKind::new("unknown_kind")),
+        ] {
+            let query = library_query(&library(other));
+            assert!(query.kinds.is_empty());
+            assert!(!query.recursive);
+            assert_eq!(query.sort, [SortKey::SORT_NAME]);
+        }
+    }
 
     #[tokio::test]
     async fn sync_list_uses_set_append_and_remove_only() {

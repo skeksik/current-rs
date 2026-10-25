@@ -42,7 +42,10 @@ public sealed record EpisodeLinks(
     int? NumberEnd,
     int? SeasonNumber);
 
-/// <summary>An item as a tile or a row shows it. <c>Kind</c> is the media kind: movie, series, episode..., or one the server named.</summary>
+/// <summary>
+/// An item as a tile or a row shows it. <c>Kind</c> is the media kind: movie, series, episode..., or one the server named.
+/// <c>Poster</c> and <c>Wide</c> are the artwork a poster (2:3) and a wide (16:9) tile show, as the core picks them.
+/// </summary>
 public sealed record ItemSummary(
     ItemRef Item,
     string Kind,
@@ -52,7 +55,9 @@ public sealed record ItemSummary(
     IReadOnlyList<Artwork> Artwork,
     UserState User,
     EpisodeLinks? Episode,
-    int? ChildCount);
+    int? ChildCount,
+    Artwork? Poster = null,
+    Artwork? Wide = null);
 
 /// <summary>One of the user's libraries, for the app's navigation. <c>Collection</c> is null for a mixed library.</summary>
 public sealed record Library(ItemRef Item, string Name, string? Collection, IReadOnlyList<Artwork> Artwork);
@@ -73,7 +78,13 @@ public sealed record MediaSummary(
     IReadOnlyList<StreamSummary> Audio,
     IReadOnlyList<StreamSummary> Subtitles);
 
-/// <summary>What a detail page shows.</summary>
+/// <summary>A series' run: the year it started, the year it ended if that is another year, and whether it still runs.</summary>
+public sealed record SeriesRun(int StartYear, int? EndYear, bool Continuing);
+
+/// <summary>One way to sort a library grid: a key (sort_name, date_created...) and the order it goes in.</summary>
+public sealed record SortChoice(string Key, SortOrder Order);
+
+/// <summary>What a detail page shows. <c>Run</c> is a series' run, from its dates and status, as the core reads them.</summary>
 public sealed record ItemDetails(
     ItemSummary Summary,
     string? OriginalTitle,
@@ -91,7 +102,8 @@ public sealed record ItemDetails(
     IReadOnlyList<Artwork> Backdrops,
     Artwork? Logo,
     IReadOnlyList<Chapter> Chapters,
-    MediaSummary? Media);
+    MediaSummary? Media,
+    SeriesRun? Run = null);
 
 public enum SortOrder
 {
@@ -121,6 +133,24 @@ public sealed record ItemQuery
     public IReadOnlyList<int> Years { get; init; } = [];
 
     public string? NameStartsWith { get; init; }
+
+    /// <summary>
+    /// What <paramref name="library"/>'s grid shows before the user sorts or filters it, by name (the core decides): a film library
+    /// its films and a TV library its series, wherever they sit below it; any other library its top level.
+    /// </summary>
+    public static ItemQuery ForLibrary(Library library)
+    {
+        ArgumentNullException.ThrowIfNull(library);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.LibraryQuery(MapBrowse.ToFfi(library)));
+    }
+
+    /// <summary>The sorts a library grid offers, in the order to list them, each with its order (the core decides). The UI names each key.</summary>
+    public static IReadOnlyList<SortChoice> SortChoices { get; } = Array.ConvertAll(
+        Ffi.CurrentFfiMethods.LibrarySortChoices(),
+        choice => new SortChoice(choice.Key, choice.Order == Ffi.SortOrder.Descending ? SortOrder.Descending : SortOrder.Ascending));
+
+    /// <summary>The filters a library grid offers, in the order to list them: null (everything) first. The UI names each.</summary>
+    public static IReadOnlyList<string?> FilterChoices { get; } = Ffi.CurrentFfiMethods.LibraryFilterChoices();
 }
 
 /// <summary>
@@ -302,7 +332,9 @@ internal static class MapBrowse
         From(summary.Artwork),
         From(summary.User),
         summary.Episode is { } episode ? From(episode) : null,
-        Count(summary.ChildCount));
+        Count(summary.ChildCount),
+        summary.Poster is { } poster ? From(poster) : null,
+        summary.Wide is { } wide ? From(wide) : null);
 
     public static Library From(Ffi.Library library) =>
         new(From(library.Item), library.Name, library.Collection, From(library.Artwork));
@@ -347,7 +379,8 @@ internal static class MapBrowse
                 media.Video is { } video ? From(video) : null,
                 Array.ConvertAll(media.Audio, stream => From(stream)),
                 Array.ConvertAll(media.Subtitles, stream => From(stream)))
-            : null);
+            : null,
+        details.Run is { } run ? new SeriesRun(run.StartYear, run.EndYear, run.Continuing) : null);
 
     public static Ffi.ItemQuery ToFfi(ItemQuery query) => new(
         query.Kinds.ToArray(),
@@ -363,6 +396,18 @@ internal static class MapBrowse
         query.Genres.ToArray(),
         query.Years.ToArray(),
         query.NameStartsWith);
+
+    public static ItemQuery From(Ffi.ItemQuery query) => new()
+    {
+        Kinds = query.Kinds,
+        Recursive = query.Recursive,
+        Sort = query.Sort,
+        Order = query.Order == Ffi.SortOrder.Descending ? SortOrder.Descending : SortOrder.Ascending,
+        Filters = query.Filters,
+        Genres = query.Genres,
+        Years = query.Years,
+        NameStartsWith = query.NameStartsWith,
+    };
 
     public static Slot From(Ffi.Slot slot) => slot switch
     {
