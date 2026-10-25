@@ -3,7 +3,12 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:Current.Shell.ViewModels"
-    xmlns:browsing="using:Current.Shell.Browsing">
+    xmlns:browsing="using:Current.Shell.Browsing"
+    NavigationCacheMode="Required">
+    <!-- Kept by the frame: going back to Home shows this same page, its rows, tiles and scroll position, rather than a new one built
+         again (the owner's run, 2026-10-25: tiles' progress bars grew again from zero each time Home was shown). "Required: The page
+         is cached and the cached instance is reused for every visit regardless of the cache size for the frame" (NavigationCacheMode
+         Enum, learn.microsoft.com, updated 2026-07-28, read 2026-10-25). -->
     <Page.Resources>
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />

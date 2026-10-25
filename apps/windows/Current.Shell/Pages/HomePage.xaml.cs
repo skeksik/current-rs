@@ -89,7 +89,7 @@ public sealed partial class HomePage : Page
                 server.HomeLastShown = DateTime.UtcNow;
             }
         }
-        ClearSections();
+        // The sections stay: the page is kept (NavigationCacheMode Required), and so are its rows.
     }
 
     private void OnBrowseChanged(object? sender, EventArgs e)

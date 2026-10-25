@@ -18,6 +18,8 @@ public sealed partial class SearchPage : Page
     {
         InitializeComponent();
         Sections.ItemsSource = _sections;
+        // Released once the page has left the window: during its exit transition it still shows its rows.
+        Unloaded += (_, _) => Release();
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -42,9 +44,8 @@ public sealed partial class SearchPage : Page
         ShowStatus();
     }
 
-    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    private void Release()
     {
-        base.OnNavigatedFrom(e);
         foreach (var section in _sections)
         {
             section.Dispose();

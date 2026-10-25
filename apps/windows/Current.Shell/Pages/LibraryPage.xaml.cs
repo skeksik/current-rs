@@ -39,6 +39,7 @@ public sealed partial class LibraryPage : Page
     {
         InitializeComponent();
         ItemActions.Attach(Items, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item, item)));
+        Unloaded += (_, _) => Release();
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -76,6 +77,14 @@ public sealed partial class LibraryPage : Page
             _grid.FirstVisible = (Items.ItemsPanelRoot as ItemsWrapGrid)?.FirstVisibleIndex ?? 0;
             _grid.LastShown = DateTime.UtcNow;
         }
+    }
+
+    /// <summary>
+    /// Lets go of the slots once the page has left the window, not when it is navigated from: then its exit transition still
+    /// shows it, and an emptied grid showed its top for a moment (the owner's run, 2026-10-25).
+    /// </summary>
+    private void Release()
+    {
         if (_state is not null)
         {
             _state.PropertyChanged -= OnStateChanged;

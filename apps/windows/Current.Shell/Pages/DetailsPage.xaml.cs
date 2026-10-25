@@ -38,6 +38,8 @@ public sealed partial class DetailsPage : Page
         ItemActions.Attach(Episodes, Open);
         ItemActions.Attach(Similar, Open);
         BackdropFrame.SizeChanged += (_, _) => SizeBackdrop();
+        // Released once the page has left the window: during its exit transition it still shows its lists.
+        Unloaded += (_, _) => Release();
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -72,9 +74,8 @@ public sealed partial class DetailsPage : Page
         ShowState();
     }
 
-    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    private void Release()
     {
-        base.OnNavigatedFrom(e);
         _backdrop.Recycle();
         _poster.Recycle();
         _posterPlaceholder.Recycle();
