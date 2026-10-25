@@ -1315,40 +1315,54 @@ Also changed on the run: one accent button per step on add-server ("Sign in" whi
 not accent), and no example name in the headers editor (7f52cd1).
 
 ## Browse (ADR 0018, task 5)
-The Windows screens for browsing a signed-in Jellyfin server; all logic is the core's (PRs 60 and 62, and `library_query`, the image
-cache's size and clear here).
+The Windows screens for browsing a signed-in Jellyfin server; all logic is the core's (PRs 60 and 62, and here: `library_query`, the
+image cache's size and clear, the session number in `ServerStatus`, and `browse/present.rs`: the tile's artwork, a series' run, the
+library's sort and filter choices, the five-minute shown-again refresh). The pages only name and format what the core gives.
 - **Navigation:** Home, then one item per library of each signed-in Jellyfin server in the user's order, with a server header when
   more than one is signed in; the `NavigationView`'s `AutoSuggestBox` for search (Ctrl+E). Both hide while no Jellyfin server is
-  signed in, and Home keeps the M1 states. `Browsing/BrowseHub` follows the capabilities state: one `Browse` per signed-in server
-  (a new one after a new sign-in or another user), its libraries, its library grids and Home feed for the whole session, and the
-  core's notices, shown above every page.
+  signed in (the box leaves the navigation view, so no gap stays), and Home keeps the M1 states. `Browsing/BrowseHub` follows the
+  capabilities state: one `Browse` per live session, made again whenever the status names a new session (`ServerStatus.Session`, a
+  sign-in again as the same user included), its libraries, its library grids and Home feed for the whole session, and the core's
+  notices, shown above every page.
 - **Home** (provisional layout): the `HomeFeed`'s rows in the core's order, each a sideways `GridView` once it has items; wide tiles
   for Continue watching and Next up, posters for Latest. One message per server for failed rows (Retry) or offline (its last rows
   stay). The frame keeps the page (`NavigationCacheMode="Required"`): Back shows it as left; opened from the navigation it scrolls to
-  the top and its rows to their start. F5 and Ctrl+R refresh.
+  the top and its rows to their start. F5 and Ctrl+R refresh; shown again five minutes after it was left, it refreshes (the core
+  decides, `HomeFeed.shown`).
 - **Library grid:** a `GridView` over `SlotCollection` (each place a `GridSlot` object: slot records compare by value), sized to the
   total, loading what is visible; its count under the title; Sort by (name, date added, release date, rating) and Show (all,
-  unplayed, played, favourites), which `ItemQuery` takes, each a new query that starts at the top. The grid's `PagedItems` lives for
-  the session: Back and Forward return to the item the grid was left at; opened from the navigation it starts at the top. The page
-  lets go of its slots on `Unloaded`, after its exit transition. F5, Ctrl+R and a Refresh button refresh in place.
-- **Tiles** (`Browsing/ItemTile`): the picture through `TileImage` at the box's physical width, its BlurHash only if the picture has
-  not arrived within 100 ms; played, favourite and unplayed badges and a resume `ProgressBar`; Narrator reads the tile's name, line
+  unplayed, played, favourites), the core's choices (`ItemQuery.SortChoices`, `FilterChoices`), each a new query that starts at the
+  top. The grid's `PagedItems` lives for the session: Back and Forward return to the item the grid was left at, with its sort and
+  filter; opened from the navigation it starts at the top with the first ones. The page lets go of its slots on `Unloaded`, after
+  its exit transition, or at once if it never loaded. F5, Ctrl+R and a Refresh button refresh in place.
+- **Tiles** (`Browsing/ItemTile`): the artwork the core picks (`ItemSummary.Poster`, `Wide`) through `TileImage` at the box's physical
+  width, its BlurHash first; played, favourite and unplayed badges and a resume `ProgressBar`; Narrator reads the tile's name, line
   and marks. A change to the same item (marks, resume point) updates the card in place: the grid's `SetItem` and the short lists'
   `TileList` update the place's object, which the tile follows, instead of replacing it.
+- **Lists inside templates** (`Browsing/StableSource`): Home's and search's row lists, and each section's rows, get their items from
+  code once per data object, not from `x:Bind`. WinUI raised the templates' `DataContextChanged` with nothing changed (after a
+  refresh, the pointer over the window; why is not verified), `x:Bind` then set the list's source again, and the list built every
+  card again: a row went blank for a frame. Found with a diagnostic log on the owner's run; the log is not kept.
 - **Details:** backdrop, poster, title, facts, genres, tagline, overview, Played and Favourite toggle buttons, a place for Play
-  (`PlayActions`, the player's task), cast (`PersonPicture`, initials only when the photo is late), a series' seasons (`SelectorBar`
-  in a sideways `ScrollViewer`) and the chosen season's episodes, similar items. Each history entry keeps its `DetailsView`, the
-  season chosen and its scroll offsets (`ServerBrowse.Details`); Back binds the new page to them. Below 641 px the info goes under the
-  poster.
+  (`PlayActions`, the player's task), cast (`PersonPicture`, its initials until the photo arrives; the cast row keeps its cards when
+  an update brings the same people), a series' seasons (`SelectorBar` in a sideways `ScrollViewer`) and the chosen season's
+  episodes, similar items; a series' run as the core reads it (`ItemDetails.Run`). Each history entry keeps the season chosen and its
+  scroll offsets, vertical and sideways (`ServerBrowse.Details`), and the five most recently shown keep their `DetailsView` live, so
+  Back shows them without a reload; older ones open their view again on that season. Below 641 px the info goes under the poster.
+  F5 and Ctrl+R refresh.
 - **Search:** results grouped by kind, a row per kind with matches; "Searching…", "No results" or the failure, read by Narrator.
+  The five most recently shown searches are kept with their history entries (`BrowseHub.Search`): Back shows the results at once.
+  F5 and Ctrl+R search again.
 - **Played and favourite:** each tile's context menu (right-click, Shift+F10, the Menu key) and the detail page's buttons; a refusal
   rolls back with a notice above every page.
-- **Settings → Storage:** the image cache's size (all servers) and Clear, which also empties the core's memory cache.
+- **Settings → Storage:** the image cache's size (all servers) and Clear, which also empties the core's memory cache; a failed Clear
+  says so.
 - **Sizes:** Microsoft gives no poster size; 160 epx posters (2:3), 256 epx wide tiles (16:9) and a 360 px backdrop at most are
   provisional, kept so by the owner (2026-10-25) until Home is redesigned. Spacing, margins and type styles are sourced in
   `App.xaml`.
-- **Reverted on the run:** keeping Home's rows with the session, a cache of recently decoded pictures, and drawing a tile's summary
-  first on a detail page (all for blinking; the owner asked for the rebuild itself to go instead).
+- **Reverted on the run** (attempts at the blinking that did not remove its cause): keeping Home's rows with the session, a cache of
+  recently decoded pictures, drawing a tile's summary first on a detail page, a BlurHash (and the cast's initials) only when the
+  picture is late, and matching a row's cards by item through a refresh.
 
 ### Browse: Windows run (2026-10-25, owner's PC, Windows 11 Pro 10.0.26300.9711)
 feat/browse-windows, final build at 618ff76, built with the four scripts (C# tests 55 passed; the smoke run passed, including the new
@@ -1371,5 +1385,17 @@ Libraries: three, of about 13, 9 and 90 items (films, series, and a third librar
 8. Settings → Storage grows after browsing, Clear empties it and images load again, signing out deletes the server's images: **pass**.
 9. Narrator, keyboard only, high contrast, a narrow window (the navigation collapses to its rail): **pass**.
 Blinking on Home and detail pages (owner's finding): what was left at 30 fps was the page's entrance transition and the list items'
-fade-in, both platform defaults, kept. Progress bars still grow from zero when a new card is built (the control's default; owner:
-leave as is).
+fade-in, both platform defaults, kept (owner, 2026-10-25: "Don't touch fade ins"). Progress bars still grow from zero when a new
+card is built (the control's default; owner: leave as is).
+
+#### Re-check after the review (2026-10-25, same PC and server)
+Built at 3200c74 to b802ac1 with the four scripts (C# tests 55 passed; the smoke run passed). The manager's review: the session number
+in the status (signing in again as the same user), the choices moved into the core, kept detail views limited to five, Home's message
+handlers, the disk read, a failed Clear, release before load. All **pass** on the owner's checks:
+- Home between pages, Back and its navigation item: as before. Back through seven or eight detail pages: the last five without a
+  reload, the earlier ones on their season and offsets. Signed out and in again as the same user: browsing works at once. Sort by and
+  Show offer the same choices.
+- Found and fixed on the way: a gap where the search box was after sign-out; a library opened from the navigation kept its sort and
+  filter (now reset, as the scroll is); F5 and Ctrl+R on detail and search pages (owner's request); Back to a search searched again
+  (now kept); rows on Home and in search went blank for a frame after a refresh or with the pointer over the window (the x:Bind
+  cause above, fixed in dfd7637, confirmed by the log and the owner).
