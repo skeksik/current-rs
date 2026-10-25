@@ -168,8 +168,7 @@ impl DiskCache {
         }
         let path = self.path(id);
         let Ok(bytes) = fs::read(&path) else {
-            // Deleted behind our back (or by an eviction meanwhile): forget it.
-            self.lock().remove(id);
+            self.forget_if_missing(id);
             return None;
         };
         let now = SystemTime::now();
@@ -184,6 +183,16 @@ impl DiskCache {
             entry.stamped = now;
         }
         Some(bytes)
+    }
+
+    /// After a read of `id` failed: forgets it if its file is still missing now, under the index lock. Deleted behind our back, or
+    /// by an eviction or a clear meanwhile, it goes; but a write may have stored it again between the failed read and this lock
+    /// (after a clear, say), and that file is kept and stays indexed. Renames and deletions take the lock too, so the check holds.
+    fn forget_if_missing(&self, id: &FileId) {
+        let mut index = self.lock();
+        if fs::metadata(self.path(id)).is_err() {
+            index.remove(id);
+        }
     }
 
     /// Stores `bytes` as `id`: written to a temporary file, then renamed, if `wanted` still says so at that moment (it is checked
@@ -478,6 +487,25 @@ mod tests {
         cache.write(&id(OTHER, 2), b"late", || false);
         assert_eq!(cache.read(&id(OTHER, 2)), None);
         assert_eq!(fs::read_dir(temp.path().join(OTHER)).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_failed_read_forgets_a_missing_file_but_not_one_written_again_meanwhile() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = open(temp.path(), 1000);
+        cache.write(&id(FOLDER, 1), b"one", || true);
+        // Deleted behind the cache's back: a read fails and forgets it.
+        fs::remove_file(temp.path().join(FOLDER).join(id(FOLDER, 1).name)).unwrap();
+        assert_eq!(cache.read(&id(FOLDER, 1)), None);
+        assert_eq!(cache.total(), 0);
+        cache.assert_consistent(true);
+
+        // A read failed (the file was cleared), and before it took the lock a write stored the image again: that entry stays.
+        cache.write(&id(FOLDER, 2), b"again", || true);
+        cache.forget_if_missing(&id(FOLDER, 2));
+        assert_eq!(cache.total(), 5);
+        assert_eq!(cache.read(&id(FOLDER, 2)).as_deref(), Some(&b"again"[..]));
+        cache.assert_consistent(true);
     }
 
     #[test]
