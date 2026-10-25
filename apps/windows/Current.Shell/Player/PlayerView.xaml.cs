@@ -79,7 +79,11 @@ public sealed partial class PlayerView : UserControl
         _hideTimer = DispatcherQueue.CreateTimer();
         _hideTimer.Interval = HideAfter;
         _hideTimer.IsRepeating = false;
-        _hideTimer.Tick += (_, _) => HideControlsIfIdle();
+        _hideTimer.Tick += (_, _) =>
+        {
+            KeepKeyboardFocus();
+            HideControlsIfIdle();
+        };
         _seekTimer = DispatcherQueue.CreateTimer();
         _seekTimer.Interval = SeekSettle;
         _seekTimer.IsRepeating = false;
@@ -542,6 +546,9 @@ public sealed partial class PlayerView : UserControl
         {
             return;
         }
+        // Also here, not only on state changes: while the engine waits (a stalled network) no state changes come, and the keys were
+        // lost (owner's run, 2026-10-25).
+        KeepKeyboardFocus();
         ShowCursor();
         if (!_controlsShown)
         {
