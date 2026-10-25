@@ -34,7 +34,7 @@ public sealed partial class DetailsPage : Page
     public DetailsPage()
     {
         InitializeComponent();
-        void Open(ItemSummary item) => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item, item));
+        void Open(ItemSummary item) => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item));
         ItemActions.Attach(Episodes, Open);
         ItemActions.Attach(Similar, Open);
         BackdropFrame.SizeChanged += (_, _) => SizeBackdrop();
@@ -65,11 +65,6 @@ public sealed partial class DetailsPage : Page
         _subscriptions.AddRange([_details, _state, _seasons, episodes, similar]);
         Episodes.ItemsSource = episodes.Items;
         Similar.ItemsSource = similar.Items;
-        _summary = args.Summary;
-        if (_summary is { } summary)
-        {
-            ShowSummary(summary, summary.Artwork.Where(art => art.Kind == "backdrop").ToList());
-        }
         ShowDetails();
         ShowState();
     }
@@ -121,45 +116,29 @@ public sealed partial class DetailsPage : Page
         }
     }
 
-    /// <summary>The tile's item, until the details arrive; null when the page was opened another way.</summary>
-    private ItemSummary? _summary;
-
-    /// <summary>What the item's summary already tells: drawn in the first frame, and again under the full details.</summary>
-    private void ShowSummary(ItemSummary item, IReadOnlyList<Artwork> backdrops)
-    {
-        Actions.Visibility = Visibility.Visible;
-        TitleText.Text = item.Kind == "episode" ? EpisodeTitle(item) : item.Name;
-        PlayedButton.IsChecked = item.User.Played;
-        FavouriteButton.IsChecked = item.User.Favourite;
-        FavouriteGlyph.Glyph = item.User.Favourite ? "" : "";
-        SeriesPart.Visibility = item.Kind == "series" ? Visibility.Visible : Visibility.Collapsed;
-        ShowPictures(item, backdrops);
-    }
-
     private void ShowDetails()
     {
         if (_details?.Value is not { } details)
         {
-            Actions.Visibility = _summary is null ? Visibility.Collapsed : Visibility.Visible;
-            if (_summary is { } summary)
-            {
-                FactsText.Text = Facts(summary, null);
-            }
+            Actions.Visibility = Visibility.Collapsed;
             return;
         }
         var item = details.Summary;
-        ShowSummary(item, details.Backdrops);
-        FactsText.Text = Facts(item, details);
+        Actions.Visibility = Visibility.Visible;
+        TitleText.Text = item.Kind == "episode" ? EpisodeTitle(item) : item.Name;
+        FactsText.Text = Facts(details);
         GenresText.Text = string.Join(", ", details.Genres);
         GenresText.Visibility = details.Genres.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         TaglineText.Text = details.Taglines.FirstOrDefault() ?? "";
         TaglineText.Visibility = TaglineText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
         OverviewText.Text = details.Overview ?? "";
-        if (!ReferenceEquals(People.ItemsSource, details.People))
-        {
-            People.ItemsSource = details.People;
-        }
+        PlayedButton.IsChecked = item.User.Played;
+        FavouriteButton.IsChecked = item.User.Favourite;
+        FavouriteGlyph.Glyph = item.User.Favourite ? "" : "";
+        People.ItemsSource = details.People;
         PeoplePart.Visibility = details.People.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        SeriesPart.Visibility = item.Kind == "series" ? Visibility.Visible : Visibility.Collapsed;
+        ShowPictures(details);
     }
 
     /// <summary>"Series name: S1:E2 Episode name" on an episode's own page.</summary>
@@ -170,12 +149,12 @@ public sealed partial class DetailsPage : Page
         return item.Episode?.SeriesName is { Length: > 0 } series ? $"{series}: {name}" : name;
     }
 
-    /// <summary>The year (or a series' run), runtime, age rating and community rating, as the server gave them; from the summary
-    /// alone the year and runtime.</summary>
-    private static string Facts(ItemSummary item, ItemDetails? details)
+    /// <summary>The year (or a series' run), runtime, age rating and community rating, as the server gave them.</summary>
+    private static string Facts(ItemDetails details)
     {
         var facts = new List<string>();
-        if (item.Kind == "series" && details?.Premiere is { } start)
+        var item = details.Summary;
+        if (item.Kind == "series" && details.Premiere is { } start)
         {
             facts.Add(details.End is { } end && end.Year != start.Year
                 ? $"{start.Year}–{end.Year}"
@@ -189,19 +168,20 @@ public sealed partial class DetailsPage : Page
         {
             facts.Add(BrowseText.Runtime(runtime));
         }
-        if (details?.OfficialRating is { Length: > 0 } rating)
+        if (details.OfficialRating is { Length: > 0 } rating)
         {
             facts.Add(rating);
         }
-        if (details?.CommunityRating is { } community)
+        if (details.CommunityRating is { } community)
         {
             facts.Add($"{community.ToString("0.0", CultureInfo.CurrentCulture)}/10");
         }
         return string.Join(" · ", facts);
     }
 
-    private void ShowPictures(ItemSummary item, IReadOnlyList<Artwork> backdrops)
+    private void ShowPictures(ItemDetails details)
     {
+        var item = details.Summary;
         var wide = item.Kind is "episode" or "video";
         var posterWidth = (double)Application.Current.Resources[wide ? "WideTileWidth" : "PosterTileWidth"];
         PosterFrame.Width = posterWidth;
@@ -214,42 +194,20 @@ public sealed partial class DetailsPage : Page
             _shownPoster = poster.Image;
             var width = (int)Math.Ceiling(PosterFrame.Width * scale);
             var height = (int)Math.Ceiling(PosterFrame.Height * scale);
-            var picture = new ImageRequest(new ImageSource.Server(poster.Image), width, height);
-            if (TileImage.TryRecent(picture) is { } recent)
+            if (poster.BlurHash is { } hash)
             {
-                Poster.Source = recent;
+                _ = Load(_posterPlaceholder, PosterPlaceholder, new ImageRequest(new ImageSource.BlurHash(hash), width, height));
             }
-            else
-            {
-                if (poster.BlurHash is { } hash)
-                {
-                    _ = Load(_posterPlaceholder, PosterPlaceholder, new ImageRequest(new ImageSource.BlurHash(hash), width, height));
-                }
-                _ = Load(_poster, Poster, picture);
-            }
+            _ = Load(_poster, Poster, new ImageRequest(new ImageSource.Server(poster.Image), width, height));
         }
-        _backdropArt = backdrops.FirstOrDefault();
-        // Shown before its image arrives, so its height is set in the first layout and nothing below it moves later.
-        BackdropFrame.Visibility = _backdropArt is null ? Visibility.Collapsed : Visibility.Visible;
-        if (_backdropArt is { } backdrop && backdrop.Image != _shownBackdrop && BackdropFrame.ActualWidth > 0)
+        var backdrop = details.Backdrops.FirstOrDefault();
+        BackdropFrame.Visibility = backdrop is null ? Visibility.Collapsed : Visibility.Visible;
+        if (backdrop is not null && backdrop.Image != _shownBackdrop && BackdropFrame.ActualWidth > 0)
         {
-            LoadBackdrop(backdrop);
+            _shownBackdrop = backdrop.Image;
+            var width = (int)Math.Ceiling(BackdropFrame.ActualWidth * scale);
+            _ = Load(_backdrop, Backdrop, new ImageRequest(new ImageSource.Server(backdrop.Image), width, (int)Math.Ceiling(width * 9.0 / 16)));
         }
-    }
-
-    private Artwork? _backdropArt;
-
-    private void LoadBackdrop(Artwork backdrop)
-    {
-        _shownBackdrop = backdrop.Image;
-        var width = (int)Math.Ceiling(BackdropFrame.ActualWidth * (XamlRoot?.RasterizationScale ?? 1));
-        var picture = new ImageRequest(new ImageSource.Server(backdrop.Image), width, (int)Math.Ceiling(width * 9.0 / 16));
-        if (TileImage.TryRecent(picture) is { } recent)
-        {
-            Backdrop.Source = recent;
-            return;
-        }
-        _ = Load(_backdrop, Backdrop, picture);
     }
 
     /// <summary>16:9 of the page's width, at most <see cref="MaxBackdropHeight"/>; its image loads once the width is known.</summary>
@@ -260,9 +218,9 @@ public sealed partial class DetailsPage : Page
         {
             BackdropFrame.Height = height;
         }
-        if (_shownBackdrop is null && _backdropArt is not null)
+        if (_shownBackdrop is null && _details?.Value is { } details)
         {
-            LoadBackdrop(_backdropArt);
+            ShowPictures(details);
         }
     }
 

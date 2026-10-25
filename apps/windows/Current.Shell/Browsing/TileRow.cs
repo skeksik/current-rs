@@ -38,8 +38,9 @@ public sealed class HomeSection : INotifyPropertyChanged, IDisposable
     private readonly ListSubscription<HomeRow> _rows;
     private readonly ValueSubscription<HomeState> _state;
 
-    internal HomeSection(HomeFeed feed, IUiDispatcher ui)
+    internal HomeSection(string header, HomeFeed feed, IUiDispatcher ui)
     {
+        Header = header;
         _feed = feed;
         _ui = ui;
         _rows = feed.ObserveRows(ui);
@@ -51,22 +52,8 @@ public sealed class HomeSection : INotifyPropertyChanged, IDisposable
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    /// <summary>The server's name above its rows when more than one server is signed in; empty otherwise. Home sets it.</summary>
-    public string Header
-    {
-        get => _header;
-        set
-        {
-            if (_header != value)
-            {
-                _header = value;
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Header)));
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HeaderVisibility)));
-            }
-        }
-    }
-
-    private string _header = "";
+    /// <summary>The server's name above its rows when more than one server is signed in; empty otherwise.</summary>
+    public string Header { get; }
 
     public Visibility HeaderVisibility => Header.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
