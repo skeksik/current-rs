@@ -98,10 +98,10 @@ capabilities, node conversion, struct layouts, swap chain reference counting wit
 | A second engine waits, then gets `Busy`; after the first is destroyed one starts | passed | passed (run 40175292879) |
 | The next file replaces the first on the same engine (`EndFile(Stop)`, then `FileLoaded`) | passed | passed (run 40175292879) |
 | Two engines one after the other in a child process: nothing secret on its stderr | passed | passed (run 40175292879) |
-| mpv quits on its own: `Terminated`, calls stay safe, nothing destroyed before the drop, then the slot is free | passed | see the PR |
-| A sink that panics: the engine still shuts down and the slot is free | passed | see the PR |
-| An HLS segment over https with a self-signed certificate on another port: no request arrives | passed | see the PR |
-| A playlist whose segment is on another port: refused unmarked; served under a non-playlist URL, no segment opened; marked, the segment is opened without the cookie | passed (with the FFmpeg version guard bypassed for the run) | see the PR |
+| mpv quits on its own: `Terminated`, calls stay safe, nothing destroyed before the drop, then the slot is free | passed | passed (run 40178399463) |
+| A sink that panics: the engine still shuts down and the slot is free | passed | passed (run 40178399463) |
+| An HLS segment over https with a self-signed certificate on another port: no request arrives | passed | passed (run 40178399463) |
+| A playlist whose segment is on another port: refused unmarked; served under a non-playlist URL, no segment opened; marked, the segment is opened without the cookie | passed (with the FFmpeg version guard bypassed for the run) | passed (run 40178399463) |
 
 The TLS test makes a throwaway certificate at run time with `openssl` (nothing checked in); the Windows image lists OpenSSL 3.6.5
 (actions/runner-images, `images/windows/Windows2025-VS2026-Readme.md`, image 20261007.264.1, read 2026-10-25).
