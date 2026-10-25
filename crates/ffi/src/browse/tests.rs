@@ -123,6 +123,22 @@ fn follow_items(
     }
 }
 
+/// Receives values until one satisfies `done`; returns it.
+fn latest_notice(
+    rx: &Receiver<Option<BrowseNotice>>,
+    what: &str,
+    done: impl Fn(&Option<BrowseNotice>) -> bool,
+) -> Option<BrowseNotice> {
+    loop {
+        let value = rx
+            .recv_timeout(WAIT)
+            .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+        if done(&value) {
+            return value;
+        }
+    }
+}
+
 fn stand_in() -> StandIn {
     runtime::handle()
         .unwrap()
@@ -334,7 +350,8 @@ fn a_refused_toggle_rolls_back_with_a_notice_that_keeps_the_name_out_of_debug() 
     assert_eq!(favourite(&mirror.values), Some(false));
     let (notices, notice_rx) = recorder();
     let _notices = core.subscribe_browse_notices(notices);
-    assert_eq!(notice_rx.recv_timeout(WAIT).unwrap(), None);
+    // The current value first: no notice yet.
+    assert_eq!(latest_notice(&notice_rx, "the first value", |_| true), None);
 
     let path = format!("/UserFavoriteItems/{}", FILM_IDS[0]);
     stand_in.hold(&path);
@@ -350,7 +367,7 @@ fn a_refused_toggle_rolls_back_with_a_notice_that_keeps_the_name_out_of_debug() 
         favourite(slots) == Some(false)
     });
 
-    let notice = notice_rx.recv_timeout(WAIT).unwrap().unwrap();
+    let notice = latest_notice(&notice_rx, "the notice", Option::is_some).unwrap();
     let NoticeKind::ActionFailed {
         action,
         item_name,
