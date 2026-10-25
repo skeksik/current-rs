@@ -1,6 +1,7 @@
 # 0018: Browsing: items, queries, paged lists and images
 
-Status: proposed (2026-10-25), from the browse spike; accepted when its PR merges. The owner decides the open choices below.
+Status: proposed (2026-10-25), from the browse spike; accepted when its PR merges; open choices decided by the owner 2026-10-25
+(see "Decided by the owner").
 Research, quotes and sources: `docs/notes/jellyfin-browse.md`. Playback, media sources and streams are ADR 0019's (spike/playback-design);
 section 6 of the notes lists what is left to it.
 
@@ -134,8 +135,8 @@ or `Failed`. Placeholders are records, never null (WinUI 3 crashes on null place
   - Written to a temporary file and renamed. An index of sizes and last-access times is built from the folder at start; a hit
     refreshes the last-access time at most once a minute per file.
   - Limit **500 MB** by default; when exceeded, the least recently used files are deleted down to 90%, on a blocking thread.
-  - **Removing a server deletes its folder** (in `App::remove_server`), and at start the core deletes folders of servers that are no
-    longer saved.
+  - **Signing out of a server or removing it deletes its folder** (in `App::sign_out` and `App::remove_server`), and at start the
+    core deletes folders of servers that are no longer saved or have no signed-in user.
 - **BlurHash**: the core decodes `Artwork.blurhash` into a small BMP (at most 32 pixels on the long side, at the image's aspect ratio)
   with our own decoder (about a hundred lines from the published format, no dependency), through the same `load_image` path with a
   `blurhash` request kind. BMP needs no encoder and every UI reads it (open choice 5).
@@ -153,6 +154,9 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    that the UI shows as a message. The item's name may appear in the message; it never goes to the log.
 
 ### 6. Home
+Home's layout is **provisional**: the owner accepted it for now and will have it redesigned later (2026-10-25). The `HomeFeed`
+shape below (rows, each with its own list) is meant to survive that redesign; the choice and order of rows will change.
+
 Home is a **`HomeFeed`**: a list of rows, each with its own item list.
 - **Rows, in order**: Continue watching (`resume`), Next up (`next_up`), then Latest in each library in the user's library order
   (open choice 6). A row is shown only when it has items, so no row assumes a library type exists: "Next up" appears because the
@@ -183,12 +187,28 @@ item ids and image tags cross, addresses and paths never do.
 | # | Task | Done when |
 |---|---|---|
 | 1 | `current-model` browse types and `Artwork.image`; `current-jellyfin` browse queries with the two field sets; the stand-in serves recorded-shape answers for each endpoint | unit tests per endpoint against hand-written 12.2 answers (paging, totals, search window, latest grouping, ticks, missing fields, unknown kinds and collection types pass through); played and favourite answers mapped; clippy, fmt, tests, deny green |
-| 2 | Images: `image()` in `current-jellyfin` (URL, `Accept`, buckets); disk and memory cache in `current-app` (per-server folders, temp-and-rename, index, eviction, removal on server removal and at start); BlurHash decoder and BMP writer; the cache folder argument in `App::open` and `open_core` | tests: the gateway header reaches the stand-in's image endpoint; a cached image is served without a request; eviction keeps the newest under the limit; removing a server deletes its folder; cancelling stops the fetch; file names hold only hashes; BlurHash output matches known vectors (the format's published examples, not verified yet) |
+| 2 | Images: `image()` in `current-jellyfin` (URL, `Accept`, buckets); disk and memory cache in `current-app` (per-server folders, temp-and-rename, index, eviction, removal on sign-out, on server removal and at start); BlurHash decoder and BMP writer; the cache folder argument in `App::open` and `open_core` | tests: the gateway header reaches the stand-in's image endpoint; a cached image is served without a request; eviction keeps the newest under the limit; signing out of or removing a server deletes its folder; cancelling stops the fetch; file names hold only hashes; BlurHash output matches known vectors (the format's published examples, not verified yet) |
 | 3 | `current-app`: `PagedItems`, `HomeFeed`, details, search, `ItemStates`, notices | tests: visible-range loading and cancellation; refresh sends no `Reset` and keeps loaded slots; a failed page becomes `Failed` and retry fills it; an optimistic change shows in every live list and rolls back on failure; dependent rows reload; rows without items are absent |
 | 4 | `current-ffi` and C#: the surface in section 7, `PagedCollection` with `IItemsRangeInfo`, `ImageLoader` | Rust bridge tests and C# tests against the stand-in (paged grid, image bytes, cancellation, a rolled-back toggle); CI's C# job green |
-| 5 | Windows UI: Home, library grid (`GridView`), detail pages (movie, series with seasons and episodes), search, played and favourite, images with BlurHash placeholders, offline state | the smoke run passes; the owner browses a real library on Windows and checks: a grid of thousands scrolls without blank tiles staying, a refresh keeps the position, played and favourite toggle everywhere, images load behind a gateway |
+| 5 | Windows UI: Home, library grid (`GridView`), detail pages (movie, series with seasons and episodes), search, played and favourite, images with BlurHash placeholders, offline state, a "Storage" section in Settings with the cache size and Clear | the smoke run passes; the owner browses a real library on Windows and checks: a grid of thousands scrolls without blank tiles staying, a refresh keeps the position, played and favourite toggle everywhere, images load behind a gateway |
 
 Tasks 1 and 2 can run in parallel; 3 needs 1 (and 2 for images); 4 needs 3; 5 needs 4.
+
+## Decided by the owner (2026-10-25)
+1. Grid loading: **option A**, a list sized to the total with placeholders, loading pages of 100 around the visible range.
+2. Image delivery: **option A**, bytes over UniFFI.
+3. Disk cache: **500 MB**, least recently used first, no setting in M2; a server's images are deleted **on sign-out as well as on
+   removal**.
+4. "Clear cache": **option A**, a "Storage" section in Settings with the cache size and Clear.
+5. BlurHash: **option A**, decoded in the core to a small BMP.
+6. Home rows: **as proposed** (Continue watching, Next up, Latest per library in the user's order; libraries in the navigation). The
+   owner's words: "as proposed for now, later will be remade". Home's layout is provisional and will be redesigned later.
+7. Cache file-name hash: **option A**, our own 128-bit FNV-1a.
+8. Played and favourite: **option A**, one `ItemStates` store.
+
+The amendments to ADR 0005 and ADR 0013 below follow from these choices and are approved with this ADR.
+
+The options as they were put to the owner follow.
 
 ## Open choices (as proposed)
 
@@ -229,7 +249,8 @@ Tasks 1 and 2 can run in parallel; 3 needs 1 (and 2 for images); 4 needs 3; 5 ne
 Decided with the manager before writing (2026-10-25): the details record carries only `MediaSummary`; ADR 0019 owns media sources and
 streams.
 
-## Proposed amendments to merged ADRs (for the owner)
+## Amendments to merged ADRs (approved with this ADR)
+The implementation tasks write these into the ADRs they amend (task 1: ADR 0005; task 2: ADR 0013); this PR does not edit them.
 - **ADR 0005:** `Artwork.url` becomes `Artwork.image: ImageRef`; the model gains `UserState`, `ItemSummary`, `ItemDetails`, `Library`,
   `CalendarDate`, `MediaSummary`, `StreamSummary`, `Person`, `Chapter` and the open values `CollectionKind`, `SortKey`, `ItemFilter`,
   `PersonKind`.
