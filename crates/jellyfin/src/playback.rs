@@ -227,7 +227,7 @@ impl JellyfinClient {
                     source.transcoding_sub_protocol.clone(),
                     source.transcoding_container.clone(),
                 );
-                let source = map_source(source);
+                let source = map_source(&source);
                 let stream = if direct {
                     Some(PlayableStream {
                         route: Route::DirectPlay,
@@ -618,19 +618,15 @@ fn codec_from_server(name: &str) -> Codec {
         .map_or_else(|| Codec::new(name), |(_, codec)| codec)
 }
 
-fn map_source(source: wire::MediaSourceInfo) -> MediaSource {
+pub(crate) fn map_source(source: &wire::MediaSourceInfo) -> MediaSource {
     MediaSource {
-        id: source.id.unwrap_or_default(),
-        name: non_empty(source.name),
-        container: non_empty(source.container),
+        id: source.id.clone().unwrap_or_default(),
+        name: non_empty(source.name.clone()),
+        container: non_empty(source.container.clone()),
         size: source.size.and_then(|size| u64::try_from(size).ok()),
         bitrate: source.bitrate.and_then(|rate| u32::try_from(rate).ok()),
         duration: source.run_time_ticks.filter(|t| *t > 0).map(duration),
-        streams: source
-            .media_streams
-            .into_iter()
-            .filter_map(map_stream)
-            .collect(),
+        streams: map_streams(&source.media_streams),
         default_audio: source.default_audio_stream_index.and_then(index_from_wire),
         default_subtitle: source
             .default_subtitle_stream_index
@@ -640,8 +636,13 @@ fn map_source(source: wire::MediaSourceInfo) -> MediaSource {
     }
 }
 
-fn map_stream(stream: wire::MediaStream) -> Option<MediaStream> {
-    let index = index_from_wire(stream.index)?;
+/// The streams the model keeps, in the server's order.
+pub(crate) fn map_streams(streams: &[wire::MediaStream]) -> Vec<MediaStream> {
+    streams.iter().filter_map(map_stream).collect()
+}
+
+fn map_stream(stream: &wire::MediaStream) -> Option<MediaStream> {
+    let index = stream.index.and_then(index_from_wire)?;
     let kind = match stream.r#type.as_deref() {
         Some("Video") => StreamKind::VIDEO,
         Some("Audio") => StreamKind::AUDIO,
@@ -671,7 +672,7 @@ fn map_stream(stream: wire::MediaStream) -> Option<MediaStream> {
     });
     let audio = (kind == StreamKind::AUDIO).then(|| AudioFacts {
         channels: positive(stream.channels),
-        layout: non_empty(stream.channel_layout),
+        layout: non_empty(stream.channel_layout.clone()),
         sample_rate: positive(stream.sample_rate),
     });
     let subtitle_delivery = if kind == StreamKind::SUBTITLE {
@@ -681,12 +682,12 @@ fn map_stream(stream: wire::MediaStream) -> Option<MediaStream> {
     };
     Some(MediaStream {
         index,
-        codec: non_empty(stream.codec).map(|codec| codec_from_server(&codec)),
-        profile: non_empty(stream.profile),
+        codec: non_empty(stream.codec.clone()).map(|codec| codec_from_server(&codec)),
+        profile: non_empty(stream.profile.clone()),
         level: stream.level.filter(|level| *level > 0.0),
-        language: non_empty(stream.language),
-        title: non_empty(stream.title),
-        display_title: non_empty(stream.display_title),
+        language: non_empty(stream.language.clone()),
+        title: non_empty(stream.title.clone()),
+        display_title: non_empty(stream.display_title.clone()),
         is_default: stream.is_default,
         is_forced: stream.is_forced,
         is_hearing_impaired: stream.is_hearing_impaired,

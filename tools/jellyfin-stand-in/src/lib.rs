@@ -1,7 +1,9 @@
 //! A hand-written Jellyfin stand-in on 127.0.0.1, for the bridge tests (Rust, C# and Swift). It answers only what server setup,
-//! sign-in, restoring a session, sign-out and playback (PlaybackInfo, playstate reports, media segments, the session list) ask, in
-//! Jellyfin 12.2's shapes as `current-jellyfin` reads them. Every name, id and credential in it is
-//! fake. Test code only: nothing shipped depends on it.
+//! sign-in, restoring a session, sign-out, browsing a small fake library (see [`library`]) and playback (PlaybackInfo, playstate
+//! reports, media segments, the session list) ask, in Jellyfin 12.2's shapes as `current-jellyfin` reads them. Every name, id and
+//! credential in it is fake. Test code only: nothing shipped depends on it.
+
+pub mod library;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -95,6 +97,8 @@ struct State {
     paths: Mutex<Vec<String>>,
     /// Playstate reports received: path and body.
     reports: Mutex<Vec<(String, String)>>,
+    /// What the user marked played or favourite.
+    marks: Mutex<library::Marks>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -232,7 +236,10 @@ fn revoke_all(state: &State) {
 
 /// One request as the stand-in read it.
 struct Received {
+    method: String,
     path: String,
+    /// Query pairs, decoded.
+    query: Vec<(String, String)>,
     authorization: String,
     emby_authorization: String,
     cookie: String,
@@ -346,18 +353,31 @@ fn answer(state: &State, received: &Received) -> (u16, String) {
         "/Users/Me" | "/Sessions/Logout" | "/Users/AuthenticateWithQuickConnect" => {
             (401, String::new())
         }
-        path => playback(state, received, path),
+        path if is_playback_path(path) => playback(state, received, path),
+        path if library::is_browse_path(path) && !authorized(state, received) => {
+            (401, String::new())
+        }
+        path => {
+            let request = library::Browse {
+                method: &received.method,
+                path,
+                query: &received.query,
+            };
+            library::answer(&request, &mut lock(&state.marks)).unwrap_or((404, String::new()))
+        }
     }
+}
+
+/// Whether `path` is one of playback's endpoints: PlaybackInfo, media segments, the session list and playstate reports.
+fn is_playback_path(path: &str) -> bool {
+    (path.starts_with("/Items/") && path.ends_with("/PlaybackInfo"))
+        || path.starts_with("/MediaSegments/")
+        || path == "/Sessions"
+        || path.starts_with("/Sessions/Playing")
 }
 
 /// Playback's endpoints, for a signed-in caller.
 fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
-    let known = path.starts_with("/Items/")
-        || path.starts_with("/MediaSegments/")
-        || path.starts_with("/Sessions");
-    if !known {
-        return (404, String::new());
-    }
     if !authorized(state, received) {
         return (401, String::new());
     }
@@ -421,7 +441,7 @@ fn info() -> String {
 
 fn user() -> String {
     format!(
-        r#"{{"Name":"{USER_NAME}","Id":"{USER_ID}","Policy":{{"IsAdministrator":false,"EnableMediaPlayback":true}},"Configuration":{{"AudioLanguagePreference":"eng","PlayDefaultAudioTrack":true,"SubtitleLanguagePreference":"","SubtitleMode":"Default","RememberAudioSelections":true,"RememberSubtitleSelections":true,"EnableNextEpisodeAutoPlay":true}}}}"#
+        r#"{{"Name":"{USER_NAME}","Id":"{USER_ID}","Configuration":{{"LatestItemsExcludes":[],"AudioLanguagePreference":"eng","PlayDefaultAudioTrack":true,"SubtitleLanguagePreference":"","SubtitleMode":"Default","RememberAudioSelections":true,"RememberSubtitleSelections":true,"EnableNextEpisodeAutoPlay":true}},"Policy":{{"IsAdministrator":false,"EnableMediaPlayback":true}}}}"#
     )
 }
 
@@ -489,13 +509,50 @@ async fn read_request(socket: &mut TcpStream) -> Option<Received> {
             Ok(read) => data.extend_from_slice(&buffer[..read]),
         }
     }
-    let target = head.lines().next()?.split(' ').nth(1)?;
+    let mut first = head.lines().next()?.split(' ');
+    let method = first.next()?.to_owned();
+    let target = first.next()?;
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
     Some(Received {
-        path: target.split('?').next()?.to_owned(),
+        method,
+        path: path.to_owned(),
+        query: query
+            .split('&')
+            .filter(|pair| !pair.is_empty())
+            .map(|pair| {
+                let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+                (decode(key), decode(value))
+            })
+            .collect(),
         authorization: header("authorization"),
         emby_authorization: header("x-emby-authorization"),
         cookie: header("cookie"),
         gate_header: header(GATE_HEADER),
         body: String::from_utf8_lossy(&data[head_end..]).into_owned(),
     })
+}
+
+/// A query component with `%XX` and `+` decoded. A broken escape is kept as it is.
+fn decode(component: &str) -> String {
+    let bytes = component.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => decoded.push(b' '),
+            b'%' => match component
+                .get(i + 1..i + 3)
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
+                Some(byte) => {
+                    decoded.push(byte);
+                    i += 2;
+                }
+                None => decoded.push(b'%'),
+            },
+            byte => decoded.push(byte),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }

@@ -1,6 +1,6 @@
 # 0005: Core domain model
 
-Status: accepted (2026-10-22).
+Status: accepted (2026-10-22). Amended 2026-10-25 (ADR 0018, approved by the owner): browsing types and `Artwork.image`.
 
 ## Context
 Every later crate (services, playback, app state, the bridge) shares one vocabulary for servers, items, users and what each server
@@ -33,3 +33,13 @@ offers. Anyone may point Current at any mix of Jellyfin, Seerr and Stash servers
 - Comparing two items without their server is impossible by construction.
 - A new server value needs no release to pass through; giving it meaning is a new constant plus the service crate's mapping.
 - Constants for media kinds, image types and permissions are a first set; service crates add constants when they map a new meaning.
+
+## Amendment (2026-10-25, from ADR 0018)
+Approved by the owner with ADR 0018.
+- **`Artwork.url` becomes `Artwork.image: ImageRef`** (item, image type, index, tag). An address changes with roaming (ADR 0014) and
+  must not cross the bridge, so the service crate builds the URL when it fetches, from the address that serves at that moment.
+- The model gains the browsing records `UserState`, `ItemSummary` (with `EpisodeLinks`), `ItemDetails`, `Library`, `CalendarDate`,
+  `MediaSummary`, `StreamSummary`, `Person`, `Chapter` and `ItemQuery`, the open values `CollectionKind`, `SortKey`, `ItemFilter` and
+  `PersonKind`, the closed `SortOrder` (Current defines it), and new `MediaKind` constants (`MUSIC_ALBUM`, `AUDIO`, `MUSIC_ARTIST`,
+  `MUSIC_VIDEO`, `VIDEO`, `FOLDER`, `BOX_SET`). Durations are `std::time::Duration`; dates are `CalendarDate`, since the model takes no
+  dependency for a date type. Still pure, with no dependencies.

@@ -108,22 +108,20 @@ pub(crate) struct PlaybackInfoResponse {
     pub error_code: Option<String>,
 }
 
-/// `MediaSourceInfo`, the fields Current reads. `Path`, `EncoderPath` and `RequiredHttpHeaders` are left out on purpose.
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
+/// `MediaSourceInfo`, the fields Current reads. `Path`, `EncoderPath` and `RequiredHttpHeaders` are left out on purpose. Also read
+/// inside `BaseItemDto` by browsing, whose media summary is derived from it (ADR 0018, ADR 0019).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
 pub(crate) struct MediaSourceInfo {
     pub id: Option<String>,
     pub container: Option<String>,
     pub size: Option<i64>,
     pub name: Option<String>,
-    #[serde(default)]
     pub is_remote: bool,
     #[serde(rename = "ETag")]
     pub e_tag: Option<String>,
     pub run_time_ticks: Option<i64>,
-    #[serde(default)]
     pub supports_direct_play: bool,
-    #[serde(default)]
     pub media_streams: Vec<MediaStream>,
     pub bitrate: Option<i64>,
     pub transcoding_url: Option<String>,
@@ -131,13 +129,12 @@ pub(crate) struct MediaSourceInfo {
     pub transcoding_container: Option<String>,
     pub default_audio_stream_index: Option<i32>,
     pub default_subtitle_stream_index: Option<i32>,
-    #[serde(default)]
     pub has_segments: bool,
 }
 
 /// `MediaStream`, the fields Current reads. `Path` and `DeliveryUrl` (which carries `ApiKey`) are left out on purpose.
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
 pub(crate) struct MediaStream {
     pub codec: Option<String>,
     pub language: Option<String>,
@@ -146,14 +143,11 @@ pub(crate) struct MediaStream {
     pub profile: Option<String>,
     pub level: Option<f64>,
     pub r#type: Option<String>,
-    pub index: i32,
-    #[serde(default)]
+    /// A stream without an index is left out: the server's index is how reports name it.
+    pub index: Option<i32>,
     pub is_default: bool,
-    #[serde(default)]
     pub is_forced: bool,
-    #[serde(default)]
     pub is_hearing_impaired: bool,
-    #[serde(default)]
     pub is_external: bool,
     pub width: Option<i32>,
     pub height: Option<i32>,
