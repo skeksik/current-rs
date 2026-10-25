@@ -56,6 +56,8 @@ pub(crate) fn problem(error: &AuthError) -> PlaybackProblem {
             PlaybackProblem::SignedOut
         }
         AuthError::Refused => PlaybackProblem::Server { status: 403 },
+        // Jellyfin refused this item to the user while the session goes on: gone, or hidden from the user.
+        AuthError::NotAvailable => PlaybackProblem::NotFound,
         AuthError::Network(error) => match error {
             NetError::Status { status: 404, .. } => PlaybackProblem::NotFound,
             NetError::Status { status, .. } | NetError::Auth { status, .. } => {

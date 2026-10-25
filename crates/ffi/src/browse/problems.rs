@@ -16,6 +16,9 @@ pub enum BrowseProblem {
     Refused,
     /// The server's answer is being checked: try again in a moment.
     Unconfirmed,
+    /// The session goes on, but the server refused this to the user: the item or its library is gone, or hidden from the user
+    /// (ADR 0015 as amended 2026-10-25).
+    NotAvailable,
     /// An authentication gateway in front of the server answered instead (ADR 0017): sign in to it again.
     Gateway {
         answer: GatewayProblem,
@@ -54,6 +57,7 @@ impl From<&AuthError> for BrowseProblem {
             | AuthError::QuickConnectExpired
             | AuthError::EmbyHeaderIgnored => Self::Refused,
             AuthError::Unconfirmed => Self::Unconfirmed,
+            AuthError::NotAvailable => Self::NotAvailable,
             AuthError::Gateway(answer) => Self::Gateway {
                 answer: answer.into(),
             },

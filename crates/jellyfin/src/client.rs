@@ -10,6 +10,7 @@ use current_net::{
     AddressProvider, ClientConfig, GatewayShape, NetError, Request, RequestLog, Response,
     ServerClient, classify,
 };
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::auth::{
@@ -56,6 +57,12 @@ pub enum AuthError {
     /// nothing is sent. Try again once the check is done.
     #[error("the server's answer is being checked")]
     Unconfirmed,
+    /// 401 to a request whose token still works, as the check after it found ([`JellyfinClient::keep`], ADR 0015 as amended
+    /// 2026-10-25): Jellyfin refused this one resource to the user, not the session. Jellyfin 12.2 answers `GET Items` so for a
+    /// parent folder the user cannot see (a library hidden from the user, disabled, or removed while the server still knows it).
+    /// The session goes on.
+    #[error("this is not available to the user")]
+    NotAvailable,
     /// An authentication gateway in front of the server answered with a `WWW-Authenticate` challenge, which Jellyfin's own 401 and
     /// 403 never carry (ADR 0017): the request did not reach Jellyfin. Mid-session the token is kept and the session goes on once
     /// the user signs in to the gateway again.
@@ -118,6 +125,44 @@ pub enum SessionEvent {
 /// Called with each [`SessionEvent`].
 pub type SessionHook = Arc<dyn Fn(SessionEvent) + Send + Sync>;
 
+/// What the check after a 401 found about the token, as [`JellyfinClient::check_token`] reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenCheck {
+    /// Jellyfin answered with the token's user, or refused the user (403) without ending the session: the token works.
+    Works,
+    /// Jellyfin answered 401 without a challenge: the token is no longer valid.
+    Fails,
+    /// Anything else: no answer, a gateway's, or the token was replaced meanwhile. Nothing can be decided.
+    Unknown,
+}
+
+/// How a check of an unconfirmed answer ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outcome {
+    /// The token was forgotten ([`JellyfinClient::revoke`]).
+    Revoked,
+    /// The token works: the 401 was about the resource ([`JellyfinClient::keep`]).
+    Kept,
+    /// Nothing was decided ([`JellyfinClient::resume`], a new token).
+    Resumed,
+}
+
+/// The checks of unconfirmed answers: the one running, if any, and how the last one ended. Checks are numbered from 1.
+#[derive(Debug)]
+struct Checks {
+    /// The token whose answer is being checked.
+    running: Option<AccessToken>,
+    /// The number of the last check started.
+    started: u64,
+    /// The number of the last check ended, and how.
+    ended: u64,
+    outcome: Outcome,
+}
+
+/// How long a request that got a 401 waits for the app's check before it answers [`AuthError::Unconfirmed`]: well past the
+/// identity probe's and the token check's own timeouts, so only an app that never decides meets it.
+const CHECK_WAIT: Duration = Duration::from_secs(60);
+
 /// A Jellyfin client for one server, signed in or not. Every request carries the client's identity; once a token is set, it too.
 pub struct JellyfinClient {
     pub(crate) http: ServerClient,
@@ -129,8 +174,8 @@ pub struct JellyfinClient {
     pub(crate) device_id: String,
     placement: PlacementSlot,
     on_event: Mutex<Option<SessionHook>>,
-    /// The token whose unconfirmed answer the app is checking, if a check runs ([`SessionEvent::Unconfirmed`]).
-    checking: Mutex<Option<AccessToken>>,
+    /// The checks of unconfirmed answers ([`SessionEvent::Unconfirmed`]): requests that got a 401 wait on it for the outcome.
+    checks: watch::Sender<Checks>,
     /// The libraries the signed-in user keeps out of "latest" (`Configuration.LatestItemsExcludes`), as the last sign-in or
     /// [`JellyfinClient::current_user`] read them.
     latest_excludes: Mutex<Vec<ItemRef>>,
@@ -176,7 +221,12 @@ impl JellyfinClient {
             device_id,
             placement,
             on_event: Mutex::new(None),
-            checking: Mutex::new(None),
+            checks: watch::Sender::new(Checks {
+                running: None,
+                started: 0,
+                ended: 0,
+                outcome: Outcome::Resumed,
+            }),
             latest_excludes: Mutex::new(Vec::new()),
         })
     }
@@ -255,22 +305,65 @@ impl JellyfinClient {
     /// the one in use, so a newer sign-in survives, and ends its check. Returns whether it was forgotten.
     pub fn revoke(&self, token: &AccessToken) -> bool {
         let forgotten = self.forget(token);
-        let mut checking = self.lock_checking();
-        if checking.as_ref() == Some(token) {
-            *checking = None;
-        }
+        self.end_check(Some(token), Outcome::Revoked);
         forgotten
     }
 
     /// Ends a check without forgetting the token (the answer was a gateway's, or the probe could not reach the server): requests
-    /// go out again.
+    /// go out again, and a request that got the 401 answers [`AuthError::Unconfirmed`].
     pub fn resume(&self) {
-        *self.lock_checking() = None;
+        self.end_check(None, Outcome::Resumed);
     }
 
-    fn lock_checking(&self) -> std::sync::MutexGuard<'_, Option<AccessToken>> {
-        // A single assignment under the lock: a poisoned one still holds a usable value.
-        self.checking.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Ends the check of `token`'s 401 once [`JellyfinClient::check_token`] found that the token works (ADR 0015 as amended
+    /// 2026-10-25): requests go out again, and a request that got the 401 answers [`AuthError::NotAvailable`]. Nothing happens for a
+    /// token no longer checked.
+    pub fn keep(&self, token: &AccessToken) {
+        self.end_check(Some(token), Outcome::Kept);
+    }
+
+    /// Ends the running check (only `token`'s, when given) with `outcome`.
+    fn end_check(&self, token: Option<&AccessToken>, outcome: Outcome) {
+        self.checks.send_if_modified(|checks| {
+            if checks.running.is_none()
+                || token.is_some_and(|token| checks.running.as_ref() != Some(token))
+            {
+                return false;
+            }
+            checks.running = None;
+            checks.ended = checks.started;
+            checks.outcome = outcome;
+            true
+        });
+    }
+
+    fn is_checking(&self) -> bool {
+        self.checks.borrow().running.is_some()
+    }
+
+    /// Asks Jellyfin who the token in use belongs to (`GET /Users/Me`), while a check of `token`'s 401 holds every other request
+    /// back: the second part of the check after a 401 the identity probe confirmed as Jellyfin's (ADR 0015 as amended 2026-10-25).
+    /// [`TokenCheck::Unknown`] when the client no longer uses `token`.
+    pub async fn check_token(&self, token: &AccessToken) -> TokenCheck {
+        if auth::read(&self.token).as_ref() != Some(token) {
+            return TokenCheck::Unknown;
+        }
+        let result = self.http.send(Request::get("/Users/Me")).await;
+        if let Err(error) = &result
+            && GatewayAnswer::challenged(error).is_some()
+        {
+            return TokenCheck::Unknown;
+        }
+        match result {
+            Ok(response) if response.json::<wire::UserDto>().is_ok() => TokenCheck::Works,
+            Err(NetError::Auth {
+                status: 403,
+                page: false,
+                ..
+            }) => TokenCheck::Works,
+            Err(NetError::Auth { status: 401, .. }) => TokenCheck::Fails,
+            _ => TokenCheck::Unknown,
+        }
     }
 
     fn hook(&self) -> Option<SessionHook> {
@@ -414,7 +507,7 @@ impl JellyfinClient {
         let Some(token) = auth::read(&self.token) else {
             return Err(AuthError::NotSignedIn);
         };
-        if self.lock_checking().is_some() {
+        if self.is_checking() {
             return Err(AuthError::Unconfirmed);
         }
         let result = self.http.send(request).await;
@@ -437,14 +530,18 @@ impl JellyfinClient {
         };
         let unauthorized = matches!(result, Err(NetError::Auth { status: 401, .. }));
         if unconfirmed && let Some(hook) = self.hook() {
-            if self.begin_check(&token) {
+            let check = self.begin_check(&token);
+            if let Some((_, true)) = check {
                 hook(SessionEvent::Unconfirmed {
                     token: token.clone(),
                     unauthorized,
                 });
             }
             if unauthorized {
-                return Err(AuthError::Unconfirmed);
+                return Err(match check {
+                    Some((number, _)) => self.check_ended(number).await,
+                    None => AuthError::Unconfirmed,
+                });
             }
         }
         match result {
@@ -459,14 +556,39 @@ impl JellyfinClient {
         }
     }
 
-    /// Starts the check of `token`'s answer, unless one runs already or a newer token replaced it. Returns whether it started.
-    fn begin_check(&self, token: &AccessToken) -> bool {
-        let mut checking = self.lock_checking();
-        if checking.is_some() || auth::read(&self.token).as_ref() != Some(token) {
-            return false;
+    /// Starts the check of `token`'s answer, or joins the one running. Returns the check's number and whether this started it;
+    /// `None` when a newer token replaced `token` (nothing to check).
+    fn begin_check(&self, token: &AccessToken) -> Option<(u64, bool)> {
+        let mut begun = None;
+        self.checks.send_if_modified(|checks| {
+            if checks.running.is_some() {
+                begun = Some((checks.started, false));
+                return false;
+            }
+            if auth::read(&self.token).as_ref() != Some(token) {
+                return false;
+            }
+            checks.started += 1;
+            checks.running = Some(token.clone());
+            begun = Some((checks.started, true));
+            true
+        });
+        begun
+    }
+
+    /// Waits until check `number` ended (at most [`CHECK_WAIT`]) and says what a request that got the 401 answers: the session
+    /// ended, the resource is not available to the user, or nothing was decided.
+    async fn check_ended(&self, number: u64) -> AuthError {
+        let mut checks = self.checks.subscribe();
+        let ended =
+            tokio::time::timeout(CHECK_WAIT, checks.wait_for(|checks| checks.ended >= number))
+                .await;
+        match ended.ok().and_then(Result::ok).map(|checks| checks.outcome) {
+            // A later check may have ended meanwhile: its outcome is the newer one and stands for this one too.
+            Some(Outcome::Revoked) => AuthError::SessionRevoked,
+            Some(Outcome::Kept) => AuthError::NotAvailable,
+            Some(Outcome::Resumed) | None => AuthError::Unconfirmed,
         }
-        *checking = Some(token.clone());
-        true
     }
 
     /// Sends a request that needs the client's four details (a sign-in, Quick Connect's Initiate). A gateway's challenge to
