@@ -87,6 +87,14 @@ public sealed partial class PlayerView : UserControl
         _infoTimer = DispatcherQueue.CreateTimer();
         _infoTimer.Interval = TimeSpan.FromSeconds(1);
         _infoTimer.Tick += (_, _) => _ = ShowInfoAsync();
+        // In full screen the pointer goes with the controls, once they have faded out, not as they start to (owner's run, 2026-10-25).
+        FadeOut.Completed += (_, _) =>
+        {
+            if (!_controlsShown && _host?.IsFullScreen == true)
+            {
+                HideCursor();
+            }
+        };
 
         Video.SizeChanged += (_, _) => UpdateCompositionSize();
         Video.CompositionScaleChanged += (_, _) =>
@@ -564,10 +572,6 @@ public sealed partial class PlayerView : UserControl
         ControlPanel.IsHitTestVisible = false;
         FadeIn.Stop();
         FadeOut.Begin();
-        if (_host?.IsFullScreen == true)
-        {
-            HideCursor();
-        }
     }
 
     private static bool IsInside(DependencyObject element, DependencyObject parent)
