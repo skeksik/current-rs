@@ -1,3 +1,5 @@
+using System.Collections.Specialized;
+using System.ComponentModel;
 using Current.Bindings;
 using Microsoft.UI.Xaml.Data;
 
@@ -49,6 +51,19 @@ public sealed partial class SlotCollection : DiffObservableCollection<GridSlot>,
         _paged?.SetVisibleRange(visibleRange.FirstIndex, visibleRange.LastIndex);
     }
 
+    /// <summary>
+    /// A slot set again to the same item (its marks or resume point changed, a refresh read it again) updates the place's object,
+    /// which its tile follows: the grid sees no replacement, so the card stays and only what changed on it is drawn again (the
+    /// owner's run, 2026-10-25). Any other set replaces the place.
+    /// </summary>
+    protected override void SetItem(int index, GridSlot item)
+    {
+        if (!this[index].TryUpdate(item.Slot))
+        {
+            base.SetItem(index, item);
+        }
+    }
+
     /// <summary>Stops the mirror; the grid may also call it (IItemsRangeInfo is IClosable). Its PagedItems stays with its owner.</summary>
     public void Dispose()
     {
@@ -60,13 +75,31 @@ public sealed partial class SlotCollection : DiffObservableCollection<GridSlot>,
 /// <summary>
 /// One place in the grid. A class, so each place is its own object: the core's slot records are compared by value, and every
 /// <see cref="Slot.Loading"/> equals every other, so a list control that finds an item by IndexOf (to scroll to it, to keep focus on
-/// it) would find the first placeholder instead. ToString is what Narrator falls back to: the tile's name.
+/// it) would find the first placeholder instead. ToString is what Narrator falls back to: the tile's name. While it shows the same
+/// item its object stays and its slot changes (<see cref="TryUpdate"/>), which the tile follows through PropertyChanged.
 /// </summary>
-public sealed class GridSlot(Slot slot)
+public sealed class GridSlot(Slot slot) : INotifyPropertyChanged
 {
-    public Slot Slot { get; } = slot;
+    public Slot Slot { get; private set; } = slot;
 
     public ItemSummary? Summary => (Slot as Slot.Item)?.Summary;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    /// <summary>Takes <paramref name="newer"/> if it is the same item as now; false (nothing changed) otherwise. UI thread only.</summary>
+    public bool TryUpdate(Slot newer)
+    {
+        if (Slot is not Slot.Item now || newer is not Slot.Item next || now.Summary.Item != next.Summary.Item)
+        {
+            return false;
+        }
+        if (now.Summary != next.Summary)
+        {
+            Slot = newer;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Slot)));
+        }
+        return true;
+    }
 
     public override string ToString() => Slot switch
     {

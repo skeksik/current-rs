@@ -16,7 +16,8 @@ public sealed class TileRow(string key, string title, ListSubscription<ItemSumma
 
     public string Title { get; } = title;
 
-    public DiffObservableCollection<ItemSummary> Items => Subscription.Items;
+    /// <summary>The row's items as its tiles bind to them: a change to an item updates its card (TileList).</summary>
+    public TileList Items { get; } = new(items.Items);
 
     internal ListSubscription<ItemSummary> Subscription { get; } = items;
 
@@ -24,7 +25,11 @@ public sealed class TileRow(string key, string title, ListSubscription<ItemSumma
     public DataTemplate ItemTemplate { get; } =
         (DataTemplate)Application.Current.Resources[wide ? "WideTileTemplate" : "PosterTileTemplate"];
 
-    public void Dispose() => Subscription.Dispose();
+    public void Dispose()
+    {
+        Items.Dispose();
+        Subscription.Dispose();
+    }
 }
 
 /// <summary>

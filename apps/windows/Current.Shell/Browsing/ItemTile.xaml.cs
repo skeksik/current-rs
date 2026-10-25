@@ -35,14 +35,24 @@ public sealed partial class ItemTile : UserControl
         InitializeComponent();
         _placeholder = new TileImage(App.Core!);
         _artwork = new TileImage(App.Core!);
-        DataContextChanged += (_, _) => Bind();
+        DataContextChanged += (_, _) => Follow();
+        // Out of the window (scrolled past and recycled, or its page left): a load still under way stops and starts again when the
+        // tile is back; a picture that arrived stays, so a kept page (Home) shows it again at once.
         Unloaded += (_, _) =>
         {
+            if (_followed is not null)
+            {
+                _followed.PropertyChanged -= OnSlotChanged;
+                _followed = null;
+            }
             _placeholder.Recycle();
             _artwork.Recycle();
-            _shown = null;
+            if (Artwork.Source is null)
+            {
+                _shown = null;
+            }
         };
-        Loaded += (_, _) => Bind();
+        Loaded += (_, _) => Follow();
     }
 
     /// <summary>Set before <see cref="TileWidth"/> or after: the picture's height follows either way.</summary>
@@ -77,6 +87,29 @@ public sealed partial class ItemTile : UserControl
 
     /// <summary>The item now shown, or null for a placeholder.</summary>
     public ItemSummary? Item { get; private set; }
+
+    /// <summary>The place this tile shows, followed while it is the DataContext: a change to its item updates this card.</summary>
+    private GridSlot? _followed;
+
+    private void Follow()
+    {
+        if (!ReferenceEquals(_followed, DataContext))
+        {
+            if (_followed is not null)
+            {
+                _followed.PropertyChanged -= OnSlotChanged;
+            }
+            _followed = DataContext as GridSlot;
+            if (_followed is not null)
+            {
+                _followed.PropertyChanged += OnSlotChanged;
+            }
+        }
+        Bind();
+    }
+
+    /// <summary>Its item changed: the lines, marks and name again; the picture stays unless the image itself changed.</summary>
+    private void OnSlotChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => Bind();
 
     private void Bind()
     {

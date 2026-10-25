@@ -63,14 +63,22 @@ public sealed partial class DetailsPage : Page
         similar.Items.CollectionChanged += (_, _) =>
             SimilarPart.Visibility = similar.Items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         _subscriptions.AddRange([_details, _state, _seasons, episodes, similar]);
-        Episodes.ItemsSource = episodes.Items;
-        Similar.ItemsSource = similar.Items;
+        _episodeTiles = new TileList(episodes.Items);
+        _similarTiles = new TileList(similar.Items);
+        Episodes.ItemsSource = _episodeTiles;
+        Similar.ItemsSource = _similarTiles;
         ShowDetails();
         ShowState();
     }
 
+    /// <summary>The episodes and similar items as their tiles bind to them (TileList).</summary>
+    private TileList? _episodeTiles;
+    private TileList? _similarTiles;
+
     private void Release()
     {
+        _episodeTiles?.Dispose();
+        _similarTiles?.Dispose();
         _backdrop.Recycle();
         _poster.Recycle();
         _posterPlaceholder.Recycle();
