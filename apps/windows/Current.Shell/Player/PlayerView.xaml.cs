@@ -62,9 +62,10 @@ public sealed partial class PlayerView : UserControl
     private readonly DispatcherQueueTimer _hideTimer;
     private readonly DispatcherQueueTimer _seekTimer;
     private readonly DispatcherQueueTimer _infoTimer;
+    private InputCursor? _noCursor;
+    private bool _cursorHidden;
     private bool _controlsShown = true;
     private bool _pointerOverPanel;
-    private bool _cursorHidden;
     private bool _showingState;
     private bool _dragging;
     private (uint Width, uint Height) _compositionSize;
@@ -581,21 +582,42 @@ public sealed partial class PlayerView : UserControl
         return false;
     }
 
+    /// <summary>
+    /// The resource id of the cursor without a visual that build.ps1 adds to the published Current.exe (Add-NoCursor), which WinUI loads
+    /// from the executable's own resources (InputDesktopResourceCursor: "You can add a .res resource file that contains a custom cursor
+    /// to your project", learn.microsoft.com, updated 2026-07-28, read 2026-10-25). Win32's ShowCursor(false) and SetCursor(NULL), even
+    /// every 200 ms, left the pointer showing over the WinUI content, and ProtectedCursor = null shows the default arrow (owner's PC,
+    /// 2026-10-25); InputCustomCursor is "Not implemented" (same site and date).
+    /// </summary>
+    private const uint NoCursorResource = 101;
+
+    /// <summary>Hides the pointer over the player: its cursor becomes the one without a visual, until the pointer moves
+    /// (ShowControls). Nothing in a build without that resource.</summary>
     private void HideCursor()
     {
-        if (!_cursorHidden)
+        if (_noCursor is null)
         {
-            _cursorHidden = true;
-            PlayerNative.ShowCursor(false);
+            try
+            {
+                _noCursor = InputDesktopResourceCursor.CreateFromModule("Current.exe", NoCursorResource);
+            }
+            catch (Exception error)
+            {
+                Trace.TraceWarning($"Current: no cursor resource to hide the pointer with: {error.GetType().Name}");
+                return;
+            }
         }
+        ProtectedCursor = _noCursor;
+        _cursorHidden = true;
     }
 
+    /// <summary>The default cursor again.</summary>
     private void ShowCursor()
     {
         if (_cursorHidden)
         {
             _cursorHidden = false;
-            PlayerNative.ShowCursor(true);
+            ProtectedCursor = null;
         }
     }
 

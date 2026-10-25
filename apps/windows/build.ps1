@@ -65,6 +65,47 @@ if ([System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($pub
     throw 'the published current_ffi.dll has the test engine'
 }
 
+# A cursor without a visual in Current.exe's resources (RT_GROUP_CURSOR 101, its image RT_CURSOR 1), which the player shows to hide
+# the pointer in full screen (Current.Shell/Player/PlayerView.xaml.cs, HideCursor): WinUI loads cursors from the executable's resources
+# (InputDesktopResourceCursor) and has no empty cursor of its own. Written with Windows' UpdateResource after publishing, so the build
+# needs no resource compiler and the manifest and version resources the SDK writes stay as they are. The image: a 32x32 monochrome
+# cursor whose AND mask is all ones and XOR mask all zeros, which leaves the screen unchanged (the cursor and icon resource formats:
+# "LOCALHEADER", "NEWHEADER", "RESDIR", learn.microsoft.com, not re-read for this; checked on the owner's PC).
+Add-Type -Namespace CurrentBuild -Name Resources -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern System.IntPtr BeginUpdateResource(string file, bool deleteExisting);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool UpdateResource(System.IntPtr update, System.IntPtr type, System.IntPtr name, ushort language, byte[] data, uint size);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool EndUpdateResource(System.IntPtr update, bool discard);
+'@
+function Add-NoCursor([string]$exe) {
+    $image = New-Object System.IO.MemoryStream
+    $writer = New-Object System.IO.BinaryWriter $image
+    $writer.Write([uint16]0); $writer.Write([uint16]0)                       # hotspot
+    $writer.Write([uint32]40); $writer.Write([int32]32); $writer.Write([int32]64) # BITMAPINFOHEADER: 32 wide, XOR and AND masks high
+    $writer.Write([uint16]1); $writer.Write([uint16]1)                       # planes, bits per pixel
+    foreach ($field in 1..6) { $writer.Write([uint32]0) }                    # compression, sizes, resolution, colours
+    $writer.Write([byte[]](0, 0, 0, 0, 255, 255, 255, 0))                    # black, white
+    $writer.Write([byte[]]::new(128))                                        # XOR mask: nothing drawn
+    $writer.Write([byte[]](,255 * 128))                                      # AND mask: the screen kept
+    $writer.Flush()
+    $cursor = $image.ToArray()
+    $group = New-Object System.IO.MemoryStream
+    $writer = New-Object System.IO.BinaryWriter $group
+    $writer.Write([uint16]0); $writer.Write([uint16]2); $writer.Write([uint16]1) # NEWHEADER: cursors, one
+    $writer.Write([uint16]32); $writer.Write([uint16]64); $writer.Write([uint16]1); $writer.Write([uint16]1)
+    $writer.Write([uint32]$cursor.Length); $writer.Write([uint16]1)          # RESDIR: its size and its RT_CURSOR id
+    $writer.Flush()
+    $directory = $group.ToArray()
+    $update = [CurrentBuild.Resources]::BeginUpdateResource($exe, $false)
+    if ($update -eq [IntPtr]::Zero) { throw "BeginUpdateResource failed on $exe" }
+    $ok = [CurrentBuild.Resources]::UpdateResource($update, [IntPtr]1, [IntPtr]1, 0, $cursor, $cursor.Length) -and
+        [CurrentBuild.Resources]::UpdateResource($update, [IntPtr]12, [IntPtr]101, 0, $directory, $directory.Length)
+    if (-not [CurrentBuild.Resources]::EndUpdateResource($update, -not $ok) -or -not $ok) { throw "adding the cursor resource to $exe failed" }
+}
+Add-NoCursor (Join-Path $out 'Current.exe')
+
 # The libmpv DLL set next to Current.exe, the application's folder, where Windows looks first for current_ffi.dll's imports ("Dynamic
 # link library search order", learn.microsoft.com; not re-read for this change). Each LGPL library stays its own DLL, replaceable
 # by the user (ADR 0003).

@@ -197,11 +197,4 @@ internal static class PlayerNative
         }
         return 0;
     }
-
-    /// <summary>
-    /// <c>ShowCursor</c>: the cursor shows while the thread's display count is 0 or more. The player calls it in pairs only (hide once,
-    /// show once), so the count goes back where it was.
-    /// </summary>
-    [DllImport("user32.dll")]
-    public static extern int ShowCursor([MarshalAs(UnmanagedType.Bool)] bool show);
 }
