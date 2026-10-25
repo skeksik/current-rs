@@ -38,7 +38,7 @@ public sealed partial class LibraryPage : Page
     public LibraryPage()
     {
         InitializeComponent();
-        ItemActions.Attach(Items, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+        ItemActions.Attach(Items, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item, item)));
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -98,7 +98,15 @@ public sealed partial class LibraryPage : Page
         var index = Math.Min(_grid?.FirstVisible ?? 0, slots.Count - 1);
         if (index > 0)
         {
-            Items.ScrollIntoView(slots[index], ScrollIntoViewAlignment.Leading);
+            // Queued: this handler runs before the grid's own, which has not taken the items in yet, and a scroll asked for now did
+            // nothing (owner's run, 2026-10-25: Back did not return to the place).
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (ReferenceEquals(_slots, slots) && index < slots.Count)
+                {
+                    Items.ScrollIntoView(slots[index], ScrollIntoViewAlignment.Leading);
+                }
+            });
         }
     }
 
@@ -111,6 +119,9 @@ public sealed partial class LibraryPage : Page
             return;
         }
         LoadingRing.IsActive = state.Loading && state.Total == 0;
+        CountText.Text = state.Total > 0
+            ? (state.Total == 1 ? "1 item" : $"{state.Total.ToString("N0", System.Globalization.CultureInfo.CurrentCulture)} items")
+            : "";
         EmptyText.Visibility = !state.Loading && state.Total == 0 && state.Failed is null ? Visibility.Visible : Visibility.Collapsed;
         if (state.Failed is { } failed)
         {

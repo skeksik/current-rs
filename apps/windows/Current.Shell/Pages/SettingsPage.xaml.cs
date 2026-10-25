@@ -347,6 +347,7 @@ public sealed partial class SettingsPage : Page
         try
         {
             await core.ClearImageCacheAsync();
+            Browsing.TileImage.ForgetRecent();
             Announce.Say(ImageCacheCard, "Image cache cleared", "image-cache");
         }
         catch (Exception error)

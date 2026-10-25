@@ -152,11 +152,18 @@ public sealed partial class ItemTile : UserControl
         var scale = XamlRoot.RasterizationScale;
         var width = (int)Math.Ceiling(Root.Width * scale);
         var height = (int)Math.Ceiling(Picture.Height * scale);
+        var picture = new ImageRequest(new ImageSource.Server(art.Image), width, height);
+        // Shown recently: set now, in this frame, with no placeholder before it.
+        if (TileImage.TryRecent(picture) is { } recent)
+        {
+            Artwork.Source = recent;
+            return;
+        }
         if (art.BlurHash is { } hash)
         {
             _ = LoadAsync(_placeholder, Placeholder, new ImageRequest(new ImageSource.BlurHash(hash), width, height), art.Image);
         }
-        _ = LoadAsync(_artwork, Artwork, new ImageRequest(new ImageSource.Server(art.Image), width, height), art.Image);
+        _ = LoadAsync(_artwork, Artwork, picture, art.Image);
     }
 
     private async Task LoadAsync(TileImage loader, Image target, ImageRequest request, ImageRef image)

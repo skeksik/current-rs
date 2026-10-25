@@ -94,7 +94,7 @@ internal sealed class BrowseHub : IDisposable
                     // Signed in, but the session is not live yet (a restore still checking it): the next status change tries again.
                     continue;
                 }
-                browse = new ServerBrowse(server, status.User?.Id, session);
+                browse = new ServerBrowse(server, status.User?.Id, session, _ui);
                 _servers[server] = browse;
                 changed = true;
             }
@@ -172,10 +172,11 @@ internal sealed class BrowseHub : IDisposable
 }
 
 /// <summary>One signed-in server's browse session, its libraries, and the grids opened on it.</summary>
-internal sealed class ServerBrowse(ServerRef server, string? userId, Browse session) : IDisposable
+internal sealed class ServerBrowse(ServerRef server, string? userId, Browse session, IUiDispatcher ui) : IDisposable
 {
     private readonly Dictionary<ItemRef, LibraryGrid> _grids = [];
     private HomeFeed? _home;
+    private HomeSection? _homeSection;
 
     public ServerRef Server { get; } = server;
 
@@ -209,12 +210,20 @@ internal sealed class ServerBrowse(ServerRef server, string? userId, Browse sess
     /// <summary>Home's rows of this server, opened on first use and kept, as the grids are, so Home shows again without reloading.</summary>
     public HomeFeed Home => _home ??= Session.Home();
 
+    /// <summary>
+    /// Home's rows of this server as the page shows them, mirrored for the whole session: shown again, Home has its rows at once,
+    /// where a new mirror would start empty and fill a frame later (the owner's run, 2026-10-25: Home blinked when opened).
+    /// </summary>
+    public HomeSection HomeSection => _homeSection ??= new HomeSection(Home, ui);
+
     /// <summary>When Home was last shown: shown again after five minutes, it refreshes.</summary>
     public DateTime HomeLastShown { get; set; } = DateTime.UtcNow;
 
     public void Dispose()
     {
         IsDisposed = true;
+        _homeSection?.Dispose();
+        _homeSection = null;
         _home?.Dispose();
         _home = null;
         foreach (var grid in _grids.Values)

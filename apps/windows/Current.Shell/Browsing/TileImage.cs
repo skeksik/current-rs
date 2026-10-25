@@ -19,7 +19,51 @@ namespace Current.Shell.Browsing;
 /// </remarks>
 public sealed class TileImage(CoreHost core) : IDisposable
 {
+    /// <summary>
+    /// How many decoded pictures stay at hand on the UI thread, the most recently shown, so a page shown again (Home after a detail
+    /// page, a recycled tile scrolled back) sets its pictures in the same frame instead of blinking empty, then blurred, then sharp
+    /// (owner's run, 2026-10-25). The core's memory cache still holds the bytes behind them; this saves the round trip and the decode.
+    /// 150 posters of 240 by 360 pixels are about 50 MB decoded, if XAML keeps them all decoded (not measured).
+    /// </summary>
+    private const int RecentCapacity = 150;
+
+    private static readonly Dictionary<ImageRequest, LinkedListNode<(ImageRequest Request, BitmapImage Bitmap)>> Recent = [];
+    private static readonly LinkedList<(ImageRequest Request, BitmapImage Bitmap)> RecentOrder = new();
+
     private CancellationTokenSource? _load;
+
+    /// <summary>The picture for <paramref name="request"/> if it was decoded recently; now the most recent. UI thread only.</summary>
+    public static BitmapImage? TryRecent(ImageRequest request)
+    {
+        if (!Recent.TryGetValue(request, out var node))
+        {
+            return null;
+        }
+        RecentOrder.Remove(node);
+        RecentOrder.AddFirst(node);
+        return node.Value.Bitmap;
+    }
+
+    /// <summary>Forgets every recent picture: Settings → Storage cleared the cache, so images load again from the servers.</summary>
+    public static void ForgetRecent()
+    {
+        Recent.Clear();
+        RecentOrder.Clear();
+    }
+
+    private static void Remember(ImageRequest request, BitmapImage bitmap)
+    {
+        if (Recent.TryGetValue(request, out var old))
+        {
+            RecentOrder.Remove(old);
+        }
+        Recent[request] = RecentOrder.AddFirst((request, bitmap));
+        while (RecentOrder.Count > RecentCapacity && RecentOrder.Last is { } last)
+        {
+            RecentOrder.RemoveLast();
+            Recent.Remove(last.Value.Request);
+        }
+    }
 
     /// <summary>
     /// The image for <paramref name="request"/>, or null if a later load or <see cref="Recycle"/> cancelled this one. Width and height
@@ -29,6 +73,10 @@ public sealed class TileImage(CoreHost core) : IDisposable
     public async Task<BitmapImage?> LoadAsync(ImageRequest request)
     {
         Recycle();
+        if (TryRecent(request) is { } recent)
+        {
+            return recent;
+        }
         var load = new CancellationTokenSource();
         _load = load;
         try
@@ -41,6 +89,7 @@ public sealed class TileImage(CoreHost core) : IDisposable
             var bitmap = new BitmapImage { DecodePixelWidth = request.Width };
             using var stream = new MemoryStream(bytes).AsRandomAccessStream();
             await bitmap.SetSourceAsync(stream);
+            Remember(request, bitmap);
             return load.IsCancellationRequested ? null : bitmap;
         }
         catch (OperationCanceledException) when (load.IsCancellationRequested)

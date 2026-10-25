@@ -74,7 +74,7 @@ public sealed partial class SearchPage : Page
     {
         if (sender is ListViewBase list)
         {
-            HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+            HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item, item)));
         }
     }
 }

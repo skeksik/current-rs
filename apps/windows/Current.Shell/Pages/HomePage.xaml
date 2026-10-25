@@ -14,7 +14,12 @@
         </Style>
     </Page.Resources>
 
-    <Grid>
+    <!-- F5 and Ctrl+R refresh the rows, as on a library's page. -->
+    <Grid KeyboardAcceleratorPlacementMode="Hidden">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="F5" Invoked="OnRefreshAccelerator" />
+            <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="OnRefreshAccelerator" />
+        </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -36,8 +41,8 @@
                                 Margin="0,12,24,0"
                                 Style="{StaticResource SubtitleTextBlockStyle}"
                                 AutomationProperties.HeadingLevel="Level2"
-                                Text="{x:Bind Header}"
-                                Visibility="{x:Bind HeaderVisibility}" />
+                                Text="{x:Bind Header, Mode=OneWay}"
+                                Visibility="{x:Bind HeaderVisibility, Mode=OneWay}" />
                             <InfoBar Margin="0,12,24,0" IsClosable="False" Loaded="OnSectionInfoLoaded" Tag="{x:Bind}">
                                 <InfoBar.ActionButton>
                                     <Button Content="Retry" Tag="{x:Bind}" Click="OnRetrySection" />

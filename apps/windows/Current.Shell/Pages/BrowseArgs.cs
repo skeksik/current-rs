@@ -15,8 +15,11 @@ public sealed record LibraryArgs(Library Library)
     public bool Shows(object? other) => other is LibraryArgs args && args.Library.Item == Library.Item;
 }
 
-/// <summary>An item's detail page.</summary>
-public sealed record DetailsArgs(ItemRef Item);
+/// <summary>
+/// An item's detail page. <c>Summary</c>: what the tile it was opened from showed, drawn at once while the details load, so the page
+/// does not open blank (the owner's run, 2026-10-25).
+/// </summary>
+public sealed record DetailsArgs(ItemRef Item, ItemSummary? Summary = null);
 
 /// <summary>The results for a search term, from every signed-in server.</summary>
 public sealed record SearchArgs(string Term);

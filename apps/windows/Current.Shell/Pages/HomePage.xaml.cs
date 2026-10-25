@@ -24,6 +24,12 @@ public sealed partial class HomePage : Page
     public HomePage()
     {
         InitializeComponent();
+        Sections.ItemsSource = _sections;
+        // Shown again with a session: the feed and its rows from the first frame, not the M1 content first.
+        if (App.Browsing is { } hub)
+        {
+            ShowFeed(hub, refreshStale: false);
+        }
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
@@ -59,7 +65,6 @@ public sealed partial class HomePage : Page
             ViewModel ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
             ViewModel.Start();
             Bindings.Update();
-            Sections.ItemsSource = _sections;
             if (App.Browsing is { } hub)
             {
                 hub.Changed += OnBrowseChanged;
@@ -103,17 +108,21 @@ public sealed partial class HomePage : Page
         M1Content.Visibility = hub.IsAvailable ? Visibility.Collapsed : Visibility.Visible;
         TitleText.Style = (Style)Application.Current.Resources[
             hub.IsAvailable ? "WidePageTitleTextBlockStyle" : "PageTitleTextBlockStyle"];
-        var feeds = servers.Select(server => server.Home).ToList();
-        if (_sections.Count == feeds.Count && _sections.Select(section => section.Feed).SequenceEqual(feeds))
-        {
-            return;
-        }
-        ClearSections();
-        var ui = new DispatcherQueueUi(DispatcherQueue);
+        var wanted = servers.Select(server => server.HomeSection).ToList();
         foreach (var server in servers)
         {
-            var header = servers.Count > 1 ? hub.ServerName(server.Server) : "";
-            _sections.Add(new HomeSection(header, server.Home, ui));
+            server.HomeSection.Header = servers.Count > 1 ? hub.ServerName(server.Server) : "";
+        }
+        if (!_sections.SequenceEqual(wanted))
+        {
+            ClearSections();
+            foreach (var section in wanted)
+            {
+                _sections.Add(section);
+            }
+        }
+        foreach (var server in servers)
+        {
             if (refreshStale && DateTime.UtcNow - server.HomeLastShown > RefreshAfter)
             {
                 server.Home.Refresh();
@@ -122,20 +131,14 @@ public sealed partial class HomePage : Page
         }
     }
 
-    private void ClearSections()
-    {
-        foreach (var section in _sections)
-        {
-            section.Dispose();
-        }
-        _sections.Clear();
-    }
+    /// <summary>Lets go of the sections; they stay with their sessions (ServerBrowse.HomeSection).</summary>
+    private void ClearSections() => _sections.Clear();
 
     private void OnRowLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is ListViewBase list)
         {
-            HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+            HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item, item)));
         }
     }
 
@@ -162,7 +165,15 @@ public sealed partial class HomePage : Page
                 info.IsOpen = false;
             }
         }
-        section.PropertyChanged += (_, _) => Show();
+        void OnChanged(object? s, System.ComponentModel.PropertyChangedEventArgs args) => Show();
+        section.PropertyChanged += OnChanged;
+        // The section outlives the page: its handler goes with the bar.
+        void OnUnloaded(object s, RoutedEventArgs args)
+        {
+            section.PropertyChanged -= OnChanged;
+            info.Unloaded -= OnUnloaded;
+        }
+        info.Unloaded += OnUnloaded;
         Show();
     }
 
@@ -179,6 +190,16 @@ public sealed partial class HomePage : Page
         info.Message = message;
         info.ActionButton.Visibility = retry ? Visibility.Visible : Visibility.Collapsed;
         info.IsOpen = true;
+    }
+
+    private void OnRefreshAccelerator(Microsoft.UI.Xaml.Input.KeyboardAccelerator sender,
+        Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
+    {
+        foreach (var section in _sections)
+        {
+            section.Feed.Refresh();
+        }
+        args.Handled = _sections.Count > 0;
     }
 
     private void OnRetrySection(object sender, RoutedEventArgs e)

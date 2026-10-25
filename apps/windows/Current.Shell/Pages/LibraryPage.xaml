@@ -9,11 +9,19 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <TextBlock x:Name="TitleText" Style="{StaticResource WidePageTitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
+        <StackPanel>
+            <TextBlock x:Name="TitleText" Style="{StaticResource WidePageTitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
+            <!-- How many items the library holds, as File Explorer's status bar counts a folder's items. -->
+            <TextBlock
+                x:Name="CountText"
+                Margin="24,4,24,0"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </StackPanel>
 
         <!-- Sort and show: the core's ItemQuery takes both; a new choice is a new query, which starts at the top (ADR 0018, section
-             3). Refresh re-reads the grid in place. F5 for it is a convention of Windows' own apps that no Microsoft guideline read so far
-             states (not verified). -->
+             3). Refresh re-reads the grid in place. F5 and Ctrl+R for it are what File Explorer and Edge use; no Microsoft guideline read so
+             far states it (not verified). -->
         <StackPanel Grid.Row="1" Margin="24,12,24,0" Orientation="Horizontal" Spacing="8">
             <ComboBox x:Name="SortBox" Header="Sort by" SelectionChanged="OnQueryChanged">
                 <ComboBoxItem Content="Name" />
@@ -34,6 +42,7 @@
                 Click="OnRefresh">
                 <Button.KeyboardAccelerators>
                     <KeyboardAccelerator Key="F5" />
+                    <KeyboardAccelerator Key="R" Modifiers="Control" />
                 </Button.KeyboardAccelerators>
                 <FontIcon Glyph="&#xE72C;" FontSize="16" />
             </Button>
