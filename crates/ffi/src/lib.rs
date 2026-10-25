@@ -73,8 +73,8 @@ pub trait SavedServersListener: Send + Sync {
     fn on_diffs(&self, diffs: Vec<SavedServerDiff>);
 }
 
-/// Opens the core on the app's data folder (ADR 0013): loads the settings, creating them and the device id on first start, and the
-/// saved servers. The file and keyring work runs on the core's own blocking pool, so the UI may await this from its UI thread. Then
+/// Opens the core on the app's data and cache folders (ADR 0013): loads the settings, creating them and the device id on first
+/// start, and the saved servers, and reads the image cache's index from the cache folder (ADR 0018). The file and keyring work runs on the core's own blocking pool, so the UI may await this from its UI thread. Then
 /// call [`Core::restore_sessions`] in the background.
 ///
 /// Open one core per data folder per process: two would each keep their own copy of the saved servers and overwrite each other's
@@ -89,6 +89,7 @@ pub trait SavedServersListener: Send + Sync {
 #[uniffi::export]
 pub async fn open_core(
     data_dir: String,
+    cache_dir: String,
     device_name: String,
     secrets: SecretStore,
 ) -> Result<Arc<Core>, CoreError> {
@@ -99,7 +100,12 @@ pub async fn open_core(
                 SecretStore::Keyring => Arc::new(KeyringSecrets::new()),
                 SecretStore::Memory => Arc::new(MemorySecrets::new()),
             };
-            App::open(Path::new(&data_dir), secrets, &device_name)
+            App::open(
+                Path::new(&data_dir),
+                Path::new(&cache_dir),
+                secrets,
+                &device_name,
+            )
         })
         .await
         .map_err(|error| CoreError::Runtime {

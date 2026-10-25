@@ -42,6 +42,12 @@ internal static class AppIdentity
         ? ApplicationData.Current.LocalFolder.Path
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Current");
 
+    /// <summary>
+    /// The app's cache folder, which the core is given at start for what it can fetch again (images, ADR 0018): <c>Cache</c> in the
+    /// data folder, so %LOCALAPPDATA%\Current\Cache unpackaged, inside the per-user data tree and never next to the program (ADR 0009).
+    /// </summary>
+    public static string CacheFolder { get; } = Path.Combine(DataFolder, "Cache");
+
     /// <summary>Must run before the process shows any UI ("Where to Assign an AppUserModelID", same page).</summary>
     public static void ApplyToProcess() => SetCurrentProcessExplicitAppUserModelID(AppUserModelId);
 
