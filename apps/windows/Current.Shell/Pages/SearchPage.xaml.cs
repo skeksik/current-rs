@@ -68,6 +68,12 @@ public sealed partial class SearchPage : Page
         {
             StatusText.Text = text;
             StatusText.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            // A live region is read only when its peer raises LiveRegionChanged (Announce.Shown): "No results" was not heard
+            // (the owner's run, 2026-10-25).
+            if (text.Length > 0)
+            {
+                Announce.Shown(StatusText);
+            }
         }
     }
 
