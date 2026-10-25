@@ -81,7 +81,7 @@ before merging, and its PR carries only the record.
       delay in `saved::pump` (fails 1 of 1, passes after the fix); the test now applies batches until the list holds the server, and
       until it is empty after the removal. After the fixes, 200 runs under the same load (100 at each `RUST_BACKTRACE`): the fixed
       tests passed every time; `a_blocking_listener_does_not_delay_other_subscriptions_or_tasks` failed once (`RUST_BACKTRACE=1`,
-      its 1 s `PROMPT` bound on the first value), not investigated here (test/ffi-failing-listener-flake, 2026-10-25)
+      its 1 s `PROMPT` bound on the first value), not investigated here (PR #59, 2026-10-25)
 - [ ] Windows, not measured in the owner's M1 runs: the caption buttons' pressed colour against Windows' own apps (high contrast
       and Narrator passed on PR 39's run, 2026-10-24; docs/notes/windows-shell.md)
 - [ ] Linux: choose how to ship (Flatpak, per-distro packages, AppImage or tarball; ADR 0011) before M5's release work
