@@ -34,10 +34,13 @@ Project settings that matter, each found the hard way in CI:
   2.1.9, the versions the Windows App SDK 2.5.1 metapackage pins. The metapackage also put the AI, ML (onnxruntime, 21.7 MB), Widgets
   and Search runtimes into the self-contained app, which uses none of them. The Windows App SDK 1.8 release notes, "NuGet
   Metapackage" (learn.microsoft.com, ms.date 2026-09-24, read 2026-10-22): "This allows developers to choose either the metapackage
-  or select specific component packages for their applications." WinUI 2.3.9 asks for InteractiveExperiences 2.1.8, which nuget.org
-  does not have, so 2.1.9 is named directly and NuGet's NU1603 notice stays a warning. Foundation 2.3.12 (AppLifecycle, which the
-  single instance uses) and Base 2.0.4 come with WinUI; Base also brings `Microsoft.Windows.SDK.BuildTools.MSIX`, so no reference to
-  it is needed.
+  or select specific component packages for their applications." Foundation 2.3.12 (AppLifecycle, which the single instance uses)
+  and Base 2.0.4 come with WinUI; Base also brings `Microsoft.Windows.SDK.BuildTools.MSIX`, so no reference to it is needed. All four
+  are pinned exactly with NuGet's bracket form (`[2.3.9]`, `[2.1.9]`, `[2.3.12]`, `[2.0.4]`), Foundation and Base as direct references
+  although WinUI brings them, so a restore can never pick another version. WinUI 2.3.9 and Foundation 2.3.12 ask for
+  InteractiveExperiences >= 2.1.8, which nuget.org does not have (stable versions 2.1.3, 2.1.6, 2.1.9; nuget.org package index and
+  nuspecs, read 2026-10-25); the direct 2.1.9 reference is the one restored, and the restore reports no NU1603. NU1603 is not exempt
+  from `TreatWarningsAsErrors`, so if it came back the build would fail.
 - **`EnableMsixTooling=true`** although the app is unpackaged. Without it the publish folder had no `Current.pri` and loading
   `MainWindow.xaml` failed with "Cannot locate resource from 'ms-appx:///MainWindow.xaml'". The typical WinUI project in "Project
   properties and auto-initializers" (learn.microsoft.com, ms.date 2026-10-02, read 2026-10-22) sets it. `build.ps1` fails if the
@@ -429,8 +432,7 @@ owner chose this exact set. Read on nuget.org (registration API and nuspecs) on 
   `CommunityToolkit.Common`'s commit 2258fd31) ship in `licences\` (`build.ps1`). Both: MIT, "Copyright © .NET Foundation and
   Contributors".
 - All five are pinned exactly with NuGet's bracket form (`[8.3.260402-preview2]`, `[8.2.1]`), the transitive ones as direct
-  references. The WinUI and InteractiveExperiences references stay minimums, with NuGet's NU1603 notice a warning (Layout): pinning
-  them exactly is a follow-up (docs/roadmap.md).
+  references. The Windows App SDK component packages are pinned the same way (Layout).
 - What ships (`out/files.txt`, CI run 39884007811, 2026-10-23): the five `.dll` files only (34,952 + 106,320 + 129,360 + 76,624 +
   31,568 bytes); the packages' `.pri` files are merged into `Current.pri` and their `.pdb` and `.xml` files are not published. The two
   licence texts ship in `licences\`.
