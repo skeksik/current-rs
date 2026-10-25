@@ -91,6 +91,17 @@ public sealed partial class SearchPage : Page
         }
     }
 
+    /// <summary>F5 and Ctrl+R: every server's search runs again, keeping its results until the answers arrive.</summary>
+    private void OnRefreshAccelerator(Microsoft.UI.Xaml.Input.KeyboardAccelerator sender,
+        Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
+    {
+        foreach (var section in _sections)
+        {
+            section.Refresh();
+        }
+        args.Handled = _sections.Count > 0;
+    }
+
     private void OnRowLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is ListViewBase list)

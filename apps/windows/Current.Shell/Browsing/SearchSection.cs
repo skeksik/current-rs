@@ -70,6 +70,9 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
         }
     }
 
+    /// <summary>Searches again, keeping the results until the answers arrive.</summary>
+    internal void Refresh() => _results.Refresh();
+
     public void Dispose()
     {
         _groups.Dispose();

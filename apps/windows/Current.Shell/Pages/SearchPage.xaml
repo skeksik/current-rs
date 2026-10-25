@@ -3,7 +3,12 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:browsing="using:Current.Shell.Browsing">
-    <Grid>
+    <!-- F5 and Ctrl+R search again, as Home and a library's page refresh (owner, 2026-10-25). -->
+    <Grid KeyboardAcceleratorPlacementMode="Hidden">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="F5" Invoked="OnRefreshAccelerator" />
+            <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="OnRefreshAccelerator" />
+        </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />

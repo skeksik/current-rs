@@ -408,4 +408,12 @@ public sealed partial class DetailsPage : Page
     private void OnFavourite(object sender, RoutedEventArgs e) => ItemActions.Toggle(_details?.Value?.Summary, played: false);
 
     private void OnRetry(object sender, RoutedEventArgs e) => _view?.Refresh();
+
+    /// <summary>F5 and Ctrl+R: the page loads again, keeping what it shows until the answers arrive.</summary>
+    private void OnRefreshAccelerator(Microsoft.UI.Xaml.Input.KeyboardAccelerator sender,
+        Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
+    {
+        _view?.Refresh();
+        args.Handled = _view is not null;
+    }
 }

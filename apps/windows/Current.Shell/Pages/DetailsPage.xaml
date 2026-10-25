@@ -13,7 +13,12 @@
         </ItemsPanelTemplate>
     </Page.Resources>
 
-    <ScrollViewer x:Name="Scroller">
+    <!-- F5 and Ctrl+R refresh the page, as on Home and a library's page (owner, 2026-10-25). -->
+    <ScrollViewer x:Name="Scroller" KeyboardAcceleratorPlacementMode="Hidden">
+        <ScrollViewer.KeyboardAccelerators>
+            <KeyboardAccelerator Key="F5" Invoked="OnRefreshAccelerator" />
+            <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="OnRefreshAccelerator" />
+        </ScrollViewer.KeyboardAccelerators>
         <StackPanel>
             <!-- The backdrop across the page, at most MaxBackdropHeight tall (DetailsPage.xaml.cs). -->
             <Grid x:Name="BackdropFrame" Visibility="Collapsed" Background="{ThemeResource ControlFillColorSecondaryBrush}">
