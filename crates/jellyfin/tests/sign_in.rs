@@ -6,11 +6,13 @@ use std::time::Duration;
 
 use current_jellyfin::{
     AccessToken, AuthError, ClientIdentity, JellyfinClient, QuickConnectSecret, SessionEvent,
+    WaitClock,
 };
 use current_model::{Permission, ServerId, ServerKey, ServerRef, ServiceType, UserId};
 use current_net::{FixedAddress, NetError, Request, RequestLog, Url};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 
 const TOKEN: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
 const PASSWORD: &str = "pa55-word-value";
@@ -255,6 +257,65 @@ fn quick_connect_server(polls_before_approval: usize) -> impl Fn(&Received) -> (
     }
 }
 
+/// The Quick Connect wait's time in a test: a pause moves the clock on at once, so a test counts checks and never waits for real
+/// time. Pauses from the `hold_from`th on (counted from 1) wait for [`TestClock::release`].
+struct TestClock {
+    now: Mutex<Duration>,
+    pauses: Mutex<Vec<Duration>>,
+    started: watch::Sender<usize>,
+    hold_from: watch::Sender<usize>,
+}
+
+impl TestClock {
+    fn new() -> Self {
+        Self::holding_from(usize::MAX)
+    }
+
+    fn holding_from(pause: usize) -> Self {
+        Self {
+            now: Mutex::new(Duration::ZERO),
+            pauses: Mutex::new(Vec::new()),
+            started: watch::Sender::new(0),
+            hold_from: watch::Sender::new(pause),
+        }
+    }
+
+    /// The pauses the wait asked for, in order.
+    fn pauses(&self) -> Vec<Duration> {
+        self.pauses.lock().unwrap().clone()
+    }
+
+    /// Returns once `count` pauses have started.
+    async fn paused(&self, count: usize) {
+        let _ = self.started.subscribe().wait_for(|&n| n >= count).await;
+    }
+
+    fn release(&self) {
+        self.hold_from.send_replace(usize::MAX);
+    }
+}
+
+impl WaitClock for TestClock {
+    fn now(&self) -> Duration {
+        *self.now.lock().unwrap()
+    }
+
+    async fn sleep(&self, duration: Duration) {
+        self.pauses.lock().unwrap().push(duration);
+        let mut number = 0;
+        self.started.send_modify(|started| {
+            *started += 1;
+            number = *started;
+        });
+        let _ = self
+            .hold_from
+            .subscribe()
+            .wait_for(|&from| number < from)
+            .await;
+        *self.now.lock().unwrap() += duration;
+    }
+}
+
 #[tokio::test]
 async fn quick_connect_polls_until_approved_then_signs_in() {
     let server = StandIn::start(quick_connect_server(2)).await;
@@ -308,30 +369,36 @@ async fn quick_connect_turned_off_is_reported() {
 
 #[tokio::test]
 async fn quick_connect_expires_when_the_server_forgets_or_time_runs_out() {
-    // The server forgot the request (10 minutes passed, or it restarted): 404.
+    // The server forgot the request (10 minutes passed, or it restarted): 404, at the first check.
     let server = StandIn::start(|_: &Received| (404, "Unknown secret".into())).await;
     let client = client(&server, &Arc::new(RequestLog::default()));
     let secret = QuickConnectSecret::new(QC_SECRET);
+    let clock = TestClock::new();
     assert_eq!(
         client
-            .quick_connect_wait(&secret, Duration::from_millis(10), Duration::from_secs(5))
+            .quick_connect_wait_on(
+                &clock,
+                &secret,
+                Duration::from_millis(10),
+                Duration::from_secs(5)
+            )
             .await,
         Err(AuthError::QuickConnectExpired)
     );
+    assert_eq!(server.paths(), ["/QuickConnect/Connect"]);
+    assert!(clock.pauses().is_empty());
 
-    // Never approved: the wait ends at its lifetime.
+    // Never approved: the wait ends at its lifetime. Checks at 0, 20, 40, 60 and 80 ms; the next would be at the lifetime.
     let server = StandIn::start(quick_connect_server(usize::MAX)).await;
     let client = self::client(&server, &Arc::new(RequestLog::default()));
+    let clock = TestClock::new();
+    let interval = Duration::from_millis(20);
     let result = client
-        .quick_connect_wait(
-            &secret,
-            Duration::from_millis(20),
-            Duration::from_millis(100),
-        )
+        .quick_connect_wait_on(&clock, &secret, interval, Duration::from_millis(100))
         .await;
     assert_eq!(result, Err(AuthError::QuickConnectExpired));
-    let polls = server.paths().len();
-    assert!((3..=6).contains(&polls), "{polls}");
+    assert_eq!(server.paths(), ["/QuickConnect/Connect"; 5]);
+    assert_eq!(clock.pauses(), [interval; 4]);
 }
 
 #[tokio::test]
@@ -339,20 +406,23 @@ async fn dropping_the_wait_stops_polling() {
     let server = StandIn::start(quick_connect_server(usize::MAX)).await;
     let client = client(&server, &Arc::new(RequestLog::default()));
     let secret = QuickConnectSecret::new(QC_SECRET);
-    let interval = Duration::from_millis(20);
-    let wait = client.quick_connect_wait(&secret, interval, Duration::from_secs(60));
-    assert!(
-        tokio::time::timeout(Duration::from_millis(150), wait)
-            .await
-            .is_err()
+    // The third pause holds: three checks were answered by then, and none is on the wire.
+    let clock = TestClock::holding_from(3);
+    let wait = client.quick_connect_wait_on(
+        &clock,
+        &secret,
+        Duration::from_millis(20),
+        Duration::from_secs(60),
     );
-    // A request already on the wire when the future was dropped may still arrive: let it settle, then count.
-    tokio::time::sleep(interval).await;
-    let polls = server.paths().len();
-    assert!(polls >= 3, "{polls}");
-    // Ten more intervals: no new poll.
-    tokio::time::sleep(interval * 10).await;
-    assert_eq!(server.paths().len(), polls);
+    tokio::select! {
+        result = wait => panic!("the wait ended: {result:?}"),
+        () = clock.paused(3) => {}
+    }
+    assert_eq!(server.paths(), ["/QuickConnect/Connect"; 3]);
+    // Dropped while held. Released, polling that outlived the future would go on at once: give it time to reach the server.
+    clock.release();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(server.paths().len(), 3);
 }
 
 #[tokio::test]
@@ -371,21 +441,30 @@ async fn quick_connect_rides_out_a_server_restart() {
     .await;
     let client = client(&server, &Arc::new(RequestLog::default()));
     let secret = QuickConnectSecret::new(QC_SECRET);
+    let clock = TestClock::new();
+    let interval = Duration::from_millis(10);
     let signed_in = client
-        .quick_connect_wait(&secret, Duration::from_millis(10), Duration::from_secs(5))
+        .quick_connect_wait_on(&clock, &secret, interval, Duration::from_secs(5))
         .await
         .unwrap();
     assert_eq!(signed_in.token, AccessToken::new(TOKEN));
+    assert_eq!(
+        server.paths(),
+        [
+            "/QuickConnect/Connect",
+            "/QuickConnect/Connect",
+            "/QuickConnect/Connect",
+            "/Users/AuthenticateWithQuickConnect",
+        ]
+    );
+    assert_eq!(clock.pauses(), [interval; 2]);
 
-    // A server that keeps failing: the wait ends at its lifetime with the last error.
+    // A server that keeps failing: the wait ends at its lifetime with the last error. Checks at 0, 10, 20, 30, 40 and 50 ms.
     let server = StandIn::start(|_: &Received| (503, String::new())).await;
     let client = self::client(&server, &Arc::new(RequestLog::default()));
+    let clock = TestClock::new();
     let result = client
-        .quick_connect_wait(
-            &secret,
-            Duration::from_millis(10),
-            Duration::from_millis(60),
-        )
+        .quick_connect_wait_on(&clock, &secret, interval, Duration::from_millis(60))
         .await;
     assert_eq!(
         result,
@@ -394,7 +473,8 @@ async fn quick_connect_rides_out_a_server_restart() {
             message: None
         }))
     );
-    assert!(server.paths().len() >= 3);
+    assert_eq!(server.paths(), ["/QuickConnect/Connect"; 6]);
+    assert_eq!(clock.pauses(), [interval; 5]);
 }
 
 #[tokio::test]

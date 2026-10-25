@@ -24,6 +24,46 @@ use crate::wire;
 pub const QUICK_CONNECT_INTERVAL: Duration = Duration::from_secs(5);
 /// How long a Quick Connect request lives on the server (`QuickConnectManager.Timeout`, 10 minutes).
 pub const QUICK_CONNECT_LIFETIME: Duration = Duration::from_secs(10 * 60);
+
+/// The Quick Connect wait's time: a monotonic clock and a pause. [`RuntimeClock`] is the runtime's; a test passes its own so that
+/// it counts checks without waiting for real time.
+pub trait WaitClock: Send + Sync {
+    /// The time since an arbitrary fixed start.
+    fn now(&self) -> Duration;
+    /// Waits `duration` on this clock.
+    fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send;
+}
+
+/// Tokio's clock: what [`JellyfinClient::quick_connect_wait`] uses.
+#[derive(Clone, Copy, Debug)]
+pub struct RuntimeClock {
+    start: Instant,
+}
+
+impl RuntimeClock {
+    pub fn new() -> Self {
+        Self {
+            start: Instant::now(),
+        }
+    }
+}
+
+impl Default for RuntimeClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WaitClock for RuntimeClock {
+    fn now(&self) -> Duration {
+        self.start.elapsed()
+    }
+
+    fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send {
+        tokio::time::sleep(duration)
+    }
+}
+
 /// Signing out waits at most this long: the token is deleted on this device whatever the server answers.
 const SIGN_OUT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -363,7 +403,19 @@ impl JellyfinClient {
         interval: Duration,
         lifetime: Duration,
     ) -> Result<SignedIn, AuthError> {
-        let deadline = Instant::now() + lifetime;
+        self.quick_connect_wait_on(&RuntimeClock::new(), secret, interval, lifetime)
+            .await
+    }
+
+    /// [`JellyfinClient::quick_connect_wait`] on `clock`: the interval and the lifetime are counted on it.
+    pub async fn quick_connect_wait_on(
+        &self,
+        clock: &impl WaitClock,
+        secret: &QuickConnectSecret,
+        interval: Duration,
+        lifetime: Duration,
+    ) -> Result<SignedIn, AuthError> {
+        let deadline = clock.now() + lifetime;
         loop {
             let last = match self.quick_connect_approved(secret).await {
                 Ok(true) => return self.quick_connect_sign_in(secret).await,
@@ -371,10 +423,10 @@ impl JellyfinClient {
                 Err(AuthError::Network(error)) if is_transient(&error) => Some(error),
                 Err(error) => return Err(error),
             };
-            if Instant::now() + interval >= deadline {
+            if clock.now() + interval >= deadline {
                 return Err(last.map_or(AuthError::QuickConnectExpired, AuthError::Network));
             }
-            tokio::time::sleep(interval).await;
+            clock.sleep(interval).await;
         }
     }
 

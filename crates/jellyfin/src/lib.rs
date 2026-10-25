@@ -34,7 +34,7 @@ pub use auth::{
 pub use browse::{NEXT_UP_CUTOFF, Page, SEARCH_GROUPS, SEARCH_LIMIT, SearchGroup};
 pub use client::{
     AuthError, JellyfinClient, QUICK_CONNECT_INTERVAL, QUICK_CONNECT_LIFETIME, QuickConnectCode,
-    SessionEvent, SessionHook, SignedIn,
+    RuntimeClock, SessionEvent, SessionHook, SignedIn, WaitClock,
 };
 pub use discovery::{
     Candidate, DISCOVERY_PORT, DiscoveryConfig, DiscoveryError, MAX_ADDRESSES_PER_SERVER,
