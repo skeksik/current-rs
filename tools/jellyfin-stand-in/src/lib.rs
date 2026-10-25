@@ -1,5 +1,6 @@
 //! A hand-written Jellyfin stand-in on 127.0.0.1, for the bridge tests (Rust, C# and Swift). It answers only what server setup,
-//! sign-in, restoring a session and sign-out ask, with the shapes `current-jellyfin` reads. Every name, id and credential in it is
+//! sign-in, restoring a session, sign-out and playback (PlaybackInfo, playstate reports, media segments, the session list) ask, in
+//! Jellyfin 12.2's shapes as `current-jellyfin` reads them. Every name, id and credential in it is
 //! fake. Test code only: nothing shipped depends on it.
 
 use std::collections::HashSet;
@@ -37,6 +38,14 @@ pub const GATE_SIGN_IN_PATH: &str = "/gate/sign-in";
 /// The header [`Gate::Header`] wants.
 pub const GATE_HEADER: &str = "x-stand-in-gate";
 pub const GATE_HEADER_VALUE: &str = "not-a-real-gate-header";
+/// An item PlaybackInfo answers with direct play. It has an intro and an outro segment.
+pub const DIRECT_PLAY_ITEM: &str = "57a2d1e0000000000000000000000010";
+/// An item PlaybackInfo answers with an HLS remux (`ContainerNotSupported`).
+pub const TRANSCODE_ITEM: &str = "57a2d1e0000000000000000000000011";
+/// The one media source of either item.
+pub const MEDIA_SOURCE: &str = "57a2d1e0000000000000000000000012";
+/// The play session id PlaybackInfo hands out.
+pub const PLAY_SESSION: &str = "57a2d1e0000000000000000000000013";
 const QUICK_CONNECT_SECRET: &str =
     "57a2d1e0000000000000000000000000000000000000000000000000000000ff";
 
@@ -84,6 +93,8 @@ struct State {
     released: Notify,
     /// The path of every request, in order.
     paths: Mutex<Vec<String>>,
+    /// Playstate reports received: path and body.
+    reports: Mutex<Vec<(String, String)>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -202,6 +213,11 @@ impl Controls {
     /// The cookie value [`Gate::Portal`] takes from now on (the gateway's session expired and a new one began).
     pub fn set_gate_cookie(&self, value: &str) {
         *lock(&self.state.gate_cookie) = Some(value.to_owned());
+    }
+
+    /// The playstate reports received so far (`/Sessions/Playing`, `/Progress`, `/Stopped`), oldest first: path and JSON body.
+    pub fn reports(&self) -> Vec<(String, String)> {
+        lock(&self.state.reports).clone()
     }
 
     /// How many sessions are live.
@@ -330,8 +346,71 @@ fn answer(state: &State, received: &Received) -> (u16, String) {
         "/Users/Me" | "/Sessions/Logout" | "/Users/AuthenticateWithQuickConnect" => {
             (401, String::new())
         }
+        path => playback(state, received, path),
+    }
+}
+
+/// Playback's endpoints, for a signed-in caller.
+fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
+    let known = path.starts_with("/Items/")
+        || path.starts_with("/MediaSegments/")
+        || path.starts_with("/Sessions");
+    if !known {
+        return (404, String::new());
+    }
+    if !authorized(state, received) {
+        return (401, String::new());
+    }
+    match path {
+        "/Sessions/Playing" | "/Sessions/Playing/Progress" | "/Sessions/Playing/Stopped" => {
+            lock(&state.reports).push((path.to_owned(), received.body.clone()));
+            (204, String::new())
+        }
+        "/Sessions" => (200, sessions(received)),
+        _ if path == format!("/Items/{DIRECT_PLAY_ITEM}/PlaybackInfo") => {
+            (200, playback_info(r#""SupportsDirectPlay":true"#.into()))
+        }
+        _ if path == format!("/Items/{TRANSCODE_ITEM}/PlaybackInfo") => {
+            let token = token(received).unwrap_or_default();
+            (
+                200,
+                playback_info(format!(
+                    r#""SupportsDirectPlay":false,"TranscodingUrl":"/videos/{TRANSCODE_ITEM}/master.m3u8?DeviceId=d&MediaSourceId={MEDIA_SOURCE}&VideoCodec=hevc,h264&AudioCodec=aac,ac3,eac3&AudioStreamIndex=1&PlaySessionId={PLAY_SESSION}&ApiKey={token}&SegmentContainer=mp4&TranscodeReasons=ContainerNotSupported","TranscodingSubProtocol":"hls","TranscodingContainer":"mp4""#
+                )),
+            )
+        }
+        _ if path == format!("/MediaSegments/{DIRECT_PLAY_ITEM}") => (200, segments()),
         _ => (404, String::new()),
     }
+}
+
+/// A PlaybackInfo answer with one HEVC/AAC Matroska source; `route` sets how it can be played.
+fn playback_info(route: String) -> String {
+    format!(
+        r#"{{"MediaSources":[{{"Protocol":"File","Id":"{MEDIA_SOURCE}","Path":"/media/stand-in/file.mkv","Type":"Default","Container":"mkv","Size":104857600,"Name":"Stand-in 1080p","IsRemote":false,"ETag":"5ad01e","RunTimeTicks":6000000000,"SupportsTranscoding":true,"SupportsDirectStream":false,{route},"MediaStreams":[{{"Codec":"hevc","DisplayTitle":"1080p HEVC SDR","BitDepth":8,"Height":1080,"Width":1920,"RealFrameRate":24,"VideoRange":"SDR","VideoRangeType":"SDR","Profile":"Main","Type":"Video","Index":0,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false,"Level":120}},{{"Codec":"aac","Language":"eng","DisplayTitle":"English - AAC - Stereo - Default","ChannelLayout":"stereo","Channels":2,"SampleRate":48000,"Type":"Audio","Index":1,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false}}],"Bitrate":1398101,"DefaultAudioStreamIndex":1,"HasSegments":true}}],"PlaySessionId":"{PLAY_SESSION}"}}"#
+    )
+}
+
+fn segments() -> String {
+    format!(
+        r#"{{"Items":[{{"Id":"57a2d1e0000000000000000000000020","ItemId":"{DIRECT_PLAY_ITEM}","Type":"Intro","StartTicks":50000000,"EndTicks":350000000}},{{"Id":"57a2d1e0000000000000000000000021","ItemId":"{DIRECT_PLAY_ITEM}","Type":"Outro","StartTicks":5500000000,"EndTicks":6000000000}}],"TotalRecordCount":2,"StartIndex":0}}"#
+    )
+}
+
+/// The caller's session, with a transcode in progress: the device id comes from the caller's own authorization fields.
+fn sessions(received: &Received) -> String {
+    let fields = if received.authorization.starts_with("MediaBrowser") {
+        &received.authorization
+    } else {
+        &received.emby_authorization
+    };
+    let device = fields
+        .split_once("DeviceId=\"")
+        .and_then(|(_, rest)| rest.split('"').next())
+        .unwrap_or_default();
+    format!(
+        r#"[{{"Id":"57a2d1e0000000000000000000000030","UserId":"{USER_ID}","Client":"Current","DeviceId":"{device}","TranscodingInfo":{{"AudioCodec":"aac","VideoCodec":"hevc","Container":"mp4","IsVideoDirect":true,"IsAudioDirect":true,"Bitrate":1398101,"Width":1920,"Height":1080,"AudioChannels":2,"HardwareAccelerationType":"none","TranscodeReasons":["ContainerNotSupported"]}}}}]"#
+    )
 }
 
 fn info() -> String {
@@ -342,7 +421,7 @@ fn info() -> String {
 
 fn user() -> String {
     format!(
-        r#"{{"Name":"{USER_NAME}","Id":"{USER_ID}","Policy":{{"IsAdministrator":false,"EnableMediaPlayback":true}}}}"#
+        r#"{{"Name":"{USER_NAME}","Id":"{USER_ID}","Policy":{{"IsAdministrator":false,"EnableMediaPlayback":true}},"Configuration":{{"AudioLanguagePreference":"eng","PlayDefaultAudioTrack":true,"SubtitleLanguagePreference":"","SubtitleMode":"Default","RememberAudioSelections":true,"RememberSubtitleSelections":true,"EnableNextEpisodeAutoPlay":true}}}}"#
     )
 }
 
