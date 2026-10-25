@@ -88,7 +88,7 @@ pub fn plan(
         }
         if let Some(limit) = permissions.remote_bitrate_limit
             && !local
-            && !Quality::Bitrate(limit).limits(Some(effective_limit(request.quality)))
+            && effective_limit(request.quality) > limit
             && Quality::Bitrate(limit).limits(source.bitrate)
         {
             notes.push(PlanNote::RemoteBitrateLimit { limit });
@@ -179,7 +179,13 @@ mod tests {
     use current_model::{RouteLabel, StreamProtocol};
 
     fn ask(quality: Quality) -> PlanRequest {
-        request(None, Duration::from_secs(30), TrackChoice::default(), quality, true)
+        request(
+            None,
+            Duration::from_secs(30),
+            TrackChoice::default(),
+            quality,
+            true,
+        )
     }
 
     #[test]
@@ -296,7 +302,10 @@ mod tests {
         };
         assert_eq!(
             not_playable_notes(&permissions),
-            vec![PlanNote::TranscodingNotAllowed, PlanNote::RemuxingNotAllowed]
+            vec![
+                PlanNote::TranscodingNotAllowed,
+                PlanNote::RemuxingNotAllowed
+            ]
         );
         let mut remote = answer(hls(StreamAction::Transcode, StreamAction::Copy), vec![]);
         remote.source.is_remote = true;
@@ -317,7 +326,14 @@ mod tests {
             ]
         );
         // On a local address, or below the user's own lower limit, the server's remote limit explains nothing.
-        let local = plan(&item("e1"), &ask(Quality::Maximum), remote.clone(), &[], &permissions, true);
+        let local = plan(
+            &item("e1"),
+            &ask(Quality::Maximum),
+            remote.clone(),
+            &[],
+            &permissions,
+            true,
+        );
         assert_eq!(local.notes, vec![PlanNote::RemoteSourceTranscodingForced]);
         let lower = plan(
             &item("e1"),

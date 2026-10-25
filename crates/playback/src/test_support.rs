@@ -53,7 +53,9 @@ impl Clock for FakeClock {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,16 +80,6 @@ pub struct FakeEngine {
 impl FakeEngine {
     pub fn take(&mut self) -> Vec<Command> {
         std::mem::take(&mut self.commands)
-    }
-
-    pub fn loads(&self) -> Vec<&EngineFile> {
-        self.commands
-            .iter()
-            .filter_map(|command| match command {
-                Command::Load(file) => Some(file),
-                _ => None,
-            })
-            .collect()
     }
 }
 

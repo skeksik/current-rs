@@ -19,9 +19,7 @@ use crate::engine::{EndReason, Engine, EngineEvent, EngineFile, EngineTrack, Ext
 use crate::planner::{self, Planned};
 use crate::quality::{Quality, QualityMemory};
 use crate::server::{MediaServer, ProgressReport, StopReport, TranscodePermissions};
-use crate::status::{
-    AutoSkip, NextEpisode, PlaybackDetails, PlayerEvent, PlayerStatus, Track,
-};
+use crate::status::{AutoSkip, NextEpisode, PlaybackDetails, PlayerEvent, PlayerStatus, Track};
 
 /// Progress reports while a file plays, paused or not (ADR 0019, choice 7); well under the server's 60 s HLS kill timer.
 pub const PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
@@ -178,7 +176,13 @@ pub struct Controller<E, S, C> {
 
 impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     /// A controller with the remembered quality and the auto-skip setting, both loaded by the composition root.
-    pub fn new(engine: E, server: S, clock: C, quality: QualityMemory, auto_skip: AutoSkip) -> Self {
+    pub fn new(
+        engine: E,
+        server: S,
+        clock: C,
+        quality: QualityMemory,
+        auto_skip: AutoSkip,
+    ) -> Self {
         Self {
             engine,
             server,
@@ -343,7 +347,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
 
     /// Plays the next episode now, on the same engine.
     pub async fn play_next(&mut self) {
-        let Some(next) = self.session.as_ref().and_then(|session| session.next.clone()) else {
+        let Some(next) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.next.clone())
+        else {
             return;
         };
         // From its start: a resume point of the next episode is the details screen's choice, not autoplay's.
@@ -411,11 +419,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
 
     /// Seeks past the segment under the position.
     pub async fn skip_segment(&mut self) {
-        let end = self.session.as_ref().and_then(|session| {
-            session
-                .segment
-                .map(|index| session.segments[index].end)
-        });
+        let end = self
+            .session
+            .as_ref()
+            .and_then(|session| session.segment.map(|index| session.segments[index].end));
         if let Some(end) = end
             && self.phase == Phase::Active
         {
@@ -551,7 +558,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 .as_ref()
                 .map(|codec| SubtitleFormat::new(codec.as_str().to_ascii_lowercase())),
             data,
-            title: stream.display_title.clone().or_else(|| stream.title.clone()),
+            title: stream
+                .display_title
+                .clone()
+                .or_else(|| stream.title.clone()),
             language: stream.language.clone(),
             select: true,
         });
@@ -571,7 +581,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         self.events
             .push(PlayerEvent::QualityChanged { local, quality });
         if self.phase == Phase::Active {
-            let tracks = self.session.as_ref().map(Session::tracks).unwrap_or_default();
+            let tracks = self
+                .session
+                .as_ref()
+                .map(Session::tracks)
+                .unwrap_or_default();
             self.replan(tracks).await;
         } else {
             self.publish(true);
@@ -724,7 +738,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
 
     fn countdown(&self, session: &Session) -> Option<u32> {
         let left = session.countdown_until?.saturating_sub(self.clock.now());
-        Some(u32::try_from(left.as_millis().div_ceil(1000)).unwrap_or(u32::MAX).max(1))
+        Some(
+            u32::try_from(left.as_millis().div_ceil(1000))
+                .unwrap_or(u32::MAX)
+                .max(1),
+        )
     }
 
     /// Asks the server for a plan for the session's item and loads it. On a problem the caller fails.
@@ -774,7 +792,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             auth: planned.auth.clone(),
             start,
             audio: if planned.plan.route.is_direct_play() {
-                planned.plan.tracks.audio.map_or(EngineTrack::Auto, EngineTrack::Stream)
+                planned
+                    .plan
+                    .tracks
+                    .audio
+                    .map_or(EngineTrack::Auto, EngineTrack::Stream)
             } else {
                 EngineTrack::Auto
             },
@@ -882,6 +904,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         }
         self.end_item(false).await;
         self.phase = Phase::Ended;
+        self.update_position();
         self.publish(true);
     }
 
@@ -1034,7 +1057,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         }
         let status = self.status();
         self.published_countdown = status.next.as_ref().and_then(|next| next.countdown);
-        self.events.push(PlayerEvent::State(status));
+        self.events.push(PlayerEvent::State(Box::new(status)));
         self.last_published = Some(now);
         self.publish_pending = false;
     }

@@ -132,10 +132,13 @@ pub trait MediaServer {
     ) -> impl Future<Output = Result<Option<ItemSummary>, PlaybackProblem>> + Send;
 
     /// The user's playback preferences (next-episode autoplay among them).
-    fn preferences(&self) -> impl Future<Output = Result<PlaybackPreferences, PlaybackProblem>> + Send;
+    fn preferences(
+        &self,
+    ) -> impl Future<Output = Result<PlaybackPreferences, PlaybackProblem>> + Send;
 
-    fn permissions(&self)
-    -> impl Future<Output = Result<TranscodePermissions, PlaybackProblem>> + Send;
+    fn permissions(
+        &self,
+    ) -> impl Future<Output = Result<TranscodePermissions, PlaybackProblem>> + Send;
 
     /// The server's facts about its transcode for this playback, if one runs.
     fn transcoding_facts(

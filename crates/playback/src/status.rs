@@ -116,7 +116,7 @@ pub struct PlayerStatus {
 /// What the controller tells the composition root, drained with [`Controller::take_events`](crate::Controller::take_events).
 #[derive(Clone, Debug, PartialEq)]
 pub enum PlayerEvent {
-    State(PlayerStatus),
+    State(Box<PlayerStatus>),
     /// Playback of an item ended: stopped by the user, played to the end, replaced by another item, or failed. Once per item played,
     /// after the server was told. For lists that show progress (ADR 0018).
     Stopped {
@@ -125,7 +125,10 @@ pub enum PlayerEvent {
         failed: bool,
     },
     /// The user picked a quality; the composition root saves it for that kind of address.
-    QualityChanged { local: bool, quality: Quality },
+    QualityChanged {
+        local: bool,
+        quality: Quality,
+    },
 }
 
 /// What the playback information view shows: the plan (route, reasons, source), what explains it, and the server's facts about its

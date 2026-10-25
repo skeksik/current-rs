@@ -100,7 +100,12 @@ mod tests {
             secrets: vec!["secret-token".into()],
         };
         let shown = format!("{url:?} {auth:?} {url:#?} {auth:#?}");
-        for secret in ["secret-token", "cookie-value", "header-value", "media.example.com"] {
+        for secret in [
+            "secret-token",
+            "cookie-value",
+            "header-value",
+            "media.example.com",
+        ] {
             assert!(!shown.contains(secret), "{secret} in {shown}");
         }
         assert!(shown.contains("Authorization"));
