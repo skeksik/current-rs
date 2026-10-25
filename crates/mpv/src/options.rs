@@ -415,6 +415,66 @@ impl FileRequest {
     }
 }
 
+/// An external subtitle the core fetched itself (ADR 0019, "External subtitles"), added to the file playing with `sub-add` from memory,
+/// so mpv never fetches a subtitle: UTF-8 text without NUL as `memory://`, anything else (PGS, VobSub) as `hex://`. mpv's `memory://`
+/// "use[s] the data part as source data" and `hex://` reads it as a hex dump (mpv v0.41.0 `DOCS/man/mpv.rst`, "Protocols"; ADR 0019).
+/// The command's named arguments (`url`, `flags`, `title`, `lang`) follow `sub-add`'s synopsis in `DOCS/man/input.rst`; not verified
+/// against a live libmpv here.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SubtitleFile {
+    pub data: Vec<u8>,
+    pub title: Option<String>,
+    pub language: Option<String>,
+    /// Show it at once (`select`), else only add it (`auto`).
+    pub select: bool,
+}
+
+impl std::fmt::Debug for SubtitleFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubtitleFile")
+            .field("bytes", &self.data.len())
+            .field("title", &self.title)
+            .field("language", &self.language)
+            .field("select", &self.select)
+            .finish()
+    }
+}
+
+impl SubtitleFile {
+    /// The `memory://` or `hex://` source.
+    pub fn source(&self) -> String {
+        match std::str::from_utf8(&self.data) {
+            Ok(text) if !text.contains('\0') => format!("memory://{text}"),
+            _ => {
+                let mut hex = String::with_capacity(6 + self.data.len() * 2);
+                hex.push_str("hex://");
+                for byte in &self.data {
+                    hex.push_str(&format!("{byte:02x}"));
+                }
+                hex
+            }
+        }
+    }
+
+    pub(crate) fn sub_add_command(&self) -> Node {
+        let mut args = vec![
+            ("name".into(), Node::String("sub-add".into())),
+            ("url".into(), Node::String(self.source())),
+            (
+                "flags".into(),
+                Node::String(if self.select { "select" } else { "auto" }.into()),
+            ),
+        ];
+        if let Some(title) = &self.title {
+            args.push(("title".into(), Node::String(title.clone())));
+        }
+        if let Some(language) = &self.language {
+            args.push(("lang".into(), Node::String(language.clone())));
+        }
+        Node::Map(args)
+    }
+}
+
 /// Whether an FFmpeg version string (`av_version_info()`, mpv's `ffmpeg-version`) names FFmpeg 9.0 or later, the first with the http
 /// protocol's `max_redirects` (in FFmpeg 9.0.2's `libavformat/http.c`, not in n8.0's; docs/notes/mpv-engine.md). Release builds read
 /// `9.0.2` or `n9.0.2`, distribution builds `6.1.1-3ubuntu5`; a git build (`N-12345-g...`) or anything else unreadable counts as no.
@@ -773,6 +833,36 @@ mod tests {
         // No start for zero, so a start-over plays from the beginning without an option.
         req.start = Some(0.0);
         assert!(req.file_options().get("start").is_none());
+    }
+
+    #[test]
+    fn subtitles_are_added_from_memory_text_or_hex() {
+        let text = SubtitleFile {
+            data: b"1\n00:00:01,000 --> 00:00:02,000\nHello\n".to_vec(),
+            title: Some("English".into()),
+            language: Some("eng".into()),
+            select: true,
+        };
+        let cmd = text.sub_add_command();
+        assert_eq!(cmd.get("name").and_then(Node::as_str), Some("sub-add"));
+        assert_eq!(
+            cmd.get("url").and_then(Node::as_str),
+            Some("memory://1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+        );
+        assert_eq!(cmd.get("flags").and_then(Node::as_str), Some("select"));
+        assert_eq!(cmd.get("title").and_then(Node::as_str), Some("English"));
+        assert_eq!(cmd.get("lang").and_then(Node::as_str), Some("eng"));
+        let binary = SubtitleFile {
+            data: vec![0x50, 0x47, 0x00, 0xff],
+            title: None,
+            language: None,
+            select: false,
+        };
+        assert_eq!(binary.source(), "hex://504700ff");
+        let cmd = binary.sub_add_command();
+        assert_eq!(cmd.get("flags").and_then(Node::as_str), Some("auto"));
+        assert!(cmd.get("title").is_none());
+        assert!(!format!("{text:?}").contains("Hello"));
     }
 
     #[test]

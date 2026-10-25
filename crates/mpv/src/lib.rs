@@ -32,7 +32,7 @@ pub use error::{EngineError, MpvError};
 pub use event::{EndReason, EngineEvent, LogLine, PropertyChange, Track, VideoParams};
 pub use options::{
     CompositionSize, DisplayFacts, EngineConfig, FileRequest, LogLevel, Output, StartOption,
-    StreamCookie, TrackChoice, display_options, start_options,
+    StreamCookie, SubtitleFile, TrackChoice, display_options, start_options,
 };
 pub use redact::{REDACTED, Redactor};
 pub use swapchain::SwapChain;

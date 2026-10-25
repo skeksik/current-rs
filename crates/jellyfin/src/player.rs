@@ -12,7 +12,7 @@
 //!   `ForceRemoteSourceTranscoding` (default false), and `RemoteClientBitrateLimit` in bits per second.
 
 use current_model::{Codec, ItemId};
-use current_net::{Request, StreamCookie, Url};
+use current_net::{HostScope, Request, StreamCookie, Url, host_scope};
 use serde::Deserialize;
 
 use crate::auth;
@@ -87,6 +87,17 @@ impl JellyfinClient {
                 .map(|token| vec![token.expose().to_owned()])
                 .unwrap_or_default(),
         }
+    }
+
+    /// Whether the address in use is on this device or the local network, for the quality remembered per kind of address (ADR 0019,
+    /// choice 10). False while no address is selected.
+    pub fn address_is_local(&self) -> bool {
+        self.http.current_address().is_some_and(|selected| {
+            matches!(
+                host_scope(selected.url()),
+                HostScope::Local | HostScope::Loopback
+            )
+        })
     }
 
     /// The signed-in user's transcoding policy (`GET /Users/Me`, its `Policy`). A field the server leaves out reads as its default.
