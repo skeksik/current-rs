@@ -139,7 +139,10 @@ impl From<NetError> for ProbeError {
             NetError::Timeout => Self::Timeout,
             NetError::Tls => Self::Tls,
             NetError::Status { status: 503, .. } => Self::Unavailable,
-            NetError::Status { status: 404, .. } | NetError::Decode { .. } => Self::NotJellyfin,
+            // The probe sets no body limit; a body too large is no Jellyfin answer either.
+            NetError::Status { status: 404, .. } | NetError::Decode { .. } | NetError::TooLarge => {
+                Self::NotJellyfin
+            }
             NetError::Auth { status, .. } | NetError::Status { status, .. } => {
                 Self::Status { status }
             }

@@ -317,9 +317,9 @@ fn the_playback_settings_switch_skipping() {
     );
 }
 
-/// Every type `player_records.rs` declares, so that a new one must be added here and so to the check below.
+/// Every type `player_records.rs` declares, so that a new one must be added here and so to the check below. The item reference is
+/// browse's (`browse::records`), which holds a server reference and an id only.
 const RECORD_TYPES: &[&str] = &[
-    "ItemRef",
     "CompositionSize",
     "DisplayFacts",
     "PlayerEngineKind",
@@ -416,16 +416,33 @@ fn no_url_token_cookie_or_header_value_crosses_the_bridge() {
         swap_chain.is_released()
     ));
 
-    // An HLS stream behind a header gateway is refused until the core has checked its playlists (ADR 0019).
+    // An HLS stream behind a header gateway: the core checks its playlists first (ADR 0019), and the engine gets it marked checked.
     block_on(player.play(item(TRANSCODE_ITEM), 30_000, CancelToken::new())).unwrap();
+    let hls = until(&state_rx, "the HLS stream playing", |state| {
+        state.state == PlayerStateKind::Playing && state.item == Some(item(TRANSCODE_ITEM))
+    });
+    assert!(control.commands().iter().any(|command| matches!(
+        command,
+        TestCommand::Load {
+            credentials: true,
+            playlist_checked: true,
+            ..
+        }
+    )));
+    crossed.extend(hls.iter().map(|state| format!("{state:?}")));
+
+    // A playlist that names another host is refused: its headers would go there.
+    stand_in.set_playlist(
+        &jellyfin_stand_in::master_playlist_path(),
+        "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=8000000\nhttps://cdn.example.com/main.m3u8\n",
+    );
+    block_on(player.play(item(TRANSCODE_ITEM), 0, CancelToken::new())).unwrap();
     let failed = until(&state_rx, "the refusal", |state| {
         state.state == PlayerStateKind::Failed
     });
     assert_eq!(
         failed.last().unwrap().problem,
-        Some(PlaybackProblem::Engine {
-            kind: "gateway_playlist_unchecked".into()
-        })
+        Some(PlaybackProblem::PlaylistElsewhere)
     );
     crossed.extend(failed.iter().map(|state| format!("{state:?}")));
     crossed.push(format!("{:?}", block_on(player.playback_info()).unwrap()));
@@ -450,6 +467,7 @@ fn no_url_token_cookie_or_header_value_crosses_the_bridge() {
         "api_key",
         "Videos/",
         "master.m3u8",
+        "cdn.example.com",
         "http",
     ] {
         assert!(

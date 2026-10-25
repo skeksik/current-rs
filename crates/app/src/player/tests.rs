@@ -427,6 +427,7 @@ fn the_test_engine_refuses_an_unchecked_playlist_with_headers() {
         start: Duration::ZERO,
         audio: EngineTrack::Auto,
         subtitle: EngineTrack::Auto,
+        playlist_checked: false,
     });
     assert_eq!(refused, Err(EngineErrorKind::GATEWAY_PLAYLIST_UNCHECKED));
     drop(engine);

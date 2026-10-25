@@ -144,6 +144,11 @@ fake engine, a fake server and a fake clock):
   (a follow-up task); `current-mpv` refuses a playlist URL with headers unless the caller marks it checked, and opens no nested
   reference at all for any other load with headers (`access-references=no`). mpv re-fetches the playlists itself, so this is a check,
   not enforcement; the loopback relay in M3 (shared with AVPlayer's header gap, ADR 0017) enforces it, on Windows too.
+  Built 2026-10-25: `JellyfinClient::check_playlist_origin` (`current-jellyfin`, `hls`) fetches the master and up to 32 media
+  playlists through the address's client (4 MiB each, `ApiKey` out of the query and the log) and checks every URI line and every
+  `URI`/`*-URI` attribute; the controller calls it through `MediaServer::check_playlist` for an HLS route with headers and marks
+  `EngineFile::playlist_checked`, else fails with `PlaylistElsewhere`. Known limit: mpv re-reads the playlists after the check,
+  which holds for Jellyfin's fixed VOD transcode playlists and not for a playlist that changes; the M3 relay enforces.
 - **Redaction:** no URL that carries a token or a cookie crosses `current-ffi`, enters the request log, the playback information view
   or a file. The engine never sets `log-file`; it takes mpv's messages through `mpv_request_log_messages` at `info` (`v` while
   diagnosing), and replaces the session token, every gateway secret value and any `ApiKey=`/`api_key=` value with `<redacted>` before a

@@ -5,6 +5,15 @@
 $ErrorActionPreference = 'Stop'
 
 $standIn = Resolve-Path "$PSScriptRoot/../../target/x86_64-pc-windows-msvc/release/jellyfin-stand-in.exe"
+
+# The runner must load the core built with the test engine (build.ps1): its library holds the engine's marker
+# (crates/app/src/player/test_engine.rs). apps/windows/build.ps1 checks that the published app's does not.
+$runnerCores = @(Get-ChildItem (Join-Path $PSScriptRoot 'Current.Bindings.Tests/bin/Release') -Recurse -Filter 'current_ffi.dll')
+if ($runnerCores.Count -eq 0) { throw 'the test runner has no current_ffi.dll: run build.ps1' }
+foreach ($core in $runnerCores) {
+    $text = [System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($core.FullName))
+    if (-not $text.Contains('current-test-engine')) { throw "$($core.FullName) is not the test-engine core" }
+}
 $env:CURRENT_STAND_IN = $standIn.Path
 
 # Stand-ins already running belong to someone else: only those this run started are stopped below.

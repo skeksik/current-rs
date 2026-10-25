@@ -24,8 +24,10 @@ public abstract record ListDiff<T>
 /// <remarks>
 /// An out-of-range diff means the mirror is out of step with the core, which never sends one on its own. The owner should then
 /// re-subscribe: a new subscription starts with a fresh Reset (the core sends no unsolicited Reset for this).
+/// Not sealed, so an app can add a platform interface to the collection a list view binds to (the Windows app's paged grid adds
+/// IItemsRangeInfo); <see cref="ListSubscription{T}"/> fills a collection it is handed.
 /// </remarks>
-public sealed class DiffObservableCollection<T> : ObservableCollection<T>
+public class DiffObservableCollection<T> : ObservableCollection<T>
 {
     /// <summary>Applies a batch in order, all or nothing: the batch is checked against a copy first.</summary>
     /// <exception cref="ArgumentOutOfRangeException">A diff's index does not exist; the collection is unchanged.</exception>

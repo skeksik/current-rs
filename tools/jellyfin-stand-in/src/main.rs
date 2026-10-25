@@ -4,6 +4,9 @@
 //! - `quick-connect off`, `quick-connect on`, `quick-connect hold` (requests stay unapproved; `on` approves them again);
 //! - `hold <path>`, `release <path>`: requests to the path wait, unanswered, until released;
 //! - `count <path>`: prints `count <n>`, how many requests to the path arrived;
+//! - `fail <path or page>`, `unfail <path or page>`: requests to the path, or to a page of the generated library (`/Items@<start>`,
+//!   `paging::page_key`), answer 500 until unfailed;
+//! - `cancelled <path or page>`: prints `cancelled <n>`, how many held requests to it their client gave up;
 //! - `gate off`, `gate basic`, `gate portal`, `gate header`: the gateway in front of it (ADR 0017; credentials in `lib.rs`);
 //! - `gate-cookie <value>`: the portal takes this cookie value from now on.
 //!
@@ -53,6 +56,14 @@ fn main() -> std::io::Result<()> {
                     controls.hold(path);
                 } else if let Some(path) = line.strip_prefix("release ") {
                     controls.release(path);
+                } else if let Some(path) = line.strip_prefix("fail ") {
+                    controls.fail(path);
+                } else if let Some(path) = line.strip_prefix("unfail ") {
+                    controls.unfail(path);
+                } else if let Some(path) = line.strip_prefix("cancelled ") {
+                    let mut out = std::io::stdout().lock();
+                    writeln!(out, "cancelled {}", controls.cancelled(path))?;
+                    out.flush()?;
                 } else if let Some(value) = line.strip_prefix("gate-cookie ") {
                     controls.set_gate_cookie(value);
                 } else if let Some(path) = line.strip_prefix("count ") {

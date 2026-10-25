@@ -17,6 +17,7 @@ mod browse_wire;
 mod client;
 mod discovery;
 mod gateway;
+mod hls;
 mod image;
 mod playback;
 mod playback_wire;
@@ -40,6 +41,7 @@ pub use discovery::{
     MAX_INTERFACES, MAX_REPLY_BYTES, MAX_SERVERS, Source, discover,
 };
 pub use gateway::{GatewayAnswer, Realm};
+pub use hls::{MAX_MEDIA_PLAYLISTS, MAX_PLAYLIST_BYTES, PlaylistCheckError};
 pub use image::{ImageError, ImageRequest};
 pub use playback::{
     MAXIMUM_STREAMING_BITRATE, PlayableStream, PlaybackAnswer, PlaybackError, PlaybackRequest,

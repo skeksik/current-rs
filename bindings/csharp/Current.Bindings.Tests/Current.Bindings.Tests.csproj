@@ -13,4 +13,10 @@
   <ItemGroup>
     <ProjectReference Include="../Current.Bindings/Current.Bindings.csproj" />
   </ItemGroup>
+
+  <!-- The runner loads the core built with the test engine (build.ps1 passes -p:CoreTestLibDir), in place of the shipped one the class
+       library copies in; test.ps1 checks that it did. -->
+  <Target Name="UseTestEngineCore" AfterTargets="Build" Condition="'$(CoreTestLibDir)' != ''">
+    <Copy SourceFiles="$([MSBuild]::EnsureTrailingSlash('$(CoreTestLibDir)'))current_ffi.dll" DestinationFolder="$(OutDir)" />
+  </Target>
 </Project>

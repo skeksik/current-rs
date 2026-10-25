@@ -233,6 +233,8 @@ impl From<&NetError> for NetProblem {
             NetError::Redirected { status, .. } => Self::Redirected { status: *status },
             NetError::Decode { .. } => Self::Decode,
             NetError::InvalidRequest => Self::InvalidRequest,
+            // Only a playlist check limits a body so far; for the UI it is an answer that could not be read.
+            NetError::TooLarge => Self::Decode,
         }
     }
 }

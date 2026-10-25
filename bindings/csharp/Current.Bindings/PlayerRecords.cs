@@ -2,9 +2,6 @@ using Ffi = uniffi.current_ffi;
 
 namespace Current.Bindings;
 
-/// <summary>An item of a server, as browse and the player name it.</summary>
-public sealed record ItemRef(ServerRef Server, string Id);
-
 /// <summary>The panel's size in physical pixels (<c>ActualSize</c> × <c>CompositionScale</c>, ADR 0007).</summary>
 public sealed record CompositionSize(uint Width, uint Height);
 
@@ -58,6 +55,8 @@ public abstract record PlaybackProblem
     public sealed record SignedOut : PlaybackProblem;
     public sealed record Server(ushort Status) : PlaybackProblem;
     public sealed record NotFound : PlaybackProblem;
+    /// <summary>The server's HLS playlist names another address, so it cannot play with the address's gateway headers.</summary>
+    public sealed record PlaylistElsewhere : PlaybackProblem;
 }
 
 public enum PlayerStateKind
@@ -225,10 +224,6 @@ internal static class PlayerMap
 
     public static ulong ToMs(TimeSpan time) => time <= TimeSpan.Zero ? 0 : (ulong)time.TotalMilliseconds;
 
-    public static ItemRef From(Ffi.ItemRef item) => new(Map.From(item.Server), item.Id);
-
-    public static Ffi.ItemRef ToFfi(ItemRef item) => new(Map.ToFfi(item.Server), item.Id);
-
     public static Ffi.CompositionSize ToFfi(CompositionSize size) => new(size.Width, size.Height);
 
     public static Ffi.DisplayFacts ToFfi(DisplayFacts facts) => new(facts.Hdr, facts.PeakNits, facts.SdrWhiteNits, facts.RefreshHz);
@@ -257,6 +252,7 @@ internal static class PlayerMap
         Ffi.PlaybackProblem.GatewaySignInNeeded => new PlaybackProblem.GatewaySignInNeeded(),
         Ffi.PlaybackProblem.SignedOut => new PlaybackProblem.SignedOut(),
         Ffi.PlaybackProblem.Server server => new PlaybackProblem.Server(server.Status),
+        Ffi.PlaybackProblem.PlaylistElsewhere => new PlaybackProblem.PlaylistElsewhere(),
         _ => new PlaybackProblem.NotFound(),
     };
 
@@ -324,7 +320,7 @@ internal static class PlayerMap
     public static PlayerState From(Ffi.PlayerStateSnapshot state) => new(
         From(state.State),
         state.Problem is { } problem ? From(problem) : null,
-        state.Item is { } item ? From(item) : null,
+        state.Item is { } item ? MapBrowse.From(item) : null,
         Ms(state.PositionMs),
         Ms(state.DurationMs),
         Ms(state.BufferedMs),
@@ -335,14 +331,14 @@ internal static class PlayerMap
         state.Route is { } route ? From(route) : null,
         state.Segment is { } segment ? new SegmentInfo(segment.Kind, Ms(segment.StartMs), Ms(segment.EndMs)) : null,
         state.Next is { } next
-            ? new NextEpisodeInfo(From(next.Item), next.Name, next.Series, next.Season, next.Episode, next.Countdown)
+            ? new NextEpisodeInfo(MapBrowse.From(next.Item), next.Name, next.Series, next.Season, next.Episode, next.Countdown)
             : null,
         From(state.Quality),
         state.Volume,
         state.Muted);
 
     public static NowPlaying From(Ffi.NowPlayingSnapshot now) => new(
-        now.Item is { } item ? From(item) : null,
+        now.Item is { } item ? MapBrowse.From(item) : null,
         now.Kind,
         now.Title,
         now.Series,

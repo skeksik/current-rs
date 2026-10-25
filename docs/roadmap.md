@@ -71,6 +71,23 @@ before merging, and its PR carries only the record.
       delivering every listener callback on the runtime's blocking pool, one at a time per subscription, so a slow, blocked or
       panicking listener (and its hook) holds a pool thread, never a worker; the core installs no hook (PR #50, 2026-10-25;
       docs/architecture.md, "Listener delivery")
+- [x] `current-ffi`'s tests after PR #50: `a_failing_listener_keeps_its_subscription` and `a_failing_list_listener_gets_a_reset_next`
+      once failed together in a cloud container under full parallel load, then passed 3 of 3 alone (2026-10-25; failure output not
+      kept; never seen in CI). Not reproduced unforced: 0 failures in 164 runs at e1a8dc5 and 104 at 852a55d, with
+      `RUST_BACKTRACE` 0 and 1, up to 4 copies of the binary at once beside 12 CPU-burning processes on 4 CPUs. The panic hook is
+      not the cause: the default hook with a backtrace took 160-300 ms on the pool thread (0.03-0.2 ms without), and the test hook
+      only slows its own marker payload. Cause found for the list test (and `a_panicking_list_listener_with_a_slow_hook_gets_a_reset_next`):
+      an ordering race. After the lost batch the subscription resyncs with the list as it is then; if the failed delivery ends before
+      the test appends "next", the Reset holds only "lost" and "next" follows as a diff, but the test expected one Reset of both.
+      Proven by forcing a 500 ms sleep between the appends: fails 1 of 1, `RUST_BACKTRACE` 0 and 1. The tests now check that a Reset
+      comes first and that the mirror reaches the whole list; with a forced 2.5 s sleep they pass. The capabilities test has no race
+      found: its one failure is explained only by a stall of the whole process over 5 s (`WAIT`), not proven. The same load found
+      `flow_tests::removing_a_server_signs_out_and_forgets_it` failing once (`list.len()` 0): the core's saved-server list is filled on
+      the runtime after sign-in, so the first batch can be `[Reset []]`, which the test took for the list. Proven with a forced 500 ms
+      delay in `saved::pump` (fails 1 of 1, passes after the fix); the test now applies batches until the list holds the server, and
+      until it is empty after the removal. After the fixes, 200 runs under the same load (100 at each `RUST_BACKTRACE`): the fixed
+      tests passed every time; `a_blocking_listener_does_not_delay_other_subscriptions_or_tasks` failed once (`RUST_BACKTRACE=1`,
+      its 1 s `PROMPT` bound on the first value), not investigated here (PR #59, 2026-10-25)
 - [ ] Windows, not measured in the owner's M1 runs: the caption buttons' pressed colour against Windows' own apps (high contrast
       and Narrator passed on PR 39's run, 2026-10-24; docs/notes/windows-shell.md)
 - [ ] Linux: choose how to ship (Flatpak, per-distro packages, AppImage or tarball; ADR 0011) before M5's release work

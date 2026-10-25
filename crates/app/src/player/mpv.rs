@@ -84,12 +84,11 @@ pub(crate) fn engine_error_kind(error: &EngineError) -> EngineErrorKind {
 }
 
 impl MpvMapper {
-    /// The request for `file`, from now on the file the mapping is about. `playlist_checked` is the core's same-origin check of the
-    /// file's playlists (always false until that check lands).
+    /// The request for `file`, from now on the file the mapping is about. A file whose playlists the core checked
+    /// ([`EngineFile::playlist_checked`]) is marked so; any other playlist with gateway headers is refused.
     pub(crate) fn file_request(
         &mut self,
         file: EngineFile,
-        playlist_checked: bool,
     ) -> Result<FileRequest, EngineErrorKind> {
         let EngineFile {
             url,
@@ -97,6 +96,7 @@ impl MpvMapper {
             start,
             audio,
             subtitle,
+            playlist_checked,
         } = file;
         let mut request = FileRequest::new(url.expose().to_owned());
         request.start = (start > Duration::ZERO).then(|| seconds(start));
@@ -115,7 +115,7 @@ impl MpvMapper {
         if playlist_checked {
             request = request.playlist_checked_same_origin();
         }
-        // The defensive refusal: an unchecked playlist with headers never reaches libmpv.
+        // The defensive refusal: an unchecked playlist with headers never reaches libmpv (the controller checks before it loads).
         request
             .check_header_scope()
             .map_err(|error| engine_error_kind(&error))?;
@@ -410,7 +410,7 @@ mod real {
         }
 
         fn load(&mut self, file: EngineFile) -> Result<(), EngineErrorKind> {
-            let request = self.mapper.file_request(file, false)?;
+            let request = self.mapper.file_request(file)?;
             let mpv = self
                 .mpv
                 .as_ref()
@@ -525,6 +525,14 @@ mod tests {
             start: Duration::from_secs(90),
             audio: EngineTrack::Stream(1),
             subtitle: EngineTrack::Stream(3),
+            playlist_checked: false,
+        }
+    }
+
+    fn checked(file: EngineFile) -> EngineFile {
+        EngineFile {
+            playlist_checked: true,
+            ..file
         }
     }
 
@@ -562,13 +570,10 @@ mod tests {
             secrets: vec!["t0ken".into()],
         };
         let request = mapper
-            .file_request(
-                file(
-                    "https://media.example.com/Videos/1/stream?ApiKey=t0ken",
-                    auth,
-                ),
-                false,
-            )
+            .file_request(file(
+                "https://media.example.com/Videos/1/stream?ApiKey=t0ken",
+                auth,
+            ))
             .unwrap();
         assert_eq!(
             request.url,
@@ -595,24 +600,23 @@ mod tests {
         let url = "https://media.example.com/videos/1/master.m3u8?ApiKey=t0ken";
         let mut mapper = MpvMapper::default();
         assert_eq!(
-            mapper
-                .file_request(file(url, auth.clone()), false)
-                .unwrap_err(),
+            mapper.file_request(file(url, auth.clone())).unwrap_err(),
             EngineErrorKind::GATEWAY_PLAYLIST_UNCHECKED
         );
-        assert!(mapper.file_request(file(url, auth.clone()), true).is_ok());
+        assert!(
+            mapper
+                .file_request(checked(file(url, auth.clone())))
+                .is_ok()
+        );
         // Without headers (cookies are scoped to the host by the engine) or for a file, nothing to check.
         assert!(
             mapper
-                .file_request(file(url, StreamAuth::default()), false)
+                .file_request(file(url, StreamAuth::default()))
                 .is_ok()
         );
         assert!(
             mapper
-                .file_request(
-                    file("https://media.example.com/Videos/1/stream", auth),
-                    false
-                )
+                .file_request(file("https://media.example.com/Videos/1/stream", auth))
                 .is_ok()
         );
     }
@@ -621,10 +625,7 @@ mod tests {
     fn tracks_are_chosen_by_ff_index_once_listed_and_external_ones_by_order() {
         let mut mapper = MpvMapper::default();
         mapper
-            .file_request(
-                file("https://media.example.com/v", StreamAuth::default()),
-                false,
-            )
+            .file_request(file("https://media.example.com/v", StreamAuth::default()))
             .unwrap();
         let (mut signals, mut commands) = (Vec::new(), Vec::new());
         mapper.translate(

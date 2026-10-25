@@ -37,9 +37,10 @@ pub const START_WAIT: Duration = Duration::from_secs(2);
 /// What the test engine was asked to do, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TestCommand {
-    /// A load, without its URL: whether it carried gateway credentials, the start and the tracks.
+    /// A load, without its URL: whether it carried gateway credentials and its playlists were checked, the start and the tracks.
     Load {
         credentials: bool,
+        playlist_checked: bool,
         start: Duration,
         audio: EngineTrack,
         subtitle: EngineTrack,
@@ -198,12 +199,14 @@ impl Engine for TestBackend {
 
     fn load(&mut self, file: EngineFile) -> Result<(), EngineErrorKind> {
         let credentials = !file.auth.cookies.is_empty() || !file.auth.headers.is_empty();
-        let (start, audio, subtitle) = (file.start, file.audio, file.subtitle);
+        let (start, audio, subtitle, playlist_checked) =
+            (file.start, file.audio, file.subtitle, file.playlist_checked);
         let url = file.url.expose().to_owned();
         // The same refusal as libmpv's mapping: an unchecked playlist with headers is not opened.
-        MpvMapper::default().file_request(file, false)?;
+        MpvMapper::default().file_request(file)?;
         self.record(TestCommand::Load {
             credentials,
+            playlist_checked,
             start,
             audio,
             subtitle,

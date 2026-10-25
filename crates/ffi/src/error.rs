@@ -1,6 +1,7 @@
 //! The one error type every export returns (ADR 0004). It becomes `CoreException` with one nested class per variant in C#, and a
 //! Swift `Error` enum.
 
+use crate::browse::{BrowseProblem, ImageProblem};
 use crate::player_records::PlayerProblem;
 use crate::problems::{GatewayInputProblem, StoreProblem};
 
@@ -31,6 +32,15 @@ pub enum CoreError {
     /// The gateway credentials handed over were not used (ADR 0017): nothing was sent.
     #[error("the gateway credentials cannot be used")]
     Gateway { problem: GatewayInputProblem },
+    /// The server is not a Jellyfin server that is signed in with a live session: browsing needs one (ADR 0018).
+    #[error("not signed in to this server")]
+    NotSignedIn,
+    /// A browse request failed (ADR 0018).
+    #[error("the request failed")]
+    Browse { problem: BrowseProblem },
+    /// An image could not be loaded (ADR 0018).
+    #[error("the image could not be loaded")]
+    Image { problem: ImageProblem },
     /// The player could not open or act (ADR 0019).
     #[error("the player could not do this")]
     Player { problem: PlayerProblem },

@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use current_jellyfin::{
     AuthError, JellyfinClient, MAXIMUM_STREAMING_BITRATE, PlaybackError, PlaybackRequest,
+    PlaylistCheckError,
 };
 use current_model::{
     EngineCapabilities, ItemRef, ItemSummary, MediaSource, MediaStream, PlaybackPreferences,
@@ -225,6 +226,20 @@ impl MediaServer for JellyfinMedia {
             .subtitle(&item.id, &source.id, stream.index, stream.codec.as_ref())
             .await
             .map_err(|error| problem(&error))
+    }
+
+    async fn check_playlist(&self, url: &StreamUrl) -> Result<(), PlaybackProblem> {
+        self.session()?
+            .check_playlist_origin(url.expose())
+            .await
+            .map_err(|error| match error {
+                // The server moved to another address since the URL was made: a new plan gets a new URL.
+                PlaylistCheckError::AddressChanged => PlaybackProblem::Network,
+                PlaylistCheckError::Auth(error) => problem(&error),
+                PlaylistCheckError::Elsewhere
+                | PlaylistCheckError::TooLarge
+                | PlaylistCheckError::Malformed => PlaybackProblem::PlaylistElsewhere,
+            })
     }
 
     fn is_local_address(&self) -> bool {

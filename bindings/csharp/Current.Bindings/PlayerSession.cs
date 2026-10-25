@@ -95,7 +95,7 @@ public sealed class PlayerSession : IAsyncDisposable
     /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled: nothing stays half-started.</exception>
     /// <exception cref="PlayerException">The item's server is not signed in, or the player is closed.</exception>
     public Task PlayAsync(ItemRef item, TimeSpan start, CancellationToken ct = default) =>
-        CoreCall.RunVoidAsync(token => _player.Play(PlayerMap.ToFfi(item), PlayerMap.ToMs(start), token), ct);
+        CoreCall.RunVoidAsync(token => _player.Play(MapBrowse.ToFfi(item), PlayerMap.ToMs(start), token), ct);
 
     /// <summary>The audio stream with this server index.</summary>
     public Task SelectAudioAsync(uint index, CancellationToken ct = default) =>

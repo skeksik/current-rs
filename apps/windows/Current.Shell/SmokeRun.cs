@@ -38,6 +38,8 @@ internal static class SmokeRun
             using var core = CoreHost.Create();
             var version = core.AppInfo.Version;
             Check(version.Length > 0, $"core version '{version}'");
+            // The app ships without a player engine until it ships libmpv (ADR 0019 task 5), and never with the test engine.
+            Check(core.PlayerEngine() == PlayerEngineKind.Unavailable, $"no player engine yet ({core.PlayerEngine()})");
             Console.WriteLine($"     data folder {AppIdentity.DataFolder}");
 
             var baseline = core.LiveListeners;

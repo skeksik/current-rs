@@ -1,12 +1,13 @@
 //! A hand-written Jellyfin stand-in on 127.0.0.1, for the bridge tests (Rust, C# and Swift). It answers only what server setup,
 //! sign-in, restoring a session, sign-out, images, browsing a small fake library (see [`library`]) and a large generated one (see
-//! [`paging`]) and playback (PlaybackInfo, playstate reports, media segments, the session list) ask, in Jellyfin 12.2's shapes as
-//! `current-jellyfin` reads them. Every name, id and credential in it is fake. Test code only: nothing shipped depends on it.
+//! [`paging`]) and playback (PlaybackInfo, playstate reports, media segments, the session list, HLS playlists) ask, in Jellyfin
+//! 12.2's shapes as `current-jellyfin` reads them. Every name, id and credential in it is fake. Test code only: nothing shipped
+//! depends on it.
 
 pub mod library;
 pub mod paging;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -90,6 +91,44 @@ pub struct ImageSeen {
     pub gate_header: String,
 }
 
+/// A playlist request as the stand-in received it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaylistSeen {
+    /// The path and query.
+    pub target: String,
+    /// The [`GATE_HEADER`] header, empty without it.
+    pub gate_header: String,
+}
+
+/// The path of [`TRANSCODE_ITEM`]'s master playlist (its `TranscodingUrl`'s path).
+pub fn master_playlist_path() -> String {
+    format!("/videos/{TRANSCODE_ITEM}/master.m3u8")
+}
+
+/// The path of the media playlist [`TRANSCODE_ITEM`]'s master playlist names by default.
+pub fn media_playlist_path() -> String {
+    format!("/videos/{TRANSCODE_ITEM}/main.m3u8")
+}
+
+/// [`TRANSCODE_ITEM`]'s master playlist until [`Controls::set_playlist`] changes it: one variant, relative, in the shape of Jellyfin's
+/// (not verified against a real server's bytes).
+pub const MASTER_PLAYLIST: &str = "#EXTM3U\n\
+#EXT-X-STREAM-INF:BANDWIDTH=8000000,AVERAGE-BANDWIDTH=8000000,CODECS=\"hvc1.1.4.L120,mp4a.40.2\",RESOLUTION=1920x1080\n\
+main.m3u8?DeviceId=d&MediaSourceId=57a2d1e0000000000000000000000012&PlaySessionId=57a2d1e0000000000000000000000013&ApiKey=not-a-real-variant-key\n";
+
+/// The media playlist until [`Controls::set_playlist`] changes it: fMP4 segments, relative.
+pub const MEDIA_PLAYLIST: &str = "#EXTM3U\n\
+#EXT-X-PLAYLIST-TYPE:VOD\n\
+#EXT-X-VERSION:7\n\
+#EXT-X-TARGETDURATION:6\n\
+#EXT-X-MEDIA-SEQUENCE:0\n\
+#EXT-X-MAP:URI=\"hls1/main/-1.mp4?PlaySessionId=57a2d1e0000000000000000000000013\"\n\
+#EXTINF:6.0, nodesc\n\
+hls1/main/0.mp4?PlaySessionId=57a2d1e0000000000000000000000013&runtimeTicks=0\n\
+#EXTINF:4.0, nodesc\n\
+hls1/main/1.mp4?PlaySessionId=57a2d1e0000000000000000000000013&runtimeTicks=60000000\n\
+#EXT-X-ENDLIST\n";
+
 /// An authentication gateway in front of the stand-in (ADR 0017), as a reverse proxy would answer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Gate {
@@ -126,6 +165,10 @@ struct State {
     reports: Mutex<Vec<(String, String)>>,
     /// Every image request that the gateway let through, in order.
     images: Mutex<Vec<ImageSeen>>,
+    /// Playlists by path, over the defaults ([`MASTER_PLAYLIST`], [`MEDIA_PLAYLIST`]).
+    playlists: Mutex<HashMap<String, String>>,
+    /// Every playlist request that the gateway let through, in order.
+    playlists_seen: Mutex<Vec<PlaylistSeen>>,
     /// The path of every held request whose client closed the connection before it was released.
     cancelled: Mutex<Vec<String>>,
     /// What the user marked played or favourite.
@@ -263,6 +306,16 @@ impl Controls {
         lock(&self.state.images).clone()
     }
 
+    /// Serves `body` as the HLS playlist at `path` (e.g. [`master_playlist_path`]), to a signed-in client.
+    pub fn set_playlist(&self, path: &str, body: &str) {
+        lock(&self.state.playlists).insert(path.to_owned(), body.to_owned());
+    }
+
+    /// The playlist requests that passed the gateway so far, oldest first.
+    pub fn playlists(&self) -> Vec<PlaylistSeen> {
+        lock(&self.state.playlists_seen).clone()
+    }
+
     /// How many held requests to `path` (or a [`paging::page_key`]) were given up by their client (the connection closed) before [`Controls::release`].
     pub fn cancelled(&self, path: &str) -> usize {
         lock(&self.state.cancelled)
@@ -350,6 +403,21 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
             let _ = socket.shutdown().await;
             return;
         }
+        None if let Some(body) = playlist(&state, &received.path) => {
+            lock(&state.playlists_seen).push(PlaylistSeen {
+                target: received.target.clone(),
+                gate_header: received.gate_header.clone(),
+            });
+            let (status, body) = if authorized(&state, &received) {
+                (200, body)
+            } else {
+                (401, String::new())
+            };
+            format!(
+                "HTTP/1.1 {status} X\r\ncontent-type: application/vnd.apple.mpegurl\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        }
         None => {
             let (status, body) = answer(&state, &received);
             format!(
@@ -403,6 +471,20 @@ fn gate(state: &State, received: &Received) -> Option<String> {
             })
         }
         Gate::Header => (received.gate_header != GATE_HEADER_VALUE).then(|| reply(403, "", "")),
+    }
+}
+
+/// The playlist served at `path`, if any.
+fn playlist(state: &State, path: &str) -> Option<String> {
+    if let Some(body) = lock(&state.playlists).get(path) {
+        return Some(body.clone());
+    }
+    if path == master_playlist_path() {
+        Some(MASTER_PLAYLIST.to_owned())
+    } else if path == media_playlist_path() {
+        Some(MEDIA_PLAYLIST.to_owned())
+    } else {
+        None
     }
 }
 

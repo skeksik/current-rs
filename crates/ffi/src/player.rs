@@ -11,9 +11,10 @@ use std::time::Duration;
 use current_app::{PlayerAction, SwapChain};
 use tokio::runtime::Handle;
 
+use crate::browse::ItemRef;
 use crate::cancel::{self, CancelToken};
 use crate::player_records::{
-    CompositionSize, DisplayFacts, ItemRef, NowPlayingSnapshot, PlaybackInfoSnapshot,
+    CompositionSize, DisplayFacts, NowPlayingSnapshot, PlaybackInfoSnapshot,
     PlaybackSettingsSnapshot, PlayerEngineKind, PlayerStateSnapshot, QualityChoice,
     SubtitleSelection,
 };

@@ -89,6 +89,23 @@ fn until<T: std::fmt::Debug>(rx: &Receiver<T>, what: &str, done: impl Fn(&T) -> 
     }
 }
 
+/// Applies batches of diffs to `list` until `done` holds for it.
+fn mirror_until(
+    rx: &Receiver<Vec<SavedServerDiff>>,
+    list: &mut Vec<SavedServerSnapshot>,
+    what: &str,
+    done: impl Fn(&Vec<SavedServerSnapshot>) -> bool,
+) {
+    while !done(list) {
+        let batch = rx
+            .recv_timeout(WAIT)
+            .unwrap_or_else(|_| panic!("timed out waiting for {what}; the list is {list:?}"));
+        for diff in batch {
+            apply(list, diff);
+        }
+    }
+}
+
 fn stand_in() -> StandIn {
     runtime::handle()
         .unwrap()
@@ -599,14 +616,9 @@ fn removing_a_server_signs_out_and_forgets_it() {
     assert_eq!(stand_in.live_sessions(), 1);
     let (listener, rx) = recorder();
     let _servers = core.subscribe_servers(listener);
+    // The core's list follows the saved servers on the runtime: the first Reset may come before the server does.
     let mut list = Vec::new();
-    for diff in until(&rx, "the saved server", |diffs| !diffs.is_empty())
-        .into_iter()
-        .flatten()
-    {
-        apply(&mut list, diff);
-    }
-    assert_eq!(list.len(), 1);
+    mirror_until(&rx, &mut list, "the saved server", |list| list.len() == 1);
 
     let result = block_on(core.remove_server(first_server())).unwrap();
     assert_eq!(
@@ -617,13 +629,7 @@ fn removing_a_server_signs_out_and_forgets_it() {
         }
     );
     // The list, the capabilities state and the keyring forget it at once; the server hears of it in the background.
-    for diff in until(&rx, "the removal", |diffs| !diffs.is_empty())
-        .into_iter()
-        .flatten()
-    {
-        apply(&mut list, diff);
-    }
-    assert!(list.is_empty());
+    mirror_until(&rx, &mut list, "the removal", Vec::is_empty);
     assert!(core.servers().is_empty());
     let (listener, capabilities) = recorder();
     let _capabilities = core.subscribe_capabilities(listener);

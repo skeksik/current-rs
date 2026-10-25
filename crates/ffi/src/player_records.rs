@@ -7,36 +7,14 @@ use std::time::Duration;
 use current_app::playback::{NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, Track};
 use current_app::{EngineOutput, MediaStatus, NowPlaying, PlaybackInfo, PlayerEngine};
 use current_model::{
-    self as model, MediaSource, MediaStream, PlaybackProblem as ModelProblem, PlayerState, Route,
-    RouteLabel, StreamAction, StreamProtocol, SubtitleChoice, TranscodingFacts,
+    MediaSource, MediaStream, PlaybackProblem as ModelProblem, PlayerState, Route, RouteLabel,
+    StreamAction, StreamProtocol, SubtitleChoice, TranscodingFacts,
 };
 
-use crate::records::ServerRef;
+use crate::browse::ItemRef;
 
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-}
-
-/// An item of a server.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, uniffi::Record)]
-pub struct ItemRef {
-    pub server: ServerRef,
-    pub id: String,
-}
-
-impl From<&model::ItemRef> for ItemRef {
-    fn from(item: &model::ItemRef) -> Self {
-        Self {
-            server: (&item.server).into(),
-            id: item.id.as_str().to_owned(),
-        }
-    }
-}
-
-impl From<&ItemRef> for model::ItemRef {
-    fn from(item: &ItemRef) -> Self {
-        model::ItemRef::new((&item.server).into(), model::ItemId::new(item.id.clone()))
-    }
 }
 
 /// The panel's size in physical pixels (`ActualSize` × `CompositionScale`, ADR 0007).
@@ -148,6 +126,9 @@ pub enum PlaybackProblem {
         status: u16,
     },
     NotFound,
+    /// The server's HLS playlist names another address (or could not be checked), so it cannot be played with the address's gateway
+    /// headers (ADR 0019, "Playlists and headers").
+    PlaylistElsewhere,
 }
 
 impl From<&ModelProblem> for PlaybackProblem {
@@ -164,6 +145,7 @@ impl From<&ModelProblem> for PlaybackProblem {
             ModelProblem::SignedOut => Self::SignedOut,
             ModelProblem::Server { status } => Self::Server { status: *status },
             ModelProblem::NotFound => Self::NotFound,
+            ModelProblem::PlaylistElsewhere => Self::PlaylistElsewhere,
         }
     }
 }
