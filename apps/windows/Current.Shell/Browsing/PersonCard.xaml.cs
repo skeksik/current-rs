@@ -22,22 +22,53 @@ public sealed partial class PersonCard : UserControl
         Unloaded += (_, _) => _loader.Recycle();
     }
 
+    /// <summary>The person shown now: bound again to the same one (Loaded after DataContextChanged), the card keeps its photo.</summary>
+    private Person? _shown;
+
     private void Bind()
     {
-        _loader.Recycle();
-        Picture.ProfilePicture = null;
         if (DataContext is not Person person)
+        {
+            _loader.Recycle();
+            _shown = null;
+            Picture.ProfilePicture = null;
+            Picture.DisplayName = "";
+            return;
+        }
+        if (person == _shown && (Picture.ProfilePicture is not null || XamlRoot is null))
         {
             return;
         }
-        Picture.DisplayName = person.Name;
+        _loader.Recycle();
+        Picture.ProfilePicture = null;
+        // The initials only once the photo is late, as a tile's BlurHash (TileImage.PlaceholderDelay): a photo the core has shows
+        // without initials before it (the owner's run, 2026-10-25).
+        Picture.DisplayName = "";
         NameText.Text = person.Name;
         RoleText.Text = person.Role is { Length: > 0 } role ? role : BrowseText.PersonKind(person.Kind);
         AutomationProperties.SetName(this, RoleText.Text.Length > 0 ? $"{person.Name}, {RoleText.Text}" : person.Name);
-        if (person.Image is { } art && XamlRoot is { } root)
+        if (person.Image is not { } art)
         {
-            var size = (int)Math.Ceiling(Picture.Width * root.RasterizationScale);
-            _ = LoadAsync(new ImageRequest(new ImageSource.Server(art.Image), size, size), person);
+            Picture.DisplayName = person.Name;
+            _shown = person;
+            return;
+        }
+        if (XamlRoot is not { } root)
+        {
+            return;
+        }
+        _shown = person;
+        var size = (int)Math.Ceiling(Picture.Width * root.RasterizationScale);
+        _ = LoadAsync(new ImageRequest(new ImageSource.Server(art.Image), size, size), person);
+        _ = ShowInitialsLaterAsync(person);
+    }
+
+    private async Task ShowInitialsLaterAsync(Person person)
+    {
+        await Task.Delay(TileImage.PlaceholderDelay);
+        if (ReferenceEquals(_shown, person) && Picture.ProfilePicture is null)
+        {
+            Picture.DisplayName = person.Name;
         }
     }
 
@@ -46,14 +77,18 @@ public sealed partial class PersonCard : UserControl
         try
         {
             var bitmap = await _loader.LoadAsync(request);
-            if (bitmap is not null && ReferenceEquals(DataContext, person))
+            if (bitmap is not null && ReferenceEquals(_shown, person))
             {
                 Picture.ProfilePicture = bitmap;
             }
         }
         catch (ImageLoadException)
         {
-            // The initials stay.
+            // No photo: the initials, at once.
+            if (ReferenceEquals(_shown, person))
+            {
+                Picture.DisplayName = person.Name;
+            }
         }
         catch (Exception error)
         {

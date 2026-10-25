@@ -135,7 +135,11 @@ public sealed partial class DetailsPage : Page
         PlayedButton.IsChecked = item.User.Played;
         FavouriteButton.IsChecked = item.User.Favourite;
         FavouriteGlyph.Glyph = item.User.Favourite ? "" : "";
-        People.ItemsSource = details.People;
+        // The same people again (a played or favourite change, a refresh): the cards stay, with their photos.
+        if (People.ItemsSource is not IReadOnlyList<Person> shown || !shown.SequenceEqual(details.People))
+        {
+            People.ItemsSource = details.People;
+        }
         PeoplePart.Visibility = details.People.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         SeriesPart.Visibility = item.Kind == "series" ? Visibility.Visible : Visibility.Collapsed;
         ShowPictures(details);
