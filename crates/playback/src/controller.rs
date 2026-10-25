@@ -29,6 +29,12 @@ pub const STATE_INTERVAL: Duration = Duration::from_millis(250);
 pub const NEXT_EPISODE_LEAD: Duration = Duration::from_secs(30);
 /// The next episode starts this long after the end when the user's autoplay is on (choice 8).
 pub const AUTOPLAY_COUNTDOWN: Duration = Duration::from_secs(10);
+/// Loading, seeking, or buffering while not paused, with no position or buffer change for this long, playback fails as
+/// [`PlaybackProblem::Network`]: FFmpeg can wait on a dead connection for minutes without an error (docs/notes/windows-shell.md,
+/// "Player: Windows run", case 7). Twice the 30 s timeouts: mpv's `network-timeout=30` (`current-mpv`'s options) runs out first, so an
+/// error the engine does report takes the engine-failure path and its fallback; the other 30 s, `current-net`'s request timeout,
+/// covers a server that is slow to make the first segment of a transcode.
+pub const STALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq)]
 enum Phase {
@@ -54,6 +60,8 @@ struct Session {
     paused: bool,
     buffering: bool,
     seeking: bool,
+    /// When the engine last moved (an event that changed something, or a command); the stall rule counts from here.
+    last_progress: Duration,
     /// Whether the server was told this play session started, and that it stopped.
     started: bool,
     stop_reported: bool,
@@ -88,6 +96,7 @@ impl Session {
             paused: false,
             buffering: false,
             seeking: false,
+            last_progress: now,
             started: false,
             stop_reported: false,
             item_stopped: false,
@@ -392,6 +401,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             return;
         }
         session.paused = paused;
+        session.last_progress = self.clock.now();
         self.engine.set_paused(paused);
         self.report_progress().await;
         self.publish(true);
@@ -439,6 +449,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             .map_or(target, |duration| target.min(duration));
         session.position = target;
         session.seeking = true;
+        session.last_progress = self.clock.now();
         self.engine.seek_to(target);
         self.update_position();
         self.publish(true);
@@ -605,11 +616,13 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     }
 
     pub async fn on_engine_event(&mut self, event: EngineEvent) {
+        let now = self.clock.now();
         let Some(session) = &mut self.session else {
             return;
         };
         match event {
             EngineEvent::Loaded => {
+                session.last_progress = now;
                 if self.phase == Phase::Loading {
                     let subtitle = session.tracks().subtitle;
                     if session
@@ -621,6 +634,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 }
             }
             EngineEvent::Restarted => {
+                session.last_progress = now;
                 if self.phase == Phase::Loading {
                     self.phase = Phase::Active;
                     session.seeking = false;
@@ -639,6 +653,9 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             }
             EngineEvent::Position(position) => {
                 if matches!(self.phase, Phase::Active | Phase::Loading) {
+                    if session.position != position {
+                        session.last_progress = now;
+                    }
                     session.position = position;
                     let changed = self.update_position();
                     self.publish(changed);
@@ -652,12 +669,16 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 }
             }
             EngineEvent::Buffered(buffered) => {
+                if session.buffered != Some(buffered) {
+                    session.last_progress = now;
+                }
                 session.buffered = Some(buffered);
                 self.publish(false);
             }
             EngineEvent::Paused(paused) => {
                 if self.phase == Phase::Active && session.paused != paused {
                     session.paused = paused;
+                    session.last_progress = now;
                     self.report_progress().await;
                     self.publish(true);
                 }
@@ -665,6 +686,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             EngineEvent::Buffering(buffering) => {
                 if session.buffering != buffering {
                     session.buffering = buffering;
+                    session.last_progress = now;
                     self.publish(true);
                 }
             }
@@ -683,9 +705,16 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         }
     }
 
-    /// Does what is due: the periodic progress report, a held-back state, the autoplay countdown.
+    /// Does what is due: the stall rule, the periodic progress report, a held-back state, the autoplay countdown.
     pub async fn tick(&mut self) {
         let now = self.clock.now();
+        if self
+            .stall_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.stall().await;
+            return;
+        }
         let Some(session) = &self.session else {
             return;
         };
@@ -713,7 +742,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     /// When [`Controller::tick`] has something to do next, by the clock.
     pub fn next_deadline(&self) -> Option<Duration> {
         let session = self.session.as_ref()?;
-        let mut deadlines = Vec::new();
+        let mut deadlines: Vec<_> = self.stall_deadline().into_iter().collect();
         if self.phase == Phase::Active && session.started {
             deadlines.push(session.last_report + PROGRESS_INTERVAL);
         }
@@ -730,6 +759,25 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             }
         }
         deadlines.into_iter().min()
+    }
+
+    /// When the stall rule fails playback, while the player waits on the engine: loading, seeking, or buffering while not paused (a
+    /// paused player is not expected to move).
+    fn stall_deadline(&self) -> Option<Duration> {
+        let session = self.session.as_ref()?;
+        let waiting = match self.phase {
+            Phase::Loading => true,
+            Phase::Active => session.seeking || (session.buffering && !session.paused),
+            _ => false,
+        };
+        waiting.then(|| session.last_progress + STALL_TIMEOUT)
+    }
+
+    /// The engine made no progress for [`STALL_TIMEOUT`]: it is stopped and playback fails, reported stopped with `Failed = true`.
+    /// Nothing is retried by itself; playing the item again resumes at the reported position.
+    async fn stall(&mut self) {
+        self.engine.stop();
+        self.fail(PlaybackProblem::Network).await;
     }
 
     fn current_quality(&self) -> Quality {
@@ -829,6 +877,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         };
         session.planned = Some(planned);
         session.position = start;
+        session.last_progress = self.clock.now();
         session.started = false;
         session.stop_reported = false;
         session.paused = false;
