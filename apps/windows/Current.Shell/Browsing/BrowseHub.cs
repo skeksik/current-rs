@@ -175,6 +175,9 @@ internal sealed class BrowseHub : IDisposable
 internal sealed class ServerBrowse(ServerRef server, string? userId, Browse session) : IDisposable
 {
     private readonly Dictionary<ItemRef, LibraryGrid> _grids = [];
+
+    /// <summary>The detail views of the history's detail pages, by their navigation parameter (the same object on Back).</summary>
+    private readonly Dictionary<object, KeptDetails> _details = new(ReferenceEqualityComparer.Instance);
     private HomeFeed? _home;
 
     public ServerRef Server { get; } = server;
@@ -212,9 +215,40 @@ internal sealed class ServerBrowse(ServerRef server, string? userId, Browse sess
     /// <summary>When Home was last shown: shown again after five minutes, it refreshes.</summary>
     public DateTime HomeLastShown { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// The detail view kept for a history entry (<paramref name="args"/>, the page's navigation parameter), or a new one kept from
+    /// now on: Back to a detail page binds the new page to the view it had, with its details, the season chosen in it, and where the
+    /// page was scrolled to (the owner's choice, 2026-10-25). One page type serves every item, so the frame cannot keep the pages
+    /// themselves.
+    /// </summary>
+    public KeptDetails Details(object args, ItemRef item)
+    {
+        if (!_details.TryGetValue(args, out var kept))
+        {
+            kept = new KeptDetails(Session.Details(item));
+            _details[args] = kept;
+        }
+        return kept;
+    }
+
+    /// <summary>Drops the views of entries no longer in the history (<paramref name="live"/>: the parameters still in it).</summary>
+    public void PruneDetails(IReadOnlySet<object> live)
+    {
+        foreach (var args in _details.Keys.Where(args => !live.Contains(args)).ToList())
+        {
+            _details[args].View.Dispose();
+            _details.Remove(args);
+        }
+    }
+
     public void Dispose()
     {
         IsDisposed = true;
+        foreach (var kept in _details.Values)
+        {
+            kept.View.Dispose();
+        }
+        _details.Clear();
         _home?.Dispose();
         _home = null;
         foreach (var grid in _grids.Values)
@@ -238,4 +272,15 @@ internal sealed class LibraryGrid(PagedItems items, ItemQuery query)
 
     /// <summary>When its page was last shown: shown again after five minutes, it refreshes (ADR 0018, section 3).</summary>
     public DateTime LastShown { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>A history entry's detail view, with the season chosen in it and where its page was scrolled to.</summary>
+internal sealed class KeptDetails(DetailsView view)
+{
+    public DetailsView View { get; } = view;
+
+    /// <summary>The season last chosen, or null for the core's first.</summary>
+    public ItemRef? Season { get; set; }
+
+    public double Offset { get; set; }
 }

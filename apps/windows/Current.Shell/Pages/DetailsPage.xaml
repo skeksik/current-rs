@@ -13,7 +13,7 @@
         </ItemsPanelTemplate>
     </Page.Resources>
 
-    <ScrollViewer>
+    <ScrollViewer x:Name="Scroller">
         <StackPanel>
             <!-- The backdrop across the page, at most MaxBackdropHeight tall (DetailsPage.xaml.cs). -->
             <Grid x:Name="BackdropFrame" Visibility="Collapsed" Background="{ThemeResource ControlFillColorSecondaryBrush}">
@@ -104,10 +104,17 @@
                 <!-- A series: its seasons, then the chosen season's episodes. SelectorBar, as Microsoft recommends for "a limited
                      number of views or pages and only one option can be selected at once" (SelectorBar page, learn.microsoft.com,
                      ms.date 2025-02-26, read 2026-10-25); Pivot "is not recommended for Windows 11 design patterns" (Pivot page,
-                     ms.date 2026-10-13). How it lays out more seasons than fit is not verified. -->
+                     ms.date 2026-10-13). On its own it cut off the seasons that did not fit the width (the owner's run, 2026-10-25), so it
+                     scrolls sideways; that focus on a hidden season brings it into view is checked on the owner's run. -->
                 <StackPanel x:Name="SeriesPart" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="Episodes" />
-                    <SelectorBar x:Name="Seasons" AutomationProperties.Name="Seasons" SelectionChanged="OnSeasonChanged" />
+                    <ScrollViewer
+                        HorizontalScrollMode="Enabled"
+                        HorizontalScrollBarVisibility="Auto"
+                        VerticalScrollMode="Disabled"
+                        VerticalScrollBarVisibility="Disabled">
+                        <SelectorBar x:Name="Seasons" AutomationProperties.Name="Seasons" SelectionChanged="OnSeasonChanged" />
+                    </ScrollViewer>
                     <GridView x:Name="Episodes" Margin="0,8,0,0" ItemTemplate="{StaticResource EpisodeTileTemplate}" AutomationProperties.Name="Episodes" />
                 </StackPanel>
 

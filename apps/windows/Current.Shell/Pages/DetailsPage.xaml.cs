@@ -11,8 +11,9 @@ namespace Current.Shell.Pages;
 /// <summary>
 /// An item's detail page (ADR 0018): backdrop, poster, title, the facts the server gives (year, runtime, ratings, genres), the
 /// overview, the played and favourite marks, and the cast; a series adds its seasons and the chosen season's episodes; every item
-/// its similar items. Everything is the core's DetailsView, opened when the page is shown and closed when it is left. No Play yet:
-/// the player adds it (ADR 0019, task 5), in PlayActions.
+/// its similar items. Everything is the core's DetailsView, kept for the page's history entry (ServerBrowse.Details): Back binds a
+/// new page to the view it had, with the season chosen in it, and scrolls to where the page was. No Play yet: the player adds it
+/// (ADR 0019, task 5), in PlayActions.
 /// </summary>
 public sealed partial class DetailsPage : Page
 {
@@ -24,6 +25,10 @@ public sealed partial class DetailsPage : Page
     private readonly TileImage _poster = new(App.Core!);
     private readonly TileImage _posterPlaceholder = new(App.Core!);
     private DetailsView? _view;
+    private KeptDetails? _kept;
+
+    /// <summary>Reached by Back or Forward: scroll to where the page was once it is laid out.</summary>
+    private bool _restore;
     private ValueSubscription<ItemDetails?>? _details;
     private ValueSubscription<LoadState>? _state;
     private ListSubscription<ItemSummary>? _seasons;
@@ -51,7 +56,9 @@ public sealed partial class DetailsPage : Page
             return;
         }
         var ui = new DispatcherQueueUi(DispatcherQueue);
-        _view = server.Session.Details(args.Item);
+        _kept = server.Details(args, args.Item);
+        _view = _kept.View;
+        _restore = e.NavigationMode is (NavigationMode.Back or NavigationMode.Forward) && _kept.Offset > 0;
         _details = _view.ObserveDetails(ui);
         _details.PropertyChanged += OnDetailsChanged;
         _state = _view.ObserveState(ui);
@@ -69,6 +76,38 @@ public sealed partial class DetailsPage : Page
         Similar.ItemsSource = _similarTiles;
         ShowDetails();
         ShowState();
+        if (_restore)
+        {
+            _ = ScrollWhenLaidOutAsync(_kept.Offset);
+        }
+    }
+
+    /// <summary>Before the exit transition, while the page is still in place: where it was scrolled to.</summary>
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        base.OnNavigatedFrom(e);
+        if (_kept is not null)
+        {
+            _kept.Offset = Scroller.VerticalOffset;
+        }
+    }
+
+    /// <summary>
+    /// Scrolls to <paramref name="offset"/> once the page reaches it: its lists arrive and lay out a moment after it is shown, so it
+    /// tries again each frame, for at most a second. Without animation, as a return to a place is.
+    /// </summary>
+    private async Task ScrollWhenLaidOutAsync(double offset)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(1);
+        while (_view is not null && DateTime.UtcNow < deadline)
+        {
+            if (Scroller.ScrollableHeight >= offset - 0.5)
+            {
+                Scroller.ChangeView(null, offset, null, true);
+                return;
+            }
+            await Task.Delay(16);
+        }
     }
 
     /// <summary>The episodes and similar items as their tiles bind to them (TileList).</summary>
@@ -90,7 +129,7 @@ public sealed partial class DetailsPage : Page
             subscription.Dispose();
         }
         _subscriptions.Clear();
-        _view?.Dispose();
+        // The view stays with its history entry (ServerBrowse.Details); it goes when the entry leaves the history.
         _view = null;
     }
 
@@ -273,7 +312,7 @@ public sealed partial class DetailsPage : Page
         {
             return;
         }
-        var chosen = (Seasons.SelectedItem?.Tag as ItemSummary)?.Item;
+        var chosen = (Seasons.SelectedItem?.Tag as ItemSummary)?.Item ?? _kept?.Season;
         _showingSeasons = true;
         Seasons.Items.Clear();
         foreach (var season in _seasons.Items)
@@ -298,6 +337,10 @@ public sealed partial class DetailsPage : Page
         if (!_showingSeasons && sender.SelectedItem?.Tag is ItemSummary season)
         {
             _view?.SelectSeason(season.Item);
+            if (_kept is not null)
+            {
+                _kept.Season = season.Item;
+            }
         }
     }
 

@@ -412,6 +412,31 @@ public sealed partial class MainWindow : Window
         _ => null,
     };
 
+    /// <summary>Detail views kept for history entries that are no longer in the history (a new page dropped the forward stack).</summary>
+    private void PruneKeptDetails()
+    {
+        if (App.Browsing is not { } hub)
+        {
+            return;
+        }
+        var live = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        foreach (var entry in ContentFrame.BackStack.Concat(ContentFrame.ForwardStack))
+        {
+            if (entry.Parameter is { } parameter)
+            {
+                live.Add(parameter);
+            }
+        }
+        if (_shownParameter is { } shown)
+        {
+            live.Add(shown);
+        }
+        foreach (var server in hub.Servers)
+        {
+            server.PruneDetails(live);
+        }
+    }
+
     /// <summary>Pages of a server whose session ended leave the back and forward stacks; the page shown now goes to Home.</summary>
     private void DropHistoryOfGoneServers(BrowseHub hub)
     {
@@ -484,6 +509,7 @@ public sealed partial class MainWindow : Window
     private void OnNavigated(object sender, NavigationEventArgs e)
     {
         _shownParameter = e.Parameter;
+        PruneKeptDetails();
         DropSignInHistory();
         UpdateBackButton();
         SelectShownPage();
