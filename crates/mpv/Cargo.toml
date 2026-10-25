@@ -1,0 +1,31 @@
+[package]
+name = "current-mpv"
+description = "The libmpv engine: hand-written client API declarations, the event thread, options, display facts, swap chain and capabilities."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Links libmpv (`mpv.lib` from the D6 build on Windows, the system libmpv on Linux) and builds the engine. Off by default, so the
+# workspace builds and tests on machines without libmpv; the "mpv (Windows)" CI job turns it on. Tests that need libmpv are ignored
+# without it.
+libmpv = []
+
+[dependencies]
+current-model.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# For the self-signed HTTPS stand-in of the TLS test.
+rustls.workspace = true
+tempfile.workspace = true
+
+# Not `[lints] workspace = true`: the workspace forbids `unsafe_code`, and a forbid cannot be lifted inside the crate. This crate calls
+# libmpv's C API, which needs `unsafe` (ADR 0002, ADR 0019); it denies it instead and allows it only on the `sys` declarations and the
+# handle (`engine`) and the swap chain (`swapchain`), each block commented with its invariant. Keep the rest equal to the workspace's lints.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

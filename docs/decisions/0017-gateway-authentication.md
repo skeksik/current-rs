@@ -113,9 +113,13 @@ are sent on every request to that address. Names that Current sets itself (`Auth
   core reads `Set-Cookie` back is open choice 4.
 - **Images:** the core fetches image bytes with the same credentials and hands the UI the bytes (UI image loaders cannot add headers).
   M2 decides the image path; this ADR only requires that it carries gateway credentials.
-- **The player (M2, M3):** libmpv gets gateway cookies through its `cookies` option (FFmpeg scopes them by domain and Secure, also for
-  HLS segments) and Basic or extra headers through `http-header-fields`, which FFmpeg keeps on a redirect to another host: the player
-  task must stop at a redirect off the address (or not pass header secrets to a stream that can redirect). AVPlayer takes cookies
+- **The player (M2, M3):** libmpv gets gateway cookies through FFmpeg's own `cookies` option, passed through `stream-lavf-o` as a
+  per-file option of `loadfile`, never a cookie file (mpv's own `cookies` only switches its cookie file on), and Basic or extra headers
+  through FFmpeg's `headers` the same way. FFmpeg keeps headers on a redirect to another host, so every stream gets `max_redirects=0`
+  and a redirect fails; every stream is also opened with `tls-verify=yes` (mpv's default is off). FFmpeg 9.0.2 matches a cookie's
+  domain against the request's Host value, port included, and ignores Secure (`libavformat/http.c`, `get_cookies`), so the engine
+  gives each cookie the stream URL's host and port as its domain and sends Secure cookies only over https. External subtitles are
+  fetched by the core, not by mpv. Amended by ADR 0019 (owner, 2026-10-25); written in `current-mpv` (docs/notes/mpv-engine.md). AVPlayer takes cookies
   through `AVURLAssetHTTPCookiesKey`; headers have no supported API, so header and Basic gateways on Apple need a resource loader or a
   loopback relay in the core, decided in M3.
 - **AirPlay and casting:** a receiver gets only the URL. When the address in use has gateway credentials, the cast and AirPlay buttons
