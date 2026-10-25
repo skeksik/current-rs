@@ -1,0 +1,243 @@
+# 0018: Browsing: items, queries, paged lists and images
+
+Status: proposed (2026-10-25), from the browse spike; accepted when its PR merges. The owner decides the open choices below.
+Research, quotes and sources: `docs/notes/jellyfin-browse.md`. Playback, media sources and streams are ADR 0019's (spike/playback-design);
+section 6 of the notes lists what is left to it.
+
+## Context
+M2 makes a Jellyfin library browsable on Windows: Home, library grids, detail pages, search, played and favourite (docs/roadmap.md).
+The core already has the identity types and `Artwork` (ADR 0005), `ObservableList` and diff lists across the bridge (ADR 0004), and
+per-address gateway credentials that every request to a server must carry, images included (ADR 0017: "UI image loaders cannot add
+headers").
+
+What the research found:
+- **Jellyfin 12.2 serves everything we need from a handful of endpoints**, and list answers can be trimmed: `fields`,
+  `enableImageTypes`, `imageTypeLimit` and `enableUserData` control what each item carries; `Items/{id}` always returns all fields.
+- **Paging is by index** (`startIndex`, `limit`) with a `TotalRecordCount` for the whole query. **Search is not pageable**: 12.2 asks
+  its search providers for `3 × limit` candidates and pages within those.
+- **An image's tag is its version**: with `tag`, Jellyfin answers `Cache-Control: ... immutable` and an `ETag`. A cache keyed by
+  item, image type, index, tag and size never needs revalidation.
+- **`fillWidth`/`fillHeight`** return an image that covers the box at the source's aspect ratio, never upscaled.
+- **WinUI**: `GridView` supports random-access data virtualisation with `IItemsRangeInfo` and placeholders, which must not be `null` in
+  WinUI 3. A collection `Reset` costs the scroll position. `BitmapImage` reads JPEG, PNG, BMP, GIF, TIFF, JPEG XR and ICO, not WebP,
+  from a URI or from a stream through `SetSourceAsync`.
+- **`Artwork.url` cannot stay a URL**: the address changes with roaming (ADR 0014) and addresses must not cross the bridge.
+
+## Decision
+
+### 1. Items in `current-model` (amends ADR 0005)
+Pure records, no I/O, no serde, bridge-ready like the rest of the model.
+
+- **`ImageRef`**: `item: ItemRef` (whose image: an episode's row may show its series' poster), `kind: ImageType`, `index: u32` (for
+  backdrops after the first), `tag: String` (the server's version of the image). **`Artwork` keeps `kind`, `aspect_ratio`,
+  `blurhash` and replaces `url` with `image: ImageRef`.** The service crate builds the URL when it fetches, from the address that
+  serves at that moment.
+- **`UserState`**: `played: bool`, `position: Option<Duration>` (resume point), `progress: Option<f32>` (0.0-1.0, from
+  `PlayedPercentage`), `favourite: bool`, `unplayed_count: Option<u32>` (series, seasons, folders), `play_count: u32`.
+- **`ItemSummary`**, what grids and rows show: `item: ItemRef`, `kind: MediaKind`, `name`, `year: Option<i32>`,
+  `runtime: Option<Duration>`, `artwork: Vec<Artwork>` (at most one per image type, so primary, thumb and backdrop are available to
+  pick per layout), `user: UserState`, `episode: Option<EpisodeLinks>` and `child_count: Option<u32>` (the number of new episodes when
+  "latest" groups them).
+  - `EpisodeLinks`: `series: Option<ItemRef>`, `series_name`, `season: Option<ItemRef>`, `season_name`, `number: Option<u32>`,
+    `number_end: Option<u32>`, `season_number: Option<u32>`.
+- **`Library`**: `item: ItemRef`, `name`, `collection: CollectionKind`, `artwork`. `CollectionKind` is a new open value (`MOVIES`,
+  `TV_SHOWS`, `MUSIC`, `MUSIC_VIDEOS`, `HOME_VIDEOS`, `BOX_SETS`, `BOOKS`, `PHOTOS`, `PLAYLISTS`; anything else passes through).
+- **`ItemDetails`**, what a detail page shows: `summary: ItemSummary`, `original_title`, `overview`, `taglines`, `genres: Vec<String>`,
+  `studios: Vec<String>`, `people: Vec<Person>`, `official_rating: Option<String>`, `community_rating: Option<f32>`,
+  `critic_rating: Option<f32>`, `premiere: Option<CalendarDate>`, `end: Option<CalendarDate>`, `status: Option<String>` (a series'
+  "Continuing"/"Ended", as the server writes it), `backdrops: Vec<Artwork>`, `logo: Option<Artwork>`, `chapters: Vec<Chapter>`
+  (`start: Duration`, `name`), `media: Option<MediaSummary>`.
+  - `Person`: `person: ItemRef`, `name`, `role: Option<String>`, `kind: PersonKind` (open: `ACTOR`, `DIRECTOR`, `WRITER`, ...),
+    `image: Option<Artwork>`.
+  - `CalendarDate`: `year`, `month`, `day`. The model has no date type and takes no dependency for one.
+  - **`MediaSummary`** (thin, by agreement with ADR 0019): `source_count: u32` (versions), `container: Option<String>`,
+    `video: Option<StreamSummary>`, `audio: Vec<StreamSummary>`, `subtitles: Vec<StreamSummary>`, each `StreamSummary` being
+    `label: String` (the server's display title), `language: Option<String>`, `codec: Option<String>`. These describe the default
+    version only. ADR 0019 owns `MediaSource` and the full stream types; it may extend `StreamSummary` or replace it with its own
+    types and map `MediaSummary` from them, without a second set of names.
+- **Open values for keys**: `SortKey` (`SORT_NAME`, `DATE_CREATED`, `PREMIERE_DATE`, `PRODUCTION_YEAR`, `COMMUNITY_RATING`,
+  `RUNTIME`, `DATE_PLAYED`, `PLAY_COUNT`, `RANDOM`, ...) with `SortOrder` (`Ascending`, `Descending`, a closed enum: Current defines
+  it), and `ItemFilter` (`PLAYED`, `UNPLAYED`, `FAVOURITE`, `RESUMABLE`, ...). New `MediaKind` constants as browsing maps them
+  (`MUSIC_ALBUM`, `AUDIO`, `MUSIC_ARTIST`, `MUSIC_VIDEO`, `VIDEO`, `FOLDER`, `BOX_SET`); every other Jellyfin type passes through.
+  Music, books and photos are browsable as open values and open in a generic detail page; nothing in M2 plays them.
+- `Duration` is `std::time::Duration` (the model stays dependency-free). Jellyfin's ticks (100 ns) convert in `current-jellyfin`.
+
+### 2. Queries in `current-jellyfin`
+Wire types stay private; each method returns model types. Every list query sends one of two field sets:
+- **Summary**: `fields=PrimaryImageAspectRatio`, `enableImageTypes=Primary,Thumb,Backdrop`, `imageTypeLimit=1`, user data on (the
+  default). Episodes add the series' primary image from `SeriesPrimaryImageTag` when the episode has none (whether that field comes without
+  an `ItemFields` value was not verified; task 1 checks it).
+- **Details**: `Items/{id}` as it is (all fields).
+
+| Method | Endpoint | Notes |
+|---|---|---|
+| `libraries()` | `GET UserViews` | the server returns the user's order and drops hidden views |
+| `items(query, start, limit)` | `GET Items` | `parentId`, `includeItemTypes`, `recursive`, `sortBy`/`sortOrder` (always ending with `SortName`), `filters`, `genres`, `years`, `nameStartsWith`; `enableTotalRecordCount` only on a first page and a refresh |
+| `latest(library, limit)` | `GET Items/Latest` | `parentId` per library, `groupItems=true`; a bare array |
+| `resume(limit)` | `GET UserItems/Resume` | `mediaTypes=Video`, `enableTotalRecordCount=false` |
+| `next_up(limit, cutoff)` | `GET Shows/NextUp` | `enableResumable=false` (no duplicate of "continue watching"), `enableTotalRecordCount=false`; `nextUpDateCutoff` 365 days back until a setting exists |
+| `seasons(series)` | `GET Shows/{id}/Seasons` | |
+| `episodes(series, season)` | `GET Shows/{id}/Episodes` | `seasonId` |
+| `similar(item, limit)` | `GET Items/{id}/Similar` | `fields` as summary |
+| `search(term, kinds, limit)` | `GET Items?searchTerm=` | one request per result group (movies, series, episodes, ...), `recursive=true`, one page of up to 24 each; not paged (see Context) |
+| `details(item)` | `GET Items/{id}` | |
+| `set_played(item, bool)` | `POST`/`DELETE UserPlayedItems/{id}` | answers the item's user data |
+| `set_favourite(item, bool)` | `POST`/`DELETE UserFavoriteItems/{id}` | answers the item's user data |
+| `image(request)` | `GET Items/{id}/Images/{type}[/{index}]` | section 4 |
+
+The user's "exclude from latest" libraries (`Configuration.LatestItemsExcludes`, which sign-in already reads) are kept with the session
+so Home can skip them.
+
+### 3. Paged lists in `current-app`
+A library grid is a **`PagedItems`**: an `ObservableList<Slot>` sized to the query's total, where `Slot` is `Loading`, `Item(ItemSummary)`
+or `Failed`. Placeholders are records, never null (WinUI 3 crashes on null placeholders).
+
+- **Loading.** The first request asks for page 0 with the total count, then the list is reset once to `total` slots (page 0 filled, the
+  rest `Loading`). The UI reports what it shows with `set_visible_range(first, last)`; the core loads the pages that cover it plus one
+  page either side, at most two requests at a time, the newest range first, and cancels requests for pages that left the window. A
+  loaded page fills its slots with `Set` diffs in one batch. **Page size: 100** (what jellyfin-web uses; "prefer chunky to chatty").
+  Loaded pages stay loaded for the life of the list; a list of 10,000 summaries is a few megabytes (not measured), so no pruning in M2.
+- **Backlog.** The list is built `with_backlog` of at least eight pages of diffs, so a busy UI is not reset (a reset costs the scroll
+  position).
+- **Refresh** (the user asks, the page is shown again after five minutes, the network changed) **never resets.** The core re-reads the
+  loaded pages nearest the visible range with the total count; slots whose item changed get `Set`; a smaller or larger total removes
+  or appends slots at the end; other loaded pages become stale and reload when they are next visible. The scroll position stays
+  because the UI's collection only sees `Set`, `Append` and `Remove`. A new sort or filter is a new query and does reset: the grid
+  starts at the top, as a re-sorted list does.
+- **A failed page** turns its slots into `Failed`; the UI shows those tiles empty with a retry glyph, and the list's state value
+  (`PagedState { total, loading, failed: Option<NetProblem> }`) drives one message above the grid with a Retry button. Retry reloads
+  every failed page; the next scroll that reaches a failed page retries it once by itself.
+- **Short lists** (home rows, seasons, episodes, similar, search groups, details) are plain `ObservableList<ItemSummary>` or a value,
+  loaded in one request.
+
+### 4. Images
+**The core fetches every image** through the server's `RoamingAddresses`, so the current address and its gateway credentials apply
+(ADR 0014, ADR 0017), and hands the UI the bytes.
+
+- **Request**: the UI asks for an `ImageRef` at a box size in physical pixels: the slot's size in view pixels times
+  `XamlRoot.RasterizationScale` on Windows. The core rounds the width up to a bucket (160, 240, 320, 480, 640, 960, 1280, 1920, 2560,
+  3840) and scales the height by the box's ratio, so a few sizes per layout serve every scale.
+- **URL**: `fillWidth`, `fillHeight`, `quality=90` (the server's default), `tag`, `imageIndex` when non-zero; `Accept: image/jpeg,
+  image/png` and no `format`, so the server sends JPEG, or PNG when the image needs transparency (logos), never WebP.
+- **Delivery: bytes over UniFFI** (open choice 2). `Core::load_image(request, cancel)` returns the encoded bytes. In C#, an
+  `ImageLoader` adapter turns them into a `BitmapImage` through `MemoryStream.AsRandomAccessStream()` and `SetSourceAsync`, with
+  `DecodePixelWidth` set to the box width, and cancels when the tile is recycled. No path and no address crosses the bridge, the UI
+  never reads the cache folder, and an eviction can never pull a file from under the UI.
+- **Memory cache**: encoded bytes, least recently used, 64 MB. Identical requests in flight share one fetch. At most six image fetches
+  per server at a time; the newest request goes first, since the user scrolled to it.
+- **Disk cache** (open choices 3, 4 and 7):
+  - Location: a cache folder the UI passes at start, next to the data folder argument (amends ADR 0013): `%LOCALAPPDATA%\Current\Cache`
+    on Windows, inside the per-user data tree and never next to the program (ADR 0009); `~/Library/Caches/<bundle id>` on macOS (not
+    verified). The core never looks folders up.
+  - **Per server**: `images/<hash(server ref)>/<hash(server ref, item id, image type, index, tag, width, height)>`. No title, item name,
+    address or user name goes into a file name or a log line; logs name the server key and the short hash only.
+  - Written to a temporary file and renamed. An index of sizes and last-access times is built from the folder at start; a hit
+    refreshes the last-access time at most once a minute per file.
+  - Limit **500 MB** by default; when exceeded, the least recently used files are deleted down to 90%, on a blocking thread.
+  - **Removing a server deletes its folder** (in `App::remove_server`), and at start the core deletes folders of servers that are no
+    longer saved.
+- **BlurHash**: the core decodes `Artwork.blurhash` into a small BMP (at most 32 pixels on the long side, at the image's aspect ratio)
+  with our own decoder (about a hundred lines from the published format, no dependency), through the same `load_image` path with a
+  `blurhash` request kind. BMP needs no encoder and every UI reads it (open choice 5).
+- No new dependency. The cache key hash is our own (open choice 7).
+
+### 5. Played and favourite
+One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
+1. `set_played(item, true)` (or favourite) records the new `UserState` as pending and broadcasts `(ItemRef, UserState)` inside the core.
+2. **Every live list subscribes to the store** and patches its slots for that `ItemRef` with `Set` (each list keeps an
+   `ItemRef → indices` map): grids, home rows, details, search. Items loaded while a change is pending take the pending state.
+3. The request goes out; requests for one item are sent one at a time, and only the last wanted state is sent after one in flight.
+4. Success: the server's answer becomes the item's state. Then the lists whose content depends on it reload in the background, a
+   second after the last change: "continue watching", "next up", and the parent series and season (their unplayed count).
+5. Failure: the store rolls back to the state before the change, broadcasts it, and raises one notice (`ActionFailed { action, problem }`)
+   that the UI shows as a message. The item's name may appear in the message; it never goes to the log.
+
+### 6. Home
+Home is a **`HomeFeed`**: a list of rows, each with its own item list.
+- **Rows, in order**: Continue watching (`resume`), Next up (`next_up`), then Latest in each library in the user's library order
+  (open choice 6). A row is shown only when it has items, so no row assumes a library type exists: "Next up" appears because the
+  server returned episodes, not because a TV library is present. Latest skips libraries in the user's "exclude from latest" list
+  and collection kinds without a meaningful "latest" (`PLAYLISTS`, `BOX_SETS`, and the views jellyfin-web also skips).
+- Rows load in parallel; each appears as soon as it has items, in its place. A failed row is left out and one message offers Retry.
+- Without a signed-in Jellyfin server, Home shows the M1 empty state (add a server); browse features read
+  `Capabilities::is_available(&ServiceType::JELLYFIN)` and hide otherwise. An unreachable server keeps its rows from the last load,
+  marked offline, and images from the disk cache still show.
+- Refresh: on start, on return to the foreground (the existing session hook), after played or favourite changes (the dependent rows),
+  after playback stops (an event ADR 0019 provides), and on request.
+- Libraries are reached from the app's navigation (one entry per library), not from a tile row on Home (open choice 6).
+
+### 7. Across the bridge
+Records mirror the model types (`ItemSummary`, `ItemDetails`, `Library`, `ImageRef`, `Artwork`, `UserState`, `Slot`, `PagedState`, ...);
+item ids and image tags cross, addresses and paths never do.
+- `Core::browse(server)` returns a `Browse` object: `libraries()` (a value), `open_library(library, query) -> PagedItems`,
+  `home() -> HomeFeed`, `details(item) -> DetailsView` (the details value plus seasons, episodes and similar lists), `search(term)`.
+- `PagedItems`: `subscribe_slots(listener)` (a diff list), `subscribe_state(listener)` (a value), `set_visible_range(first, last)`,
+  `refresh()`, `retry()`.
+- `HomeFeed`: `subscribe_rows` (a diff list of `HomeRow { key, kind, title }`), `subscribe_row(key, listener)` (a diff list of items).
+- `set_played(item, bool)`, `set_favourite(item, bool)` on `Browse`; notices through a value on `Core`.
+- `load_image(request, cancel) -> bytes` (async, `CancelToken`, ADR 0004).
+- C#: a `PagedCollection<T>` over `DiffObservableCollection<T>` that implements `IItemsRangeInfo` and forwards the visible range;
+  `ImageLoader` as above; one `ListSubscription<T>` per row.
+
+### 8. Tasks
+| # | Task | Done when |
+|---|---|---|
+| 1 | `current-model` browse types and `Artwork.image`; `current-jellyfin` browse queries with the two field sets; the stand-in serves recorded-shape answers for each endpoint | unit tests per endpoint against hand-written 12.2 answers (paging, totals, search window, latest grouping, ticks, missing fields, unknown kinds and collection types pass through); played and favourite answers mapped; clippy, fmt, tests, deny green |
+| 2 | Images: `image()` in `current-jellyfin` (URL, `Accept`, buckets); disk and memory cache in `current-app` (per-server folders, temp-and-rename, index, eviction, removal on server removal and at start); BlurHash decoder and BMP writer; the cache folder argument in `App::open` and `open_core` | tests: the gateway header reaches the stand-in's image endpoint; a cached image is served without a request; eviction keeps the newest under the limit; removing a server deletes its folder; cancelling stops the fetch; file names hold only hashes; BlurHash output matches known vectors (the format's published examples, not verified yet) |
+| 3 | `current-app`: `PagedItems`, `HomeFeed`, details, search, `ItemStates`, notices | tests: visible-range loading and cancellation; refresh sends no `Reset` and keeps loaded slots; a failed page becomes `Failed` and retry fills it; an optimistic change shows in every live list and rolls back on failure; dependent rows reload; rows without items are absent |
+| 4 | `current-ffi` and C#: the surface in section 7, `PagedCollection` with `IItemsRangeInfo`, `ImageLoader` | Rust bridge tests and C# tests against the stand-in (paged grid, image bytes, cancellation, a rolled-back toggle); CI's C# job green |
+| 5 | Windows UI: Home, library grid (`GridView`), detail pages (movie, series with seasons and episodes), search, played and favourite, images with BlurHash placeholders, offline state | the smoke run passes; the owner browses a real library on Windows and checks: a grid of thousands scrolls without blank tiles staying, a refresh keeps the position, played and favourite toggle everywhere, images load behind a gateway |
+
+Tasks 1 and 2 can run in parallel; 3 needs 1 (and 2 for images); 4 needs 3; 5 needs 4.
+
+## Open choices (as proposed)
+
+1. **How a long grid loads.** A: a list sized to the server's total with placeholders, loading pages around what is visible (random
+   access; the scroll bar shows the whole library from the start, the user can jump anywhere). B: append pages as the user nears the
+   end (`ISupportIncrementalLoading`; simpler, but the scroll bar grows and jumping to the end loads everything before it).
+   **Recommendation: A**, with pages of 100. Consequence: the C# side implements `IItemsRangeInfo` and placeholder tiles.
+
+2. **How image bytes reach the UI.** A: bytes over UniFFI. B: a path to the cached file, which the UI opens. C: a loopback HTTP URL.
+   B needs the core to keep a file alive while the UI reads it, puts paths that contain the account name across the bridge, and its
+   `UriSource` form is not verified for unpackaged apps; C needs an HTTP server and a token in the core. **Recommendation: A.**
+   Consequence: one copy of each encoded image (tens of kilobytes) into the UI per display.
+
+3. **The disk cache's size and lifetime.** Proposed: 500 MB, least recently used first; deleted with the server. Also: should signing
+   out of a server delete its images (the server stays saved, but the user asked to be forgotten)? **Recommendation:** 500 MB, no
+   setting in M2; delete on sign-out as well as on removal. Consequence: after signing in again, images download again.
+
+4. **Where "Clear cache" goes.** A: a "Storage" section in Settings showing the cache size, with "Clear" (a pattern like Windows'
+   own storage settings; how Windows Settings words it was not verified). B: under Diagnostics, next to "copy diagnostics". C: none in
+   M2. **Recommendation: A**, small, in the Windows UI task. Consequence: one more Settings section.
+
+5. **BlurHash placeholders.** A: the core decodes to a small BMP (our own code). B: each UI decodes (a library per platform, or our own
+   code three times). C: no blur, a neutral tile until the image arrives. **Recommendation: A.** Consequence: about a hundred lines
+   and tests in the core, once for every platform.
+
+6. **Home rows.** Proposed: Continue watching, Next up, then Latest per library in the user's order; libraries in the app's navigation,
+   not as a tile row on Home; Continue watching and Next up kept as two rows (as the server's own web client does). The alternative is
+   one merged "Up next" row or a library tile row first. **Recommendation:** as proposed. Consequence: a user with many libraries gets
+   many Latest rows; a later setting can hide some.
+
+7. **The cache file-name hash.** A: our own 128-bit FNV-1a (a dozen lines, no dependency; not cryptographic, which the cache does not
+   need: the inputs are ids and tags, not secrets, and a 128-bit collision among a cache's files is negligible). B: SHA-256 from `ring`, already in the build through `rustls` but not a declared
+   dependency (declaring it needs the owner's approval). **Recommendation: A.** Consequence: none outside the cache.
+
+8. **How other lists see a played or favourite change.** A: one `ItemStates` store every live list follows (section 5). B: reload
+   every visible list after each change. **Recommendation: A.** Consequence: each list keeps an index by `ItemRef`.
+
+Decided with the manager before writing (2026-10-25): the details record carries only `MediaSummary`; ADR 0019 owns media sources and
+streams.
+
+## Proposed amendments to merged ADRs (for the owner)
+- **ADR 0005:** `Artwork.url` becomes `Artwork.image: ImageRef`; the model gains `UserState`, `ItemSummary`, `ItemDetails`, `Library`,
+  `CalendarDate`, `MediaSummary`, `StreamSummary`, `Person`, `Chapter` and the open values `CollectionKind`, `SortKey`, `ItemFilter`,
+  `PersonKind`.
+- **ADR 0013:** `App::open` and `open_core` take a cache folder from the UI as well as the data folder; the table gains a cache column.
+
+## Consequences
+- Grids of any size open at the speed of one page and keep their place through refreshes.
+- Images follow the server's address and gateway like every other request, and a cache of one server never outlives it.
+- The core grows an image cache and a BlurHash decoder, and holds image bytes in memory; the UIs only decode and draw.
+- Search shows the best matches per group, not an endless list; that is what the server offers.
+- ADR 0019 and this ADR share `MediaSummary`; whichever merges second adapts to the other.
