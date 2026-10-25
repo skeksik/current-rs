@@ -96,7 +96,9 @@ public sealed partial class PlayerView : UserControl
         // handledEventsToo: the slider and the buttons handle the pointer themselves.
         Root.AddHandler(PointerMovedEvent, new PointerEventHandler((_, _) => ShowControls()), true);
         Root.AddHandler(PointerPressedEvent, new PointerEventHandler((_, _) => ShowControls()), true);
-        Root.AddHandler(KeyDownEvent, new KeyEventHandler(OnKeyDown), true);
+        // The keys come from the window (MainWindow.OnKeyDown, HandleKey): with no element focused, Windows sends them to the window's
+        // root, above the player, and they never reach it (owner's PC, 2026-10-25).
+        Video.PointerPressed += (_, _) => Focus(FocusState.Pointer);
         Video.DoubleTapped += (_, _) => ToggleFullScreen();
         ControlPanel.PointerEntered += (_, _) => _pointerOverPanel = true;
         ControlPanel.PointerExited += (_, _) => _pointerOverPanel = false;
@@ -111,6 +113,11 @@ public sealed partial class PlayerView : UserControl
     {
         _window = window;
         _host = host;
+        window.Activated += (_, args) =>
+        {
+            _windowActive = args.WindowActivationState != WindowActivationState.Deactivated;
+            KeepKeyboardFocus();
+        };
     }
 
     /// <summary>Whether the player is shown (playing, opening or showing a problem).</summary>
@@ -130,7 +137,14 @@ public sealed partial class PlayerView : UserControl
         ShowProblem(null);
         BusyRing.IsActive = true;
         ShowControls();
-        Focus(FocusState.Programmatic);
+        // Once it is laid out: a view just made visible takes no focus yet.
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+        {
+            if (!Focus(FocusState.Programmatic))
+            {
+                Trace.TraceWarning("Current: the player did not take focus");
+            }
+        });
         try
         {
             // An earlier close finishes first: one engine per process (ADR 0019).
@@ -287,6 +301,7 @@ public sealed partial class PlayerView : UserControl
     private void OnState(object? sender, PropertyChangedEventArgs e)
     {
         var state = State;
+        KeepKeyboardFocus();
         _showingState = true;
         try
         {
@@ -342,6 +357,40 @@ public sealed partial class PlayerView : UserControl
             _ = CloseAsync();
         }
     }
+
+    /// <summary>
+    /// Gives the keyboard back to the player when the window is in front but its content lost it. As playback starts, Windows' focus
+    /// moves from the window's XAML content to the top-level window itself, with or without the media controls (GetFocus and
+    /// GetGUIThreadInfo on the owner's PC, 2026-10-25; what moves it, in libmpv's start or elsewhere, was not found), and then no key
+    /// reaches the player. InputFocusController.TrySetFocus puts it back on the content's island (Microsoft.UI.Input, Windows App SDK
+    /// InteractiveExperiences 2.1.9 metadata; its reference page was not read), and the player takes XAML focus if nothing has it.
+    /// </summary>
+    private void KeepKeyboardFocus()
+    {
+        if (!_open || !_windowActive || XamlRoot?.ContentIsland is not { } island)
+        {
+            return;
+        }
+        try
+        {
+            var controller = InputFocusController.GetForIsland(island);
+            if (!controller.HasFocus)
+            {
+                controller.TrySetFocus();
+            }
+            if (FocusManager.GetFocusedElement(XamlRoot) is null)
+            {
+                Focus(FocusState.Programmatic);
+            }
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: taking the keyboard back failed: {error.GetType().Name}");
+        }
+    }
+
+    /// <summary>Whether the window is in front: the player never takes focus from another app.</summary>
+    private bool _windowActive = true;
 
     /// <summary>The seek bar, its buffered range and the times, unless the user is moving the bar.</summary>
     private void ShowPosition(PlayerState state)
@@ -558,7 +607,7 @@ public sealed partial class PlayerView : UserControl
     /// volume, F and F11 toggle full screen (F11 as in Media Player), Esc leaves full screen (as in Media Player), M mutes. Ctrl+P,
     /// Ctrl+Left, Ctrl+Right, Ctrl+I and F11 are the buttons' own accelerators (PlayerView.xaml), Media Player's keys.
     /// </summary>
-    private void OnKeyDown(object sender, KeyRoutedEventArgs e)
+    internal void HandleKey(KeyRoutedEventArgs e)
     {
         ShowControls();
         if (e.Handled || _session is not { } session || IsModifierDown())
@@ -865,7 +914,10 @@ public sealed partial class PlayerView : UserControl
                 display.SdrWhiteNits > 0 ? $"SDR white {display.SdrWhiteNits:0} nits" : null,
                 display.RefreshHz > 0 ? $"{display.RefreshHz:0.###} Hz" : null));
         }
+        var scale = XamlRoot?.RasterizationScale ?? 1;
         Line(Join("Panel", $"{_compositionSize.Width}×{_compositionSize.Height}",
+            $"view {ActualWidth * scale:0.##}×{ActualHeight * scale:0.##}",
+            XamlRoot is { } root ? $"content {root.Size.Width * scale:0.##}×{root.Size.Height * scale:0.##}" : null,
             _window is { } window ? $"window {window.AppWindow.ClientSize.Width}×{window.AppWindow.ClientSize.Height}" : null));
         return text.ToString().TrimEnd();
     }

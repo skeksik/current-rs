@@ -80,6 +80,14 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
             _appTheme = null;
         };
         Player.Attach(this, this);
+        // handledEventsToo: the player still shows its controls on a key a control took; its shortcuts skip handled keys.
+        Root.AddHandler(UIElement.KeyDownEvent, new KeyEventHandler((_, e) =>
+        {
+            if (Player.IsOpen)
+            {
+                Player.HandleKey(e);
+            }
+        }), true);
         AppWindow.Changed += OnAppWindowChanged;
         AppWindow.Closing += OnClosing;
         Root.Loaded += OnRootLoaded;
@@ -290,9 +298,26 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>Full screen through the AppWindow's full-screen presenter, on whichever monitor the window is (ADR 0007 item 3).</summary>
     public void SetFullScreen(bool on)
     {
-        if (on != IsFullScreen)
+        if (on == IsFullScreen)
         {
-            AppWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+            return;
+        }
+        if (on)
+        {
+            // The one-row gap (ADR 0007, "Limits"): with the content extended into the title bar, WinUI places the content's window
+            // (Microsoft.UI.Content.DesktopChildSiteBridge) one row below the top of the client area, so it stays a row short of the
+            // full-screen presenter's (GetWindowRect of the child windows, and Playback info: content 3840×2159 of a 3840×2160 client,
+            // owner's PC, 2026-10-25). Not extended, before the presenter changes, the content fills it.
+            ExtendsContentIntoTitleBar = false;
+            AppWindow.SetPresenter(AppWindowPresenterKind.FullScreen);
+        }
+        else
+        {
+            AppWindow.SetPresenter(AppWindowPresenterKind.Overlapped);
+            ExtendsContentIntoTitleBar = true;
+            SetTitleBar(AppTitleBar);
+            AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
+            ApplyCaptionButtonColors();
         }
     }
 
