@@ -481,7 +481,7 @@ async fn playback_stopping_gives_every_list_the_item_s_new_marks() {
     // The half-watched film, in a list that no stop reloads: the similar items of another film.
     let half_watched = item(&server, FILM_IDS[1]);
     let other = browse.details(&item(&server, FILM_IDS[0]));
-    eventually(|| !other.state().borrow().loading && other.similar().len() > 0).await;
+    eventually(|| !other.state().borrow().loading && !other.similar().is_empty()).await;
     let shown = || {
         other
             .similar()

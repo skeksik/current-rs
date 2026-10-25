@@ -77,6 +77,7 @@ mod live {
             user_agent: crate::user_agent(),
             // `v` logs more URLs than `info`, so redaction is tested on more lines.
             log_level: LogLevel::Verbose,
+            video_sync: None,
         }
     }
 

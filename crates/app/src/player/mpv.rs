@@ -24,6 +24,10 @@ use current_playback::{EndReason, EngineEvent, EngineFile, EngineTrack, External
 
 use super::backend::{EngineOutput, Signal, SwapChain, VideoOutput};
 
+/// An environment variable naming one of mpv's `video-sync` modes, for comparing `display-resample` with mpv's default on a device
+/// (ADR 0007 item 5, ADR 0019 choice 11; docs/notes/windows-video.md). A test aid, not a setting: unset, mpv keeps its default.
+pub(crate) const VIDEO_SYNC_VARIABLE: &str = "CURRENT_MPV_VIDEO_SYNC";
+
 /// Which kind of track a choice is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TrackKind {
@@ -343,7 +347,7 @@ mod real {
     use current_playback::{Engine, EngineFile, EngineTrack, ExternalSubtitle};
     use tokio::sync::mpsc::UnboundedSender;
 
-    use super::{MpvCommand, MpvMapper, TrackKind, engine_error_kind};
+    use super::{MpvCommand, MpvMapper, TrackKind, VIDEO_SYNC_VARIABLE, engine_error_kind};
     use crate::player::backend::{Backend, EngineOutput, Signal};
 
     /// The libmpv engine of one player.
@@ -375,6 +379,10 @@ mod real {
                 output,
                 user_agent: current_mpv::user_agent(),
                 log_level: LogLevel::Info,
+                // A test aid only (VIDEO_SYNC_VARIABLE); anything that is not one of mpv's modes is ignored.
+                video_sync: std::env::var(VIDEO_SYNC_VARIABLE)
+                    .ok()
+                    .and_then(|name| current_mpv::video_sync_mode(&name)),
             };
             let mpv = Mpv::start(
                 &config,
