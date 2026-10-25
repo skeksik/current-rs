@@ -59,7 +59,7 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
     @Test func openingCreatesThenLoadsTheSettings() async throws {
         let folder = try DataFolder()
         defer { folder.remove() }
-        let core = try await openCore(dataDir: folder.path, deviceName: "Example PC", secrets: .memory)
+        let core = try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "Example PC", secrets: .memory)
         #expect(core.loadReport() == .created)
         #expect(core.servers().isEmpty)
         let report = try await core.exportDiagnostics()
@@ -67,7 +67,7 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         #expect(!report.contains(folder.path))
         #expect(!report.contains("Example PC"))
 
-        let again = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        let again = try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "", secrets: .memory)
         #expect(again.loadReport() == .loaded)
         #expect(try Core().loadReport() == nil)
     }
@@ -75,7 +75,7 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
     @Test @MainActor func theAppThemeIsSavedAndReadAtTheNextOpen() async throws {
         let folder = try DataFolder()
         defer { folder.remove() }
-        let core = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        let core = try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "", secrets: .memory)
         let theme = core.observeAppTheme()
         defer { theme.cancel() }
         #expect(theme.value == .system)
@@ -83,7 +83,7 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         #expect(core.appTheme() == .dark)
         try await eventually("the dark theme") { theme.value == .dark }
 
-        let again = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        let again = try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "", secrets: .memory)
         #expect(again.appTheme() == .dark)
     }
 
@@ -93,7 +93,7 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         let file = folder.path + "/file"
         try Data("x".utf8).write(to: URL(fileURLWithPath: file))
         do {
-            _ = try await openCore(dataDir: file, deviceName: "", secrets: .memory)
+            _ = try await openCore(dataDir: file, cacheDir: file + "/Cache", deviceName: "", secrets: .memory)
             Issue.record("opening succeeded")
         } catch CoreError.Store(problem: .io) {
         }
@@ -104,7 +104,7 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         defer { standIn.stop() }
         let folder = try DataFolder()
         defer { folder.remove() }
-        let core = try await openCore(dataDir: folder.path, deviceName: "Example PC", secrets: .memory)
+        let core = try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "Example PC", secrets: .memory)
         let servers = core.observeServers()
         defer { servers.cancel() }
 
@@ -209,7 +209,7 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         defer { standIn.stop() }
         let folder = try DataFolder()
         defer { folder.remove() }
-        let core = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        let core = try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "", secrets: .memory)
         try await signIn(core, standIn)
         let result = try await core.signOut(server: firstServer)
         #expect(result.serverTold)
@@ -227,7 +227,7 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         defer { standIn.stop() }
         let folder = try DataFolder()
         defer { folder.remove() }
-        let core = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        let core = try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "", secrets: .memory)
         try await signIn(core, standIn)
         let result = try await core.removeServer(server: firstServer)
         #expect(result.removed && !result.credentialsLeft)
@@ -239,7 +239,7 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         try await eventually("the server is told") { (try? standIn.count("/Sessions/Logout")) == 1 }
         let again = try await core.removeServer(server: firstServer)
         #expect(!again.removed)
-        let next = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        let next = try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "", secrets: .memory)
         #expect(next.servers().isEmpty)
     }
 
@@ -248,9 +248,9 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         defer { standIn.stop() }
         let folder = try DataFolder()
         defer { folder.remove() }
-        try await signIn(try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory), standIn)
+        try await signIn(try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "", secrets: .memory), standIn)
         // Memory secrets die with their core: the next one finds the saved user but no token.
-        let next = try await openCore(dataDir: folder.path, deviceName: "", secrets: .memory)
+        let next = try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "", secrets: .memory)
         #expect(next.servers()[0].activeUser == StandIn.userId)
         try await next.restoreSessions()
         _ = try await status(next) { !$0.signedIn }
@@ -304,7 +304,7 @@ private func status(_ core: Core, _ done: (ServerStatusSnapshot) -> Bool) async 
         defer { standIn.stop() }
         let folder = try DataFolder()
         defer { folder.remove() }
-        let core = try await openCore(dataDir: folder.path, deviceName: "Example PC", secrets: .memory)
+        let core = try await openCore(dataDir: folder.path, cacheDir: folder.path + "/Cache", deviceName: "Example PC", secrets: .memory)
         try await signIn(core, standIn)
         let report = try await core.exportDiagnostics()
         #expect(report.contains("/Users/AuthenticateByName"))

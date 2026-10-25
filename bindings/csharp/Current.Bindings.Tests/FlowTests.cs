@@ -78,7 +78,7 @@ internal static class FlowTests
     public static async Task OpenCreatesThenLoads()
     {
         using var folder = new DataFolder();
-        using (var core = await CoreHost.OpenAsync(folder.Path, "Example PC", SecretStore.Memory))
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "Example PC", SecretStore.Memory))
         {
             Check(core.LoadReport is LoadReport.Created, "created");
             Check(core.Servers.Count == 0, "no servers");
@@ -87,7 +87,7 @@ internal static class FlowTests
             Check(!report.Contains(folder.Path, StringComparison.OrdinalIgnoreCase), "no path in the report");
             Check(!report.Contains("Example PC", StringComparison.Ordinal), "no device name in the report");
         }
-        using (var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory))
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory))
         {
             Check(core.LoadReport is LoadReport.Loaded, "loaded");
         }
@@ -101,7 +101,7 @@ internal static class FlowTests
     {
         using var folder = new DataFolder();
         var ui = new ManualDispatcher();
-        using (var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory))
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory))
         {
             Check(core.AppTheme == AppTheme.System, "System until one is chosen");
             using var theme = core.ObserveAppTheme(ui);
@@ -110,7 +110,7 @@ internal static class FlowTests
             Check(core.AppTheme == AppTheme.Dark, "read back at once");
             await Eventually("the observer sees Dark", ui, () => theme.Value == AppTheme.Dark);
         }
-        using (var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory))
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory))
         {
             Check(core.AppTheme == AppTheme.Dark, "kept for the next open");
         }
@@ -120,7 +120,7 @@ internal static class FlowTests
     {
         using var folder = new DataFolder();
         File.WriteAllText(Path.Combine(folder.Path, "settings.json"), "{\"version\": 99, \"device_id\": \"abc\"}");
-        using var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory);
+        using var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory);
         try
         {
             await core.SetAppThemeAsync(AppTheme.Light);
@@ -140,7 +140,7 @@ internal static class FlowTests
         File.WriteAllText(file, "x");
         try
         {
-            using var core = await CoreHost.OpenAsync(file, "", SecretStore.Memory);
+            using var core = await CoreHost.OpenAsync(file, Path.Combine(file, "Cache"), "", SecretStore.Memory);
             Check(false, "opening fails");
         }
         catch (CoreStoreException error)
@@ -153,7 +153,7 @@ internal static class FlowTests
     {
         using var standIn = StandIn.Start();
         using var folder = new DataFolder();
-        using var core = await CoreHost.OpenAsync(folder.Path, "Example PC", SecretStore.Memory);
+        using var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "Example PC", SecretStore.Memory);
         var ui = new ManualDispatcher();
         using var servers = core.ObserveServers(ui);
 
@@ -272,7 +272,7 @@ internal static class FlowTests
     {
         using var standIn = StandIn.Start();
         using var folder = new DataFolder();
-        using var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory);
+        using var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory);
         await SignIn(core, standIn);
         var result = await core.SignOutAsync(FirstServer);
         Check(result.ServerTold, "the server was told");
@@ -293,7 +293,7 @@ internal static class FlowTests
     {
         using var standIn = StandIn.Start();
         using var folder = new DataFolder();
-        using (var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory))
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory))
         {
             await SignIn(core, standIn);
             var result = await core.RemoveServerAsync(FirstServer);
@@ -305,7 +305,7 @@ internal static class FlowTests
             await Eventually("the server is told", ui, () => standIn.Count("/Sessions/Logout") == 1);
             Check(!(await core.RemoveServerAsync(FirstServer)).Removed, "a second removal does nothing");
         }
-        using (var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory))
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory))
         {
             Check(core.Servers.Count == 0, "the next start does not bring it back");
         }
@@ -315,12 +315,12 @@ internal static class FlowTests
     {
         using var standIn = StandIn.Start();
         using var folder = new DataFolder();
-        using (var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory))
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory))
         {
             await SignIn(core, standIn);
         }
         // Memory secrets die with their core: the next one finds the saved user but no token.
-        using var next = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory);
+        using var next = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory);
         Check(next.Servers[0].ActiveUser == StandIn.UserId, "the saved user");
         await next.RestoreSessionsAsync();
         await Status(next, status => !status.SignedIn);
@@ -341,7 +341,7 @@ internal static class FlowTests
     {
         using var standIn = StandIn.Start();
         using var folder = new DataFolder();
-        using var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Keyring);
+        using var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Keyring);
         try
         {
             using (var add = core.AddServer())
@@ -351,7 +351,7 @@ internal static class FlowTests
                 await flow.WithPasswordAsync(StandIn.UserName, StandIn.Password);
                 Check(flow.State is SignInState.SignedIn { Remembered: true }, $"remembered in the keyring, not {flow.State}");
             }
-            using var next = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Keyring);
+            using var next = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Keyring);
             await next.RestoreSessionsAsync();
             var status = await Status(next, status => status.SignedIn && status.Reachability == Reachability.Reachable);
             Check(status.User?.Name == StandIn.UserName, "the user from the restored session");
@@ -411,7 +411,7 @@ internal static class FlowTests
     {
         using var standIn = StandIn.Start();
         using var folder = new DataFolder();
-        using var core = await CoreHost.OpenAsync(folder.Path, "Example PC", SecretStore.Memory);
+        using var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "Example PC", SecretStore.Memory);
         await SignIn(core, standIn);
         var report = await core.ExportDiagnosticsAsync();
         Check(report.Contains("/Users/AuthenticateByName", StringComparison.Ordinal), report);
@@ -503,7 +503,7 @@ internal static class FlowTests
     {
         using var standIn = StandIn.Start();
         using var folder = new DataFolder();
-        using var core = await CoreHost.OpenAsync(folder.Path, "", SecretStore.Memory);
+        using var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory);
         var ui = new RefusingDispatcher();
         using var servers = core.ObserveServers(ui);
         await Eventually("the first Reset", ui.Queue, () => ui.Accepted >= 1);
