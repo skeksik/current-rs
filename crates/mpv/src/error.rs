@@ -67,9 +67,9 @@ pub enum EngineError {
     /// its headers could follow a redirect to another host (ADR 0019, choice 4).
     #[error("this FFmpeg cannot refuse redirects; not sending gateway credentials")]
     RedirectsNotRefused,
-    /// An HLS or DASH playlist with gateway headers, not marked as checked for same-origin URIs: FFmpeg would send the headers to any
-    /// host the playlist names (`FileRequest::playlist_checked_same_origin`).
-    #[error("a playlist with gateway headers must be checked for same-origin URIs first")]
+    /// An HLS or DASH playlist with gateway credentials, not marked as checked for same-origin URIs: FFmpeg would send the headers to
+    /// any host the playlist names, and the cookies to any whose name ends in the stream's (`FileRequest::playlist_checked_same_origin`).
+    #[error("a playlist with gateway credentials must be checked for same-origin URIs first")]
     UncheckedPlaylist,
     /// A cookie or header has a character that would change its meaning (a control character, `;` in a cookie, `:` in a header name).
     /// `what` names the field, never its value.

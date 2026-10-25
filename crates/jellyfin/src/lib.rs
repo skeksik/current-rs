@@ -21,6 +21,7 @@ mod hls;
 mod image;
 mod playback;
 mod playback_wire;
+mod player;
 mod probe;
 mod profile;
 mod wire;
@@ -46,4 +47,5 @@ pub use playback::{
     MAXIMUM_STREAMING_BITRATE, PlayableStream, PlaybackAnswer, PlaybackError, PlaybackRequest,
     ProgressReport, STOP_REPORT_TIMEOUT, SourceAnswer, StopReport, StreamUrl,
 };
+pub use player::{StreamAccess, TranscodePolicy};
 pub use probe::{FoundServer, JellyfinIdentity, MINIMUM_VERSION, ProbeError, Prober, same_server};

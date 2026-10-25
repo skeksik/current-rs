@@ -46,6 +46,11 @@ internal sealed class StandIn : IDisposable
     /// <summary>What <c>fail</c>, <c>hold</c> and <see cref="Cancelled"/> take for the generated library's page at <paramref name="start"/>.</summary>
     public static string PageKey(int start) => $"/Items@{start}";
 
+    // Its playback items (tools/jellyfin-stand-in/src/lib.rs): direct play, and an HLS remux.
+    public const string DirectPlayItem = "57a2d1e0000000000000000000000010";
+    public const string DirectPlayName = "Stand-in Direct Play";
+    public const string TranscodeItem = "57a2d1e0000000000000000000000011";
+
     private readonly Process _process;
 
     private StandIn(Process process, string address)

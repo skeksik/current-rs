@@ -6,10 +6,20 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# The libmpv engine (`current-mpv` with its `libmpv` feature, which links libmpv). Off by default, so the core builds and tests without
+# libmpv; without it and without `test-engine`, `App::open_player` fails with `EngineUnavailable`.
+libmpv = ["current-mpv/libmpv"]
+# A stand-in engine that opens nothing, for the bridge tests (Rust and C#). Never in a build a user runs: the app's build checks its
+# published core library for the test engine's marker (`player::test_engine::MARKER`).
+test-engine = []
+
 [dependencies]
 current-jellyfin.workspace = true
 current-model.workspace = true
+current-mpv.workspace = true
 current-net.workspace = true
+current-playback.workspace = true
 current-store.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

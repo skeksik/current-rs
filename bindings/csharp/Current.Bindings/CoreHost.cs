@@ -32,6 +32,9 @@ public sealed partial class CoreHost : IDisposable
         new(await CoreCall.RunUncancellableAsync(
             () => Ffi.CurrentFfiMethods.OpenCore(dataDirectory, cacheDirectory, deviceName, Map.ToFfi(secrets))).ConfigureAwait(false));
 
+    /// <summary>The generated core, for the adapters in this library (the player's).</summary>
+    internal Ffi.Core Core => _core;
+
     public AppInfo AppInfo => Map.From(_core.AppInfo());
 
     /// <summary>What the settings store found when the core opened. Null for <see cref="Create"/>.</summary>

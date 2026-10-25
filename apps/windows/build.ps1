@@ -29,6 +29,14 @@ finally {
     Pop-Location
 }
 
+# The published core must not have the test engine (crates/app/src/player/test_engine.rs), which only the adapter tests use: its
+# library would hold the engine's marker. bindings/csharp/test.ps1 checks that the test runner's core does.
+$published = Join-Path $out 'current_ffi.dll'
+if (-not (Test-Path $published)) { throw "no current_ffi.dll in $out" }
+if ([System.Text.Encoding]::Latin1.GetString([System.IO.File]::ReadAllBytes($published)).Contains('current-test-engine')) {
+    throw 'the published current_ffi.dll has the test engine'
+}
+
 # The app's PRI file holds its compiled XAML; without it the main window cannot load.
 if (-not (Get-ChildItem $out -File | Where-Object Name -in 'Current.pri', 'resources.pri')) { throw "no app PRI file in $out" }
 

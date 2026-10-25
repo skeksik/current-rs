@@ -2,6 +2,7 @@
 //! Swift `Error` enum.
 
 use crate::browse::{BrowseProblem, ImageProblem};
+use crate::player_records::PlayerProblem;
 use crate::problems::{GatewayInputProblem, StoreProblem};
 
 /// Why a call into the core failed.
@@ -40,4 +41,7 @@ pub enum CoreError {
     /// An image could not be loaded (ADR 0018).
     #[error("the image could not be loaded")]
     Image { problem: ImageProblem },
+    /// The player could not open or act (ADR 0019).
+    #[error("the player could not do this")]
+    Player { problem: PlayerProblem },
 }

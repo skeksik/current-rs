@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::address::{AddressOutcome, AddressProvider, Selected};
 use crate::error::{Location, NetError};
-use crate::gateway::Gateway;
+use crate::gateway::{Gateway, StreamCredentials};
 use crate::log::{LogEntry, Outcome, RequestLog, redact_query};
 use crate::scope::transport;
 
@@ -314,6 +314,21 @@ impl ServerClient {
     /// The address the client would use now, if one is selected. For identity probes, which need to know which address they check.
     pub fn current_address(&self) -> Option<Selected> {
         self.address.current()
+    }
+
+    /// The gateway credentials a player needs for a stream at `url` that it fetches itself: those of the address in use, when `url`
+    /// is on it (same scheme, host and port) and they may go to `url` by the same rule as a request's (https, plain HTTP to the local
+    /// network, or plain HTTP the user confirmed). Empty otherwise, and for an address without a gateway.
+    pub fn stream_credentials(&self, url: &Url) -> StreamCredentials {
+        let Some(selected) = self.address.current() else {
+            return StreamCredentials::default();
+        };
+        if selected.url().origin() != url.origin() {
+            return StreamCredentials::default();
+        }
+        gateway_for(&selected, url)
+            .map(|gateway| gateway.for_stream(url, SystemTime::now()))
+            .unwrap_or_default()
     }
 
     /// Sends a request and decodes its JSON body.
@@ -788,6 +803,73 @@ mod tests {
         ));
         let none = Selected::new(url("https://media.example.com/"), None, 0);
         assert!(gateway_for(&none, &url("https://media.example.com/")).is_none());
+    }
+
+    #[test]
+    fn stream_credentials_are_the_address_gateways_for_urls_on_it_only() {
+        use crate::gateway::{BasicCredentials, GatewayCookie, GatewayCredentials};
+        let credentials = GatewayCredentials::new(
+            Some(BasicCredentials::new("viewer", "basic-secret").unwrap()),
+            vec![
+                crate::ExtraHeader::new(
+                    "X-Gateway",
+                    "header-secret",
+                    crate::AuthorizationUse::Service,
+                )
+                .unwrap(),
+            ],
+            vec![
+                GatewayCookie::new("session", "cookie-secret", "media.example.com")
+                    .unwrap()
+                    .with_secure(true),
+                GatewayCookie::new("other", "elsewhere", "other.example.com").unwrap(),
+            ],
+        )
+        .unwrap();
+        let gateway = Arc::new(Gateway::new(credentials));
+        let client = |address: &str| {
+            ServerClient::new(
+                ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("s1")),
+                Arc::new(crate::GatewayAddress::new(
+                    url(address),
+                    gateway.clone(),
+                    false,
+                )),
+                None,
+                Arc::new(RequestLog::default()),
+                &ClientConfig::default(),
+            )
+            .unwrap()
+        };
+        let https = client("https://media.example.com/jf/");
+        let stream = https.stream_credentials(&url("https://media.example.com/jf/Videos/1/stream"));
+        assert_eq!(stream.headers.len(), 2);
+        assert_eq!(stream.headers[0].0, "authorization");
+        assert!(stream.headers[0].1.starts_with("Basic "));
+        assert_eq!(
+            stream.headers[1],
+            ("x-gateway".to_owned(), "header-secret".to_owned())
+        );
+        assert_eq!(stream.cookies.len(), 1);
+        assert_eq!(stream.cookies[0].name, "session");
+        assert!(stream.cookies[0].secure);
+        let shown = format!("{stream:?}");
+        for secret in ["basic-secret", "header-secret", "cookie-secret", "session"] {
+            assert!(!shown.contains(secret), "{shown}");
+        }
+        // Another host, another port, or plain HTTP off the local network: nothing.
+        for other in [
+            "https://other.example.com/jf/Videos/1/stream",
+            "https://media.example.com:8443/jf/Videos/1/stream",
+        ] {
+            assert!(https.stream_credentials(&url(other)).is_empty(), "{other}");
+        }
+        let plain = client("http://media.example.com/");
+        assert!(
+            plain
+                .stream_credentials(&url("http://media.example.com/Videos/1/stream"))
+                .is_empty()
+        );
     }
 
     #[test]

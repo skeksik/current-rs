@@ -21,8 +21,8 @@ crates/net          current-net: HTTP client per server, typed errors, redacted 
 crates/store        current-store: settings file, secrets in the OS keyring, device id (ADR 0013)
 crates/jellyfin     current-jellyfin: Jellyfin client; so far server setup (ADR 0012), discovery (ADR 0016), sign-in (ADR 0015), gateway answers and header placement (ADR 0017), browse queries and images (ADR 0018), playback calls, the device profile and the HLS playlist origin check (ADR 0019)
 crates/mpv          current-mpv: the libmpv engine (ADR 0019): client API declarations, event thread, options, display facts, swap chain, capabilities, log redaction; the only crate with `unsafe`; links libmpv only with its `libmpv` feature
-crates/app          current-app: composition root (App), capabilities state, observable lists, add-a-server and sign-in flows, sessions, local discovery, gateways (ADR 0017), image cache and browse state (ADR 0018)
-crates/ffi          current-ffi: UniFFI surface over current-app (runtime, TaskHandle, CancelToken, CoreError; ADR 0004); opening, setup, sign-in, sessions
+crates/app          current-app: composition root (App), capabilities state, observable lists, add-a-server and sign-in flows, sessions, local discovery, gateways (ADR 0017), image cache and browse state (ADR 0018), the player (ADR 0019; its `libmpv` feature builds the libmpv engine, `test-engine` a stand-in engine for the bridge tests only)
+crates/ffi          current-ffi: UniFFI surface over current-app (runtime, TaskHandle, CancelToken, CoreError; ADR 0004); opening, setup, sign-in, sessions, browse, the player
 tools/uniffi-bindgen  UniFFI's generator at the workspace's uniffi version, for Swift
 tools/jellyfin-stand-in  a fake Jellyfin on 127.0.0.1 for the bridge tests (Rust, C#, Swift); never shipped
 bindings/csharp     Current.Bindings: generated C# (not checked in) + public adapters, and a console test runner

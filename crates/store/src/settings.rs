@@ -20,6 +20,7 @@ use current_model::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::playback::PlaybackSettings;
 use crate::{DeviceId, StoreError};
 
 /// The settings file's name in the data folder.
@@ -54,6 +55,10 @@ pub struct Settings {
     pub app_theme: AppTheme,
     /// The stored `app_theme` this version did not know, kept for the version that wrote it.
     unknown_app_theme: Option<Value>,
+    /// Settings → Playback (ADR 0019): the remembered qualities and automatic skipping, open values.
+    pub playback: PlaybackSettings,
+    /// A stored `playback` that is not an object, kept until playback settings are changed here.
+    unknown_playback: Option<Value>,
     /// Fields this version does not know, written back unchanged.
     extra: Map<String, Value>,
 }
@@ -66,6 +71,8 @@ impl Settings {
             last_server_key: 0,
             app_theme: AppTheme::System,
             unknown_app_theme: None,
+            playback: PlaybackSettings::default(),
+            unknown_playback: None,
             extra: Map::new(),
         }
     }
@@ -101,6 +108,9 @@ struct Stored {
     /// rather than making the file corrupt: a corrupt file resets the device id, and a theme is not worth that.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     app_theme: Option<Value>,
+    /// Added with playback (ADR 0019, 2026-10-25); older files have none. Any JSON value, as `app_theme`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    playback: Option<Value>,
     #[serde(flatten)]
     extra: Map<String, Value>,
 }
@@ -344,6 +354,10 @@ impl SettingsStore {
             // The theme was picked here: an unknown stored value no longer stands.
             next.unknown_app_theme = None;
         }
+        if next.playback != state.settings.playback {
+            next.unknown_playback = None;
+            next.playback.changed_from(&state.settings.playback);
+        }
         if next != state.settings {
             self.write(&next, SETTINGS_VERSION)?;
             state.settings = next;
@@ -363,6 +377,10 @@ impl SettingsStore {
             servers: settings.servers.iter().map(StoredServer::from).collect(),
             last_server_key: settings.last_server_key,
             app_theme: stored_theme(settings),
+            playback: settings
+                .unknown_playback
+                .clone()
+                .or_else(|| settings.playback.write()),
             extra: settings.extra.clone(),
         };
         let mut object = Map::new();
@@ -432,12 +450,15 @@ fn from_stored(stored: Stored) -> Result<(Settings, bool), StoreError> {
             None => (AppTheme::System, Some(value)),
         },
     };
+    let (playback, unknown_playback) = PlaybackSettings::read(stored.playback);
     let settings = Settings {
         device_id,
         servers: stored.servers.into_iter().map(SavedServer::from).collect(),
         last_server_key: stored.last_server_key,
         app_theme,
         unknown_app_theme,
+        playback,
+        unknown_playback,
         extra: stored.extra,
     };
     Ok((settings, made))
@@ -870,6 +891,47 @@ mod tests {
         // The default is left out of the file.
         store.update(|s| s.app_theme = AppTheme::System).unwrap();
         assert!(read_json(temp.path()).get("app_theme").is_none());
+    }
+
+    #[test]
+    fn playback_settings_round_trip_and_unknown_values_stay() {
+        use crate::StreamQuality;
+        let temp = tempfile::tempdir().unwrap();
+        write_file(
+            temp.path(),
+            r#"{"version": 1, "device_id": "abc", "playback": {"quality_local": "automatic", "later": true}}"#,
+        );
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        assert_eq!(store.get().playback.quality_local, StreamQuality::Maximum);
+        assert!(store.get().playback.auto_skip.is_empty());
+        store.update(|s| s.last_server_key = 1).unwrap();
+        assert_eq!(
+            read_json(temp.path())["playback"]["quality_local"],
+            "automatic"
+        );
+        store
+            .update(|s| {
+                s.playback.quality_internet = StreamQuality::Bitrate(4_000_000);
+                s.playback.auto_skip = vec!["intro".into(), "outro".into()];
+            })
+            .unwrap();
+        let file = read_json(temp.path());
+        assert_eq!(file["playback"]["quality_local"], "automatic");
+        assert_eq!(file["playback"]["quality_internet"], 4_000_000);
+        assert_eq!(
+            file["playback"]["auto_skip"],
+            serde_json::json!(["intro", "outro"])
+        );
+        assert_eq!(file["playback"]["later"], true);
+        let reopened = SettingsStore::open(temp.path()).unwrap().0.get().playback;
+        assert_eq!(reopened.quality_internet, StreamQuality::Bitrate(4_000_000));
+        assert_eq!(reopened.auto_skip, ["intro", "outro"]);
+        // An older file has none, and the defaults write none.
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path(), r#"{"version": 1, "device_id": "abc"}"#);
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        store.update(|s| s.last_server_key = 2).unwrap();
+        assert!(read_json(temp.path()).get("playback").is_none());
     }
 
     #[test]

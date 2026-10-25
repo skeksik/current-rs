@@ -187,6 +187,33 @@ impl JellyfinClient {
         Ok(self.summaries(result.items))
     }
 
+    /// The episode after `episode` in its series, across seasons (`GET Shows/{series}/Episodes?startItemId=`, which skips "through
+    /// the list until a given item is found", `TvShowsController.cs` at v12.2; docs/notes/playback.md section 5). `None` for the last
+    /// episode, and for an item that is not an episode of a series.
+    pub async fn next_episode(&self, episode: &ItemRef) -> Result<Option<ItemSummary>, AuthError> {
+        let details = self.details(episode).await?;
+        let Some(series) = details
+            .summary
+            .episode
+            .as_ref()
+            .and_then(|links| links.series.clone())
+        else {
+            return Ok(None);
+        };
+        let request = summary(Request::get(format!(
+            "/Shows/{}/Episodes",
+            series.id.as_str()
+        )))
+        .query("startItemId", episode.id.as_str())
+        .query("limit", "2");
+        let result: ItemsResult = self.get_json(request).await?;
+        Ok(self
+            .summaries(result.items)
+            .into_iter()
+            .skip_while(|summary| summary.item.id != episode.id)
+            .nth(1))
+    }
+
     /// Items like `item` (`GET Items/{id}/Similar`). The endpoint takes `fields` and `limit` only.
     pub async fn similar(&self, item: &ItemRef, limit: u32) -> Result<Vec<ItemSummary>, AuthError> {
         let request = Request::get(format!("/Items/{}/Similar", item.id.as_str()))

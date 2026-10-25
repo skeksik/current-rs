@@ -126,6 +126,7 @@ internal static class CoreCall
         Ffi.CoreException.NotSignedIn => new NotSignedInException(),
         Ffi.CoreException.Browse browse => new BrowseRequestException(MapBrowse.From(browse.@problem)),
         Ffi.CoreException.Image image => new ImageLoadException(MapBrowse.From(image.@problem)),
+        Ffi.CoreException.Player player => new PlayerException(PlayerMap.From(player.@problem)),
         _ => new CoreRuntimeException(error.Message),
     };
 }

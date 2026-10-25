@@ -34,7 +34,8 @@ use crate::error::{EngineError, MpvError};
 use crate::event::{self, EndReason, EngineEvent, LogLine, OBSERVED, Observed};
 use crate::node::Node;
 use crate::options::{
-    self, CompositionSize, DisplayFacts, EngineConfig, FileRequest, Output, TrackChoice,
+    self, CompositionSize, DisplayFacts, EngineConfig, FileRequest, Output, SubtitleFile,
+    TrackChoice,
 };
 use crate::redact::Redactor;
 use crate::swapchain::SwapChain;
@@ -57,11 +58,12 @@ enum Request {
     Mute,
     Display,
     CompositionSize,
+    SubAdd,
     Quit,
 }
 
 impl Request {
-    const ALL: [Request; 11] = [
+    const ALL: [Request; 12] = [
         Request::Load,
         Request::Stop,
         Request::Pause,
@@ -72,6 +74,7 @@ impl Request {
         Request::Mute,
         Request::Display,
         Request::CompositionSize,
+        Request::SubAdd,
         Request::Quit,
     ];
 
@@ -87,6 +90,7 @@ impl Request {
             Request::Mute => "mute",
             Request::Display => "display facts",
             Request::CompositionSize => "d3d11-composition-size",
+            Request::SubAdd => "sub-add",
             Request::Quit => "quit",
         }
     }
@@ -328,6 +332,11 @@ impl Engine {
             }
         }
         self.command(Request::Load, &file.loadfile_command())
+    }
+
+    /// Adds an external subtitle the core fetched to the file playing (`sub-add` from memory, [`SubtitleFile`]).
+    pub fn add_subtitle(&self, file: &SubtitleFile) -> Result<(), EngineError> {
+        self.command(Request::SubAdd, &file.sub_add_command())
     }
 
     /// Stops and unloads the file (`stop`); the engine stays for the next one.

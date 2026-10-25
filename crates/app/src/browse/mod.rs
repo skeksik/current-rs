@@ -139,6 +139,17 @@ impl Hub {
         Some(Browse { ctx: context })
     }
 
+    /// Playback of `item` stopped (ADR 0019): its session's lists that depend on it reload ([`Browse::playback_stopped`]). Nothing
+    /// when no `Browse` of the item's current session lives.
+    pub(crate) fn playback_stopped(&self, item: &ItemRef) {
+        let context = lock(&self.contexts)
+            .get(&item.server)
+            .and_then(Weak::upgrade);
+        if let Some(context) = context.filter(|context| context.is_current()) {
+            Browse { ctx: context }.playback_stopped(item);
+        }
+    }
+
     /// Refreshes every live list of every session still current: the app came back to the foreground.
     pub(crate) fn refresh_all(&self) {
         let contexts: Vec<Arc<Context>> = lock(&self.contexts)

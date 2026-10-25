@@ -1004,7 +1004,26 @@ fn an_hls_stream_with_headers_is_checked_before_it_loads_and_marked_checked() {
 }
 
 #[test]
-fn direct_play_progressive_streams_and_hls_without_headers_are_not_checked() {
+fn an_hls_stream_with_only_gateway_cookies_is_checked_too() {
+    let mut cookie_only = answer(
+        hls(StreamAction::Copy, StreamAction::Copy),
+        vec![RouteReason::CONTAINER_NOT_SUPPORTED],
+    );
+    cookie_only.auth.headers.clear();
+    assert!(!cookie_only.auth.cookies.is_empty());
+    let mut player = Harness::new(AutoSkip::off());
+    player.server.answer(Ok(cookie_only));
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    assert_eq!(player.server.state().playlist_checks.len(), 1);
+    let commands = player.commands();
+    let [Command::Load(file)] = commands.as_slice() else {
+        panic!("one load: {commands:?}");
+    };
+    assert!(file.playlist_checked);
+}
+
+#[test]
+fn direct_play_progressive_streams_and_hls_without_credentials_are_not_checked() {
     let progressive = Route::ServerStream {
         protocol: current_model::StreamProtocol::Progressive,
         container: Some("mkv".into()),
@@ -1013,6 +1032,7 @@ fn direct_play_progressive_streams_and_hls_without_headers_are_not_checked() {
     };
     let mut no_headers = answer(hls(StreamAction::Copy, StreamAction::Copy), vec![]);
     no_headers.auth.headers.clear();
+    no_headers.auth.cookies.clear();
     for answer in [
         answer(Route::DirectPlay, vec![]),
         answer(progressive, vec![RouteReason::AUDIO_CODEC_NOT_SUPPORTED]),
