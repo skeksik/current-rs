@@ -1497,3 +1497,18 @@ the dashboard shows the session stopped: **pass**. A series' Play button names i
 episode, not a special): **pass**. Network drop while loading, on the hotspot: "The server can't be reached" with Back after 5 to 10
 s: **pass**; that came from a failed request before the stream loaded, so the 60 s stall timeout itself was not seen live (its tests
 are in PR 67).
+
+## Library changes: Windows run (2026-10-25)
+fix/library-changes, head 673eadd (the app was built from 3cd0d48; the commits after it change only docs), owner's PC, against the
+owner's own Jellyfin 12.2 server. The libmpv build on the PC lacks `components.json`, so `build.ps1` stopped at the libmpv licence
+step after publishing the app; the run used the published app. CI builds the installer with the D6 build. Checked by the owner:
+1. A library added on the server while the app ran appears in the navigation after a refresh, or on return to the app, without a
+   restart: **pass**.
+2. A library renamed, and the library order changed in the user's Jellyfin settings: the navigation follows, in place: **pass**.
+3. A library removed while its page was shown: the page goes back to Home with "This library is no longer available", and the user
+   stays signed in: **pass**.
+4. A library removed, then its stale entry clicked before any refresh: the user stays signed in, and Home shows with the notice: **pass**.
+5. The device's session revoked in Jellyfin's dashboard, then a library opened: the user is signed out, as before: **pass**.
+6. Narrator reads the updated navigation, keyboard only works, and the gateways still behave: **pass**.
+The smoke run also adds a library on the stand-in and removes the films library while its page shows (pane count, Home, the notice,
+still signed in): **pass**.
