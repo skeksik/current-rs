@@ -26,7 +26,7 @@ fn stand_in(gate: Gate) -> StandIn {
 
 fn core_on(dir: &Path, secrets: &Arc<MemorySecrets>) -> Arc<Core> {
     let secrets: Arc<dyn Secrets> = secrets.clone();
-    let (app, report) = App::open(dir, secrets, "Example PC").unwrap();
+    let (app, report) = App::open(dir, &dir.join("cache"), secrets, "Example PC").unwrap();
     Arc::new(Core::with_app(
         app,
         Some(report.into()),

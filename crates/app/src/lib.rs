@@ -9,6 +9,7 @@ mod add_server;
 mod discovery;
 mod gateway;
 mod gateway_sign_in;
+mod images;
 mod list;
 mod session;
 mod sign_in;
@@ -33,9 +34,11 @@ pub use add_server::{AddServer, AddServerState, NewServer};
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
 pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState};
+pub use images::{ImageError, ImageLoad, ImageSource, WIDTH_BUCKETS, bucket};
 pub use list::{ListSubscription, ObservableList, VectorDiff};
 pub use sign_in::{SignIn, SignInError, SignInState};
 
+use images::ImageCache;
 use session::{Roaming, Shared, Storage, Target};
 
 /// What the about and diagnostics screens show about the core.
@@ -64,6 +67,7 @@ pub struct App {
     app_theme: watch::Sender<AppTheme>,
     /// Serializes [`App::set_app_theme`], so the published theme is the one saved last.
     theme_write: Mutex<()>,
+    images: ImageCache,
 }
 
 impl std::fmt::Debug for App {
@@ -102,23 +106,28 @@ impl App {
             device_id: None,
             app_theme: watch::Sender::new(AppTheme::System),
             theme_write: Mutex::new(()),
+            images: ImageCache::in_memory(),
         }
     }
 
-    /// A core on the data folder the UI passes in (ADR 0013): loads the settings, creating them and the device id on first start,
-    /// and the saved servers, each signed in if it has an active user until [`App::restore_sessions`] checks. `secrets` is the OS
+    /// A core on the data and cache folders the UI passes in (ADR 0013): loads the settings, creating them and the device id on first
+    /// start, and the saved servers, each signed in if it has an active user until [`App::restore_sessions`] checks. The image
+    /// cache's index is read from `cache_dir`, and the images of servers no longer saved or signed out are deleted there (ADR
+    /// 0018); a cache folder that cannot be used leaves images in memory only. `secrets` is the OS
     /// keyring in the apps and memory in tests. `device_name` is what Jellyfin shows for this device: the UI passes the platform's
     /// name for the computer (ADR 0015); an empty one becomes the platform's name. Blocking file I/O: call it at start, off the
     /// async runtime. One `App` per data folder per process is assumed: two would each keep their own copy of the saved servers
     /// and overwrite each other's settings.
     pub fn open(
         data_dir: &Path,
+        cache_dir: &Path,
         secrets: Arc<dyn Secrets>,
         device_name: &str,
     ) -> Result<(Self, LoadReport), StoreError> {
         let (settings, report) = SettingsStore::open(data_dir)?;
         let stored = settings.get();
         let identity = ClientIdentity::current(device_name, stored.device_id.as_str());
+        let images = ImageCache::open(cache_dir, &stored.servers);
         let app = Self {
             shared: Arc::new(Shared::new(
                 Arc::new(RequestLog::default()),
@@ -130,6 +139,7 @@ impl App {
             device_id: Some(stored.device_id),
             app_theme: watch::Sender::new(stored.app_theme),
             theme_write: Mutex::new(()),
+            images,
         };
         Ok((app, report))
     }
@@ -300,22 +310,40 @@ impl App {
     }
 
     /// Signs out of a server: tells the server, then deletes the token and the active user whatever it answered. Returns the
-    /// server's answer, for the UI to mention that the server could not be told; the app is signed out either way.
+    /// server's answer, for the UI to mention that the server could not be told; the app is signed out either way. The server's
+    /// cached images are deleted then (ADR 0018); if this future is dropped before, the next start deletes them.
     pub async fn sign_out(&self, server: &ServerRef) -> Result<(), AuthError> {
-        self.shared.sign_out(server).await
+        let result = self.shared.sign_out(server).await;
+        self.images.forget_server(server).await;
+        result
     }
 
     /// Removes a saved server (ADR 0015, "Remove a server"), local first, as sign-out: under the session lock the list without it
     /// is saved and its session, address provider and status are dropped; then every saved user's token for it is deleted from
     /// the keyring. Only then, in the background and without waiting, is the server told (`POST /Sessions/Logout` for each token,
     /// through its identity-checked provider); its answer changes nothing. A restore or sign-in to it that ends later finds it gone
-    /// and saves nothing. Removing a server that is not saved does nothing.
+    /// and saves nothing. Removing a server that is not saved does nothing. Its cached images are deleted after (ADR 0018); if this
+    /// future is dropped before, the next start deletes them.
     ///
     /// # Errors
     /// The settings could not be saved (a newer version's file, a failed write): nothing changed, the server is still saved and
     /// signed in as before.
     pub async fn remove_server(&self, server: &ServerRef) -> Result<Removal, StoreError> {
-        self.shared.remove_server(server).await
+        let removal = self.shared.remove_server(server).await?;
+        self.images.forget_server(server).await;
+        Ok(removal)
+    }
+
+    /// An image's encoded bytes (JPEG or PNG from the server, BMP for a BlurHash placeholder), for a box of `load.width` by
+    /// `load.height` physical pixels (ADR 0018, section 4). The width is rounded up to a bucket ([`bucket`]) and the height follows.
+    /// From memory, the disk cache, or the server's signed-in session, through its address provider and gateway credentials.
+    /// Identical requests share one fetch. Dropping the future cancels the request: the fetch stops once no caller waits for it.
+    ///
+    /// # Errors
+    /// [`ImageError`]: not signed in, the server's or the network's failure, an answer that is not an image, an invalid BlurHash
+    /// or an empty box.
+    pub async fn load_image(&self, load: &ImageLoad) -> Result<Arc<[u8]>, ImageError> {
+        self.images.load(&self.shared, load).await
     }
 
     /// The platform's report of the network, on start and on every change (ADR 0014). Every server's address provider hears it, and
@@ -459,14 +487,26 @@ mod tests {
     fn open_loads_the_settings_and_keeps_the_device_id() {
         let temp = tempfile::tempdir().unwrap();
         let secrets: Arc<dyn Secrets> = Arc::new(MemorySecrets::new());
-        let (app, report) = App::open(temp.path(), secrets.clone(), "Office PC").unwrap();
+        let (app, report) = App::open(
+            temp.path(),
+            &temp.path().join("cache"),
+            secrets.clone(),
+            "Office PC",
+        )
+        .unwrap();
         assert_eq!(report, LoadReport::Created);
         let id = app.device_id().unwrap().clone();
         assert_eq!(app.settings().unwrap().get().device_id, id);
         assert!(app.secrets().is_some());
         drop(app);
 
-        let (app, report) = App::open(temp.path(), secrets, "Office PC").unwrap();
+        let (app, report) = App::open(
+            temp.path(),
+            &temp.path().join("cache"),
+            secrets,
+            "Office PC",
+        )
+        .unwrap();
         assert_eq!(report, LoadReport::Loaded);
         assert_eq!(app.device_id(), Some(&id));
     }
@@ -475,7 +515,8 @@ mod tests {
     fn the_app_theme_is_saved_at_once_and_survives_reopening() {
         let temp = tempfile::tempdir().unwrap();
         let secrets: Arc<dyn Secrets> = Arc::new(MemorySecrets::new());
-        let (app, _) = App::open(temp.path(), secrets.clone(), "").unwrap();
+        let (app, _) =
+            App::open(temp.path(), &temp.path().join("cache"), secrets.clone(), "").unwrap();
         let rx = app.app_theme();
         assert_eq!(*rx.borrow(), AppTheme::System);
         app.set_app_theme(AppTheme::Dark).unwrap();
@@ -484,7 +525,7 @@ mod tests {
         assert_eq!(app.settings().unwrap().get().app_theme, AppTheme::Dark);
         drop((rx, app));
 
-        let (app, _) = App::open(temp.path(), secrets, "").unwrap();
+        let (app, _) = App::open(temp.path(), &temp.path().join("cache"), secrets, "").unwrap();
         assert_eq!(*app.app_theme().borrow(), AppTheme::Dark);
     }
 
@@ -507,7 +548,13 @@ mod tests {
             r#"{"version": 99, "device_id": "abc", "app_theme": "light"}"#,
         )
         .unwrap();
-        let (app, report) = App::open(temp.path(), Arc::new(MemorySecrets::new()), "").unwrap();
+        let (app, report) = App::open(
+            temp.path(),
+            &temp.path().join("cache"),
+            Arc::new(MemorySecrets::new()),
+            "",
+        )
+        .unwrap();
         assert_eq!(report, LoadReport::NewerVersion { found: 99 });
         let rx = app.app_theme();
         assert_eq!(*rx.borrow(), AppTheme::Light);

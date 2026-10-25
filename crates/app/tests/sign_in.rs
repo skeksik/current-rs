@@ -305,7 +305,9 @@ fn secret_key() -> SecretKey {
 
 fn open(dir: &Path, secrets: &Arc<MemorySecrets>) -> App {
     let secrets: Arc<dyn Secrets> = secrets.clone();
-    App::open(dir, secrets, "Office PC").unwrap().0
+    App::open(dir, &dir.join("cache"), secrets, "Office PC")
+        .unwrap()
+        .0
 }
 
 /// Runs server setup on `address` and returns the server it found.
@@ -815,7 +817,13 @@ impl Secrets for NoKeyring {
 async fn without_a_keyring_the_sign_in_lasts_for_the_run() {
     let (server, address) = start(SERVER_ID).await;
     let temp = tempfile::tempdir().unwrap();
-    let (app, _) = App::open(temp.path(), Arc::new(NoKeyring), "").unwrap();
+    let (app, _) = App::open(
+        temp.path(),
+        &temp.path().join("cache"),
+        Arc::new(NoKeyring),
+        "",
+    )
+    .unwrap();
     let flow = signed_in_with_password(&app, &address).await;
     let state = flow.state().borrow().clone();
     assert!(
@@ -843,7 +851,13 @@ async fn without_a_keyring_the_sign_in_lasts_for_the_run() {
     drop(app);
 
     // Next run: nothing to restore from, so signed out, with the user still saved.
-    let (app, _) = App::open(temp.path(), Arc::new(NoKeyring), "").unwrap();
+    let (app, _) = App::open(
+        temp.path(),
+        &temp.path().join("cache"),
+        Arc::new(NoKeyring),
+        "",
+    )
+    .unwrap();
     app.restore_sessions().await;
     assert!(!app.capabilities().borrow().servers[0].signed_in);
     assert!(
@@ -1609,6 +1623,7 @@ async fn a_keyring_that_cannot_delete_still_lets_the_server_go_and_says_so() {
     let temp = tempfile::tempdir().unwrap();
     let (app, _) = App::open(
         temp.path(),
+        &temp.path().join("cache"),
         Arc::new(UndeletableKeyring::default()),
         "Office PC",
     )
@@ -1760,12 +1775,27 @@ async fn restore_racing_removal(locked: bool) {
     let temp = tempfile::tempdir().unwrap();
     let keyring = Arc::new(GatedKeyring::default());
     let secrets: Arc<dyn Secrets> = keyring.clone();
-    let (app, _) = App::open(temp.path(), secrets.clone(), "Office PC").unwrap();
+    let (app, _) = App::open(
+        temp.path(),
+        &temp.path().join("cache"),
+        secrets.clone(),
+        "Office PC",
+    )
+    .unwrap();
     signed_in_with_password(&app, &address).await;
     drop(app);
 
     let release = keyring.close();
-    let app = Arc::new(App::open(temp.path(), secrets, "Office PC").unwrap().0);
+    let app = Arc::new(
+        App::open(
+            temp.path(),
+            &temp.path().join("cache"),
+            secrets,
+            "Office PC",
+        )
+        .unwrap()
+        .0,
+    );
     let restore = tokio::spawn({
         let app = app.clone();
         async move { app.restore_sessions().await }
@@ -1823,7 +1853,13 @@ async fn an_unavailable_keyring_reports_credentials_left_only_where_there_is_a_b
         (Arc::new(NoBackend) as Arc<dyn Secrets>, false),
     ] {
         let temp = tempfile::tempdir().unwrap();
-        let (app, _) = App::open(temp.path(), secrets, "Office PC").unwrap();
+        let (app, _) = App::open(
+            temp.path(),
+            &temp.path().join("cache"),
+            secrets,
+            "Office PC",
+        )
+        .unwrap();
         signed_in_with_password(&app, &address).await;
         assert_eq!(
             app.remove_server(&jellyfin("1")).await,
