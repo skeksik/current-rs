@@ -55,6 +55,8 @@ pub(crate) trait Live: Send + Sync {
     fn dependents_changed(&self, items: &HashSet<ItemRef>);
     /// Read the list again, keeping what it shows until the answers arrive.
     fn refresh(&self);
+    /// `item` as the list shows it, if it does.
+    fn find(&self, item: &ItemRef) -> Option<ItemSummary>;
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -130,6 +132,7 @@ impl Hub {
             notices: self.notices.clone(),
             states: ItemStates::default(),
             lives: Mutex::new(Vec::new()),
+            publishing: Mutex::new(()),
             dependents: Mutex::new(Dependents::default()),
         });
         contexts.insert(server.clone(), Arc::downgrade(&context));
@@ -152,6 +155,8 @@ impl Hub {
 struct Dependents {
     changed: HashSet<ItemRef>,
     timer: Option<AbortHandle>,
+    /// Counts the schedules: a timer that fires after a newer schedule leaves the reload to the newer timer.
+    generation: u64,
 }
 
 /// One session's browse state: its item states and its live lists.
@@ -164,6 +169,8 @@ pub(crate) struct Context {
     notices: Arc<Notices>,
     states: ItemStates,
     lives: Mutex<Vec<Weak<dyn Live>>>,
+    /// Serializes publishing an item's state, so the last publish shows the newest state.
+    publishing: Mutex<()>,
     dependents: Mutex<Dependents>,
 }
 
@@ -223,17 +230,25 @@ impl Context {
         }
     }
 
-    /// Records what `items` show and gives each the state of a change still pending.
+    /// Gives each of `items` the state of a change still pending for it.
     fn observe(&self, items: &mut [ItemSummary]) {
         for item in items {
             self.states.observe(item);
         }
     }
 
-    /// Sends `item`'s new state to every live list.
-    fn publish(&self, item: &ItemRef, state: &UserState) {
+    /// `item` as the first live list that shows it does.
+    fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
+        self.lives().iter().find_map(|live| live.find(item))
+    }
+
+    /// Sends `item`'s state to every live list: the pending state if a change is pending, else `settled` (the server's answer).
+    /// Read under one lock, so publishes for one item cannot land out of order: the last one shows the newest state.
+    fn publish(&self, item: &ItemRef, settled: UserState) {
+        let _order = lock(&self.publishing);
+        let state = self.states.pending(item).unwrap_or(settled);
         for live in self.lives() {
-            live.patch(item, state);
+            live.patch(item, &state);
         }
     }
 
@@ -244,6 +259,8 @@ impl Context {
         if let Some(timer) = dependents.timer.take() {
             timer.abort();
         }
+        dependents.generation += 1;
+        let generation = dependents.generation;
         let context = Arc::downgrade(self);
         dependents.timer = Some(self.spawn(async move {
             tokio::time::sleep(DEPENDENT_RELOAD_DELAY).await;
@@ -252,6 +269,10 @@ impl Context {
             };
             let changed = {
                 let mut dependents = lock(&context.dependents);
+                // A newer schedule came while this one woke: its timer reloads, a second after it.
+                if dependents.generation != generation {
+                    return;
+                }
                 dependents.timer = None;
                 std::mem::take(&mut dependents.changed)
             };
@@ -262,8 +283,9 @@ impl Context {
     }
 
     fn want(self: &Arc<Self>, item: &ItemRef, action: ItemAction) {
-        let (shown, start) = self.states.want(item, action);
-        self.publish(item, &shown);
+        let found = self.find(item);
+        let (shown, start) = self.states.want(item, action, found.as_ref());
+        self.publish(item, shown);
         if start {
             let context = self.clone();
             let item = item.clone();
@@ -284,7 +306,7 @@ impl Context {
                 Err(error) => Err(error),
             };
             let answered = self.states.answered(&item, action, result);
-            self.publish(&item, &answered.shown);
+            self.publish(&item, answered.shown);
             match answered.failure {
                 Some((name, problem)) => self.notices.raise(NoticeKind::ActionFailed {
                     action,
@@ -365,7 +387,10 @@ impl Browse {
 
     /// `item`'s state as the lists show it, if a list loaded it.
     pub fn user_state(&self, item: &ItemRef) -> Option<UserState> {
-        self.ctx.states.shown(item)
+        self.ctx
+            .states
+            .pending(item)
+            .or_else(|| self.ctx.find(item).map(|summary| summary.user))
     }
 
     /// Refreshes every live list of this session, as the user asked.
@@ -376,7 +401,11 @@ impl Browse {
     /// Playback of `item` stopped (ADR 0019 calls this): the lists that depend on it ("continue watching", "next up", its series
     /// and season) reload, as after a played change.
     pub fn playback_stopped(&self, item: &ItemRef) {
-        let mut items = self.ctx.states.parents(item);
+        let mut items = self
+            .ctx
+            .find(item)
+            .map(|summary| states::parents(&summary))
+            .unwrap_or_default();
         items.push(item.clone());
         self.ctx.dependents_changed(items);
     }
@@ -404,6 +433,13 @@ fn sync_list<T: Clone + PartialEq + Send + 'static>(list: &ObservableList<T>, va
     }
     // Cannot fail: every index is below the length it is applied to.
     let _ = list.change_many(diffs);
+}
+
+/// `item`'s summary in `list`, if it holds one.
+fn find_in(list: &ObservableList<ItemSummary>, item: &ItemRef) -> Option<ItemSummary> {
+    list.snapshot()
+        .into_iter()
+        .find(|summary| &summary.item == item)
 }
 
 /// Gives `item`'s new state to every summary of it in `list`.

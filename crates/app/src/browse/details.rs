@@ -9,7 +9,7 @@ use current_model::{ItemDetails, ItemRef, ItemSummary, MediaKind, UserState};
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
-use super::{Context, Live, lock, patch_list, sync_list};
+use super::{Context, Live, find_in, lock, patch_list, sync_list};
 use crate::list::ObservableList;
 
 /// How many similar items a detail page shows.
@@ -155,6 +155,8 @@ impl Details {
                     let Some(page) = me.upgrade() else {
                         return;
                     };
+                    // Under the guard that patches take, so a patch is never overwritten by an older state.
+                    let _guard = lock(&page.lists);
                     match details {
                         Ok(mut details) => {
                             page.ctx.states.observe(&mut details.summary);
@@ -162,7 +164,6 @@ impl Details {
                         }
                         Err(error) => failures.insert(0, error),
                     }
-                    let _guard = lock(&page.lists);
                     match similar {
                         Ok(mut similar) => {
                             page.ctx.observe(&mut similar);
@@ -194,6 +195,7 @@ impl Details {
 
 impl Live for Details {
     fn patch(&self, item: &ItemRef, state: &UserState) {
+        let _guard = lock(&self.lists);
         self.details.send_if_modified(|details| match details {
             Some(details) if &details.summary.item == item && &details.summary.user != state => {
                 details.summary.user = state.clone();
@@ -201,7 +203,6 @@ impl Live for Details {
             }
             _ => false,
         });
-        let _guard = lock(&self.lists);
         for list in [&self.seasons, &self.episodes, &self.similar] {
             patch_list(list, item, state);
         }
@@ -221,5 +222,17 @@ impl Live for Details {
 
     fn refresh(&self) {
         self.load();
+    }
+
+    fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
+        let _guard = lock(&self.lists);
+        if let Some(details) = self.details.borrow().as_ref()
+            && &details.summary.item == item
+        {
+            return Some(details.summary.clone());
+        }
+        [&self.seasons, &self.episodes, &self.similar]
+            .into_iter()
+            .find_map(|list| find_in(list, item))
     }
 }

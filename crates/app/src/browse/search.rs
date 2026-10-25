@@ -9,7 +9,7 @@ use current_model::{ItemRef, ItemSummary, MediaKind, UserState};
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
-use super::{Context, Live, LoadState, lock, patch_list, sync_list};
+use super::{Context, Live, LoadState, find_in, lock, patch_list, sync_list};
 use crate::list::ObservableList;
 
 struct Groups {
@@ -145,5 +145,10 @@ impl Live for Search {
 
     fn refresh(&self) {
         self.load();
+    }
+
+    fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
+        let groups = lock(&self.lists);
+        groups.lists.values().find_map(|list| find_in(list, item))
     }
 }

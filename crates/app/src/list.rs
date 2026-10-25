@@ -1,14 +1,15 @@
 //! Observable lists: a list the core owns, sent to subscribers as batches of diffs (ADR 0004).
 //!
-//! Every change is applied and broadcast under one lock, and a subscription takes its snapshot and its receiver under the same lock,
-//! so no diff is lost or doubled. A subscription starts with `Reset(snapshot)`; one that falls behind the broadcast backlog gets a
+//! Every change is applied and broadcast under one lock, as one message however many diffs it holds, and a subscription takes its
+//! snapshot and its receiver under the same lock, so no diff is lost or doubled. A subscription starts with `Reset(snapshot)`; one that falls behind the broadcast backlog gets a
 //! fresh `Reset` instead of an error.
 
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
 
-/// How many diffs a slow subscriber may fall behind before it is reset.
+/// How many changes a slow subscriber may fall behind before it is reset. A change of many diffs ([`ObservableList::change_many`])
+/// counts once, so no single change resets a subscriber that keeps up.
 pub const DEFAULT_BACKLOG: usize = 256;
 
 /// One change to a list. Indices refer to the list after the diffs before it in the same batch.
@@ -72,15 +73,18 @@ pub struct ObservableList<T> {
 #[derive(Debug)]
 struct Inner<T> {
     values: Vec<T>,
-    tx: broadcast::Sender<VectorDiff<T>>,
+    tx: broadcast::Sender<Change<T>>,
 }
+
+/// One change as broadcast: its diffs, in order.
+type Change<T> = Vec<VectorDiff<T>>;
 
 impl<T: Clone + Send + 'static> ObservableList<T> {
     pub fn new() -> Arc<Self> {
         Self::with_backlog(DEFAULT_BACKLOG)
     }
 
-    /// A list whose subscribers are reset after falling `backlog` diffs behind (at least one).
+    /// A list whose subscribers are reset after falling `backlog` changes behind (at least one).
     pub fn with_backlog(backlog: usize) -> Arc<Self> {
         Arc::new(Self {
             inner: Mutex::new(Inner {
@@ -156,19 +160,24 @@ impl<T: Clone + Send + 'static> ObservableList<T> {
     /// [`OutOfRange`] for the first diff whose index does not exist.
     pub fn change_many(&self, diffs: Vec<VectorDiff<T>>) -> Result<(), OutOfRange> {
         let mut inner = self.lock();
+        let mut applied = Vec::with_capacity(diffs.len());
+        let mut result = Ok(());
         for diff in diffs {
-            diff.clone().apply(&mut inner.values)?;
-            let _ = inner.tx.send(diff);
+            if let Err(error) = diff.clone().apply(&mut inner.values) {
+                result = Err(error);
+                break;
+            }
+            applied.push(diff);
         }
-        Ok(())
+        if !applied.is_empty() {
+            // An error means no one is subscribed, which is fine.
+            let _ = inner.tx.send(applied);
+        }
+        result
     }
 
     fn change(&self, diff: VectorDiff<T>) -> Result<(), OutOfRange> {
-        let mut inner = self.lock();
-        diff.clone().apply(&mut inner.values)?;
-        // An error means no one is subscribed, which is fine.
-        let _ = inner.tx.send(diff);
-        Ok(())
+        self.change_many(vec![diff])
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner<T>> {
@@ -184,7 +193,7 @@ impl<T: Clone + Send + 'static> ObservableList<T> {
 #[derive(Debug)]
 pub struct ListSubscription<T> {
     list: Weak<ObservableList<T>>,
-    rx: broadcast::Receiver<VectorDiff<T>>,
+    rx: broadcast::Receiver<Change<T>>,
     first: Option<Vec<T>>,
     reset_requested: bool,
 }
@@ -205,28 +214,18 @@ impl<T: Clone + Send + 'static> ListSubscription<T> {
             return self.resync();
         }
         let first = match self.rx.recv().await {
-            Ok(diff) => diff,
+            Ok(change) => change,
             Err(RecvError::Lagged(_)) => return self.resync(),
             Err(RecvError::Closed) => return None,
         };
-        let mut batch = vec![first];
-        // A change of several diffs is sent under the list's lock: taking it here waits for the rest of that change, so it arrives
-        // in this batch.
-        let lagged = {
-            let list = self.list.upgrade();
-            let _whole = list.as_ref().map(|list| list.lock());
-            loop {
-                match self.rx.try_recv() {
-                    Ok(diff) => batch.push(diff),
-                    Err(TryRecvError::Lagged(_)) => break true,
-                    Err(TryRecvError::Empty | TryRecvError::Closed) => break false,
-                }
+        let mut batch = first;
+        loop {
+            match self.rx.try_recv() {
+                Ok(change) => batch.extend(change),
+                Err(TryRecvError::Lagged(_)) => return self.resync(),
+                Err(TryRecvError::Empty | TryRecvError::Closed) => return Some(batch),
             }
-        };
-        if lagged {
-            return self.resync();
         }
-        Some(batch)
     }
 
     fn resync(&mut self) -> Option<Vec<VectorDiff<T>>> {
@@ -342,6 +341,28 @@ mod tests {
         assert_eq!(
             list.change_many(vec![VectorDiff::Remove { index: 5 }]),
             Err(OutOfRange { index: 5, len: 3 })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_change_larger_than_the_backlog_is_not_a_reset() {
+        let list = ObservableList::with_backlog(4);
+        list.append((0..100).collect());
+        let mut sub = list.subscribe();
+        sub.next_batch().await.unwrap();
+        list.change_many(
+            (10..100)
+                .rev()
+                .map(|index| VectorDiff::Remove { index })
+                .collect(),
+        )
+        .unwrap();
+        let batch = sub.next_batch().await.unwrap();
+        assert_eq!(batch.len(), 90);
+        assert!(
+            batch
+                .iter()
+                .all(|diff| matches!(diff, VectorDiff::Remove { .. }))
         );
     }
 

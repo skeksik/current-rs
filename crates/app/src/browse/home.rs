@@ -15,7 +15,7 @@ use current_model::{CollectionKind, ItemRef, ItemSummary, Library, UserState};
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 
-use super::{Context, Live, lock, patch_list, sync_list};
+use super::{Context, Live, find_in, lock, patch_list, sync_list};
 use crate::list::ObservableList;
 
 /// How many items each row asks for (what jellyfin-web asks; `docs/notes/jellyfin-browse.md`).
@@ -34,8 +34,8 @@ pub enum HomeRowKind {
     Latest,
 }
 
-/// One row of Home.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One row of Home. Debug leaves out the title, a library's name.
+#[derive(Clone, PartialEq, Eq)]
 pub struct HomeRow {
     /// Stable across loads: the key for [`HomeFeed::row`].
     pub key: String,
@@ -44,6 +44,15 @@ pub struct HomeRow {
     pub title: String,
     /// The library of a Latest row.
     pub library: Option<ItemRef>,
+}
+
+impl std::fmt::Debug for HomeRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HomeRow")
+            .field("key", &self.key)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What Home's message shows.
@@ -122,10 +131,32 @@ struct Rows {
     lists: HashMap<String, Arc<ObservableList<ItemSummary>>>,
 }
 
+/// One kind of load: every row, or only the rows that depend on played marks.
+#[derive(Default)]
+struct Load {
+    task: Option<AbortHandle>,
+    /// Tells the current load of this kind apart from one it replaced.
+    generation: u64,
+    running: bool,
+    /// Why its last load failed, if it did.
+    failed: Option<AuthError>,
+}
+
+/// Each kind keeps its own outcome, so one finishing does not hide the other's failure or that it still runs.
 #[derive(Default)]
 struct Loads {
-    full: Option<AbortHandle>,
-    dependent: Option<AbortHandle>,
+    full: Load,
+    dependent: Load,
+}
+
+impl Loads {
+    fn kind(&mut self, full: bool) -> &mut Load {
+        if full {
+            &mut self.full
+        } else {
+            &mut self.dependent
+        }
+    }
 }
 
 struct Home {
@@ -141,7 +172,7 @@ struct Home {
 impl Drop for Home {
     fn drop(&mut self) {
         let loads = lock(&self.loads);
-        for task in loads.full.iter().chain(&loads.dependent) {
+        for task in loads.full.task.iter().chain(&loads.dependent.task) {
             task.abort();
         }
     }
@@ -208,7 +239,17 @@ impl Home {
     fn load(&self, full: bool) {
         let me = self.me.clone();
         let ctx = self.ctx.clone();
-        self.state.send_modify(|state| state.loading = true);
+        let generation = {
+            let mut loads = lock(&self.loads);
+            let load = loads.kind(full);
+            if let Some(previous) = load.task.take() {
+                previous.abort();
+            }
+            load.generation += 1;
+            load.running = true;
+            self.publish_state(&loads);
+            load_generation(&loads, full)
+        };
         let task = self.ctx.spawn(async move {
             let mut failures = Vec::new();
             let mut order = None;
@@ -258,23 +299,48 @@ impl Home {
                 if let Some(order) = order {
                     home.keep_only(&order);
                 }
-                let offline = ctx.is_unreachable();
-                home.state.send_replace(HomeState {
-                    loading: false,
-                    failed: failures.into_iter().next(),
-                    offline,
-                });
+                home.finished(full, generation, failures.into_iter().next());
             }
         });
         let mut loads = lock(&self.loads);
-        let slot = if full {
-            &mut loads.full
-        } else {
-            &mut loads.dependent
-        };
-        if let Some(previous) = slot.replace(task) {
-            previous.abort();
+        if load_generation(&loads, full) == generation {
+            loads.kind(full).task = Some(task);
         }
+    }
+
+    /// A load of one kind ended; a load it was replaced by keeps the state.
+    fn finished(&self, full: bool, generation: u64, failed: Option<AuthError>) {
+        let mut loads = lock(&self.loads);
+        if load_generation(&loads, full) != generation {
+            return;
+        }
+        let succeeded = failed.is_none();
+        let load = loads.kind(full);
+        load.running = false;
+        load.task = None;
+        load.failed = failed;
+        // A full load reads the dependent rows too.
+        if full && succeeded && !loads.dependent.running {
+            loads.dependent.failed = None;
+        }
+        self.publish_state(&loads);
+    }
+
+    fn publish_state(&self, loads: &Loads) {
+        let state = HomeState {
+            loading: loads.full.running || loads.dependent.running,
+            failed: loads
+                .full
+                .failed
+                .clone()
+                .or_else(|| loads.dependent.failed.clone()),
+            offline: self.ctx.is_unreachable(),
+        };
+        self.state.send_if_modified(|current| {
+            let changed = *current != state;
+            *current = state;
+            changed
+        });
     }
 
     /// A row answered: shown in its place with `items`, or gone without items.
@@ -335,6 +401,14 @@ impl Home {
     }
 }
 
+fn load_generation(loads: &Loads, full: bool) -> u64 {
+    if full {
+        loads.full.generation
+    } else {
+        loads.dependent.generation
+    }
+}
+
 fn spawn_row(
     rows: &mut JoinSet<(Spec, Result<Vec<ItemSummary>, AuthError>)>,
     client: &Arc<JellyfinClient>,
@@ -362,6 +436,11 @@ impl Live for Home {
 
     fn refresh(&self) {
         self.load(true);
+    }
+
+    fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
+        let rows = lock(&self.lists);
+        rows.lists.values().find_map(|list| find_in(list, item))
     }
 }
 

@@ -2,7 +2,7 @@
 //! wants that the server has not confirmed yet. A wanted change shows at once; the request for an item goes out one at a time, and
 //! only the last wanted state follows one in flight; a failed request rolls the change back.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use current_jellyfin::AuthError;
@@ -17,15 +17,16 @@ pub enum ItemAction {
     SetFavourite(bool),
 }
 
-/// Something the UI tells the user once, as a message.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Something the UI tells the user once, as a message. Debug leaves out the item's name.
+#[derive(Clone, PartialEq, Eq)]
 pub struct BrowseNotice {
     /// Counts up with each notice, so two identical failures can be told apart.
     pub seq: u64,
     pub kind: NoticeKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Debug leaves out the item's name.
+#[derive(Clone, PartialEq, Eq)]
 pub enum NoticeKind {
     /// The server did not take a played or favourite change: it was rolled back. `item_name` is for the message only; it never
     /// goes to the log.
@@ -36,12 +37,27 @@ pub enum NoticeKind {
     },
 }
 
-/// What a list showed of an item last.
-struct Known {
-    name: String,
-    user: UserState,
-    /// The series and season of an episode: lists of them depend on its played mark.
-    parents: Vec<ItemRef>,
+impl std::fmt::Debug for BrowseNotice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BrowseNotice")
+            .field("seq", &self.seq)
+            .field("kind", &self.kind)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for NoticeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ActionFailed {
+                action, problem, ..
+            } => f
+                .debug_struct("ActionFailed")
+                .field("action", action)
+                .field("problem", problem)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 /// The changes wanted for one item.
@@ -50,6 +66,10 @@ struct Pending {
     server: UserState,
     played: Option<bool>,
     favourite: Option<bool>,
+    /// The item's name for a notice, as a list showed it when the change was wanted.
+    name: Option<String>,
+    /// The series and season of an episode: lists of them depend on its played mark.
+    parents: Vec<ItemRef>,
 }
 
 impl Pending {
@@ -79,6 +99,22 @@ fn set_played(state: &mut UserState, played: bool) {
     }
 }
 
+/// The series and season of an episode summary.
+pub(super) fn parents(summary: &ItemSummary) -> Vec<ItemRef> {
+    summary
+        .episode
+        .as_ref()
+        .map(|links| {
+            links
+                .series
+                .iter()
+                .chain(links.season.iter())
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// How a request ended.
 pub(super) struct Answered {
     /// What the lists show now.
@@ -89,6 +125,8 @@ pub(super) struct Answered {
     pub(super) parents: Vec<ItemRef>,
 }
 
+/// Only the items with changes not yet confirmed are kept: what an item shows otherwise is read from the live lists, so nothing
+/// here grows with what the session loaded.
 #[derive(Default)]
 pub(super) struct ItemStates {
     inner: Mutex<Inner>,
@@ -96,80 +134,52 @@ pub(super) struct ItemStates {
 
 #[derive(Default)]
 struct Inner {
-    known: HashMap<ItemRef, Known>,
     pending: HashMap<ItemRef, Pending>,
     /// Items whose changes are being sent.
-    sending: std::collections::HashSet<ItemRef>,
+    sending: HashSet<ItemRef>,
 }
 
 impl ItemStates {
-    /// Records what `summary` shows, and gives it the state of a change still pending.
+    /// Gives `summary` the state of a change still pending for it.
     pub(super) fn observe(&self, summary: &mut ItemSummary) {
-        let mut inner = lock(&self.inner);
-        if let Some(pending) = inner.pending.get(&summary.item) {
+        if let Some(pending) = lock(&self.inner).pending.get(&summary.item) {
             summary.user = pending.shown();
         }
-        let parents = summary
-            .episode
-            .as_ref()
-            .map(|links| {
-                links
-                    .series
-                    .iter()
-                    .chain(links.season.iter())
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        inner.known.insert(
-            summary.item.clone(),
-            Known {
-                name: summary.name.clone(),
-                user: summary.user.clone(),
-                parents,
-            },
-        );
     }
 
-    pub(super) fn shown(&self, item: &ItemRef) -> Option<UserState> {
-        let inner = lock(&self.inner);
-        match inner.pending.get(item) {
-            Some(pending) => Some(pending.shown()),
-            None => inner.known.get(item).map(|known| known.user.clone()),
-        }
+    /// The state of `item` while a change for it is pending.
+    pub(super) fn pending(&self, item: &ItemRef) -> Option<UserState> {
+        lock(&self.inner).pending.get(item).map(Pending::shown)
     }
 
-    pub(super) fn parents(&self, item: &ItemRef) -> Vec<ItemRef> {
-        lock(&self.inner)
-            .known
-            .get(item)
-            .map(|known| known.parents.clone())
-            .unwrap_or_default()
-    }
-
-    /// Records a wanted change. Returns what the lists show now, and whether a sender must start (none runs for the item).
-    pub(super) fn want(&self, item: &ItemRef, action: ItemAction) -> (UserState, bool) {
+    /// Records a wanted change; `shown` is the item as a live list shows it, if one does. Returns what the lists show now, and
+    /// whether a sender must start (none runs for the item).
+    pub(super) fn want(
+        &self,
+        item: &ItemRef,
+        action: ItemAction,
+        shown: Option<&ItemSummary>,
+    ) -> (UserState, bool) {
         let mut inner = lock(&self.inner);
-        let base = inner
-            .known
-            .get(item)
-            .map(|known| known.user.clone())
-            .unwrap_or_default();
-        let pending = inner.pending.entry(item.clone()).or_insert(Pending {
-            server: base,
-            played: None,
-            favourite: None,
-        });
+        let pending = inner
+            .pending
+            .entry(item.clone())
+            .or_insert_with(|| Pending {
+                server: shown
+                    .map(|summary| summary.user.clone())
+                    .unwrap_or_default(),
+                played: None,
+                favourite: None,
+                name: shown.map(|summary| summary.name.clone()),
+                parents: shown.map(parents).unwrap_or_default(),
+            });
         match action {
             ItemAction::SetPlayed(played) => pending.played = Some(played),
             ItemAction::SetFavourite(favourite) => pending.favourite = Some(favourite),
         }
-        let shown = pending.shown();
-        if let Some(known) = inner.known.get_mut(item) {
-            known.user = shown.clone();
-        }
+        let state = pending.shown();
         let start = inner.sending.insert(item.clone());
-        (shown, start)
+        (state, start)
     }
 
     /// The next request to send for `item`, or `None` when nothing differs from the server's state any more: the item's changes
@@ -203,38 +213,31 @@ impl ItemStates {
         result: Result<UserState, AuthError>,
     ) -> Answered {
         let mut inner = lock(&self.inner);
-        let failure = match (inner.pending.get_mut(item), result) {
-            (Some(pending), Ok(state)) => {
+        // Only the sender removes an item's changes, so they are there while it waits.
+        let Some(pending) = inner.pending.get_mut(item) else {
+            return Answered {
+                shown: result.clone().unwrap_or_default(),
+                failure: result.err().map(|problem| (None, problem)),
+                parents: Vec::new(),
+            };
+        };
+        let failure = match result {
+            Ok(state) => {
                 pending.server = state;
                 None
             }
-            (Some(pending), Err(problem)) => {
+            Err(problem) => {
                 match action {
                     ItemAction::SetPlayed(_) => pending.played = None,
                     ItemAction::SetFavourite(_) => pending.favourite = None,
                 }
-                Some(problem)
+                Some((pending.name.clone(), problem))
             }
-            // Only the sender removes an item's changes, so they are there while it waits.
-            (None, result) => result.err(),
-        };
-        let shown = inner
-            .pending
-            .get(item)
-            .map(Pending::shown)
-            .unwrap_or_default();
-        let known = inner.known.get_mut(item);
-        let (name, parents) = match known {
-            Some(known) => {
-                known.user = shown.clone();
-                (Some(known.name.clone()), known.parents.clone())
-            }
-            None => (None, Vec::new()),
         };
         Answered {
-            shown,
-            failure: failure.map(|problem| (name, problem)),
-            parents,
+            shown: pending.shown(),
+            failure,
+            parents: pending.parents.clone(),
         }
     }
 }
@@ -276,36 +279,40 @@ mod tests {
     #[test]
     fn only_the_last_wanted_state_follows_one_in_flight() {
         let states = ItemStates::default();
-        states.observe(&mut summary("a", played(false)));
-        let (shown, start) = states.want(&item("a"), ItemAction::SetPlayed(true));
+        let film = summary("a", played(false));
+        let (shown, start) = states.want(&item("a"), ItemAction::SetPlayed(true), Some(&film));
         assert!(shown.played && start);
         assert_eq!(states.next(&item("a")), Some(ItemAction::SetPlayed(true)));
         // While it is in flight: unplayed, played, unplayed. No second sender.
         for on in [false, true, false] {
-            assert!(!states.want(&item("a"), ItemAction::SetPlayed(on)).1);
+            assert!(!states.want(&item("a"), ItemAction::SetPlayed(on), None).1);
         }
         let answered = states.answered(&item("a"), ItemAction::SetPlayed(true), Ok(played(true)));
         assert!(!answered.shown.played, "the last wish still shows");
         assert_eq!(states.next(&item("a")), Some(ItemAction::SetPlayed(false)));
         states.answered(&item("a"), ItemAction::SetPlayed(false), Ok(played(false)));
         assert_eq!(states.next(&item("a")), None);
-        assert_eq!(states.shown(&item("a")), Some(played(false)));
+        assert_eq!(
+            states.pending(&item("a")),
+            None,
+            "nothing is kept once done"
+        );
     }
 
     #[test]
     fn a_change_undone_before_it_is_sent_sends_nothing() {
         let states = ItemStates::default();
-        states.observe(&mut summary("a", played(false)));
-        states.want(&item("a"), ItemAction::SetFavourite(true));
-        states.want(&item("a"), ItemAction::SetFavourite(false));
+        let film = summary("a", played(false));
+        states.want(&item("a"), ItemAction::SetFavourite(true), Some(&film));
+        states.want(&item("a"), ItemAction::SetFavourite(false), Some(&film));
         assert_eq!(states.next(&item("a")), None);
     }
 
     #[test]
     fn a_failure_rolls_back_and_names_the_item_for_the_notice() {
         let states = ItemStates::default();
-        states.observe(&mut summary("a", played(false)));
-        states.want(&item("a"), ItemAction::SetPlayed(true));
+        let film = summary("a", played(false));
+        states.want(&item("a"), ItemAction::SetPlayed(true), Some(&film));
         states.next(&item("a"));
         let answered = states.answered(
             &item("a"),
@@ -323,11 +330,27 @@ mod tests {
     #[test]
     fn items_loaded_while_a_change_is_pending_take_it() {
         let states = ItemStates::default();
-        states.observe(&mut summary("a", played(false)));
-        states.want(&item("a"), ItemAction::SetPlayed(true));
+        states.want(&item("a"), ItemAction::SetPlayed(true), None);
         let mut late = summary("a", played(false));
         states.observe(&mut late);
         assert!(late.user.played);
+    }
+
+    #[test]
+    fn a_notice_debugs_without_the_name() {
+        let notice = BrowseNotice {
+            seq: 1,
+            kind: NoticeKind::ActionFailed {
+                action: ItemAction::SetPlayed(true),
+                item_name: Some("Example Film".into()),
+                problem: AuthError::NotSignedIn,
+            },
+        };
+        let debug = format!("{notice:?}");
+        assert!(
+            debug.contains("SetPlayed") && !debug.contains("Example"),
+            "{debug}"
+        );
     }
 
     #[test]

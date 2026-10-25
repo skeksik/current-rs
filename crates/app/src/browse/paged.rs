@@ -74,6 +74,8 @@ enum Page {
     Empty,
     /// `stale` after a refresh, until it is read again; its items show meanwhile.
     Loaded { stale: bool },
+    /// Loaded, but reading it again failed: its items still show, and it waits for Retry or for coming into view again.
+    ReloadFailed,
     /// Its slots are `Failed`. `retried` once a scroll retried it by itself.
     Failed { retried: bool },
     /// Failed, and to be loaded again now; `auto` when a scroll asked rather than Retry.
@@ -189,8 +191,10 @@ impl PagedItems {
         control.visible = Some((first.min(last), first.max(last)));
         let now = plan(control.total, control.visible);
         for page in now.into_iter().filter(|page| !before.contains(page)) {
-            if let Some(slot @ Page::Failed { retried: false }) = control.pages.get_mut(page) {
-                *slot = Page::Retry { auto: true };
+            match control.pages.get_mut(page) {
+                Some(slot @ Page::Failed { retried: false }) => *slot = Page::Retry { auto: true },
+                Some(slot @ Page::ReloadFailed) => *slot = Page::Loaded { stale: true },
+                _ => {}
             }
         }
         self.inner.pump(&mut control);
@@ -206,8 +210,10 @@ impl PagedItems {
         let mut control = lock(&self.inner.control);
         control.error = None;
         for page in &mut control.pages {
-            if matches!(page, Page::Failed { .. }) {
-                *page = Page::Retry { auto: false };
+            match page {
+                Page::Failed { .. } => *page = Page::Retry { auto: false },
+                Page::ReloadFailed => *page = Page::Loaded { stale: true },
+                _ => {}
             }
         }
         self.inner.pump(&mut control);
@@ -234,8 +240,8 @@ impl Paged {
         let mut control = lock(&self.control);
         if control.started {
             for page in &mut control.pages {
-                if let Page::Loaded { stale } = page {
-                    *stale = true;
+                if matches!(page, Page::Loaded { .. } | Page::ReloadFailed) {
+                    *page = Page::Loaded { stale: true };
                 }
             }
             control.refresh_wanted = true;
@@ -351,21 +357,29 @@ impl Paged {
                 if flight.with_total {
                     self.resize(&mut control, answer.total);
                 }
+                // Fewer items than the page's slots: the total shrank since it was read. Read it again; a page read with the total
+                // is already sized to it.
+                if !flight.with_total && answer.items.len() < page_range(page, control.total).len()
+                {
+                    control.refresh_wanted = true;
+                }
                 self.fill(&mut control, page, answer.items);
                 if !control
                     .pages
                     .iter()
-                    .any(|page| matches!(page, Page::Failed { .. }))
+                    .any(|page| matches!(page, Page::Failed { .. } | Page::ReloadFailed))
                 {
                     control.error = None;
                 }
             }
             Err(error) => {
                 if control.started {
+                    // A failed request is not sent again by itself, whether it read the total or not: the page waits for Retry or
+                    // for coming into view again, so a server that keeps failing gets one request per user action.
                     match control.pages.get(page) {
-                        // A loaded page keeps its items: it is read again when next visible.
-                        Some(Page::Loaded { .. }) => {
-                            control.pages[page] = Page::Loaded { stale: true };
+                        // A loaded page keeps its items.
+                        Some(Page::Loaded { .. } | Page::ReloadFailed) => {
+                            control.pages[page] = Page::ReloadFailed;
                         }
                         Some(_) => {
                             control.pages[page] = Page::Failed {
@@ -385,8 +399,6 @@ impl Paged {
                         }
                         None => {}
                     }
-                    // Read the total again with the next request.
-                    control.refresh_wanted |= flight.with_total;
                 }
                 control.error = Some(error);
             }
@@ -553,6 +565,18 @@ impl Live for Paged {
 
     fn refresh(&self) {
         Paged::refresh(self);
+    }
+
+    fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
+        let control = lock(&self.control);
+        control
+            .index
+            .get(item)?
+            .iter()
+            .find_map(|index| match self.slots.get(*index) {
+                Some(Slot::Item(summary)) if &summary.item == item => Some(*summary),
+                _ => None,
+            })
     }
 }
 

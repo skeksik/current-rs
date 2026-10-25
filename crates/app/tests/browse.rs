@@ -568,3 +568,95 @@ async fn no_browse_without_a_signed_in_jellyfin_server() {
     );
     assert!(app.browse(&server).is_none());
 }
+
+#[tokio::test]
+async fn a_failed_refresh_sends_one_request_and_waits_for_retry() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let grid = browse.open_library(&big_library(&server), ItemQuery::default());
+    started(&grid, BIG_LIBRARY_SIZE as u32).await;
+    eventually(|| is_item(grid.slots().get(199)) && !grid.state().borrow().loading).await;
+
+    stand_in.set_big_library_revision(1);
+    stand_in.fail(&page_key(0));
+    stand_in.fail(&page_key(100));
+    stand_in.clear_pages();
+    grid.refresh();
+    eventually(|| grid.state().borrow().failed.is_some() && !grid.state().borrow().loading).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let starts: Vec<usize> = stand_in.pages().iter().map(|page| page.start).collect();
+    assert_eq!(
+        starts,
+        [0, 100],
+        "each failed page was asked once: {starts:?}"
+    );
+    // The loaded slots keep their items.
+    assert_eq!(name(grid.slots().get(0)), Some(big_item_name(0, 0)));
+
+    stand_in.unfail(&page_key(0));
+    stand_in.unfail(&page_key(100));
+    grid.retry();
+    eventually(|| name(grid.slots().get(150)) == Some(big_item_name(150, 1))).await;
+    assert_eq!(name(grid.slots().get(0)), Some(big_item_name(0, 1)));
+    eventually(|| grid.state().borrow().failed.is_none()).await;
+}
+
+#[tokio::test]
+async fn a_short_page_reads_the_total_again() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let grid = browse.open_library(&big_library(&server), ItemQuery::default());
+    started(&grid, BIG_LIBRARY_SIZE as u32).await;
+    // The library shrank on the server; the list does not know until a page answers short.
+    stand_in.set_big_library_size(420);
+    grid.set_visible_range(440, 449);
+    eventually(|| grid.slots().len() == 420).await;
+    eventually(|| (300..420).all(|index| is_item(grid.slots().get(index)))).await;
+    assert_eq!(grid.state().borrow().total, 420);
+}
+
+#[tokio::test]
+async fn a_large_shrink_sends_no_reset() {
+    let stand_in = StandIn::start().await.unwrap();
+    stand_in.set_big_library_size(2_000);
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let grid = browse.open_library(&big_library(&server), ItemQuery::default());
+    started(&grid, 2_000).await;
+    let diffs = record(&grid.slots());
+    eventually(|| !diffs.lock().unwrap().is_empty()).await;
+    stand_in.set_big_library_size(100);
+    grid.refresh();
+    eventually(|| grid.slots().len() == 100).await;
+    let diffs = diffs.lock().unwrap();
+    assert!(
+        diffs[1..]
+            .iter()
+            .all(|diff| !matches!(diff, VectorDiff::Reset { .. })),
+        "1,900 removals in one change are not a reset"
+    );
+}
+
+#[tokio::test]
+async fn a_dependent_reload_keeps_a_full_loads_failure() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    stand_in.fail("/Items/Latest");
+    let home = browse.home();
+    eventually(|| home.state().borrow().failed.is_some() && !home.state().borrow().loading).await;
+    let next_up = stand_in.count("/Shows/NextUp");
+    browse.set_played(&item(&server, EPISODE_IDS[0]), true);
+    eventually(|| stand_in.count("/Shows/NextUp") == next_up + 1).await;
+    eventually(|| !home.state().borrow().loading).await;
+    assert!(
+        home.state().borrow().failed.is_some(),
+        "the Latest rows are still missing: Retry stays"
+    );
+}
