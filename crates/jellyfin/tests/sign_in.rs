@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use current_jellyfin::{
     AccessToken, AuthError, ClientIdentity, JellyfinClient, QuickConnectSecret, SessionEvent,
-    TokenCheck,
+    TOKEN_CHECK_TIMEOUT, TokenCheck,
 };
 use current_model::{Permission, ServerId, ServerKey, ServerRef, ServiceType, UserId};
 use current_net::{FixedAddress, NetError, Request, RequestLog, Url};
@@ -538,8 +538,9 @@ async fn the_token_check_asks_who_the_token_belongs_to() {
         (403, String::new(), TokenCheck::Works),
         (401, String::new(), TokenCheck::Fails),
         (500, String::new(), TokenCheck::Unknown),
-        // A page where JSON was expected: no answer of Jellyfin's.
+        // A page where JSON was expected, or a 401 page: no answer of Jellyfin's, which never sends pages (ADR 0017).
         (200, "<html>sign in</html>".to_owned(), TokenCheck::Unknown),
+        (401, "<html>sign in</html>".to_owned(), TokenCheck::Unknown),
     ] {
         let server = StandIn::start(move |_: &Received| (status, body.clone())).await;
         let client = client(&server, &Arc::new(RequestLog::default()));
@@ -564,6 +565,70 @@ async fn the_token_check_asks_who_the_token_belongs_to() {
         );
         assert_eq!(server.received().len(), 1);
     }
+}
+
+#[tokio::test]
+async fn the_token_check_decides_nothing_without_an_answer() {
+    // Nothing listens: no answer at all.
+    let unreachable = JellyfinClient::new(
+        ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+        Arc::new(FixedAddress(Url::parse("http://127.0.0.1:1").unwrap())),
+        identity(),
+        Arc::new(RequestLog::default()),
+    )
+    .unwrap();
+    unreachable.set_token(AccessToken::new(TOKEN));
+    assert_eq!(
+        unreachable.check_token(&AccessToken::new(TOKEN)).await,
+        TokenCheck::Unknown
+    );
+
+    // A server that takes the request and never answers: the check gives up after its own timeout.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = Url::parse(&format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().unwrap().port()
+    ))
+    .unwrap();
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let holding = held.clone();
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            holding.lock().unwrap().push(socket);
+        }
+    });
+    let silent = JellyfinClient::new(
+        ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+        Arc::new(FixedAddress(address)),
+        identity(),
+        Arc::new(RequestLog::default()),
+    )
+    .unwrap();
+    silent.set_token(AccessToken::new(TOKEN));
+    let started = tokio::time::Instant::now();
+    assert_eq!(
+        silent.check_token(&AccessToken::new(TOKEN)).await,
+        TokenCheck::Unknown
+    );
+    assert!(started.elapsed() < TOKEN_CHECK_TIMEOUT + Duration::from_secs(5));
+    assert!(silent.has_token());
+}
+
+#[tokio::test]
+async fn a_401_waits_for_the_check_no_longer_than_the_request_s_deadline() {
+    let server = StandIn::start(|_: &Received| (401, String::new())).await;
+    let client = client(&server, &Arc::new(RequestLog::default()));
+    let events = recorder(&client);
+    client.set_token(AccessToken::new(TOKEN));
+    // The app's check never ends here: the request answers once its own deadline passed.
+    let started = tokio::time::Instant::now();
+    let result = client
+        .send_authenticated(Request::get("/Items").timeout(Duration::from_millis(300)))
+        .await;
+    assert_eq!(result.unwrap_err(), AuthError::Unconfirmed);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(events.lock().unwrap().len(), 1);
+    assert!(client.has_token());
 }
 
 #[tokio::test]

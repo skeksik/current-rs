@@ -249,3 +249,18 @@ impl MediaServer for JellyfinMedia {
             .is_some_and(|client| client.address_is_local())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_item_refused_to_a_session_that_goes_on_is_not_found() {
+        // ADR 0015 as amended 2026-10-25: a 401 to a token that still works is about the one item.
+        assert_eq!(problem(&AuthError::NotAvailable), PlaybackProblem::NotFound);
+        assert_eq!(
+            problem(&AuthError::SessionRevoked),
+            PlaybackProblem::SignedOut
+        );
+    }
+}

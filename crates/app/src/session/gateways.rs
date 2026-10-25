@@ -325,7 +325,7 @@ impl Shared {
     /// the session; one that works keeps it, and the request that got the 401 answers "not available"; no answer changes nothing.
     /// After a page or a redirect, which Jellyfin never sends, nothing changes (a proxy rule blocking one path, say). A gateway's
     /// answer: "Sign in to the gateway again", session and token kept. No answer: nothing changes. The client holds its requests
-    /// back meanwhile and lets them go once this decides, so at most one probe and one token check run per session.
+    /// back meanwhile and lets them go once this decides, so at most one probe and one token check run at a time per session.
     async fn confirm(
         self: &Arc<Self>,
         server: &ServerRef,

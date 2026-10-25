@@ -27,6 +27,9 @@ pub const QUICK_CONNECT_INTERVAL: Duration = Duration::from_secs(5);
 pub const QUICK_CONNECT_LIFETIME: Duration = Duration::from_secs(10 * 60);
 /// Signing out waits at most this long: the token is deleted on this device whatever the server answers.
 const SIGN_OUT_TIMEOUT: Duration = Duration::from_secs(10);
+/// The token check after a 401 waits at most this long: the identity probe's request timeout, so that the check's two requests
+/// together stay within a default request's deadline.
+pub const TOKEN_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Why a sign-in or an authenticated request failed. Neither Display nor Debug holds an address, a password or a token.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -107,9 +110,10 @@ pub struct QuickConnectCode {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
     /// A 401 without a challenge, a redirect that was not followed or an HTML page where JSON was expected, to a request that
-    /// carried `token`: a gateway in front of the server may want a sign-in, or (for a 401 only) Jellyfin ended the session. The
-    /// client keeps the token and answers [`AuthError::Unconfirmed`] without sending anything until the app has re-run the
-    /// identity probe and called [`JellyfinClient::revoke`] or [`JellyfinClient::resume`]. Reported once per check: such answers
+    /// carried `token`: a gateway in front of the server may want a sign-in, or (for a 401 only) Jellyfin ended the session or
+    /// refused one resource. The client keeps the token and answers [`AuthError::Unconfirmed`] without sending anything until the
+    /// app has re-run the identity probe (and, for Jellyfin's 401, [`JellyfinClient::check_token`]) and called
+    /// [`JellyfinClient::revoke`], [`JellyfinClient::keep`] or [`JellyfinClient::resume`]. Reported once per check: such answers
     /// that arrive while one runs join it.
     ///
     /// `unauthorized` is true for a 401. Only then can a passing probe mean the session ended: Jellyfin never answers with a page
@@ -158,10 +162,6 @@ struct Checks {
     ended: u64,
     outcome: Outcome,
 }
-
-/// How long a request that got a 401 waits for the app's check before it answers [`AuthError::Unconfirmed`]: well past the
-/// identity probe's and the token check's own timeouts, so only an app that never decides meets it.
-const CHECK_WAIT: Duration = Duration::from_secs(60);
 
 /// A Jellyfin client for one server, signed in or not. Every request carries the client's identity; once a token is set, it too.
 pub struct JellyfinClient {
@@ -348,7 +348,10 @@ impl JellyfinClient {
         if auth::read(&self.token).as_ref() != Some(token) {
             return TokenCheck::Unknown;
         }
-        let result = self.http.send(Request::get("/Users/Me")).await;
+        let result = self
+            .http
+            .send(Request::get("/Users/Me").timeout(TOKEN_CHECK_TIMEOUT))
+            .await;
         if let Err(error) = &result
             && GatewayAnswer::challenged(error).is_some()
         {
@@ -361,7 +364,12 @@ impl JellyfinClient {
                 page: false,
                 ..
             }) => TokenCheck::Works,
-            Err(NetError::Auth { status: 401, .. }) => TokenCheck::Fails,
+            // Jellyfin never answers with a page (ADR 0017): a 401 page is a gateway's, which decides nothing about the token.
+            Err(NetError::Auth {
+                status: 401,
+                page: false,
+                ..
+            }) => TokenCheck::Fails,
             _ => TokenCheck::Unknown,
         }
     }
@@ -499,17 +507,34 @@ impl JellyfinClient {
     /// Sends a request that needs the token. A 401 or 403 with a `WWW-Authenticate` challenge is a gateway's
     /// ([`AuthError::Gateway`]): the token is kept and the hook hears it (ADR 0017). A 401 without a challenge, a redirect that was
     /// not followed, or an HTML page where JSON was expected may be a gateway's: with a hook, the token is kept and the hook asked
-    /// to confirm ([`SessionEvent::Unconfirmed`], the 401 rule's second part). The 401 answers [`AuthError::Unconfirmed`]; a page
-    /// or a redirect answers as it would without a hook ([`AuthError::Refused`] for a 403 page, the network error for a redirect,
-    /// the page itself for a 2xx one). Without a hook, a 401 forgets the token (ADR 0015). A 403 never does: the token is valid,
-    /// only this request was refused.
+    /// to confirm ([`SessionEvent::Unconfirmed`], the 401 rule's second part). The 401 waits for the app's decision, within the
+    /// request's own deadline (its timeout, else the client's), and answers [`AuthError::SessionRevoked`],
+    /// [`AuthError::NotAvailable`], or [`AuthError::Unconfirmed`] when nothing was decided in time; a page or a redirect answers as
+    /// it would without a hook ([`AuthError::Refused`] for a 403 page, the network error for a redirect, the page itself for a 2xx
+    /// one). Without a hook, a 401 forgets the token (ADR 0015). A 403 never does: the token is valid, only this request was
+    /// refused.
     pub async fn send_authenticated(&self, request: Request) -> Result<Response, AuthError> {
+        self.send_checked(request, true).await
+    }
+
+    /// As [`JellyfinClient::send_authenticated`], but a 401 answers [`AuthError::Unconfirmed`] at once instead of waiting for the
+    /// app's decision: for requests whose caller must not be held by it (playstate reports, which the player awaits in its loop and
+    /// at exit; images, which hold one of the server's fetch slots). The check still starts.
+    pub(crate) async fn send_authenticated_now(
+        &self,
+        request: Request,
+    ) -> Result<Response, AuthError> {
+        self.send_checked(request, false).await
+    }
+
+    async fn send_checked(&self, request: Request, wait: bool) -> Result<Response, AuthError> {
         let Some(token) = auth::read(&self.token) else {
             return Err(AuthError::NotSignedIn);
         };
         if self.is_checking() {
             return Err(AuthError::Unconfirmed);
         }
+        let deadline = Instant::now() + self.http.budget(&request);
         let result = self.http.send(request).await;
         // A gateway's challenge, not Jellyfin's answer: the token is kept (ADR 0017, the 401 rule).
         if let Err(error) = &result
@@ -539,8 +564,8 @@ impl JellyfinClient {
             }
             if unauthorized {
                 return Err(match check {
-                    Some((number, _)) => self.check_ended(number).await,
-                    None => AuthError::Unconfirmed,
+                    Some((number, _)) if wait => self.check_ended(number, deadline).await,
+                    _ => AuthError::Unconfirmed,
                 });
             }
         }
@@ -576,12 +601,12 @@ impl JellyfinClient {
         begun
     }
 
-    /// Waits until check `number` ended (at most [`CHECK_WAIT`]) and says what a request that got the 401 answers: the session
-    /// ended, the resource is not available to the user, or nothing was decided.
-    async fn check_ended(&self, number: u64) -> AuthError {
+    /// Waits until check `number` ended, at most until the request's `deadline`, and says what a request that got the 401 answers:
+    /// the session ended, the resource is not available to the user, or nothing was decided (in time).
+    async fn check_ended(&self, number: u64, deadline: Instant) -> AuthError {
         let mut checks = self.checks.subscribe();
         let ended =
-            tokio::time::timeout(CHECK_WAIT, checks.wait_for(|checks| checks.ended >= number))
+            tokio::time::timeout_at(deadline, checks.wait_for(|checks| checks.ended >= number))
                 .await;
         match ended.ok().and_then(Result::ok).map(|checks| checks.outcome) {
             // A later check may have ended meanwhile: its outcome is the newer one and stands for this one too.

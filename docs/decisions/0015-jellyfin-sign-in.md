@@ -134,10 +134,13 @@ The rule's second part, after the probe answered Jellyfin's JSON with the right 
   `AuthError::NotAvailable` (`JellyfinClient::keep`). Browse shows it as `BrowseProblem::NotAvailable`, playback as
   `PlaybackProblem::NotFound`.
 - **The token fails** (401 without a challenge): the session ends as before (`revoke`, then the app signs out).
-- **No answer** (a network error, a 5xx, a gateway's answer, a page, or a newer token in the meantime): nothing changes (`resume`).
-- The request that got the 401 now waits for the decision (at most 60 s) and answers `SessionRevoked`, `NotAvailable` or
-  `Unconfirmed`. Requests made while the check runs still answer `Unconfirmed` without sending, so at most one probe and one token
-  check run per session.
+- **No answer** (a network error, a 5xx, a gateway's answer, a 401 page, a timeout after 10 s, or a newer token in the meantime):
+  nothing changes (`resume`). Jellyfin never answers with a page (ADR 0017), so a 401 page is a gateway's.
+- The request that got the 401 now waits for the decision, but no longer than its own deadline (its timeout, else the client's
+  30 s), and answers `SessionRevoked`, `NotAvailable`, or `Unconfirmed` when nothing was decided in time. Playstate reports and
+  images do not wait: they answer `Unconfirmed` at once, since the player awaits its reports in its loop and at exit (a stop report
+  within 5 s) and an image holds one of the server's fetch slots (review, 2026-10-25). Requests made while the check runs still
+  answer `Unconfirmed` without sending, so at most one probe and one token check run at a time per session.
 - A library grid whose request fails with `NotAvailable`, or with 400 or 404 (a server that has forgotten the parent), reads the
   user's libraries again; if the library left them, the grid's state says `NotAvailable` (ADR 0018, amended 2026-10-25).
 - Tests: `crates/jellyfin/tests/sign_in.rs` (the client's three outcomes, the token check's answers), `crates/app/tests/

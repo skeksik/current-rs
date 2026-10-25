@@ -177,17 +177,21 @@ pub(super) fn might_be_gone(error: &AuthError) -> bool {
     )
 }
 
-/// Loads the libraries again each time the server is reached after a failed load, until the session's browse state is gone.
+/// Loads the libraries again each time the server's status changes while it is reachable after a failed load, until the
+/// session's browse state is gone. Another server's changes do not count.
 async fn follow(
     context: Weak<Context>,
     server: ServerRef,
     mut capabilities: watch::Receiver<Capabilities>,
 ) {
+    let mut last = capabilities.borrow_and_update().server(&server).cloned();
     while capabilities.changed().await.is_ok() {
-        let reachable = capabilities
-            .borrow_and_update()
-            .server(&server)
-            .is_some_and(|status| status.reachability == Reachability::Reachable);
+        let status = capabilities.borrow_and_update().server(&server).cloned();
+        if status == last {
+            continue;
+        }
+        last.clone_from(&status);
+        let reachable = status.is_some_and(|status| status.reachability == Reachability::Reachable);
         let Some(context) = context.upgrade() else {
             return;
         };
