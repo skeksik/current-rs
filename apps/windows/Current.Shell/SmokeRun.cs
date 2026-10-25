@@ -223,6 +223,23 @@ internal static class SmokeRun
 
     private const int BigLibrarySize = 450;
 
+    /// <summary>The stand-in's films library (library.rs), and one the smoke run adds.</summary>
+    private const string FilmsLibraryId = "57a2d1e0000000000000000000001001";
+
+    private const string AddedLibraryId = "57a2d1e0000000000000000000001003";
+
+    /// <summary>
+    /// Sends the stand-in a command (its main.rs), then a count, which it answers only after every earlier line: once this returns,
+    /// the command has taken effect.
+    /// </summary>
+    private static async Task SendAsync(Process standIn, string command)
+    {
+        await standIn.StandardInput.WriteLineAsync(command);
+        await standIn.StandardInput.WriteLineAsync("count /");
+        await standIn.StandardInput.FlushAsync();
+        await standIn.StandardOutput.ReadLineAsync().WaitAsync(Timeout);
+    }
+
     /// <summary>
     /// Browsing in the main window against the Jellyfin stand-in (ADR 0018, task 5), when <c>CURRENT_STAND_IN</c> names it: signed in
     /// with its password, the window's navigation lists its two libraries; the library grid (LibraryPage) is sized to the big
@@ -284,6 +301,33 @@ internal static class SmokeRun
             page?.ScrollTo(BigLibrarySize - 1);
             var loaded = await WaitUntilAsync(() => page?.Slots is { Count: BigLibrarySize } slots && slots[^1].Slot is Slot.Item);
             check(loaded, "scrolled to its end, the grid's visible range loads the last slots");
+
+            // Libraries that change on the server: one added shows in the pane after a refresh; the films library removed while its
+            // page shows sends the page back to Home with a notice, and the user stays signed in.
+            await SendAsync(standIn, $"library add {AddedLibraryId} examplekind Example Added");
+            server.Session.Refresh();
+            var added = await WaitUntilAsync(() => window.LibraryItemCount == 3);
+            check(added, $"a library added on the server joins the navigation ({window.LibraryItemCount})");
+            if (hub.FindLibrary(new ItemRef(server.Server, FilmsLibraryId)) is { } films)
+            {
+                window.ShowLibrary(films);
+                await SendAsync(standIn, $"library remove {FilmsLibraryId}");
+                server.Session.Refresh();
+                var home = await WaitUntilAsync(() => window.ShownPage is HomePage && window.LibraryItemCount == 2);
+                check(home, $"a removed library's page goes back to Home ({window.ShownPage?.GetType().Name}, {window.LibraryItemCount})");
+                check(window.NoticeTitles.Count(title => title == BrowseText.LibraryGoneTitle) == 1,
+                    "one notice says the library is no longer available");
+                check(hub.Find(server.Server) is not null, "still signed in");
+                // Back from Home never reopens the gone library: the big library's page, opened before it, shows instead.
+                window.GoBack();
+                var back = await WaitUntilAsync(() => window.ShownPage is LibraryPage);
+                check(back && window.ShownParameter is LibraryArgs { Library.Item.Id: BigLibraryId },
+                    $"Back from Home skips the gone library ({window.ShownPage?.GetType().Name})");
+            }
+            else
+            {
+                check(false, "the navigation lists the films library");
+            }
             // Off the grid before its session goes: the page lets go of its slots.
             window.ShowSettings();
         }

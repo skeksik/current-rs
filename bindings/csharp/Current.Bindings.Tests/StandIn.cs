@@ -26,6 +26,7 @@ internal sealed class StandIn : IDisposable
     // Its fake libraries (tools/jellyfin-stand-in/src/library.rs and paging.rs).
     public const string FilmsLibraryId = "57a2d1e0000000000000000000001001";
     public const string FilmsLibraryName = "Example Films";
+    public const string ShowsLibraryId = "57a2d1e0000000000000000000001002";
     public static readonly string[] FilmIds =
     [
         "57a2d1e0000000000000000000002001",
@@ -95,7 +96,9 @@ internal sealed class StandIn : IDisposable
     /// <c>hold &lt;path&gt;</c>, <c>release &lt;path&gt;</c> (requests to the path wait, unanswered, until released);
     /// <c>gate off</c>, <c>basic</c>, <c>portal</c> or <c>header</c>; <c>gate-cookie &lt;value&gt;</c> (the portal takes this value now);
     /// <c>fail &lt;path or page&gt;</c>, <c>unfail &lt;path or page&gt;</c> (answers 500 until unfailed; a page of the generated library is
-    /// <c>/Items@&lt;start&gt;</c>).
+    /// <c>/Items@&lt;start&gt;</c>); <c>library add &lt;id&gt; &lt;collection type&gt; &lt;name&gt;</c>, <c>library remove &lt;id&gt;</c>
+    /// (items under it answer 401, as for a library the user cannot see), <c>library forget &lt;id&gt;</c> (400),
+    /// <c>library rename &lt;id&gt; &lt;name&gt;</c>, <c>library order &lt;id&gt;,&lt;id&gt;,...</c>.
     /// </summary>
     /// <remarks>
     /// The stand-in reads commands on a thread of its own, so a request sent right after a bare write could arrive before the command

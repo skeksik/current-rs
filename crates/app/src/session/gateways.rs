@@ -11,7 +11,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use current_jellyfin::{
-    AccessToken, HeaderPlacement, JellyfinClient, ProbeError, Prober, SessionEvent,
+    AccessToken, HeaderPlacement, JellyfinClient, ProbeError, Prober, SessionEvent, TokenCheck,
 };
 use current_model::{AddressId, Reachability, SavedServer, ServerAddress, ServerRef};
 use current_net::{
@@ -321,9 +321,11 @@ impl Shared {
 
     /// The 401 rule's second part: re-runs the identity probe through the server's provider, with the address's gateway
     /// credentials and never the token. Jellyfin's answer with the server's id after a 401 (`unauthorized`): the 401 was
-    /// Jellyfin's, the session ends (ADR 0015); after a page or a redirect, which Jellyfin never sends, nothing changes (a proxy
-    /// rule blocking one path, say). A gateway's answer: "Sign in to the gateway again", session and token kept. No answer: nothing changes. The client
-    /// holds its requests back meanwhile and lets them go once this decides, so at most one probe runs per session.
+    /// Jellyfin's, so Jellyfin is asked who the token belongs to (ADR 0015 as amended 2026-10-25). A token that fails (401) ends
+    /// the session; one that works keeps it, and the request that got the 401 answers "not available"; no answer changes nothing.
+    /// After a page or a redirect, which Jellyfin never sends, nothing changes (a proxy rule blocking one path, say). A gateway's
+    /// answer: "Sign in to the gateway again", session and token kept. No answer: nothing changes. The client holds its requests
+    /// back meanwhile and lets them go once this decides, so at most one probe and one token check run at a time per session.
     async fn confirm(
         self: &Arc<Self>,
         server: &ServerRef,
@@ -350,11 +352,17 @@ impl Shared {
             Err(_) => None,
         };
         match answer {
-            Some(Ok(_)) if unauthorized => {
-                if client.revoke(&token) {
-                    self.revoked(server, id);
+            // Jellyfin's 401, which it also answers with a valid token for one resource the user cannot reach (a hidden library):
+            // ask it who the token belongs to (ADR 0015 as amended 2026-10-25).
+            Some(Ok(_)) if unauthorized => match client.check_token(&token).await {
+                TokenCheck::Works => client.keep(&token),
+                TokenCheck::Fails => {
+                    if client.revoke(&token) {
+                        self.revoked(server, id);
+                    }
                 }
-            }
+                TokenCheck::Unknown => client.resume(),
+            },
             Some(Err(error)) if gateway_answered(&error) => {
                 let address = provider
                     .current()

@@ -116,8 +116,9 @@ fn is_image(response: &Response) -> bool {
 
 impl JellyfinClient {
     /// Fetches an item's image at a box size and returns its encoded bytes (JPEG or PNG). Sent as an authenticated request, under
-    /// the same rules (see [`JellyfinClient::send_authenticated`]); a 2xx HTML page, which a gateway's sign-in page is and an image
-    /// never is, is the gateway's answer ([`GatewayAnswer::SignIn`]), not a broken image.
+    /// the same rules (see [`JellyfinClient::send_authenticated`]), except that a 401 answers at once rather than holding a fetch
+    /// slot while the session checks it; a 2xx HTML page, which a gateway's sign-in page is and an image never is, is the gateway's
+    /// answer ([`GatewayAnswer::SignIn`]), not a broken image.
     ///
     /// # Errors
     /// [`ImageError`]: the request's own failure, an answer that is not an image, or a request that cannot be sent.
@@ -128,7 +129,7 @@ impl JellyfinClient {
         for (key, value) in query {
             sent = sent.query(key, value);
         }
-        let response = self.send_authenticated(sent).await?;
+        let response = self.send_authenticated_now(sent).await?;
         if GatewayAnswer::of(&Ok(response.clone())) == Some(GatewayAnswer::SignIn) {
             return Err(AuthError::Gateway(GatewayAnswer::SignIn).into());
         }

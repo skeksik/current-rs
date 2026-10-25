@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use current_jellyfin::{
     AccessToken, AuthError, ClientIdentity, GatewayAnswer, HeaderPlacement, JellyfinClient,
-    JellyfinIdentity, ProbeError, Prober, Realm, SessionEvent,
+    JellyfinIdentity, ProbeError, Prober, Realm, SessionEvent, TokenCheck,
 };
 use current_model::{ServerId, ServerKey, ServerRef, ServiceType};
 use current_net::{
@@ -766,4 +766,22 @@ async fn a_gateway_challenge_mid_session_keeps_the_token() {
         AuthError::SessionRevoked
     );
     assert!(!session.has_token());
+}
+
+#[tokio::test]
+async fn the_token_check_decides_nothing_on_a_gateway_s_answer() {
+    let log = Arc::new(RequestLog::default());
+    // A gateway's challenge, and a portal's sign-in page with 401: neither is Jellyfin's, so the session stays.
+    for answer in [basic_challenge(), html(401)] {
+        let gated = StandIn::start(move |_| answer.clone()).await;
+        let session = client(Arc::new(FixedAddress(gated.url())), &log);
+        session.set_token(AccessToken::new(TOKEN));
+        assert_eq!(
+            session.check_token(&AccessToken::new(TOKEN)).await,
+            TokenCheck::Unknown
+        );
+        assert!(session.has_token());
+        assert_eq!(gated.count("/Users/Me"), 1);
+    }
+    assert_clean(&log.to_text());
 }

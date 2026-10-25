@@ -221,6 +221,11 @@ impl ServerClient {
         &self.server
     }
 
+    /// How long `request` may take in all: its own timeout, else the client's.
+    pub fn budget(&self, request: &Request) -> Duration {
+        request.timeout.unwrap_or(self.timeout)
+    }
+
     /// Sends a request. A status outside 2xx is an error carrying the server's message.
     ///
     /// When the address in use fails (unreachable, a timeout or TLS) the provider is told, and if it picks another address within the

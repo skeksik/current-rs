@@ -624,3 +624,26 @@ async fn the_users_playback_preferences_are_read() {
     assert!(preferences.remember_audio && !preferences.remember_subtitles);
     assert!(preferences.next_episode_autoplay);
 }
+
+#[tokio::test]
+async fn a_playstate_report_that_gets_a_401_answers_within_its_timeout() {
+    let server = StandIn::start(|_| (401, String::new())).await;
+    let log = Arc::new(RequestLog::default());
+    let client = client(&server, &log);
+    // A session hook that never decides: the app's check of the 401 has not ended.
+    client.on_event(Arc::new(|_| {}));
+    let started = tokio::time::Instant::now();
+    let stopped = client
+        .report_stopped(&StopReport {
+            item: ItemId::new(ITEM),
+            media_source: SOURCE.into(),
+            play_session_id: PLAY_SESSION.into(),
+            position: Duration::from_secs(600),
+            failed: false,
+        })
+        .await;
+    // The player awaits it in its loop and at exit: it answers at once, well within STOP_REPORT_TIMEOUT, and keeps the token.
+    assert_eq!(stopped, Err(AuthError::Unconfirmed));
+    assert!(started.elapsed() < current_jellyfin::STOP_REPORT_TIMEOUT);
+    assert!(client.has_token());
+}

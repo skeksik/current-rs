@@ -930,8 +930,8 @@ impl Shared {
                 }
             }
             // The 401 hook already signed the server out; the token works but this user is refused right now (for example
-            // outside a parental time limit). Either way the check is done.
-            Err(AuthError::SessionRevoked | AuthError::Refused) => {
+            // outside a parental time limit), or the check after a 401 found it works. Either way the check is done.
+            Err(AuthError::SessionRevoked | AuthError::Refused | AuthError::NotAvailable) => {
                 check.store(CHECKED, Ordering::Release);
             }
             // An answer that may not be Jellyfin's: wait for the identity probe to decide (the 401 rule), so that a restore ends

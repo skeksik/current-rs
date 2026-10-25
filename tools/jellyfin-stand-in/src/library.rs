@@ -1,5 +1,6 @@
 //! A small fake library for the browse endpoints (ADR 0018), in Jellyfin 12.2's shapes: PascalCase names, nulls left out, ids as 32
-//! hex digits. Two libraries: films and shows, with one series of one season. Every name is an example.
+//! hex digits. Two libraries: films and shows, with one series of one season. Libraries can be added, renamed, reordered and
+//! removed while it runs ([`crate::Controls::add_library`] and the others). Every name is an example.
 
 use std::collections::HashSet;
 
@@ -131,7 +132,11 @@ impl Browse<'_> {
 }
 
 /// The answer to a browse request, or `None` if the path is not one.
-pub(crate) fn answer(request: &Browse<'_>, marks: &mut Marks) -> Option<(u16, String)> {
+pub(crate) fn answer(
+    request: &Browse<'_>,
+    marks: &mut Marks,
+    listed: &Views,
+) -> Option<(u16, String)> {
     let path = request.path;
     if let Some(id) = path.strip_prefix("/UserPlayedItems/") {
         return Some(mark(marks, Mark::Played, id, request.method));
@@ -144,7 +149,11 @@ pub(crate) fn answer(request: &Browse<'_>, marks: &mut Marks) -> Option<(u16, St
     }
     let marks = &*marks;
     let answer = match path {
-        "/UserViews" => (200, result(&views(), 0, Some(2))),
+        "/UserViews" => {
+            let views = views(listed);
+            let total = views.len();
+            (200, result(&views, 0, Some(total)))
+        }
         "/Items" => items(request, marks),
         "/Items/Latest" => {
             let parent = request.param("parentId").unwrap_or_default();
@@ -290,19 +299,74 @@ fn find(id: &str) -> Option<&'static Item> {
     ITEMS.iter().find(|item| item.id == id)
 }
 
-fn views() -> Vec<String> {
-    [
-        (FILMS_LIBRARY_ID, "Example Films", "movies"),
-        (SHOWS_LIBRARY_ID, "Example Shows", "tvshows"),
-    ]
-    .iter()
-    .map(|(id, name, collection)| {
-        format!(
-            r#"{{"Name":"{name}","ServerId":"{}","Id":"{id}","IsFolder":true,"Type":"CollectionFolder","CollectionType":"{collection}","ImageTags":{{}},"BackdropImageTags":[]}}"#,
-            crate::SERVER_ID
-        )
-    })
-    .collect()
+/// One of the user's libraries as `/UserViews` lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct View {
+    pub id: String,
+    pub name: String,
+    /// The `CollectionType`, passed as given (unknown kinds too).
+    pub collection: String,
+}
+
+/// The user's libraries: those listed, in the user's order, and those removed. Starts with the films and the shows.
+#[derive(Debug)]
+pub(crate) struct Views {
+    pub listed: Vec<View>,
+    /// Removed while the server still knows them: `GET Items` under one answers 401 with a valid token, as Jellyfin 12.2 does
+    /// for a parent folder the user cannot see (`ItemsController.GetItems`).
+    pub hidden: HashSet<String>,
+    /// Removed and forgotten: `GET Items` under one answers 400, as Jellyfin 12.2 does for a parent id it does not know
+    /// (`LibraryManager.GetParentItem`).
+    pub forgotten: HashSet<String>,
+}
+
+impl Default for Views {
+    fn default() -> Self {
+        let view = |id: &str, name: &str, collection: &str| View {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            collection: collection.to_owned(),
+        };
+        Self {
+            listed: vec![
+                view(FILMS_LIBRARY_ID, "Example Films", "movies"),
+                view(SHOWS_LIBRARY_ID, "Example Shows", "tvshows"),
+            ],
+            hidden: HashSet::new(),
+            forgotten: HashSet::new(),
+        }
+    }
+}
+
+impl Views {
+    /// What `GET Items` under `parent` answers instead of its items, if anything: 401 for a hidden library, 400 for a forgotten
+    /// one.
+    pub(crate) fn refusal(&self, parent: Option<&str>) -> Option<u16> {
+        let parent = parent?;
+        if self.hidden.contains(parent) {
+            Some(401)
+        } else if self.forgotten.contains(parent) {
+            Some(400)
+        } else {
+            None
+        }
+    }
+}
+
+fn views(views: &Views) -> Vec<String> {
+    views
+        .listed
+        .iter()
+        .map(|view| {
+            format!(
+                r#"{{"Name":"{}","ServerId":"{}","Id":"{}","IsFolder":true,"Type":"CollectionFolder","CollectionType":"{}","ImageTags":{{}},"BackdropImageTags":[]}}"#,
+                view.name,
+                crate::SERVER_ID,
+                view.id,
+                view.collection
+            )
+        })
+        .collect()
 }
 
 /// A `QueryResult`. Without a total (`enableTotalRecordCount=false`), Jellyfin sends 0.

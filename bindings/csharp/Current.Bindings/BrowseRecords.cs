@@ -224,6 +224,11 @@ public abstract record BrowseProblem
     public sealed record Refused : BrowseProblem;
     /// <summary>The server's answer is being checked: try again in a moment.</summary>
     public sealed record Unconfirmed : BrowseProblem;
+    /// <summary>
+    /// The session goes on, but the server refused this to the user: the item or its library is gone, or hidden from the user. For a
+    /// library grid, the core has read the libraries again by then: a library that left them is gone.
+    /// </summary>
+    public sealed record NotAvailable : BrowseProblem;
     /// <summary>An authentication gateway in front of the server answered instead (ADR 0017).</summary>
     public sealed record Gateway(GatewayProblem Answer) : BrowseProblem;
     public sealed record Network(NetProblem Problem) : BrowseProblem;
@@ -501,6 +506,7 @@ internal static class MapBrowse
         Ffi.BrowseProblem.SessionRevoked => new BrowseProblem.SessionRevoked(),
         Ffi.BrowseProblem.Refused => new BrowseProblem.Refused(),
         Ffi.BrowseProblem.Unconfirmed => new BrowseProblem.Unconfirmed(),
+        Ffi.BrowseProblem.NotAvailable => new BrowseProblem.NotAvailable(),
         Ffi.BrowseProblem.Gateway gateway => new BrowseProblem.Gateway(MapProblems.From(gateway.Answer)),
         Ffi.BrowseProblem.Network network => new BrowseProblem.Network(MapProblems.From(network.Problem)),
         _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
