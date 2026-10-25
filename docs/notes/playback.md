@@ -84,6 +84,11 @@ Enums are serialised as strings (`src/Jellyfin.Extensions/Json/JsonDefaults.cs` 
   `EnableVideoPlaybackTranscoding`, `EnablePlaybackRemuxing`, `ForceRemoteSourceTranscoding`, all default true except the last):
   a video with all three of audio transcoding, video transcoding and remuxing off gets `SupportsTranscoding = false`;
   `ForceRemoteSourceTranscoding` on a remote source turns off direct play and adds `&allowVideoStreamCopy=false&allowAudioStreamCopy=false`.
+- **Choosing a transcoding profile** (`GetVideoTranscodeProfile`): the profiles of the right type and context are ranked by whether
+  the video can be copied (codec listed and its conditions met), then by the audio (copied, converted within the conditions, or not);
+  the best rank wins. A source with `UseMostCompatibleTranscodingProfile` keeps only profiles whose container is `ts`. HLS audio
+  codecs the server accepts: `ts` `aac, ac3, eac3, mp3`; fMP4 `aac, ac3, eac3, mp3, alac, flac, opus, dts, truehd`
+  (`_supportedHlsAudioCodecsTs`, `_supportedHlsAudioCodecsMp4`); video `h264, hevc, vp9, av1`.
 - **Sorting** (`SortMediaSources`): the queried item's own source first ("must stay the default the client plays"), then direct-play
   files, then direct play or stream, then local files, then bitrate under the limit.
 
@@ -224,6 +229,9 @@ direct. They also appear on the session's `TranscodingInfo.TranscodeReasons` (`M
   certificates when using TLS"), `--tls-ca-file`, `--network-timeout` ("default: 60 seconds"), `--stream-lavf-o` ("Set AVOptions on
   streams opened with libavformat. Unknown or misspelled options are silently ignored."), `--demuxer-lavf-propagate-opts` ("Propagate
   FFmpeg-level options to recursively opened connections (default: yes)").
+- Build-dependent options (`options/options.c`): `scripts`, `script-opts` and `load-scripts` exist only `#if HAVE_LUA ||
+  HAVE_JAVASCRIPT || HAVE_CPLUGINS`, and `osc`, `ytdl`, `load-stats-overlay`, `load-console` only `#if HAVE_LUA`. Our Windows build
+  has none of these (`docs/notes/windows-mpv-build.md`), so setting them there fails; `media-controls` and `config` always exist.
 - Key/value list options (`DOCS/man/mpv.rst`): "When using libmpv, prefer using `MPV_FORMAT_NODE_MAP`".
 - Logging: `--msg-level=<module=level,...>` "also affects `--log-file`, and in certain cases libmpv API logging"; `--log-file`
   writes "at least `-v -v`".
