@@ -12,8 +12,8 @@ namespace Current.Shell.Pages;
 /// An item's detail page (ADR 0018): backdrop, poster, title, the facts the server gives (year, runtime, ratings, genres), the
 /// overview, the played and favourite marks, and the cast; a series adds its seasons and the chosen season's episodes; every item
 /// its similar items. Everything is the core's DetailsView, kept for the page's history entry (ServerBrowse.Details): Back binds a
-/// new page to the view it had, with the season chosen in it, and scrolls to where the page was. No Play yet: the player adds it
-/// (ADR 0019, task 5), in PlayActions.
+/// new page to the view it had, with the season chosen in it, and scrolls to where the page was. Play, Resume and "Play from the
+/// beginning" come first among the actions, from the core's PlayTarget (ADR 0019, task 5); the player opens over the page.
 /// </summary>
 public sealed partial class DetailsPage : Page
 {
