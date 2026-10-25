@@ -416,8 +416,10 @@ impl Browse {
         self.ctx.refresh();
     }
 
-    /// Playback of `item` stopped (ADR 0019 calls this): the lists that depend on it ("continue watching", "next up", its series
-    /// and season) reload, as after a played change.
+    /// Playback of `item` stopped (ADR 0019 calls this, after the server was told): the lists that depend on it ("continue
+    /// watching", "next up", its series and season) reload, as after a played change; and every live list showing the item itself
+    /// takes its new marks (its resume point, played) from the server, so a row that does not reload (a library's latest, a grid)
+    /// does not keep the old ones, and Play on any tile of it resumes (found on the owner's run, 2026-10-25).
     pub fn playback_stopped(&self, item: &ItemRef) {
         let mut items = self
             .ctx
@@ -426,6 +428,17 @@ impl Browse {
             .unwrap_or_default();
         items.push(item.clone());
         self.ctx.dependents_changed(items);
+        let context = self.ctx.clone();
+        let item = item.clone();
+        self.ctx.spawn(async move {
+            let Ok(client) = context.client() else {
+                return;
+            };
+            // A failure leaves the lists as they were; the dependent reload still runs.
+            if let Ok(details) = client.details(&item).await {
+                context.publish(&item, details.summary.user);
+            }
+        });
     }
 }
 

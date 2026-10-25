@@ -473,6 +473,49 @@ async fn play_starts_the_item_or_the_series_next_episode() {
 }
 
 #[tokio::test]
+async fn playback_stopping_gives_every_list_the_item_s_new_marks() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    // The half-watched film, in a list that no stop reloads: the similar items of another film.
+    let half_watched = item(&server, FILM_IDS[1]);
+    let other = browse.details(&item(&server, FILM_IDS[0]));
+    eventually(|| !other.state().borrow().loading && other.similar().len() > 0).await;
+    let shown = || {
+        other
+            .similar()
+            .snapshot()
+            .into_iter()
+            .find(|summary| summary.item == half_watched)
+    };
+    let before = shown().expect("the half-watched film among the similar items");
+    assert!(before.user.position.is_some() && !before.user.played);
+    assert!(PlayTargetOf::resumes(&before));
+
+    // Played to the end elsewhere (the server knows, the list does not); then playback of it stops here.
+    stand_in.set_played_on_server(FILM_IDS[1], true);
+    browse.playback_stopped(&half_watched);
+    eventually(|| shown().is_some_and(|summary| summary.user.played)).await;
+    let after = shown().unwrap();
+    assert_eq!(after.user.position, None);
+    assert!(!PlayTargetOf::resumes(&after));
+    assert_eq!(
+        browse.user_state(&half_watched).map(|state| state.played),
+        Some(true)
+    );
+}
+
+/// What Play on a tile of the summary does, by the core's rule.
+struct PlayTargetOf;
+
+impl PlayTargetOf {
+    fn resumes(summary: &ItemSummary) -> bool {
+        current_model::PlayTarget::for_item(summary).is_some_and(|target| target.resumes())
+    }
+}
+
+#[tokio::test]
 async fn dependent_rows_reload_a_second_after_the_last_change() {
     let stand_in = StandIn::start().await.unwrap();
     let app = App::new();
