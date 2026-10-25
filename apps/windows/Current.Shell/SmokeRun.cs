@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Current.Bindings;
+using Current.Shell.Browsing;
 using Current.Shell.Gateway;
 using Current.Shell.Pages;
 using Microsoft.UI.Dispatching;
@@ -115,6 +116,7 @@ internal static class SmokeRun
             }
             await core.SetAppThemeAsync(AppTheme.System);
             // While the main window is open: closing the sign-in window must not be the last window closing.
+            await BrowseChecksAsync(window, ui, Check);
             await SignInWindowChecksAsync(Check);
             window.Close();
             Check(true, "main window built");
@@ -211,6 +213,93 @@ internal static class SmokeRun
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
+            }
+        }
+    }
+
+    /// <summary>The stand-in's library of many items (tools/jellyfin-stand-in, paging.rs), which its UserViews does not list.</summary>
+    private const string BigLibraryId = "57a2d1e0000000000000000000006000";
+
+    private const int BigLibrarySize = 450;
+
+    /// <summary>
+    /// Browsing in the main window against the Jellyfin stand-in (ADR 0018, task 5), when <c>CURRENT_STAND_IN</c> names it: signed in
+    /// with its password, the window's navigation lists its two libraries; the library grid (LibraryPage) is sized to the big
+    /// library's total with its first page loaded, and scrolled to its end, the grid's visible range reaches the core (SlotCollection's
+    /// IItemsRangeInfo) and the last slots load. Skipped, visibly, without the stand-in.
+    /// </summary>
+    private static async Task BrowseChecksAsync(MainWindow window, DispatcherQueue ui, Action<bool, string> check)
+    {
+        var path = Environment.GetEnvironmentVariable("CURRENT_STAND_IN");
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+        {
+            Console.WriteLine("skip browsing against the stand-in: CURRENT_STAND_IN does not name the stand-in");
+            return;
+        }
+        using var standIn = Process.Start(new ProcessStartInfo(path)
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        }) ?? throw new InvalidOperationException("the stand-in did not start");
+        BrowseHub? hub = null;
+        var core = CoreHost.Create();
+        try
+        {
+            var line = await standIn.StandardOutput.ReadLineAsync().WaitAsync(Timeout);
+            var address = line is { } listening && listening.StartsWith("listening ", StringComparison.Ordinal)
+                ? listening["listening ".Length..]
+                : throw new InvalidOperationException("the stand-in did not report its address");
+            using (var add = core.AddServer())
+            {
+                await add.ProbeAsync(address);
+                using var signIn = add.SignIn();
+                await signIn.WithPasswordAsync("stand-in-user", "not-a-real-password");
+                check(signIn.State is SignInState.SignedIn, $"signed in to the stand-in ({signIn.State.GetType().Name})");
+                if (signIn.State is not SignInState.SignedIn)
+                {
+                    return;
+                }
+            }
+
+            // The tiles load their images through App.Core.
+            App.Core = core;
+            hub = new BrowseHub(core, new DispatcherQueueUi(ui));
+            App.Browsing = hub;
+            window.FollowBrowsing(hub);
+            var listed = await WaitUntilAsync(() => window.LibraryItemCount == 2);
+            check(listed, $"the navigation lists the server's libraries ({window.LibraryItemCount})");
+            if (hub.Servers.FirstOrDefault() is not { } server)
+            {
+                check(false, "a browse session for the stand-in");
+                return;
+            }
+
+            window.ShowLibrary(new Library(new ItemRef(server.Server, BigLibraryId), "Example Big Library", "movies", []));
+            var page = window.ShownPage as LibraryPage;
+            var sized = await WaitUntilAsync(() => page?.Slots is { Count: BigLibrarySize } slots && slots[0].Slot is Slot.Item);
+            check(sized, $"the library grid is sized to its total and shows its first page ({page?.Slots?.Count ?? 0})");
+            page?.ScrollTo(BigLibrarySize - 1);
+            var loaded = await WaitUntilAsync(() => page?.Slots is { Count: BigLibrarySize } slots && slots[^1].Slot is Slot.Item);
+            check(loaded, "scrolled to its end, the grid's visible range loads the last slots");
+            // Off the grid before its session goes: the page lets go of its slots.
+            window.ShowSettings();
+        }
+        catch (Exception error)
+        {
+            check(false, $"the browse check failed: {error.GetType().Name}");
+        }
+        finally
+        {
+            App.Browsing = null;
+            hub?.Dispose();
+            App.Core = null;
+            core.Dispose();
+            standIn.StandardInput.Close();
+            if (!standIn.WaitForExit(5000))
+            {
+                standIn.Kill();
             }
         }
     }

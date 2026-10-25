@@ -134,6 +134,16 @@ public sealed partial class MainWindow : Window
     /// <summary>The content layer's background now, or null if its template part was not found (the smoke run).</summary>
     internal Brush? ContentLayerBackground => _contentLayer?.Background;
 
+    /// <summary>Opens a library's grid, as its item in the pane does (the smoke run).</summary>
+    internal void ShowLibrary(Library library) =>
+        Navigate(typeof(LibraryPage), new SuppressNavigationTransitionInfo(), new LibraryArgs(library));
+
+    /// <summary>The page shown now (the smoke run).</summary>
+    internal Page? ShownPage => ContentFrame.Content as Page;
+
+    /// <summary>The navigation's library items now, headers left out (the smoke run).</summary>
+    internal int LibraryItemCount => _libraryItems.OfType<NavigationViewItem>().Count();
+
     /// <summary>Opens Settings, as its item in the pane does (the smoke run).</summary>
     internal void ShowSettings() => Navigate(typeof(SettingsPage), new SuppressNavigationTransitionInfo());
 
@@ -325,7 +335,8 @@ public sealed partial class MainWindow : Window
     private void Navigate(Type page, NavigationTransitionInfo transition, object? parameter = null)
     {
         // Only navigate if the page is not already shown, so the back stack gets no duplicates.
-        if (ContentFrame.CurrentSourcePageType != page || !Equals(_shownParameter, parameter))
+        var same = parameter is LibraryArgs library ? library.Shows(_shownParameter) : Equals(_shownParameter, parameter);
+        if (ContentFrame.CurrentSourcePageType != page || !same)
         {
             ContentFrame.Navigate(page, parameter, transition);
         }
@@ -364,7 +375,7 @@ public sealed partial class MainWindow : Window
                 _libraryItems.Add(new NavigationViewItem
                 {
                     Content = library.Name,
-                    Tag = new LibraryArgs(library.Item),
+                    Tag = new LibraryArgs(library),
                     Icon = new FontIcon { Glyph = LibraryGlyph(library.Collection) },
                 });
             }
@@ -396,7 +407,7 @@ public sealed partial class MainWindow : Window
 
     private static ServerRef? ServerOf(object? parameter) => parameter switch
     {
-        LibraryArgs library => library.Library.Server,
+        LibraryArgs library => library.Library.Item.Server,
         DetailsArgs details => details.Item.Server,
         _ => null,
     };
@@ -495,7 +506,8 @@ public sealed partial class MainWindow : Window
         }
         if (ContentFrame.SourcePageType == typeof(LibraryPage))
         {
-            NavView.SelectedItem = _libraryItems.OfType<NavigationViewItem>().FirstOrDefault(item => Equals(item.Tag, _shownParameter));
+            NavView.SelectedItem = _libraryItems.OfType<NavigationViewItem>()
+                .FirstOrDefault(item => item.Tag is LibraryArgs library && library.Shows(_shownParameter));
             return;
         }
         // Each page shows its own title (App.xaml, PageTitleTextBlockStyle); the navigation view's header is not used.

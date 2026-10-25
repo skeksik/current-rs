@@ -44,14 +44,13 @@ public sealed partial class LibraryPage : Page
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
-        if (e.Parameter is not LibraryArgs args
-            || App.Browsing?.Find(args.Library.Server) is not { } server
-            || App.Browsing.FindLibrary(args.Library) is not { } library)
+        if (e.Parameter is not LibraryArgs args || App.Browsing?.Find(args.Library.Item.Server) is not { } server)
         {
             // The server was signed out of while this page was in the history.
             EmptyText.Visibility = Visibility.Visible;
             return;
         }
+        var library = App.Browsing.FindLibrary(args.Library.Item) ?? args.Library;
         TitleText.Text = library.Name;
         _grid = server.Grid(library);
         ShowQuery(_grid.Query);
@@ -161,6 +160,18 @@ public sealed partial class LibraryPage : Page
         _grid.Query = query;
         _grid.FirstVisible = 0;
         _grid.Items.SetQuery(query);
+    }
+
+    /// <summary>The grid's slots now (the smoke run).</summary>
+    internal SlotCollection? Slots => _slots;
+
+    /// <summary>Scrolls the grid to a slot, as the scroll bar would (the smoke run).</summary>
+    internal void ScrollTo(int index)
+    {
+        if (_slots is { } slots && index < slots.Count)
+        {
+            Items.ScrollIntoView(slots[index], ScrollIntoViewAlignment.Leading);
+        }
     }
 
     private void OnRefresh(object sender, RoutedEventArgs e) => _grid?.Items.Refresh();

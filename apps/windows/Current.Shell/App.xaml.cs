@@ -37,8 +37,11 @@ public partial class App : Application
         };
     }
 
-    /// <summary>The core, one per process, once it is open; null before and after. Disposed when the main window closes.</summary>
-    internal static CoreHost? Core { get; private set; }
+    /// <summary>
+    /// The core, one per process, once it is open; null before and after. Disposed when the main window closes. The smoke run sets it to
+    /// its own core for its browse check.
+    /// </summary>
+    internal static CoreHost? Core { get; set; }
 
     /// <summary>The main window's browse sessions (ADR 0018), once the core is open; null before, after, and in the smoke run.</summary>
     internal static Browsing.BrowseHub? Browsing { get; set; }
