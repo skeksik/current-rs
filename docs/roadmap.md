@@ -133,6 +133,8 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
 - [ ] `current-playback`: device profile from the engine's capabilities, route planner (direct play, direct stream, remux, transcode),
       playback controller (resume, progress reporting, tracks, quality, next episode, intro skip, fallback on engine errors)
 - [ ] The libmpv engine and the Windows player UI, media keys and the media flyout
+  - [x] `current-mpv` (ADR 0019 task 3, feat/mpv-engine): the engine over hand-written client API declarations, linked against the
+        D6 build in CI's "mpv (Windows)" job, with redirect, TLS and log-redaction tests (docs/notes/mpv-engine.md)
 - [ ] Playback information (route, codecs, reasons for the choice) and remembered track choices
 - [ ] Servers behind an authentication gateway (after M1; ADR 0017): a password prompt for Basic gateways, a sign-in
       window that hands the gateway's cookies to the core, advanced extra headers, per address; the 401 rule amended so that a
@@ -170,6 +172,9 @@ Done when: a title can be found, requested and followed to "available", then pla
 - [ ] The M1-M4 screens in GTK4 + libadwaita; the libmpv engine from M2 through the OpenGL render API (SDR); Secret Service; MPRIS
       media controls (ADR 0011)
 - [ ] Our LGPL-2.1 libmpv and FFmpeg for Linux (the distributions' builds are GPL; ADR 0003, ADR 0011), and the Linux CI job
+- [ ] The engine's redirect refusal needs FFmpeg 9.0 or later (`max_redirects` is not in FFmpeg 8.0's `http.c`); a system libmpv on an
+      older FFmpeg follows redirects with the gateway headers (seen with Ubuntu's FFmpeg 6.1, docs/notes/mpv-engine.md). Use our build or
+      check the FFmpeg version before shipping on Linux
 
 ## M6: Adult content
 - [ ] Hidden unless a server offers it and the user may see it; access rules enforced in the core. Details are kept privately while the

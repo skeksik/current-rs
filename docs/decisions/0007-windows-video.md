@@ -60,10 +60,10 @@ past 0.41.0) and tested it on a 4K HDR monitor and a 1080p SDR monitor.
    monitor changes from `AppWindow.Changed`, full screen through the `AppWindow` full-screen presenter, auto-hiding Fluent controls
    with names for Narrator, keyboard shortcuts, cursor hiding in full screen (not in the spike), and media keys and the media flyout
    through `SystemMediaTransportControlsInterop.GetForWindow`, updating the timeline after every seek.
-4. D6: pin an mpv release that has composition mode (0.41.0 or later; check the `display-fps-override` name in that release) and decide
-   uchardet and LAME (licence exception or leave them out).
+4. Done by D6 (docs/notes/windows-mpv-build.md): mpv 0.41.0 (`display-fps-override` checked in that release), uchardet allowed under
+   LGPL-2.1-or-later, LAME left out (ADR 0003, owner 2026-10-22). Amended by ADR 0019 (owner, 2026-10-25).
 5. Test with real files from a Jellyfin server: direct play over HTTP, Dolby Vision profiles, HDR10+, 23.976 and 24 fps on 60, 120 and
-   144 Hz displays, and `video-sync=display-resample`.
+   144 Hz displays, and `video-sync=display-resample`. This is ADR 0019's task 5 (the Windows player UI, on the owner's PC).
 
 ## Sources (read 2026-10-22)
 - mpv v0.41.0 release (2025-12-21): https://github.com/mpv-player/mpv/releases/tag/v0.41.0
