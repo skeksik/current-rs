@@ -52,7 +52,7 @@ public sealed class ValueSubscription<T> : INotifyPropertyChanged, IDisposable
 
 /// <summary>
 /// The listener the core holds for a value. It keeps only a weak reference to its subscription and never the core, so the core cannot
-/// keep a page alive. It runs on a core worker thread, maps the value there, hops to the UI thread and returns. It catches every
+/// keep a page alive. It runs on a core thread, maps the value there, hops to the UI thread and returns. It catches every
 /// exception: one escaping into the core would end the subscription (ADR 0004).
 /// </summary>
 internal class ValueForwarder<TRaw, T>(ValueSubscription<T> target, IUiDispatcher ui, Func<TRaw, T> map)

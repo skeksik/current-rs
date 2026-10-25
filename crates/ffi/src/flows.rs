@@ -371,7 +371,7 @@ impl From<&current_app::SignInState> for SignInState {
     }
 }
 
-/// Receives a flow's state: the current value first, then every change, on a core worker thread. It must only hand the value to
+/// Receives a flow's state: the current value first, then every change, on a core thread. It must only hand the value to
 /// the UI thread and return, and must never throw.
 #[uniffi::export(callback_interface)]
 pub trait AddServerStateListener: Send + Sync {

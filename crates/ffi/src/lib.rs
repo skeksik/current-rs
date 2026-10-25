@@ -4,7 +4,7 @@
 //! - The M1 flows (adding a server, discovery, sign-in) are objects with a state subscription and actions (`flows`); the saved
 //!   servers are a list of diffs (`saved`).
 //! - Observable values: `subscribe_x(listener) -> TaskHandle`. The listener gets the current value first, then every change, on a
-//!   core worker thread. Lists use the same shape with batches of diffs (`diff::list_diff!`).
+//!   core thread (the runtime's blocking pool, never a worker or the UI thread). Lists use the same shape with batches of diffs (`diff::list_diff!`).
 //! - Cancellable calls are `async` and take a [`CancelToken`]; they end with [`CoreError::Cancelled`].
 //! - Listener callbacks return nothing and must never throw: each UI's listener catches everything.
 
@@ -52,21 +52,21 @@ use subscribe::LiveListeners;
 
 uniffi::setup_scaffolding!();
 
-/// Receives the capabilities state. Called with the current value first, then on every change, on a core worker thread. It must only
+/// Receives the capabilities state. Called with the current value first, then on every change, on a core thread. It must only
 /// hand the value to the UI thread and return, and must never throw.
 #[uniffi::export(callback_interface)]
 pub trait CapabilitiesListener: Send + Sync {
     fn on_value(&self, value: CapabilitiesSnapshot);
 }
 
-/// Receives the app theme. Called with the current value first, then on every change, on a core worker thread. It must only hand
+/// Receives the app theme. Called with the current value first, then on every change, on a core thread. It must only hand
 /// the value to the UI thread and return, and must never throw.
 #[uniffi::export(callback_interface)]
 pub trait AppThemeListener: Send + Sync {
     fn on_value(&self, value: AppTheme);
 }
 
-/// Receives the saved servers: `[Reset]` first, then batches of diffs, on a core worker thread. Apply each batch in order. It must
+/// Receives the saved servers: `[Reset]` first, then batches of diffs, on a core thread. Apply each batch in order. It must
 /// only hand the batch to the UI thread and return, and must never throw.
 #[uniffi::export(callback_interface)]
 pub trait SavedServersListener: Send + Sync {

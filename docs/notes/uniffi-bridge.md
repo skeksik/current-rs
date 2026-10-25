@@ -168,8 +168,9 @@ pub enum BridgeError { Cancelled, InvalidInput { reason: String }, Runtime { mes
 
 ## Threading rules
 **Rust side**
-- Every listener callback runs on a core worker thread (`core-worker`, tested in `sends_current_value_then_changes_on_a_worker_thread`),
-  never on the UI thread. A callback blocks that worker while it runs, so it must only enqueue and return.
+- Every listener callback runs on a core worker thread (`core-worker`), never on the UI thread. A callback blocks that worker while
+  it runs, so it must only enqueue and return. (Since fix/uniffi-panic-hook, 2026-10-25, callbacks run on the runtime's blocking
+  pool instead; docs/architecture.md describes delivery now.)
 - A listener's callbacks are ordered (one task per subscription). Different subscriptions are not ordered against each other.
 - `TaskHandle::cancel()` stops the task at its next await. A callback already running on another worker may still finish, so the UI
   must tolerate one late delivery (the weak reference below makes that harmless).

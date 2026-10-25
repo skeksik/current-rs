@@ -1,4 +1,4 @@
-// Observable values from the core (ADR 0004): the core calls a listener on its own worker thread; the listener only forwards into an
+// Observable values from the core (ADR 0004): the core calls a listener on one of its own threads; the listener only forwards into an
 // AsyncStream, and one main-actor task drains the stream in order into an @Observable model.
 
 import CurrentFFIBindings
@@ -13,7 +13,7 @@ public final class ValueForwarder<Value: Sendable>: Sendable {
         self.continuation = continuation
     }
 
-    /// Called on a core worker thread: hands the value on and returns.
+    /// Called on a core thread: hands the value on and returns.
     public func forward(_ value: Value) {
         continuation.yield(value)
     }

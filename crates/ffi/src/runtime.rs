@@ -7,7 +7,8 @@ use tokio::runtime::{Builder, Handle, Runtime};
 
 use crate::CoreError;
 
-/// The name of the core's worker threads. Every listener callback runs on one of them.
+/// The name of every thread of the core's runtime: its two workers and its blocking pool. Listener callbacks run on the blocking
+/// pool (`subscribe.rs`), never on a worker; tokio gives both kinds the same name.
 pub const WORKER_THREAD_NAME: &str = "core-worker";
 
 static RUNTIME: OnceLock<Runtime> = OnceLock::new();

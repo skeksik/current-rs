@@ -1,13 +1,14 @@
 //! Tests for the bridge: delivery, threading, release of listeners, list diffs and cancellation.
 //!
-//! Every test in this binary shares the core's one runtime and its two worker threads (`runtime.rs`), and listener callbacks run on
-//! them. A test must not block a worker, or every other test's deliveries stall with it.
+//! Every test in this binary shares the core's one runtime and its two worker threads (`runtime.rs`). Listener callbacks run on the
+//! runtime's blocking pool, so a listener may block or panic; a test must still not block a worker itself, or every other test's
+//! deliveries stall with it.
 
 use std::future::Future;
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
@@ -99,7 +100,7 @@ fn app_info_has_the_workspace_version() {
 }
 
 #[test]
-fn sends_the_current_value_then_changes_on_a_worker_thread() {
+fn sends_the_current_value_then_changes_on_a_runtime_thread() {
     let core = Core::new().unwrap();
     let (listener, rx, _) = recorder();
     let _handle = core.subscribe_capabilities(listener);
@@ -283,11 +284,38 @@ fn a_list_subscription_starts_with_a_reset_and_mirrors_the_core() {
     eventually("the task ends", || handle.is_finished());
 }
 
-/// Stands in for a foreign callback that threw: UniFFI turns the exception into a panic, which the bridge catches. Unwinds without
-/// running the panic hook, which would otherwise capture a backtrace on a core worker (`RUST_BACKTRACE` is set in some
-/// environments): two tests failing at once kept both workers in the hook and stalled every delivery past [`WAIT`].
+/// Stands in for a foreign callback that threw: UniFFI turns the exception into a panic, which the bridge catches. A real `panic!`,
+/// so the process's panic hook runs as it would for a foreign exception (with a backtrace where `RUST_BACKTRACE` is set): on a
+/// blocking-pool thread, where it delays that one subscription only.
 fn foreign_exception() -> ! {
-    std::panic::resume_unwind(Box::new("the foreign callback threw"))
+    panic!("the foreign callback threw")
+}
+
+/// The payload of a panic the test hook makes slow.
+const SLOW_HOOK_PANIC: &str = "a foreign exception with a slow panic hook";
+
+/// How long the test hook takes for a [`SLOW_HOOK_PANIC`].
+const SLOW_HOOK: Duration = Duration::from_secs(2);
+
+/// Installs, once for the whole test binary, a panic hook that takes [`SLOW_HOOK`] for a [`SLOW_HOOK_PANIC`] and hands every other
+/// panic to the hook that was there before. Installed once and never restored: tests run in parallel and would race on `set_hook`.
+fn install_slow_panic_hook() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let payload = info.payload();
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+            if message == Some(SLOW_HOOK_PANIC) {
+                thread::sleep(SLOW_HOOK);
+            } else {
+                previous(info);
+            }
+        }));
+    });
 }
 
 /// Counts its own drop: stands in for a foreign listener the core must release.
@@ -369,6 +397,224 @@ fn a_failing_list_listener_gets_a_reset_next() {
             values: vec!["lost".into(), "next".into()]
         }]
     );
+}
+
+/// How long a delivery to a well-behaved listener, or a short core task, may take while other listeners misbehave. Well below the
+/// misbehaving listeners' delays, and below [`WAIT`].
+const PROMPT: Duration = Duration::from_secs(1);
+
+/// More misbehaving listeners than the runtime has workers, so that one per worker would stall the core.
+const MISBEHAVING: usize = 4;
+
+/// Checks that, with misbehaving listeners in their callbacks, a fresh subscription gets its current value and a change promptly,
+/// and a core task completes promptly.
+fn the_core_stays_responsive(core: &Core) {
+    let (listener, rx, _) = recorder();
+    let start = Instant::now();
+    let _handle = core.subscribe_capabilities(listener);
+    rx.recv_timeout(PROMPT)
+        .expect("the current value arrives promptly");
+
+    core.app.set_capabilities(one_server("prompt"));
+    let (value, _) = rx.recv_timeout(PROMPT).expect("a change arrives promptly");
+    assert_eq!(value.servers[0].key, "prompt");
+
+    let task = runtime::handle().unwrap().spawn(async {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    });
+    eventually("a core task completes", || task.is_finished());
+    assert!(
+        start.elapsed() < PROMPT * 2,
+        "the core stalled for {:?}",
+        start.elapsed()
+    );
+}
+
+/// Waits until `count` callbacks have been entered.
+fn wait_for_entries(entered: &Receiver<()>, count: usize) {
+    for _ in 0..count {
+        entered
+            .recv_timeout(WAIT)
+            .expect("the misbehaving callback is entered");
+    }
+}
+
+#[test]
+fn a_blocking_listener_does_not_delay_other_subscriptions_or_tasks() {
+    struct Blocks(Mutex<Sender<()>>);
+    impl CapabilitiesListener for Blocks {
+        fn on_value(&self, _: CapabilitiesSnapshot) {
+            let _ = self.0.lock().unwrap().send(());
+            thread::sleep(Duration::from_secs(3));
+        }
+    }
+    let core = Core::new().unwrap();
+    let (entered_tx, entered) = mpsc::channel();
+    let _blocking: Vec<_> = (0..MISBEHAVING)
+        .map(|_| core.subscribe_capabilities(Box::new(Blocks(Mutex::new(entered_tx.clone())))))
+        .collect();
+    wait_for_entries(&entered, MISBEHAVING);
+
+    the_core_stays_responsive(&core);
+}
+
+#[test]
+fn a_panicking_listener_with_a_slow_hook_does_not_delay_other_subscriptions_or_tasks() {
+    install_slow_panic_hook();
+    // Panics on every call, as a listener whose foreign code always throws, and reports each call first.
+    struct Panics(Mutex<Sender<()>>);
+    impl CapabilitiesListener for Panics {
+        fn on_value(&self, _: CapabilitiesSnapshot) {
+            let _ = self.0.lock().unwrap().send(());
+            panic!("{SLOW_HOOK_PANIC}");
+        }
+    }
+    let core = Core::new().unwrap();
+    let (entered_tx, entered) = mpsc::channel();
+    let panicking: Vec<_> = (0..MISBEHAVING)
+        .map(|_| core.subscribe_capabilities(Box::new(Panics(Mutex::new(entered_tx.clone())))))
+        .collect();
+    wait_for_entries(&entered, MISBEHAVING);
+
+    the_core_stays_responsive(&core);
+
+    // Each panicking listener kept its subscription: it is called again for the change, once its hook has run.
+    wait_for_entries(&entered, MISBEHAVING);
+    assert!(panicking.iter().all(|handle| !handle.is_finished()));
+}
+
+#[test]
+fn a_panicking_list_listener_with_a_slow_hook_gets_a_reset_next() {
+    install_slow_panic_hook();
+    let runtime = runtime::handle().unwrap();
+    let list = ObservableList::new();
+    let (tx, rx) = mpsc::channel();
+    let calls = AtomicUsize::new(0);
+    let _handle = subscribe::watch_list(&runtime, list.subscribe(), move |batch| {
+        if calls.fetch_add(1, Ordering::SeqCst) == 1 {
+            panic!("{SLOW_HOOK_PANIC}");
+        }
+        let _ = tx.send(
+            batch
+                .into_iter()
+                .map(TextDiff::from_core)
+                .collect::<Vec<_>>(),
+        );
+    });
+    assert_eq!(
+        rx.recv_timeout(WAIT).unwrap(),
+        vec![TextDiff::Reset { values: vec![] }]
+    );
+
+    list.append(vec![String::from("lost")]);
+    list.append(vec![String::from("next")]);
+    assert_eq!(
+        rx.recv_timeout(WAIT).unwrap(),
+        vec![TextDiff::Reset {
+            values: vec!["lost".into(), "next".into()]
+        }]
+    );
+}
+
+#[test]
+fn values_arrive_in_order_one_call_at_a_time() {
+    struct Ordered {
+        tx: Mutex<Sender<String>>,
+        inside: AtomicBool,
+    }
+    impl CapabilitiesListener for Ordered {
+        fn on_value(&self, value: CapabilitiesSnapshot) {
+            assert!(
+                !self.inside.swap(true, Ordering::SeqCst),
+                "one call at a time"
+            );
+            let key = value
+                .servers
+                .first()
+                .map_or_else(String::new, |server| server.key.clone());
+            let _ = self.tx.lock().unwrap().send(key);
+            self.inside.store(false, Ordering::SeqCst);
+        }
+    }
+    let core = Core::new().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let _handle = core.subscribe_capabilities(Box::new(Ordered {
+        tx: Mutex::new(tx),
+        inside: AtomicBool::new(false),
+    }));
+    assert_eq!(rx.recv_timeout(WAIT).unwrap(), "");
+
+    for step in 0..200 {
+        core.app.set_capabilities(one_server(&format!("{step:03}")));
+    }
+    // A slow listener may skip values, but never goes back.
+    let mut seen = Vec::new();
+    while seen.last().map(String::as_str) != Some("199") {
+        seen.push(rx.recv_timeout(WAIT).expect("the last value arrives"));
+    }
+    assert!(
+        seen.windows(2).all(|pair| pair[0] < pair[1]),
+        "in order: {seen:?}"
+    );
+}
+
+/// The child half of [`a_stuck_listener_does_not_hold_up_exit`]: subscribes a listener that never returns, then ends, so the test
+/// binary's process exits with that callback still running.
+#[test]
+#[ignore = "run only as a child process by a_stuck_listener_does_not_hold_up_exit"]
+fn exits_with_a_stuck_listener() {
+    struct Stuck(Mutex<Sender<()>>);
+    impl CapabilitiesListener for Stuck {
+        fn on_value(&self, _: CapabilitiesSnapshot) {
+            let _ = self.0.lock().unwrap().send(());
+            loop {
+                thread::park();
+            }
+        }
+    }
+    let core = Core::new().unwrap();
+    let (tx, entered) = mpsc::channel();
+    let handle = core.subscribe_capabilities(Box::new(Stuck(Mutex::new(tx))));
+    entered
+        .recv_timeout(WAIT)
+        .expect("the stuck callback is entered");
+    // Neither cancelling nor leaving the subscription running may hold up exit.
+    handle.cancel();
+}
+
+#[test]
+fn a_stuck_listener_does_not_hold_up_exit() {
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "tests::exits_with_a_stuck_listener",
+            "--ignored",
+            "--nocapture",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if start.elapsed() > WAIT * 2 {
+            let _ = child.kill();
+            panic!("the process did not exit with a stuck listener");
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        status.success(),
+        "the child failed: {stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The child really ran the one test, rather than matching nothing.
+    assert!(stdout.contains("1 passed"), "the child ran: {stdout}");
 }
 
 /// Applies a diff as a UI does.

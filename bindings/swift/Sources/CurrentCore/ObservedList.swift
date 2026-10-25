@@ -53,7 +53,7 @@ public final class ListForwarder<Item: Sendable>: Sendable {
         self.continuation = continuation
     }
 
-    /// Called on a core worker thread: hands the batch on and returns.
+    /// Called on a core thread: hands the batch on and returns.
     public func forward(_ batch: [ListDiff<Item>]) {
         continuation.yield(batch)
     }
