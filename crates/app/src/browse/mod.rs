@@ -434,8 +434,12 @@ impl Browse {
             let Ok(client) = context.client() else {
                 return;
             };
-            // A failure leaves the lists as they were; the dependent reload still runs.
-            if let Ok(details) = client.details(&item).await {
+            let wanted = context.states.wanted(&item);
+            // A failure leaves the lists as they were; the dependent reload still runs. A mark the user made meanwhile is newer than
+            // this answer, even once the server confirmed it: the answer is dropped.
+            if let Ok(details) = client.details(&item).await
+                && context.states.wanted(&item) == wanted
+            {
                 context.publish(&item, details.summary.user);
             }
         });

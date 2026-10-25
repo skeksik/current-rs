@@ -473,6 +473,28 @@ async fn play_starts_the_item_or_the_series_next_episode() {
 }
 
 #[tokio::test]
+async fn a_series_keeps_its_play_button_when_its_next_episode_cannot_be_asked_for() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let series = browse.details(&item(&server, SERIES_ID));
+    let play = series.play();
+    eventually(|| play.borrow().is_some() && !series.state().borrow().loading).await;
+    let shown = play.borrow().clone();
+
+    // The refresh's next-up request fails: the button stays as it was, and the page, whose details loaded, is not failed.
+    stand_in.fail("/Shows/NextUp");
+    let asked = stand_in.count("/Shows/NextUp");
+    series.refresh();
+    eventually(|| stand_in.count("/Shows/NextUp") > asked && !series.state().borrow().loading)
+        .await;
+    assert_eq!(*play.borrow(), shown);
+    assert!(series.state().borrow().failed.is_none());
+    assert!(series.details().borrow().is_some());
+}
+
+#[tokio::test]
 async fn playback_stopping_gives_every_list_the_item_s_new_marks() {
     let stand_in = StandIn::start().await.unwrap();
     let app = App::new();
@@ -504,6 +526,44 @@ async fn playback_stopping_gives_every_list_the_item_s_new_marks() {
         browse.user_state(&half_watched).map(|state| state.played),
         Some(true)
     );
+}
+
+#[tokio::test]
+async fn a_late_answer_after_a_stop_does_not_undo_a_newer_mark() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    // The half-watched film, in a list that no stop reloads: the similar items of another film.
+    let film = item(&server, FILM_IDS[1]);
+    let other = browse.details(&item(&server, FILM_IDS[0]));
+    eventually(|| !other.state().borrow().loading && !other.similar().is_empty()).await;
+    let played = || {
+        other
+            .similar()
+            .snapshot()
+            .into_iter()
+            .find(|summary| summary.item == film)
+            .is_some_and(|summary| summary.user.played)
+    };
+    assert!(!played());
+
+    // The stop asks for the film's marks; the answer is slow.
+    let details = format!("/Items/{}", FILM_IDS[1]);
+    let asked = stand_in.count(&details);
+    stand_in.hold(&details);
+    browse.playback_stopped(&film);
+    eventually(|| stand_in.count(&details) > asked).await;
+    // Meanwhile the user marks it played, and the server confirms that.
+    let marked = format!("/UserPlayedItems/{}", FILM_IDS[1]);
+    browse.set_played(&film, true);
+    eventually(|| stand_in.count(&marked) == 1 && played()).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The answer, as the server held it before the mark, arrives last.
+    stand_in.set_played_on_server(FILM_IDS[1], false);
+    stand_in.release(&details);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(played());
 }
 
 /// What Play on a tile of the summary does, by the core's rule.

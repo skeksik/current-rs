@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use current_model::{ItemRef, ItemSummary, MediaKind, PlayerState};
+use current_model::{EpisodeLinks, ItemRef, ItemSummary, MediaKind, PlayerState};
 use current_playback::PlayerStatus;
 
 /// How often the timeline is renewed while playing.
@@ -36,6 +36,8 @@ pub struct NowPlaying {
     pub series: Option<String>,
     pub season: Option<u32>,
     pub episode: Option<u32>,
+    /// What shows under the title: the series and the episode's label (`Series · S1:E2`), for an episode.
+    pub subtitle: Option<String>,
     pub artwork: Option<Arc<[u8]>>,
     pub status: MediaStatus,
     pub position: Duration,
@@ -66,6 +68,19 @@ pub(crate) fn status(state: &PlayerState) -> MediaStatus {
     }
 }
 
+/// The series and the episode's label, as far as the server gave them.
+fn subtitle(links: &EpisodeLinks) -> String {
+    let number = links.number_label();
+    [
+        links.series_name.as_deref().unwrap_or_default(),
+        number.as_str(),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join(" · ")
+}
+
 /// The value for `status`, with the item's `summary` (when it loaded), its `artwork`, whether a next episode exists and the timeline
 /// `revision`.
 pub(crate) fn now_playing(
@@ -86,6 +101,9 @@ pub(crate) fn now_playing(
         series: episode.and_then(|links| links.series_name.clone()),
         season: episode.and_then(|links| links.season_number),
         episode: episode.and_then(|links| links.number),
+        subtitle: episode
+            .map(subtitle)
+            .filter(|subtitle| !subtitle.is_empty()),
         artwork: if has_item { artwork } else { None },
         status: media,
         position: status.position,
@@ -103,7 +121,7 @@ pub(crate) fn now_playing(
 
 #[cfg(test)]
 mod tests {
-    use current_model::{EpisodeLinks, ItemId, ServerKey, ServerRef, ServiceType, UserState};
+    use current_model::{ItemId, ServerKey, ServerRef, ServiceType, UserState};
 
     use super::*;
 
@@ -144,6 +162,7 @@ mod tests {
         assert_eq!(playing.title.as_deref(), Some("Example Episode"));
         assert_eq!(playing.series.as_deref(), Some("Example Series"));
         assert_eq!((playing.season, playing.episode), (Some(1), Some(2)));
+        assert_eq!(playing.subtitle.as_deref(), Some("Example Series · S1:E2"));
         assert!(playing.can_pause && !playing.can_play && playing.can_seek && playing.can_next);
         assert_eq!(playing.seekable_end, Some(Duration::from_secs(600)));
         assert_eq!(playing.timeline_revision, 3);

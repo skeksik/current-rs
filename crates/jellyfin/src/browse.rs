@@ -43,6 +43,9 @@ const SUMMARY_FIELDS: &str = "PrimaryImageAspectRatio";
 const SUMMARY_IMAGE_TYPES: &str = "Primary,Thumb,Backdrop";
 const SUMMARY_IMAGE_LIMIT: &str = "1";
 
+/// Episodes asked for at a time while a series' first episode is looked for past its specials: one page unless it has more specials.
+const FIRST_EPISODE_PAGE: usize = 50;
+
 /// One page of a list.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Page {
@@ -176,15 +179,40 @@ impl JellyfinClient {
         Ok(self.summaries(result.items).into_iter().next())
     }
 
-    /// A series' first episode in order (`GET Shows/{id}/Episodes?limit=1`), for its Play button when it has no next episode.
+    /// A series' first episode that is not a special (season 0), for its Play button when it has no next episode; its first special
+    /// when it has only specials. `GET Shows/{id}/Episodes?isMissing=false`, a page at a time. Without a season the server lists every
+    /// season's episodes in season order, seasons sort by their number padded to four digits, so Specials ("0000") come first, and a
+    /// user who shows missing episodes gets the virtual ones too; `isMissing` filters before the paging (`TvShowsController.GetEpisodes`,
+    /// `Series.GetEpisodes`, `Season.CreateSortName`, jellyfin tag v12.3, read 2026-10-25).
     pub async fn first_episode(&self, series: &ItemRef) -> Result<Option<ItemSummary>, AuthError> {
-        let request = summary(Request::get(format!(
-            "/Shows/{}/Episodes",
-            series.id.as_str()
-        )))
-        .query("limit", "1");
-        let result: ItemsResult = self.get_json(request).await?;
-        Ok(self.summaries(result.items).into_iter().next())
+        let mut special = None;
+        let mut start = 0;
+        loop {
+            let request = summary(Request::get(format!(
+                "/Shows/{}/Episodes",
+                series.id.as_str()
+            )))
+            .query("isMissing", "false")
+            .query("startIndex", start.to_string())
+            .query("limit", FIRST_EPISODE_PAGE.to_string());
+            let result: ItemsResult = self.get_json(request).await?;
+            let count = result.items.len();
+            for episode in self.summaries(result.items) {
+                let season = episode
+                    .episode
+                    .as_ref()
+                    .and_then(|links| links.season_number);
+                if season == Some(0) {
+                    special.get_or_insert(episode);
+                } else {
+                    return Ok(Some(episode));
+                }
+            }
+            if count < FIRST_EPISODE_PAGE {
+                return Ok(special);
+            }
+            start += count;
+        }
     }
 
     /// A series' seasons (`GET Shows/{id}/Seasons`), in order.

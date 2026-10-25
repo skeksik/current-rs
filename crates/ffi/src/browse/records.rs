@@ -72,6 +72,8 @@ pub struct EpisodeLinks {
     /// The last episode of a double episode.
     pub number_end: Option<u32>,
     pub season_number: Option<u32>,
+    /// The core's label for the numbers: `S1:E2`, `S1:E2-E3`, `E5` or empty (`EpisodeLinks::number_label`). Ignored on the way in.
+    pub label: String,
 }
 
 /// An item as a tile or a row shows it.
@@ -478,6 +480,7 @@ impl From<&model::EpisodeLinks> for EpisodeLinks {
             number: links.number,
             number_end: links.number_end,
             season_number: links.season_number,
+            label: links.number_label(),
         }
     }
 }

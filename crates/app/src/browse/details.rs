@@ -141,32 +141,34 @@ impl Details {
                     let (details, similar) =
                         tokio::join!(client.details(&item), client.similar(&item, SIMILAR_LIMIT));
                     let mut lists = None;
+                    // A series' episode to play; `None` when it could not be asked for.
                     let mut next = None;
                     if let Ok(details) = &details
                         && details.summary.kind == MediaKind::SERIES
                     {
-                        let episode = match client.series_next_up(&item).await {
-                            Ok(None) => client.first_episode(&item).await,
-                            found => found,
-                        };
-                        match episode {
-                            Ok(episode) => next = episode,
-                            Err(error) => failures.push(error),
-                        }
-                        match client.seasons(&item).await {
-                            Ok(seasons) => {
-                                let picked = season
-                                    .filter(|season| seasons.iter().any(|s| &s.item == season))
-                                    .or_else(|| seasons.first().map(|first| first.item.clone()));
-                                let episodes = match &picked {
-                                    Some(picked) => client.episodes(&item, picked).await,
-                                    None => Ok(Vec::new()),
-                                };
-                                match episodes {
-                                    Ok(episodes) => lists = Some((seasons, episodes)),
-                                    Err(error) => failures.push(error),
-                                }
+                        let episode = async {
+                            match client.series_next_up(&item).await {
+                                Ok(None) => client.first_episode(&item).await,
+                                found => found,
                             }
+                        };
+                        let seasons = async {
+                            let seasons = client.seasons(&item).await?;
+                            let picked = season
+                                .filter(|season| seasons.iter().any(|s| &s.item == season))
+                                .or_else(|| seasons.first().map(|first| first.item.clone()));
+                            let episodes = match &picked {
+                                Some(picked) => client.episodes(&item, picked).await?,
+                                None => Vec::new(),
+                            };
+                            Ok((seasons, episodes))
+                        };
+                        let (episode, seasons) = tokio::join!(episode, seasons);
+                        // A failed answer leaves the Play button as it is, and does not fail the page: its details loaded, and a
+                        // refresh keeps what is shown until answers arrive.
+                        next = episode.ok();
+                        match seasons {
+                            Ok(found) => lists = Some(found),
                             Err(error) => failures.push(error),
                         }
                     }
@@ -179,16 +181,21 @@ impl Details {
                         Ok(mut details) => {
                             page.ctx.states.observe(&mut details.summary);
                             let play = if details.summary.kind == MediaKind::SERIES {
-                                next.map(|mut episode| {
-                                    page.ctx.states.observe(&mut episode);
+                                next.map(|episode| {
                                     episode
+                                        .map(|mut episode| {
+                                            page.ctx.states.observe(&mut episode);
+                                            episode
+                                        })
+                                        .as_ref()
+                                        .and_then(PlayTarget::for_item)
                                 })
-                                .as_ref()
-                                .and_then(PlayTarget::for_item)
                             } else {
-                                PlayTarget::for_item(&details.summary)
+                                Some(PlayTarget::for_item(&details.summary))
                             };
-                            page.play.send_replace(play);
+                            if let Some(play) = play {
+                                page.play.send_replace(play);
+                            }
                             page.details.send_replace(Some(details));
                         }
                         Err(error) => failures.insert(0, error),

@@ -35,6 +35,23 @@ pub struct EpisodeLinks {
     pub season_number: Option<u32>,
 }
 
+impl EpisodeLinks {
+    /// The episode's place as one label, as every UI shows it: `S1:E2`, `S1:E2-E3` for a file holding several, `S1` or `E5` when the
+    /// server gave only one number, empty when it gave none.
+    pub fn number_label(&self) -> String {
+        let episode = match (self.number, self.number_end) {
+            (Some(first), Some(last)) if last != first => format!("E{first}-E{last}"),
+            (Some(first), _) => format!("E{first}"),
+            (None, _) => String::new(),
+        };
+        match self.season_number {
+            Some(season) if episode.is_empty() => format!("S{season}"),
+            Some(season) => format!("S{season}:{episode}"),
+            None => episode,
+        }
+    }
+}
+
 /// What a grid tile or a row shows of an item.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ItemSummary {
@@ -210,6 +227,22 @@ impl PlayTarget {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_episode_s_label_names_what_the_server_gave() {
+        let links = |season, number, number_end| super::EpisodeLinks {
+            season_number: season,
+            number,
+            number_end,
+            ..Default::default()
+        };
+        assert_eq!(links(Some(1), Some(2), None).number_label(), "S1:E2");
+        assert_eq!(links(Some(1), Some(2), Some(3)).number_label(), "S1:E2-E3");
+        assert_eq!(links(Some(1), Some(2), Some(2)).number_label(), "S1:E2");
+        assert_eq!(links(Some(0), None, None).number_label(), "S0");
+        assert_eq!(links(None, Some(5), None).number_label(), "E5");
+        assert_eq!(links(None, None, Some(4)).number_label(), "");
+    }
+
     use super::*;
     use crate::identity::{ItemId, ServerKey, ServerRef, ServiceType};
 
