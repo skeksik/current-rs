@@ -121,6 +121,12 @@ jobs:
       - name: Build the core, generate C# and build the class library
         shell: pwsh
         run: ./bindings/csharp/build.ps1
+      # Information for the Visual C++ runtime decision (ADR 0003): which DLLs the core library imports. Not a check.
+      - name: List current_ffi.dll's DLL imports
+        shell: pwsh
+        run: |
+          & 'C:\Program Files\LLVM\bin\llvm-readobj.exe' --coff-imports target/x86_64-pc-windows-msvc/release/current_ffi.dll |
+            Select-String -Pattern '^\s*Name: ' | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique
       - name: Run the adapter tests
         shell: pwsh
         run: ./bindings/csharp/test.ps1

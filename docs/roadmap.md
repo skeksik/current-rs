@@ -42,8 +42,14 @@ before merging, and its PR carries only the record.
 - [x] "Copy diagnostics" copies an empty text until a server exists: include the app version (the core's diagnostics export) in M1.
       The core side is done (`export_diagnostics`: version, platform, settings state, then the log; PR 25); the Windows app's button
       uses it since the M1 screens (feat/windows-sign-in)
-- [ ] Shipping libmpv in the app (`current-mpv`) brings the Visual C++ runtime (vcruntime140, msvcp140) under Microsoft's
-      redistributable terms: record them in ADR 0003 with the owner first
+- [x] Shipping libmpv in the app (`current-mpv`) brings the Visual C++ runtime (vcruntime140, msvcp140) under Microsoft's
+      redistributable terms: record them in ADR 0003 with the owner first. Decided 2026-10-25 (owner): Microsoft's installer
+      (`vc_redist.x64.exe`), recorded in ADR 0003
+- [ ] Installer: run `vc_redist.x64.exe` when `HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64` shows the runtime
+      missing or older than the build's toolset (ADR 0003). Check whether Inno Setup can keep the per-user install
+      (`PrivilegesRequired=lowest`) and elevate only the `vc_redist` run, so the UAC prompt appears only when the runtime is missing
+      (Inno's `ShellExec` with the `runas` verb; not verified); that would amend ADR 0009. The CI install test cannot see a missing
+      runtime (the runner has Visual Studio), so test on a clean Windows install
 - [ ] The libmpv build installs unpinned MSYS2 make/diffutils at build time (build-only; docs/notes/windows-mpv-build.md)
 - [x] A `cargo test --workspace` run in a cloud container once had 3 failures in one test binary (unidentified; 28 later runs passed).
       If it recurs, capture the test names and fix the flake. Very likely the refused-port race in `current-net`'s tests (seen again
