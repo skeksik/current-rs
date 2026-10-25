@@ -229,11 +229,21 @@ public sealed partial class HomePage : Page
                 info.IsOpen = false;
             }
         }
-        section.PropertyChanged += (_, _) => Show();
+        void OnChanged(object? s, System.ComponentModel.PropertyChangedEventArgs args) => Show();
+        // The page is kept (NavigationCacheMode Required) and its sections with it, while the bar loads again on every visit: the
+        // handler goes with the bar, so visits do not pile up handlers (review, 2026-10-25).
+        void OnUnloaded(object s, RoutedEventArgs args)
+        {
+            section.PropertyChanged -= OnChanged;
+            info.Unloaded -= OnUnloaded;
+        }
+        section.PropertyChanged += OnChanged;
+        info.Unloaded += OnUnloaded;
         Show();
     }
 
-    /// <summary>Opened again for a new message, so Narrator reads it (InfoBar page, learn.microsoft.com, ms.date 2025-02-26).</summary>
+    /// <summary>Opened again for a new message, so Narrator reads it (InfoBar page, learn.microsoft.com, ms.date 2025-02-26, read
+    /// 2026-10-25).</summary>
     private static void SetInfo(InfoBar info, InfoBarSeverity severity, string title, string message, bool retry)
     {
         if (info.IsOpen && info.Title == title && info.Message == message)

@@ -19,6 +19,7 @@ public sealed partial class SearchPage : Page
         InitializeComponent();
         Sections.ItemsSource = _sections;
         // Released once the page has left the window: during its exit transition it still shows its rows.
+        Loaded += (_, _) => _wasLoaded = true;
         Unloaded += (_, _) => Release();
     }
 
@@ -42,6 +43,19 @@ public sealed partial class SearchPage : Page
             _sections.Add(section);
         }
         ShowStatus();
+    }
+
+    /// <summary>The page reached the window: its lists go on Unloaded. One navigated from before it loaded has no Unloaded.</summary>
+    private bool _wasLoaded;
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        base.OnNavigatedFrom(e);
+        if (!_wasLoaded)
+        {
+            // Left before it ever loaded (navigated past at once): no Unloaded will come.
+            DispatcherQueue.TryEnqueue(Release);
+        }
     }
 
     private void Release()

@@ -157,6 +157,7 @@
                         <toolkit:SettingsCard x:Name="ImageCacheCard" Header="Image cache" Description="Calculating size…">
                             <Button x:Name="ClearCacheButton" Content="Clear" AutomationProperties.Name="Clear the image cache" Click="OnClearCache" />
                         </toolkit:SettingsCard>
+                        <InfoBar x:Name="StorageInfo" Margin="0,8,0,0" IsOpen="False" />
 
                         <TextBlock
                             Style="{StaticResource BodyStrongTextBlockStyle}"

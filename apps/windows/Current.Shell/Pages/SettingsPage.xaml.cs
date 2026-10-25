@@ -344,6 +344,7 @@ public sealed partial class SettingsPage : Page
             return;
         }
         _clearing = true;
+        StorageInfo.IsOpen = false;
         try
         {
             await core.ClearImageCacheAsync();
@@ -352,6 +353,10 @@ public sealed partial class SettingsPage : Page
         catch (Exception error)
         {
             Trace.TraceError($"Current: clearing the image cache failed: {error.GetType().Name}");
+            StorageInfo.Severity = InfoBarSeverity.Error;
+            StorageInfo.Title = "Couldn't clear the image cache.";
+            StorageInfo.Message = ProblemText.Unexpected;
+            StorageInfo.IsOpen = true;
         }
         await ShowCacheSizeAsync(core);
         _clearing = false;

@@ -225,18 +225,48 @@ internal sealed class ServerBrowse(ServerRef server, ulong? sessionNumber, Brows
     {
         if (!_details.TryGetValue(args, out var kept))
         {
-            kept = new KeptDetails(Session.Details(item));
+            kept = new KeptDetails();
             _details[args] = kept;
         }
+        if (kept.View is null)
+        {
+            // New, or let go of as one of the older entries (PruneDetails): opened again, on the season chosen in it before.
+            kept.View = Session.Details(item);
+            if (kept.Season is { } season)
+            {
+                kept.View.SelectSeason(season);
+            }
+        }
+        kept.LastUsed = ++_detailsUses;
+        TrimLiveDetails();
         return kept;
     }
 
-    /// <summary>Drops the views of entries no longer in the history (<paramref name="live"/>: the parameters still in it).</summary>
+    /// <summary>
+    /// How many history entries keep a live detail view: the most recently shown. Each live view is refreshed with every list on
+    /// return to the foreground (several requests each), so older entries keep only their season and offsets and open their view
+    /// again on Back (review, 2026-10-25).
+    /// </summary>
+    private const int LiveDetailsViews = 5;
+
+    private ulong _detailsUses;
+
+    private void TrimLiveDetails()
+    {
+        foreach (var kept in _details.Values.Where(kept => kept.View is not null).OrderByDescending(kept => kept.LastUsed)
+            .Skip(LiveDetailsViews))
+        {
+            kept.View!.Dispose();
+            kept.View = null;
+        }
+    }
+
+    /// <summary>Drops the entries no longer in the history (<paramref name="live"/>: the parameters still in it).</summary>
     public void PruneDetails(IReadOnlySet<object> live)
     {
         foreach (var args in _details.Keys.Where(args => !live.Contains(args)).ToList())
         {
-            _details[args].View.Dispose();
+            _details[args].View?.Dispose();
             _details.Remove(args);
         }
     }
@@ -246,7 +276,7 @@ internal sealed class ServerBrowse(ServerRef server, ulong? sessionNumber, Brows
         IsDisposed = true;
         foreach (var kept in _details.Values)
         {
-            kept.View.Dispose();
+            kept.View?.Dispose();
         }
         _details.Clear();
         _home?.Dispose();
@@ -273,9 +303,13 @@ internal sealed class LibraryGrid(PagedItems items, ItemQuery query)
 }
 
 /// <summary>A history entry's detail view, with the season chosen in it and where its page was scrolled to.</summary>
-internal sealed class KeptDetails(DetailsView view)
+internal sealed class KeptDetails
 {
-    public DetailsView View { get; } = view;
+    /// <summary>Live for the most recently shown entries only (ServerBrowse.Details); null for older ones until shown again.</summary>
+    public DetailsView? View { get; set; }
+
+    /// <summary>When it was last shown, counted per session, to keep the most recent live.</summary>
+    public ulong LastUsed { get; set; }
 
     /// <summary>The season last chosen, or null for the core's first.</summary>
     public ItemRef? Season { get; set; }

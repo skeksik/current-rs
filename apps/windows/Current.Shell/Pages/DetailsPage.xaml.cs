@@ -44,6 +44,7 @@ public sealed partial class DetailsPage : Page
         ItemActions.Attach(Similar, Open);
         BackdropFrame.SizeChanged += (_, _) => SizeBackdrop();
         // Released once the page has left the window: during its exit transition it still shows its lists.
+        Loaded += (_, _) => _wasLoaded = true;
         Unloaded += (_, _) => Release();
     }
 
@@ -57,7 +58,7 @@ public sealed partial class DetailsPage : Page
         }
         var ui = new DispatcherQueueUi(DispatcherQueue);
         _kept = server.Details(args, args.Item);
-        _view = _kept.View;
+        _view = _kept.View!;
         _restore = e.NavigationMode is NavigationMode.Back or NavigationMode.Forward;
         _details = _view.ObserveDetails(ui);
         _details.PropertyChanged += OnDetailsChanged;
@@ -118,6 +119,11 @@ public sealed partial class DetailsPage : Page
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
+        if (!_wasLoaded)
+        {
+            // Left before it ever loaded (navigated past at once): no Unloaded will come.
+            DispatcherQueue.TryEnqueue(Release);
+        }
         if (_kept is not null)
         {
             _kept.Offset = Scroller.VerticalOffset;
@@ -161,6 +167,9 @@ public sealed partial class DetailsPage : Page
     /// <summary>The episodes and similar items as their tiles bind to them (TileList).</summary>
     private TileList? _episodeTiles;
     private TileList? _similarTiles;
+
+    /// <summary>The page reached the window: its lists go on Unloaded. One navigated from before it loaded has no Unloaded.</summary>
+    private bool _wasLoaded;
 
     private void Release()
     {

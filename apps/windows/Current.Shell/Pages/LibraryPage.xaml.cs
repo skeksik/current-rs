@@ -56,6 +56,7 @@ public sealed partial class LibraryPage : Page
             FilterBox.Items.Add(FilterName(filter));
         }
         ItemActions.Attach(Items, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+        Loaded += (_, _) => _wasLoaded = true;
         Unloaded += (_, _) => Release();
     }
 
@@ -92,6 +93,11 @@ public sealed partial class LibraryPage : Page
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
+        if (!_wasLoaded)
+        {
+            // Left before it ever loaded (navigated past at once): no Unloaded will come.
+            DispatcherQueue.TryEnqueue(Release);
+        }
         if (_grid is not null)
         {
             _grid.FirstVisible = (Items.ItemsPanelRoot as ItemsWrapGrid)?.FirstVisibleIndex ?? 0;
@@ -103,6 +109,9 @@ public sealed partial class LibraryPage : Page
     /// Lets go of the slots once the page has left the window, not when it is navigated from: then its exit transition still
     /// shows it, and an emptied grid showed its top for a moment (the owner's run, 2026-10-25).
     /// </summary>
+    /// <summary>The page reached the window: its lists go on Unloaded. One navigated from before it loaded has no Unloaded.</summary>
+    private bool _wasLoaded;
+
     private void Release()
     {
         if (_state is not null)
