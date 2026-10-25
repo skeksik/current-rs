@@ -35,6 +35,7 @@ libmpv_test!(mpv_quitting_on_its_own_waits_for_the_drop);
 libmpv_test!(a_panicking_sink_still_frees_the_engine);
 libmpv_test!(hls_segment_over_https_is_verified);
 libmpv_test!(gateway_headers_never_reach_an_unchecked_playlist_segment);
+libmpv_test!(a_subtitle_added_with_select_shows_on_a_file_loaded_without_one);
 
 /// The child half of `ffmpeg_writes_nothing_to_stderr_across_two_engines`, which runs this test binary again with only this test and
 /// reads its stderr. Not meant to run on its own.
@@ -450,6 +451,46 @@ mod live {
         // `keep-open=yes` holds the file at its end; stopping ends it.
         running.engine.stop().expect("stop");
         running.wait_for("end-file", |e| end_file(e) == Some(EndReason::Stop));
+        running.finish();
+    }
+
+    /// The core's start with a fetched subtitle (ADR 0019 "External subtitles"): the file loads with `sid=no`, and once it is loaded
+    /// the subtitle is added from memory with `select`. It must end up the selected subtitle track (found on the owner's run,
+    /// 2026-10-25: it did not show until chosen again).
+    pub(super) fn a_subtitle_added_with_select_shows_on_a_file_loaded_without_one() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("tone.wav");
+        std::fs::write(&file, wav()).expect("write wav");
+
+        let mut running = Running::start();
+        let mut request = FileRequest::new(file.to_string_lossy());
+        request.subtitle = Some(crate::TrackChoice::Off);
+        running.engine.load(&request).expect("load");
+        running.wait_for("file-loaded", |e| matches!(e, EngineEvent::FileLoaded));
+        running
+            .engine
+            .add_subtitle(&crate::SubtitleFile {
+                data: b"1\n00:00:00,000 --> 00:00:01,000\nHello\n".to_vec(),
+                title: Some("English".into()),
+                language: Some("eng".into()),
+                select: true,
+            })
+            .expect("sub-add");
+        let seen = running.wait_for("the added subtitle in the track list", |e| {
+            matches!(e, EngineEvent::Property(PropertyChange::TrackList(tracks))
+                if tracks.iter().any(|t| t.kind == "sub" && t.external))
+        });
+        let selected = |events: &[EngineEvent]| {
+            events.iter().rev().find_map(|e| match e {
+                EngineEvent::Property(PropertyChange::TrackList(tracks)) => Some(
+                    tracks
+                        .iter()
+                        .any(|t| t.kind == "sub" && t.external && t.selected),
+                ),
+                _ => None,
+            })
+        };
+        assert_eq!(selected(&seen), Some(true), "{seen:#?}");
         running.finish();
     }
 

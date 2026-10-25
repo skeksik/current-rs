@@ -136,9 +136,14 @@ impl MpvMapper {
         Ok(request)
     }
 
-    /// The `sub-add` for a subtitle the core fetched; its track is found once libmpv lists it.
+    /// The `sub-add` for a subtitle the core fetched; its track is found once libmpv lists it. One added to be shown is also chosen
+    /// then, as an embedded one is: `sub-add`'s `select` on a file loaded with `sid=no` left it unshown on the owner's run
+    /// (2026-10-25) although a headless libmpv selects it (`current-mpv`'s live test), and choosing it by id shows it.
     pub(crate) fn subtitle_file(&mut self, subtitle: ExternalSubtitle) -> SubtitleFile {
         self.pending_external.push_back(subtitle.index);
+        if subtitle.select {
+            self.want_subtitle = Some(subtitle.index);
+        }
         SubtitleFile {
             data: subtitle.data,
             title: subtitle.title,
@@ -702,6 +707,56 @@ mod tests {
             &mut commands,
         );
         assert_eq!(commands, vec![MpvCommand::Subtitle(TrackChoice::Id(2))]);
+    }
+
+    #[test]
+    fn a_subtitle_fetched_at_start_is_chosen_once_listed() {
+        // The start with a fetched subtitle: the file loads with it off, it is added with `select`, and nothing else chooses it.
+        let mut mapper = MpvMapper::default();
+        let mut start = file("https://media.example.com/v", StreamAuth::default());
+        start.subtitle = EngineTrack::Off;
+        let request = mapper.file_request(start).unwrap();
+        assert_eq!(request.subtitle, Some(TrackChoice::Off));
+        let added = mapper.subtitle_file(ExternalSubtitle {
+            index: 3,
+            format: None,
+            data: b"1".to_vec(),
+            title: None,
+            language: None,
+            select: true,
+        });
+        assert!(added.select);
+        let (mut signals, mut commands) = (Vec::new(), Vec::new());
+        mapper.translate(
+            MpvEvent::Property(PropertyChange::TrackList(vec![
+                track(1, "video", Some(0), false),
+                track(1, "sub", None, true),
+            ])),
+            &mut signals,
+            &mut commands,
+        );
+        assert_eq!(commands, vec![MpvCommand::Subtitle(TrackChoice::Id(1))]);
+
+        // One added only to be offered is not chosen.
+        let mut mapper = MpvMapper::default();
+        mapper
+            .file_request(file("https://media.example.com/v", StreamAuth::default()))
+            .unwrap();
+        mapper.subtitle_file(ExternalSubtitle {
+            index: 4,
+            format: None,
+            data: b"1".to_vec(),
+            title: None,
+            language: None,
+            select: false,
+        });
+        commands.clear();
+        mapper.translate(
+            MpvEvent::Property(PropertyChange::TrackList(vec![track(1, "sub", None, true)])),
+            &mut signals,
+            &mut commands,
+        );
+        assert!(commands.is_empty(), "{commands:?}");
     }
 
     #[test]
