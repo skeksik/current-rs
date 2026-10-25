@@ -22,7 +22,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use super::backend::{Backend, CompositionSize, DisplayFacts, EngineOutput, Signal, SwapChain};
 use super::mpv::MpvMapper;
 
-/// Compiled into every build with the test engine, so a build check can tell such a library from a shipped one.
+/// Compiled into every build with the test engine, so a build check can tell such a library from a shipped one. Read when an engine
+/// starts, so no linker drops it from a library that can open a test engine.
 #[used]
 pub static MARKER: [u8; 20] = *b"current-test-engine\0";
 
@@ -137,6 +138,7 @@ pub(crate) struct TestBackend {
 impl TestBackend {
     /// Starts the engine. Blocking while an earlier one lives, as libmpv's start is.
     pub(crate) fn start(events: UnboundedSender<TestRaw>) -> Result<Self, EngineErrorKind> {
+        std::hint::black_box(&MARKER);
         let deadline = Instant::now() + START_WAIT;
         let mut taken = lock(&SLOT);
         while *taken {
