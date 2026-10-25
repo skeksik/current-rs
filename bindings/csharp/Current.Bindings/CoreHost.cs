@@ -20,15 +20,17 @@ public sealed class CoreHost : IDisposable
     public static CoreHost Create() => new(CoreCall.Run(() => new Ffi.Core()));
 
     /// <summary>
-    /// Opens the core on the app's data folder (ADR 0013). The file and keyring work runs on the core's own threads, so this may be
-    /// awaited on the UI thread. Then call <see cref="RestoreSessionsAsync"/> in the background. The app passes
+    /// Opens the core on the app's data and cache folders (ADR 0013, ADR 0018). The file and keyring work runs on the core's own
+    /// threads, so this may be awaited on the UI thread. Then call <see cref="RestoreSessionsAsync"/> in the background. The app passes
     /// <see cref="SecretStore.Keyring"/>; <see cref="SecretStore.Memory"/> is for tests.
     /// </summary>
+    /// <param name="cacheDirectory">Where the core keeps what it can fetch again (images): the app passes %LOCALAPPDATA%\Current\Cache.
+    /// A folder that cannot be used leaves images in memory only.</param>
     /// <param name="deviceName">What Jellyfin shows for this device: the computer's name. Empty becomes the platform's name.</param>
     /// <exception cref="CoreStoreException">The data folder cannot be read or written.</exception>
-    public static async Task<CoreHost> OpenAsync(string dataDirectory, string deviceName, SecretStore secrets) =>
+    public static async Task<CoreHost> OpenAsync(string dataDirectory, string cacheDirectory, string deviceName, SecretStore secrets) =>
         new(await CoreCall.RunUncancellableAsync(
-            () => Ffi.CurrentFfiMethods.OpenCore(dataDirectory, deviceName, Map.ToFfi(secrets))).ConfigureAwait(false));
+            () => Ffi.CurrentFfiMethods.OpenCore(dataDirectory, cacheDirectory, deviceName, Map.ToFfi(secrets))).ConfigureAwait(false));
 
     public AppInfo AppInfo => Map.From(_core.AppInfo());
 

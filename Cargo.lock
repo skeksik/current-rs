@@ -255,6 +255,7 @@ dependencies = [
  "current-model",
  "current-net",
  "current-store",
+ "jellyfin-stand-in",
  "serde",
  "serde_json",
  "tempfile",

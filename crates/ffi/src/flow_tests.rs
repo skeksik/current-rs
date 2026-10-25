@@ -99,7 +99,7 @@ fn stand_in() -> StandIn {
 /// A core on `dir` whose secrets outlive it, so that a second core on the same folder finds the token (what the keyring does).
 fn core_on(dir: &Path, secrets: &Arc<MemorySecrets>) -> Arc<Core> {
     let secrets: Arc<dyn Secrets> = secrets.clone();
-    let (app, report) = App::open(dir, secrets, "Example PC").unwrap();
+    let (app, report) = App::open(dir, &dir.join("cache"), secrets, "Example PC").unwrap();
     Arc::new(Core::with_app(
         app,
         Some(report.into()),
@@ -155,12 +155,18 @@ fn apply(list: &mut Vec<SavedServerSnapshot>, diff: SavedServerDiff) {
     }
 }
 
+/// A cache folder next to the data folder, as the apps pass.
+fn cache_dir(temp: &tempfile::TempDir) -> String {
+    temp.path().join("cache").to_str().unwrap().to_owned()
+}
+
 #[test]
 fn open_core_creates_then_loads_the_settings() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path().to_str().unwrap().to_owned();
     let core = block_on(open_core(
         dir.clone(),
+        cache_dir(&temp),
         "Example PC".into(),
         SecretStore::Memory,
     ))
@@ -173,7 +179,13 @@ fn open_core_creates_then_loads_the_settings() {
     assert!(!report.contains("Example PC"), "no device name in {report}");
     drop(core);
 
-    let core = block_on(open_core(dir, String::new(), SecretStore::Memory)).unwrap();
+    let core = block_on(open_core(
+        dir,
+        cache_dir(&temp),
+        String::new(),
+        SecretStore::Memory,
+    ))
+    .unwrap();
     assert_eq!(core.load_report(), Some(LoadReport::Loaded));
     assert_eq!(Core::new().unwrap().load_report(), None);
 }
@@ -182,7 +194,13 @@ fn open_core_creates_then_loads_the_settings() {
 fn the_app_theme_is_saved_at_once_and_read_at_the_next_open() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path().to_str().unwrap().to_owned();
-    let core = block_on(open_core(dir.clone(), String::new(), SecretStore::Memory)).unwrap();
+    let core = block_on(open_core(
+        dir.clone(),
+        cache_dir(&temp),
+        String::new(),
+        SecretStore::Memory,
+    ))
+    .unwrap();
     assert_eq!(core.app_theme(), AppTheme::System);
     let (listener, themes) = recorder();
     let handle = core.subscribe_app_theme(listener);
@@ -199,7 +217,13 @@ fn the_app_theme_is_saved_at_once_and_read_at_the_next_open() {
     handle.cancel();
     drop(core);
 
-    let core = block_on(open_core(dir, String::new(), SecretStore::Memory)).unwrap();
+    let core = block_on(open_core(
+        dir,
+        cache_dir(&temp),
+        String::new(),
+        SecretStore::Memory,
+    ))
+    .unwrap();
     assert_eq!(core.app_theme(), AppTheme::Light);
 }
 
@@ -212,7 +236,13 @@ fn an_app_theme_that_cannot_be_saved_is_refused_and_unchanged() {
     )
     .unwrap();
     let dir = temp.path().to_str().unwrap().to_owned();
-    let core = block_on(open_core(dir, String::new(), SecretStore::Memory)).unwrap();
+    let core = block_on(open_core(
+        dir,
+        cache_dir(&temp),
+        String::new(),
+        SecretStore::Memory,
+    ))
+    .unwrap();
     let result = block_on(core.set_app_theme(AppTheme::Dark));
     assert!(
         matches!(
@@ -234,6 +264,7 @@ fn open_core_reports_a_folder_it_cannot_use() {
     std::fs::write(&file, "x").unwrap();
     let result = block_on(open_core(
         file.to_str().unwrap().to_owned(),
+        cache_dir(&temp),
         String::new(),
         SecretStore::Memory,
     ));

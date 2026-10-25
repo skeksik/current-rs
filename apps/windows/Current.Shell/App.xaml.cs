@@ -101,7 +101,7 @@ public partial class App : Application
     internal static void ClearNavigationHistory() => _window?.ClearHistory();
 
     /// <summary>
-    /// Opens the core on the data folder (ADR 0013), off the UI thread inside the adapter, then reports the network and restores the
+    /// Opens the core on the data and cache folders (ADR 0013), off the UI thread inside the adapter, then reports the network and restores the
     /// saved sessions in the background (ADR 0015, "Restore").
     /// </summary>
     private static async Task OpenCoreAsync(DispatcherQueue ui)
@@ -109,7 +109,7 @@ public partial class App : Application
         CoreHost? core = null;
         try
         {
-            core = await CoreHost.OpenAsync(AppIdentity.DataFolder, DeviceName.Get(), SecretStore.Keyring);
+            core = await CoreHost.OpenAsync(AppIdentity.DataFolder, AppIdentity.CacheFolder, DeviceName.Get(), SecretStore.Keyring);
         }
         catch (CoreStoreException error)
         {

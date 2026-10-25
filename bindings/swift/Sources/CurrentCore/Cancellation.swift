@@ -20,7 +20,7 @@ public func withCoreCancellation<T: Sendable>(
     }
 }
 
-// `openCore(dataDir:deviceName:secrets:)` needs no wrapper: it is not cancellable, and the core does the blocking work on its own
+// `openCore(dataDir:cacheDir:deviceName:secrets:)` needs no wrapper: it is not cancellable, and the core does the blocking work on its own
 // threads, so awaiting it on the main actor does not block it.
 
 extension Core {

@@ -166,7 +166,7 @@ internal static class SmokeRun
             await standIn.StandardInput.WriteLineAsync("gate portal");
             await standIn.StandardInput.FlushAsync();
 
-            using var core = await CoreHost.OpenAsync(folder, "smoke", SecretStore.Memory);
+            using var core = await CoreHost.OpenAsync(folder, Path.Combine(folder, "Cache"), "smoke", SecretStore.Memory);
             using var flow = core.AddServer();
             await flow.ProbeAsync(address);
             check(flow.State is AddServerState.GatewaySignIn, $"setup finds the portal's web sign-in ({flow.State.GetType().Name})");
@@ -225,11 +225,11 @@ internal static class SmokeRun
         var folder = Path.Combine(Path.GetTempPath(), $"current-smoke-{Guid.NewGuid():N}");
         try
         {
-            using (var first = await CoreHost.OpenAsync(folder, "smoke", SecretStore.Memory))
+            using (var first = await CoreHost.OpenAsync(folder, Path.Combine(folder, "Cache"), "smoke", SecretStore.Memory))
             {
                 check(first.LoadReport is LoadReport.Created, $"a new data folder is created ({first.LoadReport?.GetType().Name})");
             }
-            using var core = await CoreHost.OpenAsync(folder, "smoke", SecretStore.Memory);
+            using var core = await CoreHost.OpenAsync(folder, Path.Combine(folder, "Cache"), "smoke", SecretStore.Memory);
             check(core.LoadReport is LoadReport.Loaded, $"it is loaded again ({core.LoadReport?.GetType().Name})");
 
             var listed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
