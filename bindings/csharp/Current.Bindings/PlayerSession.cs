@@ -15,7 +15,7 @@ public sealed class SwapChainRef : IDisposable
     internal SwapChainRef(Ffi.SwapChainHandle handle)
     {
         _handle = handle;
-        Handle = handle.Handle();
+        Handle = handle.Pointer();
         Generation = handle.Generation();
     }
 
@@ -28,15 +28,29 @@ public sealed class SwapChainRef : IDisposable
     /// <summary>Grows with every new swap chain.</summary>
     public ulong Generation { get; }
 
-    public bool IsReleased => _handle.IsReleased();
+    private bool _disposed;
 
-    /// <summary>Gives the core's reference back; call it once <c>SetSwapChain</c> took its own.</summary>
-    public void Release() => _handle.Release();
+    public bool IsReleased => _disposed || _handle.IsReleased();
 
+    /// <summary>Gives the core's reference back; call it once <c>SetSwapChain</c> took its own. Nothing after <see cref="Dispose"/>.</summary>
+    public void Release()
+    {
+        if (!_disposed)
+        {
+            _handle.Release();
+        }
+    }
+
+    /// <summary>Releases the reference and frees the native handle; a second call does nothing.</summary>
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
         _handle.Release();
         _handle.Dispose();
+        _disposed = true;
     }
 
     /// <summary>The generation only: the handle is a pointer.</summary>
@@ -55,6 +69,10 @@ public sealed class PlayerSession : IAsyncDisposable
     private readonly Ffi.Player _player;
     private SwapChainRef? _current;
     private bool _closed;
+
+    /// <summary>The generated player while the session is open: every call after <see cref="CloseAsync"/> fails with
+    /// <see cref="PlayerException"/> (<see cref="PlayerProblem.Closed"/>), never with the freed native object's exception.</summary>
+    private Ffi.Player Open => _closed ? throw new PlayerException(new PlayerProblem.Closed()) : _player;
 
     private PlayerSession(Ffi.Player player, IUiDispatcher ui)
     {
@@ -95,55 +113,55 @@ public sealed class PlayerSession : IAsyncDisposable
     /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled: nothing stays half-started.</exception>
     /// <exception cref="PlayerException">The item's server is not signed in, or the player is closed.</exception>
     public Task PlayAsync(ItemRef item, TimeSpan start, CancellationToken ct = default) =>
-        CoreCall.RunVoidAsync(token => _player.Play(MapBrowse.ToFfi(item), PlayerMap.ToMs(start), token), ct);
+        CoreCall.RunVoidAsync(token => Open.Play(MapBrowse.ToFfi(item), PlayerMap.ToMs(start), token), ct);
 
     /// <summary>The audio stream with this server index.</summary>
     public Task SelectAudioAsync(uint index, CancellationToken ct = default) =>
-        CoreCall.RunVoidAsync(token => _player.SelectAudio(index, token), ct);
+        CoreCall.RunVoidAsync(token => Open.SelectAudio(index, token), ct);
 
     public Task SelectSubtitleAsync(SubtitleSelection subtitle, CancellationToken ct = default) =>
-        CoreCall.RunVoidAsync(token => _player.SelectSubtitle(PlayerMap.ToFfi(subtitle), token), ct);
+        CoreCall.RunVoidAsync(token => Open.SelectSubtitle(PlayerMap.ToFfi(subtitle), token), ct);
 
     /// <summary>The quality for the kind of address in use, remembered for it (local or internet).</summary>
     public Task SetQualityAsync(QualityChoice quality, CancellationToken ct = default) =>
-        CoreCall.RunVoidAsync(token => _player.SetQuality(PlayerMap.ToFfi(quality), token), ct);
+        CoreCall.RunVoidAsync(token => Open.SetQuality(PlayerMap.ToFfi(quality), token), ct);
 
     /// <summary>Plays the next episode now, from its start.</summary>
-    public Task PlayNextAsync(CancellationToken ct = default) => CoreCall.RunVoidAsync(token => _player.PlayNext(token), ct);
+    public Task PlayNextAsync(CancellationToken ct = default) => CoreCall.RunVoidAsync(token => Open.PlayNext(token), ct);
 
     /// <exception cref="PlayerException">The player is closed (this and the other quick actions).</exception>
-    public void Pause() => Quick(() => _player.Pause());
+    public void Pause() => Quick(() => Open.Pause());
 
-    public void Resume() => Quick(() => _player.Resume());
+    public void Resume() => Quick(() => Open.Resume());
 
-    public void Toggle() => Quick(() => _player.Toggle());
+    public void Toggle() => Quick(() => Open.Toggle());
 
-    public void SeekTo(TimeSpan position) => Quick(() => _player.SeekTo(PlayerMap.ToMs(position)));
+    public void SeekTo(TimeSpan position) => Quick(() => Open.SeekTo(PlayerMap.ToMs(position)));
 
     /// <summary>Back when negative.</summary>
-    public void SeekBy(TimeSpan offset) => Quick(() => _player.SeekBy((long)offset.TotalMilliseconds));
+    public void SeekBy(TimeSpan offset) => Quick(() => Open.SeekBy((long)offset.TotalMilliseconds));
 
     /// <summary>Stops the item (reported to the server); the engine stays for the next one.</summary>
-    public void Stop() => Quick(() => _player.Stop());
+    public void Stop() => Quick(() => Open.Stop());
 
-    public void SkipSegment() => Quick(() => _player.SkipSegment());
+    public void SkipSegment() => Quick(() => Open.SkipSegment());
 
-    public void DismissNext() => Quick(() => _player.DismissNext());
+    public void DismissNext() => Quick(() => Open.DismissNext());
 
     /// <summary>0 to 100.</summary>
-    public void SetVolume(byte volume) => Quick(() => _player.SetVolume(volume));
+    public void SetVolume(byte volume) => Quick(() => Open.SetVolume(volume));
 
-    public void SetMuted(bool muted) => Quick(() => _player.SetMuted(muted));
+    public void SetMuted(bool muted) => Quick(() => Open.SetMuted(muted));
 
     /// <summary>The window moved to another monitor, or the monitor's mode changed.</summary>
-    public void SetDisplayFacts(DisplayFacts facts) => Quick(() => _player.SetDisplayFacts(PlayerMap.ToFfi(facts)));
+    public void SetDisplayFacts(DisplayFacts facts) => Quick(() => Open.SetDisplayFacts(PlayerMap.ToFfi(facts)));
 
     /// <summary>The panel's new size in physical pixels.</summary>
-    public void SetCompositionSize(CompositionSize size) => Quick(() => _player.SetCompositionSize(PlayerMap.ToFfi(size)));
+    public void SetCompositionSize(CompositionSize size) => Quick(() => Open.SetCompositionSize(PlayerMap.ToFfi(size)));
 
     /// <summary>The playback information view's content. No URL.</summary>
     public async Task<PlaybackInfo> PlaybackInfoAsync() =>
-        PlayerMap.From(await CoreCall.RunUncancellableAsync(() => _player.PlaybackInfo()).ConfigureAwait(false));
+        PlayerMap.From(await CoreCall.RunUncancellableAsync(() => Open.PlaybackInfo()).ConfigureAwait(false));
 
     /// <summary>
     /// Stops the item (reported to the server, best effort), gives the swap chain back and shuts the engine down; returns once it is

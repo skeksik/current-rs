@@ -227,7 +227,7 @@ fn a_player_plays_reports_and_releases_through_the_bridge() {
         .pop()
         .flatten()
         .unwrap();
-    assert_eq!(swap_chain.handle(), test_engine::SWAP_CHAIN_HANDLE);
+    assert_eq!(swap_chain.pointer(), test_engine::SWAP_CHAIN_HANDLE);
     assert_eq!(swap_chain.generation(), 1);
     swap_chain.release();
     swap_chain.release();
@@ -411,7 +411,7 @@ fn no_url_token_cookie_or_header_value_crosses_the_bridge() {
         .unwrap();
     crossed.push(format!(
         "{} {} {}",
-        swap_chain.handle(),
+        swap_chain.pointer(),
         swap_chain.generation(),
         swap_chain.is_released()
     ));

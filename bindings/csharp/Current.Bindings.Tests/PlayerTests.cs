@@ -69,6 +69,7 @@ internal static class PlayerTests
         await SignIn(core, standIn);
         var ui = new ManualDispatcher();
         var session = await PlayerSession.OpenAsync(core, Size, Display, ui);
+        SwapChainRef? swapChain = null;
         try
         {
             await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
@@ -90,7 +91,7 @@ internal static class PlayerTests
             await Eventually("a progress report", ui, () => standIn.Count("/Sessions/Playing/Progress") >= 1);
 
             await Eventually("a swap chain", ui, () => session.SwapChain.Value is not null);
-            var swapChain = session.SwapChain.Value!;
+            swapChain = session.SwapChain.Value!;
             Check(swapChain.Handle == TestSwapChain && swapChain.Generation == 1, $"the test engine's swap chain, not {swapChain}");
             Check(!swapChain.ToString().Contains(TestSwapChain.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 StringComparison.Ordinal), "no pointer in its text form");
@@ -106,8 +107,23 @@ internal static class PlayerTests
         {
             await session.CloseAsync();
         }
-        var closed = await ThrowsPlayer(() => { session.Pause(); return Task.CompletedTask; });
-        Check(closed.Problem is PlayerProblem.Closed, $"closed, not {closed.Problem}");
+        // Every call after closing fails with the documented exception, not the freed native object's.
+        foreach (var (what, call) in new (string, Func<Task>)[]
+        {
+            ("Pause", () => { session.Pause(); return Task.CompletedTask; }),
+            ("SeekTo", () => { session.SeekTo(TimeSpan.Zero); return Task.CompletedTask; }),
+            ("PlayAsync", () => session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero)),
+            ("SetQualityAsync", () => session.SetQualityAsync(new QualityChoice.Maximum())),
+            ("PlaybackInfoAsync", () => session.PlaybackInfoAsync()),
+        })
+        {
+            var closed = await ThrowsPlayer(call);
+            Check(closed.Problem is PlayerProblem.Closed, $"{what} after closing: closed, not {closed.Problem}");
+        }
+        await session.CloseAsync();
+        swapChain!.Dispose();
+        swapChain.Release();
+        Check(swapChain.IsReleased, "a disposed swap chain reads as released");
         await Eventually("listeners dropped", new ManualDispatcher(), () => core.LiveListeners == 0);
     }
 

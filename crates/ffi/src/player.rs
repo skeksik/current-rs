@@ -41,7 +41,7 @@ pub trait SwapChainListener: Send + Sync {
     fn on_value(&self, value: Option<Arc<SwapChainHandle>>);
 }
 
-/// A reference to the engine's swap chain: `handle` is the `IDXGISwapChain*` as an integer for `ISwapChainPanelNative::SetSwapChain`.
+/// A reference to the engine's swap chain: `pointer` is the `IDXGISwapChain*` as an integer for `ISwapChainPanelNative::SetSwapChain`.
 /// Release it once `SetSwapChain` took its own reference; releasing twice does nothing, and dropping the last handle releases too.
 #[derive(Debug, uniffi::Object)]
 pub struct SwapChainHandle {
@@ -50,7 +50,8 @@ pub struct SwapChainHandle {
 
 #[uniffi::export]
 impl SwapChainHandle {
-    pub fn handle(&self) -> u64 {
+    /// The `IDXGISwapChain*` as an integer. Not named `handle`: UniFFI's Swift objects keep their own `handle`.
+    pub fn pointer(&self) -> u64 {
         self.swap_chain.handle()
     }
 
