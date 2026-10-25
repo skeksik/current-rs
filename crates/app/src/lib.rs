@@ -12,6 +12,7 @@ mod gateway;
 mod gateway_sign_in;
 mod images;
 mod list;
+mod player;
 mod session;
 mod sign_in;
 
@@ -43,6 +44,19 @@ pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
 pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState};
 pub use images::{ImageError, ImageLoad, ImageSource, WIDTH_BUCKETS, bucket};
 pub use list::{ListSubscription, ObservableList, VectorDiff};
+#[cfg(any(test, feature = "test-engine"))]
+pub use player::test_engine;
+pub use player::{
+    CompositionSize, DisplayFacts, EngineOutput, MediaStatus, NowPlaying, PlaybackInfo, Player,
+    PlayerEngine, PlayerError, SwapChain, TIMELINE_INTERVAL, VideoOutput, player_engine,
+};
+/// `current-playback`'s values that the player publishes.
+pub mod playback {
+    pub use current_playback::{
+        AutoSkip, NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, QualityMemory,
+        Track,
+    };
+}
 pub use sign_in::{SignIn, SignInError, SignInState};
 
 use images::ImageCache;
@@ -75,7 +89,8 @@ pub struct App {
     /// Serializes [`App::set_app_theme`], so the published theme is the one saved last.
     theme_write: Mutex<()>,
     images: ImageCache,
-    browse: browse::Hub,
+    browse: Arc<browse::Hub>,
+    playback: Arc<player::PlaybackPrefs>,
 }
 
 impl std::fmt::Debug for App {
@@ -115,7 +130,8 @@ impl App {
             app_theme: watch::Sender::new(AppTheme::System),
             theme_write: Mutex::new(()),
             images: ImageCache::in_memory(),
-            browse: browse::Hub::default(),
+            browse: Arc::default(),
+            playback: Arc::new(player::PlaybackPrefs::load(None)),
         }
     }
 
@@ -137,6 +153,7 @@ impl App {
         let stored = settings.get();
         let identity = ClientIdentity::current(device_name, stored.device_id.as_str());
         let images = ImageCache::open(cache_dir, &stored.servers);
+        let playback = Arc::new(player::PlaybackPrefs::load(Some(&settings)));
         let app = Self {
             shared: Arc::new(Shared::new(
                 Arc::new(RequestLog::default()),
@@ -149,7 +166,8 @@ impl App {
             app_theme: watch::Sender::new(stored.app_theme),
             theme_write: Mutex::new(()),
             images,
-            browse: browse::Hub::default(),
+            browse: Arc::default(),
+            playback,
         };
         Ok((app, report))
     }
@@ -354,6 +372,42 @@ impl App {
     /// or an empty box.
     pub async fn load_image(&self, load: &ImageLoad) -> Result<Arc<[u8]>, ImageError> {
         self.images.load(&self.shared, load).await
+    }
+
+    /// Opens a player for a window (ADR 0019) with the panel's size in physical pixels (needed before the engine starts, ADR 0007) and
+    /// the display's facts. One engine per process for now: while another player is open this waits for it to close (a few seconds),
+    /// then fails with [`PlayerError::Busy`]. Call it on the tokio runtime.
+    ///
+    /// # Errors
+    /// [`PlayerError::EngineUnavailable`] in a build without an engine, [`PlayerError::Busy`], [`PlayerError::EngineFailed`],
+    /// [`PlayerError::NoRuntime`].
+    pub async fn open_player(
+        &self,
+        size: CompositionSize,
+        display: DisplayFacts,
+    ) -> Result<Player, PlayerError> {
+        let context = player::Context {
+            shared: self.shared.clone(),
+            images: self.images.clone(),
+            browse: self.browse.clone(),
+            prefs: self.playback.clone(),
+        };
+        player::open(context, size, display).await
+    }
+
+    /// The segment kinds skipped automatically (Settings → Playback, ADR 0019 choice 8), by their names (`intro`, `outro`, and kinds
+    /// a later version adds); empty when off, which is the default. The current value first, then every change.
+    pub fn auto_skip(&self) -> watch::Receiver<Vec<String>> {
+        self.playback.auto_skip()
+    }
+
+    /// Sets the segment kinds skipped automatically and saves them; open players follow at once. Blocking file I/O: call it off the
+    /// async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved; the setting stands for this run.
+    pub fn set_auto_skip(&self, kinds: Vec<String>) -> Result<(), StoreError> {
+        self.playback.set_auto_skip(&self.shared, kinds)
     }
 
     /// The platform's report of the network, on start and on every change (ADR 0014). Every server's address provider hears it, and

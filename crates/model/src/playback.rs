@@ -356,6 +356,11 @@ open_value! {
         UNSUPPORTED_FORMAT = "unsupported_format",
         /// A decoder failed.
         DECODER_FAILED = "decoder_failed",
+        /// An HLS or DASH stream that needs gateway headers reached the engine without the core's same-origin check of its playlists
+        /// (ADR 0019, "Playlists and headers"): refused rather than sending the headers to whatever host a playlist names.
+        GATEWAY_PLAYLIST_UNCHECKED = "gateway_playlist_unchecked",
+        /// The engine stopped working (libmpv quit on its own): the player must be opened again.
+        ENGINE_GONE = "engine_gone",
     }
 }
 

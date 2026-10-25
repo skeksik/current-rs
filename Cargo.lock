@@ -253,7 +253,9 @@ version = "0.1.0"
 dependencies = [
  "current-jellyfin",
  "current-model",
+ "current-mpv",
  "current-net",
+ "current-playback",
  "current-store",
  "jellyfin-stand-in",
  "serde",

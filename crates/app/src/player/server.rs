@@ -4,8 +4,11 @@
 //!
 //! The stream URL moves from `current-jellyfin`'s type into `current-playback`'s without being formatted, with the address's gateway
 //! credentials and the session token (for redaction) as its [`StreamAuth`].
+//!
+//! One player plays items of any signed-in server, one at a time: the driver points it at the item's session before each play, after
+//! stopping an item of another server (so its stop report goes to its own server).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use current_jellyfin::{
     AuthError, JellyfinClient, MAXIMUM_STREAMING_BITRATE, PlaybackError, PlaybackRequest,
@@ -20,18 +23,27 @@ use current_playback::{
     StreamCookie, StreamUrl, TranscodePermissions,
 };
 
-/// A Jellyfin session as a media server for one player.
+/// The session of the item playing, as a media server for one player.
+#[derive(Default)]
 pub(crate) struct JellyfinMedia {
-    client: Arc<JellyfinClient>,
+    client: Mutex<Option<Arc<JellyfinClient>>>,
 }
 
 impl JellyfinMedia {
-    pub(crate) fn new(client: Arc<JellyfinClient>) -> Self {
-        Self { client }
+    /// The session in use, if any.
+    pub(crate) fn client(&self) -> Option<Arc<JellyfinClient>> {
+        self.client
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
-    pub(crate) fn client(&self) -> &Arc<JellyfinClient> {
-        &self.client
+    pub(crate) fn set_client(&self, client: Arc<JellyfinClient>) {
+        *self.client.lock().unwrap_or_else(PoisonError::into_inner) = Some(client);
+    }
+
+    fn session(&self) -> Result<Arc<JellyfinClient>, PlaybackProblem> {
+        self.client().ok_or(PlaybackProblem::SignedOut)
     }
 }
 
@@ -100,15 +112,15 @@ impl MediaServer for JellyfinMedia {
             },
             direct_play: request.direct_play,
         };
-        let answer = self
-            .client
+        let client = self.session()?;
+        let answer = client
             .playback_info(&item.id, &wire, capabilities)
             .await
             .map_err(|error| playback_problem(&error))?;
         let (source, stream) = answer
             .playable(request.media_source.as_deref())
             .map_err(|error| playback_problem(&error))?;
-        let access = self.client.stream_access(&stream.url);
+        let access = client.stream_access(&stream.url);
         Ok(ServerAnswer {
             play_session_id: answer.play_session_id.clone(),
             source: source.clone(),
@@ -134,14 +146,14 @@ impl MediaServer for JellyfinMedia {
     }
 
     async fn report_start(&self, report: &ProgressReport) -> Result<(), PlaybackProblem> {
-        self.client
+        self.session()?
             .report_start(&progress(report))
             .await
             .map_err(|error| problem(&error))
     }
 
     async fn report_progress(&self, report: &ProgressReport) -> Result<(), PlaybackProblem> {
-        self.client
+        self.session()?
             .report_progress(&progress(report))
             .await
             .map_err(|error| problem(&error))
@@ -155,28 +167,28 @@ impl MediaServer for JellyfinMedia {
             position: report.position,
             failed: report.failed,
         };
-        self.client
+        self.session()?
             .report_stopped(&report)
             .await
             .map_err(|error| problem(&error))
     }
 
     async fn segments(&self, item: &ItemRef) -> Result<Vec<Segment>, PlaybackProblem> {
-        self.client
+        self.session()?
             .media_segments(&item.id)
             .await
             .map_err(|error| problem(&error))
     }
 
     async fn next_episode(&self, item: &ItemRef) -> Result<Option<ItemSummary>, PlaybackProblem> {
-        self.client
+        self.session()?
             .next_episode(item)
             .await
             .map_err(|error| problem(&error))
     }
 
     async fn preferences(&self) -> Result<PlaybackPreferences, PlaybackProblem> {
-        self.client
+        self.session()?
             .playback_preferences()
             .await
             .map_err(|error| problem(&error))
@@ -184,7 +196,7 @@ impl MediaServer for JellyfinMedia {
 
     async fn permissions(&self) -> Result<TranscodePermissions, PlaybackProblem> {
         let policy = self
-            .client
+            .session()?
             .transcode_policy()
             .await
             .map_err(|error| problem(&error))?;
@@ -197,7 +209,7 @@ impl MediaServer for JellyfinMedia {
     }
 
     async fn transcoding_facts(&self) -> Result<Option<TranscodingFacts>, PlaybackProblem> {
-        self.client
+        self.session()?
             .transcoding_facts()
             .await
             .map_err(|error| problem(&error))
@@ -209,13 +221,14 @@ impl MediaServer for JellyfinMedia {
         source: &MediaSource,
         stream: &MediaStream,
     ) -> Result<Vec<u8>, PlaybackProblem> {
-        self.client
+        self.session()?
             .subtitle(&item.id, &source.id, stream.index, stream.codec.as_ref())
             .await
             .map_err(|error| problem(&error))
     }
 
     fn is_local_address(&self) -> bool {
-        self.client.address_is_local()
+        self.client()
+            .is_some_and(|client| client.address_is_local())
     }
 }

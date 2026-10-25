@@ -91,7 +91,8 @@ struct Inner {
     epochs: Mutex<HashMap<ServerRef, u64>>,
 }
 
-/// The image cache of an [`App`](crate::App).
+/// The image cache of an [`App`](crate::App). Clones share it.
+#[derive(Clone)]
 pub(crate) struct ImageCache {
     inner: Arc<Inner>,
 }
