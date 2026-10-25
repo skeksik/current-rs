@@ -5,8 +5,8 @@ namespace Current.Shell.Browsing;
 
 /// <summary>
 /// The collection a library grid binds to (ADR 0018, section 7): the core's slots, with WinUI's view ranges forwarded to the core so it
-/// loads the pages the grid shows. Every item is a <see cref="Slot"/> record, never null: the tile template shows a placeholder for
-/// <see cref="Slot.Loading"/> and a retry glyph for <see cref="Slot.Failed"/>.
+/// loads the pages the grid shows. Every item is a <see cref="GridSlot"/> around the core's <see cref="Slot"/> record, never null:
+/// the tile template shows a placeholder for <see cref="Slot.Loading"/> and a retry glyph for <see cref="Slot.Failed"/>.
 /// </summary>
 /// <remarks>
 /// <para>It lives here, not in Current.Bindings, because IItemsRangeInfo is a Windows App SDK type (Microsoft.UI.Xaml.Data), and the
@@ -21,9 +21,9 @@ namespace Current.Shell.Browsing;
 /// System.IDisposable</c>, with <c>RangesChanged(ItemIndexRange visibleRange, IReadOnlyList&lt;ItemIndexRange&gt; trackedItems)</c>;
 /// "IItemsRangeInfo is designed to be used by only a single instance of an items control", so open one per grid.</para>
 /// </remarks>
-public sealed partial class SlotCollection : DiffObservableCollection<Slot>, IItemsRangeInfo
+public sealed partial class SlotCollection : DiffObservableCollection<GridSlot>, IItemsRangeInfo
 {
-    private PagedCollection<Slot>? _paged;
+    private PagedCollection<GridSlot>? _paged;
 
     private SlotCollection() { }
 
@@ -31,12 +31,12 @@ public sealed partial class SlotCollection : DiffObservableCollection<Slot>, IIt
     public static SlotCollection Open(PagedItems items, IUiDispatcher ui)
     {
         var collection = new SlotCollection();
-        collection._paged = items.Collect(ui, slot => slot, collection);
+        collection._paged = items.Collect(ui, slot => new GridSlot(slot), collection);
         return collection;
     }
 
     /// <summary>The mirror's subscription: its recoveries and whether it faulted.</summary>
-    public ListSubscription<Slot>? Subscription => _paged?.Subscription;
+    public ListSubscription<GridSlot>? Subscription => _paged?.Subscription;
 
     /// <summary>Called by the grid on the UI thread whenever its view changes: only the visible range goes to the core, which keeps a
     /// page either side itself.</summary>
@@ -55,4 +55,23 @@ public sealed partial class SlotCollection : DiffObservableCollection<Slot>, IIt
         _paged?.Dispose();
         _paged = null;
     }
+}
+
+/// <summary>
+/// One place in the grid. A class, so each place is its own object: the core's slot records are compared by value, and every
+/// <see cref="Slot.Loading"/> equals every other, so a list control that finds an item by IndexOf (to scroll to it, to keep focus on
+/// it) would find the first placeholder instead. ToString is what Narrator falls back to: the tile's name.
+/// </summary>
+public sealed class GridSlot(Slot slot)
+{
+    public Slot Slot { get; } = slot;
+
+    public ItemSummary? Summary => (Slot as Slot.Item)?.Summary;
+
+    public override string ToString() => Slot switch
+    {
+        Slot.Item item => BrowseText.TileName(item.Summary),
+        Slot.Failed => BrowseText.FailedTileName,
+        _ => BrowseText.LoadingTileName,
+    };
 }

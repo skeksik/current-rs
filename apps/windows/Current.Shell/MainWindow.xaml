@@ -10,9 +10,12 @@
     <!-- Alt+Left, the GoBack key and the mouse Back button go back, Alt+Right and the mouse Forward button go forward, from anywhere
          in the window (docs/notes/windows-shell.md). -->
     <Grid x:Name="Root" KeyboardAcceleratorPlacementMode="Hidden">
+        <!-- Ctrl+E goes to the search box: on Windows it "launches search" in Edge and many Store apps (Keyboard interactions,
+             learn.microsoft.com, ms.date 2026-09-27, read 2026-10-25). -->
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="Left" Modifiers="Menu" Invoked="OnBackAccelerator" />
             <KeyboardAccelerator Key="Right" Modifiers="Menu" Invoked="OnForwardAccelerator" />
+            <KeyboardAccelerator Key="E" Modifiers="Control" Invoked="OnSearchAccelerator" />
         </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -109,6 +112,20 @@
                 <Thickness x:Key="NavigationViewPaneContentGridMargin">-1,51,-1,3</Thickness>
                 <Thickness x:Key="NavigationViewContentMargin">0,48,0,0</Thickness>
             </NavigationView.Resources>
+            <!-- App-level search: "An optional AutoSuggestBox control to allow for app-level search. Assign the control to the
+                 NavigationView.AutoSuggestBox property." (NavigationView page, learn.microsoft.com, ms.date 2026-10-02, read
+                 2026-10-25). Shown only while a Jellyfin server is signed in. -->
+            <NavigationView.AutoSuggestBox>
+                <AutoSuggestBox
+                    x:Name="SearchBox"
+                    Visibility="Collapsed"
+                    PlaceholderText="Search"
+                    AutomationProperties.Name="Search"
+                    QueryIcon="Find"
+                    QuerySubmitted="OnSearchSubmitted" />
+            </NavigationView.AutoSuggestBox>
+            <!-- Home, then one item per library of each signed-in server, in the user's order (ADR 0018, section 6), added in code
+                 ("You can also add items in code", same page); a header names each server when there is more than one. -->
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
             </NavigationView.MenuItems>

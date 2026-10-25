@@ -1,0 +1,68 @@
+<Page
+    x:Class="Current.Shell.Pages.SearchPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:browsing="using:Current.Shell.Browsing">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <TextBlock x:Name="TitleText" Style="{StaticResource WidePageTitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
+        <!-- "display a single-line "No results" message as the result so that users know their search request executed" (Guidelines
+             for auto-suggest boxes, learn.microsoft.com, ms.date 2025-02-26, read 2026-10-25). Live, so Narrator hears the outcome. -->
+        <TextBlock
+            x:Name="StatusText"
+            Grid.Row="1"
+            Margin="24,12,24,0"
+            Style="{StaticResource BodyTextBlockStyle}"
+            AutomationProperties.LiveSetting="Polite" />
+        <ProgressRing x:Name="LoadingRing" Grid.Row="2" Width="48" Height="48" IsActive="False" AutomationProperties.Name="Searching" />
+
+        <ScrollViewer Grid.Row="2">
+            <ItemsControl x:Name="Sections" Margin="24,0,0,24" IsTabStop="False">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="browsing:SearchSection">
+                        <StackPanel>
+                            <TextBlock
+                                Margin="0,12,24,0"
+                                Style="{StaticResource SubtitleTextBlockStyle}"
+                                AutomationProperties.HeadingLevel="Level2"
+                                Text="{x:Bind Header}"
+                                Visibility="{x:Bind HeaderVisibility}" />
+                            <ItemsControl ItemsSource="{x:Bind Rows}" IsTabStop="False">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="browsing:TileRow">
+                                        <StackPanel>
+                                            <TextBlock
+                                                Style="{StaticResource SectionHeaderTextBlockStyle}"
+                                                AutomationProperties.HeadingLevel="Level3"
+                                                Text="{x:Bind Title}" />
+                                            <GridView
+                                                Padding="0,0,20,0"
+                                                ItemsSource="{x:Bind Items}"
+                                                ItemTemplate="{x:Bind ItemTemplate}"
+                                                AutomationProperties.Name="{x:Bind Title}"
+                                                ScrollViewer.HorizontalScrollMode="Enabled"
+                                                ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                ScrollViewer.VerticalScrollMode="Disabled"
+                                                ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                                Loaded="OnRowLoaded">
+                                                <GridView.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <ItemsStackPanel Orientation="Horizontal" />
+                                                    </ItemsPanelTemplate>
+                                                </GridView.ItemsPanel>
+                                            </GridView>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </Grid>
+</Page>

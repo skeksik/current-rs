@@ -1,4 +1,7 @@
+using System.Collections.ObjectModel;
 using System.Diagnostics;
+using Current.Bindings;
+using Current.Shell.Browsing;
 using Current.Shell.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -6,13 +9,17 @@ using Microsoft.UI.Xaml.Controls;
 namespace Current.Shell.Pages;
 
 /// <summary>
-/// Home: an invitation to add a server before there is one, else the saved servers with their user (browse is M2). It waits for the
-/// core to open (App.CoreReady); its subscriptions live from Loaded to Unloaded (ADR 0004).
+/// Home: with a signed-in Jellyfin server, its rows (ADR 0018, section 6: Continue watching, Next up, Latest per library; a row
+/// shows once it has items); without one, the M1 states: an invitation to add a server, or the saved servers with their user. It
+/// waits for the core to open (App.CoreReady); its subscriptions live from Loaded to Unloaded (ADR 0004). The feeds themselves stay
+/// with their sessions (BrowseHub), so Home shows again without reloading, and refreshes when shown after five minutes.
 /// </summary>
 public sealed partial class HomePage : Page
 {
     private static readonly TimeSpan OpeningDelay = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan RefreshAfter = TimeSpan.FromMinutes(5);
     private bool _loaded;
+    private readonly ObservableCollection<HomeSection> _sections = [];
 
     public HomePage()
     {
@@ -52,6 +59,12 @@ public sealed partial class HomePage : Page
             ViewModel ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
             ViewModel.Start();
             Bindings.Update();
+            Sections.ItemsSource = _sections;
+            if (App.Browsing is { } hub)
+            {
+                hub.Changed += OnBrowseChanged;
+                ShowFeed(hub, refreshStale: true);
+            }
         }
         catch (Exception error)
         {
@@ -63,6 +76,117 @@ public sealed partial class HomePage : Page
     {
         _loaded = false;
         ViewModel?.Stop();
+        if (App.Browsing is { } hub)
+        {
+            hub.Changed -= OnBrowseChanged;
+            foreach (var server in hub.Servers)
+            {
+                server.HomeLastShown = DateTime.UtcNow;
+            }
+        }
+        ClearSections();
+    }
+
+    private void OnBrowseChanged(object? sender, EventArgs e)
+    {
+        if (_loaded && App.Browsing is { } hub)
+        {
+            ShowFeed(hub, refreshStale: false);
+        }
+    }
+
+    /// <summary>One section per signed-in server, kept while its session lasts; the M1 content while there is none.</summary>
+    private void ShowFeed(BrowseHub hub, bool refreshStale)
+    {
+        var servers = hub.Servers;
+        Feed.Visibility = hub.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
+        M1Content.Visibility = hub.IsAvailable ? Visibility.Collapsed : Visibility.Visible;
+        TitleText.Style = (Style)Application.Current.Resources[
+            hub.IsAvailable ? "WidePageTitleTextBlockStyle" : "PageTitleTextBlockStyle"];
+        var feeds = servers.Select(server => server.Home).ToList();
+        if (_sections.Count == feeds.Count && _sections.Select(section => section.Feed).SequenceEqual(feeds))
+        {
+            return;
+        }
+        ClearSections();
+        var ui = new DispatcherQueueUi(DispatcherQueue);
+        foreach (var server in servers)
+        {
+            var header = servers.Count > 1 ? hub.ServerName(server.Server) : "";
+            _sections.Add(new HomeSection(header, server.Home, ui));
+            if (refreshStale && DateTime.UtcNow - server.HomeLastShown > RefreshAfter)
+            {
+                server.Home.Refresh();
+            }
+            server.HomeLastShown = DateTime.UtcNow;
+        }
+    }
+
+    private void ClearSections()
+    {
+        foreach (var section in _sections)
+        {
+            section.Dispose();
+        }
+        _sections.Clear();
+    }
+
+    private void OnRowLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is ListViewBase list)
+        {
+            HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+        }
+    }
+
+    /// <summary>A section's message: rows that failed (with Retry), or the server unreachable (its last rows stay).</summary>
+    private void OnSectionInfoLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not InfoBar { Tag: HomeSection section } info)
+        {
+            return;
+        }
+        void Show()
+        {
+            var state = section.State;
+            if (state.Offline)
+            {
+                SetInfo(info, InfoBarSeverity.Informational, "Can't reach the server.", "Showing what was loaded last.", retry: true);
+            }
+            else if (state.Failed is { } failed)
+            {
+                SetInfo(info, InfoBarSeverity.Error, "Some rows couldn't be loaded.", BrowseText.Problem(failed), retry: true);
+            }
+            else
+            {
+                info.IsOpen = false;
+            }
+        }
+        section.PropertyChanged += (_, _) => Show();
+        Show();
+    }
+
+    /// <summary>Opened again for a new message, so Narrator reads it (InfoBar page, learn.microsoft.com, ms.date 2025-02-26).</summary>
+    private static void SetInfo(InfoBar info, InfoBarSeverity severity, string title, string message, bool retry)
+    {
+        if (info.IsOpen && info.Title == title && info.Message == message)
+        {
+            return;
+        }
+        info.IsOpen = false;
+        info.Severity = severity;
+        info.Title = title;
+        info.Message = message;
+        info.ActionButton.Visibility = retry ? Visibility.Visible : Visibility.Collapsed;
+        info.IsOpen = true;
+    }
+
+    private void OnRetrySection(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is HomeSection section)
+        {
+            section.Feed.Retry();
+        }
     }
 
     private void OnAddServer(object sender, RoutedEventArgs e) => Frame.Navigate(typeof(AddServerPage));

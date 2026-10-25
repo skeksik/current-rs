@@ -1,0 +1,143 @@
+<Page
+    x:Class="Current.Shell.Pages.DetailsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:browsing="using:Current.Shell.Browsing">
+    <Page.Resources>
+        <DataTemplate x:Key="PersonTemplate">
+            <browsing:PersonCard />
+        </DataTemplate>
+        <!-- A row of tiles that scrolls sideways, as Home's rows. -->
+        <ItemsPanelTemplate x:Key="RowPanel">
+            <ItemsStackPanel Orientation="Horizontal" />
+        </ItemsPanelTemplate>
+    </Page.Resources>
+
+    <ScrollViewer>
+        <StackPanel>
+            <!-- The backdrop across the page, at most MaxBackdropHeight tall (DetailsPage.xaml.cs). -->
+            <Grid x:Name="BackdropFrame" Visibility="Collapsed" Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                <Image x:Name="Backdrop" Stretch="UniformToFill" VerticalAlignment="Center" AutomationProperties.AccessibilityView="Raw" />
+            </Grid>
+
+            <Grid Style="{StaticResource PageColumnStyle}" ColumnSpacing="24" RowSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <!-- Side by side from the medium width on, one above the other below it: "medium window widths (641px to 1007px)"
+                     (NavigationView page, learn.microsoft.com, ms.date 2026-10-02, read 2026-10-25). -->
+                <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup>
+                        <VisualState x:Name="Wide">
+                            <VisualState.StateTriggers>
+                                <AdaptiveTrigger MinWindowWidth="641" />
+                            </VisualState.StateTriggers>
+                        </VisualState>
+                        <VisualState x:Name="Narrow">
+                            <VisualState.StateTriggers>
+                                <AdaptiveTrigger MinWindowWidth="0" />
+                            </VisualState.StateTriggers>
+                            <VisualState.Setters>
+                                <Setter Target="Info.(Grid.Column)" Value="0" />
+                                <Setter Target="Info.(Grid.Row)" Value="1" />
+                                <Setter Target="Info.(Grid.ColumnSpan)" Value="2" />
+                            </VisualState.Setters>
+                        </VisualState>
+                    </VisualStateGroup>
+                </VisualStateManager.VisualStateGroups>
+
+                <Border
+                    x:Name="PosterFrame"
+                    VerticalAlignment="Top"
+                    Width="{StaticResource PosterTileWidth}"
+                    CornerRadius="{StaticResource ControlCornerRadius}"
+                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                    <Grid>
+                        <Image x:Name="PosterPlaceholder" Stretch="UniformToFill" AutomationProperties.AccessibilityView="Raw" />
+                        <Image x:Name="Poster" Stretch="UniformToFill" AutomationProperties.AccessibilityView="Raw" />
+                    </Grid>
+                </Border>
+
+                <StackPanel x:Name="Info" Grid.Column="1" Spacing="8">
+                    <TextBlock
+                        x:Name="TitleText"
+                        Style="{StaticResource TitleTextBlockStyle}"
+                        AutomationProperties.HeadingLevel="Level1"
+                        TextWrapping="WrapWholeWords" />
+                    <TextBlock x:Name="FactsText" Style="{StaticResource BodyTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock x:Name="GenresText" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <StackPanel x:Name="Actions" Margin="0,4,0,0" Orientation="Horizontal" Spacing="8">
+                        <!-- The Play button goes first here, with the player (ADR 0019, task 5). -->
+                        <StackPanel x:Name="PlayActions" Orientation="Horizontal" Spacing="8" />
+                        <ToggleButton x:Name="PlayedButton" AutomationProperties.Name="Played" Click="OnPlayed">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <FontIcon Glyph="&#xE73E;" FontSize="16" />
+                                <TextBlock Text="Played" />
+                            </StackPanel>
+                        </ToggleButton>
+                        <ToggleButton x:Name="FavouriteButton" AutomationProperties.Name="Favourite" Click="OnFavourite">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <FontIcon x:Name="FavouriteGlyph" Glyph="&#xEB51;" FontSize="16" />
+                                <TextBlock Text="Favourite" />
+                            </StackPanel>
+                        </ToggleButton>
+                    </StackPanel>
+                    <TextBlock x:Name="TaglineText" Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="WrapWholeWords" />
+                    <TextBlock x:Name="OverviewText" Style="{StaticResource BodyTextBlockStyle}" TextWrapping="WrapWholeWords" IsTextSelectionEnabled="True" />
+                    <InfoBar x:Name="StateInfo" IsClosable="False" IsOpen="False">
+                        <InfoBar.ActionButton>
+                            <Button Content="Retry" Click="OnRetry" />
+                        </InfoBar.ActionButton>
+                    </InfoBar>
+                    <ProgressRing x:Name="LoadingRing" HorizontalAlignment="Left" IsActive="False" AutomationProperties.Name="Loading" />
+                </StackPanel>
+            </Grid>
+
+            <StackPanel Margin="24,0,24,24">
+                <!-- A series: its seasons, then the chosen season's episodes. SelectorBar, as Microsoft recommends for "a limited
+                     number of views or pages and only one option can be selected at once" (SelectorBar page, learn.microsoft.com,
+                     ms.date 2025-02-26, read 2026-10-25); Pivot "is not recommended for Windows 11 design patterns" (Pivot page,
+                     ms.date 2026-10-13). How it lays out more seasons than fit is not verified. -->
+                <StackPanel x:Name="SeriesPart" Visibility="Collapsed">
+                    <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="Episodes" />
+                    <SelectorBar x:Name="Seasons" AutomationProperties.Name="Seasons" SelectionChanged="OnSeasonChanged" />
+                    <GridView x:Name="Episodes" Margin="0,8,0,0" ItemTemplate="{StaticResource EpisodeTileTemplate}" AutomationProperties.Name="Episodes" />
+                </StackPanel>
+
+                <StackPanel x:Name="PeoplePart" Visibility="Collapsed">
+                    <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="Cast and crew" />
+                    <GridView
+                        x:Name="People"
+                        SelectionMode="None"
+                        ItemTemplate="{StaticResource PersonTemplate}"
+                        ItemsPanel="{StaticResource RowPanel}"
+                        ScrollViewer.HorizontalScrollMode="Enabled"
+                        ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                        ScrollViewer.VerticalScrollMode="Disabled"
+                        ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                        AutomationProperties.Name="Cast and crew" />
+                </StackPanel>
+
+                <StackPanel x:Name="SimilarPart" Visibility="Collapsed">
+                    <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="More like this" />
+                    <GridView
+                        x:Name="Similar"
+                        ItemTemplate="{StaticResource PosterTileTemplate}"
+                        ItemsPanel="{StaticResource RowPanel}"
+                        ScrollViewer.HorizontalScrollMode="Enabled"
+                        ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                        ScrollViewer.VerticalScrollMode="Disabled"
+                        ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                        AutomationProperties.Name="More like this" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

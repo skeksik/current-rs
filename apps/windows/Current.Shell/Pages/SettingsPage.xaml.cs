@@ -9,7 +9,7 @@ namespace Current.Shell.Pages;
 
 /// <summary>
 /// Settings: the app theme under Personalization, the saved servers under Accounts (sign out, sign in again, sign in to the gateway
-/// again, extra headers, remove), diagnostics, and About. It waits for the core to open (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
+/// again, extra headers, remove), the image cache under Storage, diagnostics, and About. It waits for the core to open (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
 /// </summary>
 public sealed partial class SettingsPage : Page
 {
@@ -52,6 +52,7 @@ public sealed partial class SettingsPage : Page
             Servers ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
             Servers.Start();
             Bindings.Update();
+            await ShowCacheSizeAsync(core);
         }
         catch (Exception error)
         {
@@ -313,6 +314,50 @@ public sealed partial class SettingsPage : Page
         }
         servers.Rows.CollectionChanged += OnRowsChanged;
     }
+
+    /// <summary>The image cache's size on disk, read when the page is shown and after Clear.</summary>
+    private async Task ShowCacheSizeAsync(CoreHost core)
+    {
+        try
+        {
+            var size = await core.ImageCacheSizeAsync();
+            if (_loaded)
+            {
+                ImageCacheCard.Description = size == 0 ? "Empty" : $"{Browsing.BrowseText.Bytes(size)} of images";
+            }
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: reading the image cache's size failed: {error.GetType().Name}");
+            ImageCacheCard.Description = "The size couldn't be read.";
+        }
+    }
+
+    /// <summary>
+    /// Clears at once, without asking: the images load again from the servers, so nothing is lost. The button stays enabled, so focus
+    /// stays on it; a second click while one runs does nothing. async void, as event handlers are: it catches everything itself.
+    /// </summary>
+    private async void OnClearCache(object sender, RoutedEventArgs e)
+    {
+        if (App.Core is not { } core || _clearing)
+        {
+            return;
+        }
+        _clearing = true;
+        try
+        {
+            await core.ClearImageCacheAsync();
+            Announce.Say(ImageCacheCard, "Image cache cleared", "image-cache");
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: clearing the image cache failed: {error.GetType().Name}");
+        }
+        await ShowCacheSizeAsync(core);
+        _clearing = false;
+    }
+
+    private bool _clearing;
 
     private void ShowAccountsInfo(InfoBarSeverity severity, string title, string message)
     {
