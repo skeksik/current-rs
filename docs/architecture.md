@@ -65,6 +65,15 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
   URL (the static URL for direct play, or the `TranscodingUrl` on the selected address) carries the token as `ApiKey` and stays in a
   `StreamUrl` whose Debug is redacted and which never enters the request log. It also sends playstate reports and reads media
   segments, the session's transcoding information and the user's playback preferences.
+- **Playback logic** (ADR 0019, `current-playback`): no service, no HTTP, no libmpv. The `Engine` trait (one engine per player, kept
+  for every file: `load` replaces the file playing) and the `MediaServer` trait (PlaybackInfo, playstate reports, segments, next
+  episode, preferences, permissions, transcoding facts, external subtitles) are joined by `current-app`. The planner keeps the
+  server's route and reasons and adds Current's (quality limit, fallback); the `Controller` is a state machine driven by actions,
+  engine events and a `Clock`: start and resume, progress every 10 s and at once on pause, seek and track changes, track switching
+  (in the engine on direct play, a re-plan at the position on a server stream), segments with the auto-skip setting, the
+  next-episode card and autoplay countdown, one fallback without direct play, and state published at most 4 times a second plus
+  changes. It queues `PlayerEvent`s (state, stopped, quality changed) that the root drains. `StreamUrl` and `StreamAuth` carry the
+  token and gateway credentials with redacted Debug.
 - **`current-ffi`** is the UniFFI surface. It owns the one tokio runtime (`core-worker` threads, I/O and time enabled) and exports
   `Core`, `TaskHandle` (cancel and abort on drop), `CancelToken` and one error enum, `CoreError`. Values are pumped from `watch`
   channels to listeners, lists as diff batches (`list_diff!` declares the per-item diff enum). `Core::live_listeners` counts the

@@ -15,6 +15,7 @@ current-app = { path = "crates/app" }
 current-jellyfin = { path = "crates/jellyfin" }
 current-model = { path = "crates/model" }
 current-net = { path = "crates/net" }
+current-playback = { path = "crates/playback" }
 current-store = { path = "crates/store" }
 jellyfin-stand-in = { path = "tools/jellyfin-stand-in" }
 
