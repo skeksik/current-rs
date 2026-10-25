@@ -179,6 +179,16 @@ always present without an `ItemFields` value (for example `Name`, `ProductionYea
 from how jellyfin-web asks (it asks only for `PrimaryImageAspectRatio` and a few others on grids) and not from `DtoService` itself:
 not verified field by field. The current-jellyfin task records a real answer from the stand-in schema and checks it.
 
+**`SeriesPrimaryImageTag` needs no `ItemFields` value** (checked by ADR 0018 task 1, 2026-10-25, in the Jellyfin server at `v12.2`,
+commit ca0f16eb, `Emby.Server.Implementations/Dto/DtoService.cs`). For an episode (lines 1517-1548) and for a season (lines 1603-1619)
+the block that sets it has its condition commented out: `// if (options.ContainsField(ItemFields.SeriesPrimaryImage))`, followed by
+`dto.SeriesPrimaryImageTag = GetTagAndFillBlurhash(dto, episodeSeries, ImageType.Primary);`. So every list answer carries it, and
+its BlurHash goes into the item's `ImageBlurHashes` under `Primary`. When the item has no primary image of its own, the same block calls
+`AttachPrimaryImageAspectRatio(dto, episodeSeries)`, so `PrimaryImageAspectRatio` is then the series poster's (but only where
+`fields` includes `PrimaryImageAspectRatio`, lines 376-380, which the summary set does). With a primary image limit above 0, episodes
+also get `ParentPrimaryImageItemId`/`ParentPrimaryImageTag`, set to the season's poster or else the series' (lines 1550-1567).
+current-jellyfin reads `SeriesPrimaryImageTag` with `SeriesId`, as ADR 0018 says.
+
 ### Keeping answers small
 `AddAdditionalDtoOptions` (`Jellyfin.Api/Extensions/DtoExtensions.cs`) sets the image and user data options on every list query:
 

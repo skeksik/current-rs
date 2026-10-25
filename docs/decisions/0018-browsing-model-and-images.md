@@ -67,7 +67,8 @@ Pure records, no I/O, no serde, bridge-ready like the rest of the model.
 Wire types stay private; each method returns model types. Every list query sends one of two field sets:
 - **Summary**: `fields=PrimaryImageAspectRatio`, `enableImageTypes=Primary,Thumb,Backdrop`, `imageTypeLimit=1`, user data on (the
   default). Episodes add the series' primary image from `SeriesPrimaryImageTag` when the episode has none (whether that field comes without
-  an `ItemFields` value was not verified; task 1 checks it).
+  an `ItemFields` value was not verified; task 1 checks it). Checked 2026-10-25: it does, for episodes and seasons
+  (`docs/notes/jellyfin-browse.md`, "The item record").
 - **Details**: `Items/{id}` as it is (all fields).
 
 | Method | Endpoint | Notes |
@@ -86,8 +87,8 @@ Wire types stay private; each method returns model types. Every list query sends
 | `set_favourite(item, bool)` | `POST`/`DELETE UserFavoriteItems/{id}` | answers the item's user data |
 | `image(request)` | `GET Items/{id}/Images/{type}[/{index}]` | section 4 |
 
-The user's "exclude from latest" libraries (`Configuration.LatestItemsExcludes`, which sign-in already reads) are kept with the session
-so Home can skip them.
+The user's "exclude from latest" libraries (`Configuration.LatestItemsExcludes`, read at sign-in and with the current user) are kept with
+the session so Home can skip them. (Corrected 2026-10-25: sign-in did not read it before task 1.)
 
 ### 3. Paged lists in `current-app`
 A library grid is a **`PagedItems`**: an `ObservableList<Slot>` sized to the query's total, where `Slot` is `Loading`, `Item(ItemSummary)`

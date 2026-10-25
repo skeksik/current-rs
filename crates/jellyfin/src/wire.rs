@@ -48,6 +48,15 @@ pub(crate) struct UserDto {
     pub id: String,
     pub name: Option<String>,
     pub policy: Option<serde_json::Map<String, serde_json::Value>>,
+    pub configuration: Option<UserConfiguration>,
+}
+
+/// `MediaBrowser.Model.Configuration.UserConfiguration`, the fields this crate reads.
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "PascalCase", default)]
+pub(crate) struct UserConfiguration {
+    /// The libraries the user keeps out of "latest" (`Guid[]`, 32 hex digits each).
+    pub latest_items_excludes: Option<Vec<String>>,
 }
 
 /// `MediaBrowser.Model.QuickConnect.QuickConnectResult`, the fields this crate reads.
