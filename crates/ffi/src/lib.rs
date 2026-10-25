@@ -8,6 +8,7 @@
 //! - Cancellable calls are `async` and take a [`CancelToken`]; they end with [`CoreError::Cancelled`].
 //! - Listener callbacks return nothing and must never throw: each UI's listener catches everything.
 
+mod browse;
 mod cancel;
 mod diff;
 mod error;
@@ -27,6 +28,16 @@ use current_store::{KeyringSecrets, MemorySecrets, Secrets};
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
+pub use browse::{
+    Artwork, AspectRatio, Browse, BrowseNotice, BrowseNoticeListener, BrowseProblem, CalendarDate,
+    Chapter, DetailsView, EpisodeLinks, HomeFeed, HomeRow, HomeRowDiff, HomeRowKind,
+    HomeRowsListener, HomeState, HomeStateListener, ImageProblem, ImageRef, ImageRequest,
+    ImageSource, ItemAction, ItemDetails, ItemDetailsListener, ItemQuery, ItemRef, ItemSummary,
+    ItemSummaryDiff, ItemsListener, Library, LoadState, LoadStateListener, MediaSummary,
+    NoticeKind, PagedItems, PagedState, PagedStateListener, Person, SearchGroup, SearchGroupDiff,
+    SearchGroupsListener, SearchResults, Slot, SlotDiff, SlotsListener, SortOrder, StreamSummary,
+    UserState,
+};
 pub use cancel::CancelToken;
 pub use error::CoreError;
 pub use flows::{
