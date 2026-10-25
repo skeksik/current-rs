@@ -45,19 +45,31 @@ absolute segment URL in a playlist from our own server could name; and headers g
 on FFmpeg 6.1.1, mpv logs "Could not set AVOption max_redirects='0'" and follows the redirect, sending the gateway header to the other
 port (the redirect tests fail there, as they should). Our Windows build has FFmpeg 9.0.2. Linux: roadmap M5 follow-up.
 
+## FFmpeg's log and one engine per process
+mpv v0.41.0 `common/av_log.c` (read 2026-10-25) installs FFmpeg's log callback for the first mpv instance of the process only
+(`init_libav`: `if (!log_mpv_instance) { log_mpv_instance = global; ... av_log_set_callback(mp_msg_av_log_callback); }`) and removes
+it when that instance is destroyed (`uninit_libav`); without an instance the callback writes to stderr (`vfprintf(stderr, fmt, vl)`).
+The first Windows CI run showed it: tests running engines in parallel printed `[hls @ ...] Opening '...segment1.ts?ApiKey=<test
+token>'` on stderr. So the engine allows one instance per process (`Engine::start` waits up to 5 s for an earlier engine's destroy,
+else `EngineError::Busy`), a player reuses its engine for every file, and a test runs two engines one after the other in a child
+process and checks its stderr for the token, the cookie and the header value. Several player windows: roadmap follow-up.
+
 ## Tests
 `cargo test -p current-mpv` runs the logic everywhere (options, display mapping, per-file options and escaping, redaction, events,
 capabilities, node conversion, struct layouts, swap chain reference counting with a fake COM object). The live tests in
 `src/live_tests.rs` need `--features libmpv` and are ignored without it:
 
-| Test | Linux container (libmpv 0.37.0, FFmpeg 6.1.1, 2026-10-25) | Windows CI (D6 build) |
+| Test | Linux container (libmpv 0.37.0, FFmpeg 6.1.1, 2026-10-25) | Windows CI (D6 build: mpv 0.41.0, FFmpeg 9.0.2) |
 |---|---|---|
-| Headless start, capabilities contain `check.py`'s `REQUIRED_DECODERS` and `REQUIRED_DEMUXERS` | passed | see the PR |
-| A generated one-second WAV plays to the end: `FileLoaded`, `PlaybackRestart`, duration 1 s, rising `time-pos`, `eof-reached`, then `EndFile(Stop)` | passed | see the PR |
-| A stream that answers 302 to another port: `EndFile(Error)`, the origin got the gateway header and cookie, the target nothing | failed: no `max_redirects` before FFmpeg 9 | see the PR |
-| An HLS playlist whose segments answer 302: segments carry header and cookie, the target gets nothing | failed: same cause | see the PR |
-| No log line at `v` level contains the token, the cookie or the header value; a redacted URL line exists | passed | see the PR |
-| TLS: `tls-verify=yes` refuses a self-signed stand-in (no request arrives); with it off the same stand-in opens | passed (GnuTLS) | see the PR |
+| Headless start, capabilities contain `check.py`'s `REQUIRED_DECODERS` and `REQUIRED_DEMUXERS` | passed | passed (run 40173566806) |
+| A generated one-second WAV plays to the end: `FileLoaded`, `PlaybackRestart`, duration 1 s, rising `time-pos`, `eof-reached`, then `EndFile(Stop)` | passed | passed (run 40173566806) |
+| A stream that answers 302 to another port: `EndFile(Error)`, the origin got the gateway header and cookie, the target nothing | failed: no `max_redirects` before FFmpeg 9 | passed (run 40173566806) |
+| An HLS playlist whose segments answer 302: segments carry header and cookie, the target gets nothing | failed: same cause | passed (run 40173566806) |
+| No log line at `v` level contains the token, the cookie or the header value; a redacted URL line exists | passed | passed (run 40173566806) |
+| TLS: `tls-verify=yes` refuses a self-signed stand-in (no request arrives); with it off the same stand-in opens | passed (GnuTLS) | passed (run 40173566806) |
+| A second engine waits, then gets `Busy`; after the first is destroyed one starts | passed | CI run of this change |
+| The next file replaces the first on the same engine (`EndFile(Stop)`, then `FileLoaded`) | passed | CI run of this change |
+| Two engines one after the other in a child process: nothing secret on its stderr | passed | CI run of this change |
 
 The TLS test makes a throwaway certificate at run time with `openssl` (nothing checked in); the Windows image lists OpenSSL 3.6.5
 (actions/runner-images, `images/windows/Windows2025-VS2026-Readme.md`, image 20261007.264.1, read 2026-10-25).

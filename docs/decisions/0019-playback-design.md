@@ -162,6 +162,12 @@ fake engine, a fake server and a fake clock):
 - **Swap chain:** on each `display-swapchain` change the engine `AddRef`s the pointer through `IUnknown`'s vtable (no Windows crate
   needed) and publishes `SwapChain { handle: u64, generation }`; the UI calls `SetSwapChain`, then `release()`; dropping releases too.
 - **Capabilities:** read once from `decoder-list` and `demuxer-lavf-list` after `mpv_initialize`.
+- **One engine per process for now** (2026-10-25, found in task 3): mpv routes FFmpeg's log to the first mpv instance of the process only
+  and falls back to stderr once it is destroyed (mpv v0.41.0 `common/av_log.c`, read 2026-10-25: `init_libav` sets `log_mpv_instance`
+  only `if (!log_mpv_instance)`, `uninit_libav` clears it, `mp_msg_av_log_callback` then calls `vfprintf(stderr, fmt, vl)`), so two
+  engines alive at once would send FFmpeg's lines, URLs with tokens included, past redaction. `Engine::start` waits for an earlier
+  engine's destroy and otherwise fails with `Busy`; a player reuses its engine for every file (next episode, re-plan). "A Player per
+  window" holds again once a shared redactor and an engine kept alive while others run land (roadmap follow-up).
 - **Shipping:** the Visual C++ runtime that the DLLs need stays a roadmap follow-up for ADR 0003 with the owner, done in task 3.
 
 ### What crosses `current-ffi`

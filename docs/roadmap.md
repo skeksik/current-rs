@@ -178,6 +178,9 @@ Done when: a title can be found, requested and followed to "available", then pla
 - [ ] The M1-M4 screens in GTK4 + libadwaita; the libmpv engine from M2 through the OpenGL render API (SDR); Secret Service; MPRIS
       media controls (ADR 0011)
 - [ ] Our LGPL-2.1 libmpv and FFmpeg for Linux (the distributions' builds are GPL; ADR 0003, ADR 0011), and the Linux CI job
+- [ ] Several player windows at once: libmpv engines share FFmpeg's log through the first mpv instance only (ADR 0019, 2026-10-25), so
+      `current-mpv` runs one engine per process. For several players: one redactor for every engine's secrets, and a closed engine
+      kept alive (stopped) while another runs, so FFmpeg's log never falls back to stderr
 - [ ] The engine's redirect refusal needs FFmpeg 9.0 or later (`max_redirects` is not in FFmpeg 8.0's `http.c`); a system libmpv on an
       older FFmpeg follows redirects with the gateway headers (seen with Ubuntu's FFmpeg 6.1, docs/notes/mpv-engine.md). Use our build or
       check the FFmpeg version before shipping on Linux

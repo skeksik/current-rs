@@ -63,6 +63,9 @@ pub enum EngineError {
     Mpv { what: &'static str, error: MpvError },
     #[error("a text value contains a NUL byte: {what}")]
     Nul { what: &'static str },
+    /// Another engine still exists in this process (one per process, `engine` module doc).
+    #[error("another player engine is still running")]
+    Busy,
     #[error("could not start the event thread: {0}")]
     Thread(#[from] std::io::Error),
 }

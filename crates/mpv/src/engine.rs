@@ -10,14 +10,22 @@
 //!   waits for it.
 //! - mpv's messages arrive at `info` (or `v`) through `mpv_request_log_messages` and are redacted before they reach the sink. The engine
 //!   never sets `log-file` and never reads a URL-valued property.
+//! - **One engine per process at a time** (ADR 0019, 2026-10-25). mpv routes FFmpeg's log to the first mpv instance of the process only,
+//!   and to stderr once that instance is destroyed (mpv v0.41.0 `common/av_log.c`: `init_libav` sets `log_mpv_instance` only `if
+//!   (!log_mpv_instance)`, `uninit_libav` clears it, and `mp_msg_av_log_callback` then falls back to `vfprintf(stderr, fmt, vl)`). Two
+//!   engines alive at once would send FFmpeg's lines, URLs included, past this engine's redaction. So [`Engine::start`] waits for an
+//!   earlier engine to be destroyed and fails with [`EngineError::Busy`] if it is not gone in time.
+//! - Hence the engine lives as long as the player: the next episode, a re-plan and any other change of file reuse it through
+//!   [`Engine::load`] (`loadfile` replaces the file); it is never destroyed and created again between files.
 
 // Calls into libmpv need `unsafe`; this module and `sys` are the only places allowed (crate manifest).
 #![allow(unsafe_code)]
 
 use std::ffi::{CString, c_char, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use crate::caps::BuildCapabilities;
 use crate::error::{EngineError, MpvError};
@@ -121,19 +129,62 @@ impl std::fmt::Debug for Engine {
 /// The client API major version the declarations in `sys` follow.
 const API_MAJOR: u32 = 2;
 
+/// How long [`Engine::start`] waits for an earlier engine's destroy (`mpv_terminate_destroy` waits for mpv's threads, ADR 0007).
+const START_WAIT: Duration = Duration::from_secs(5);
+
+/// Whether an engine exists in this process: taken before `mpv_create`, given back after `mpv_terminate_destroy` (module doc).
+static SLOT: Mutex<bool> = Mutex::new(false);
+static SLOT_FREED: Condvar = Condvar::new();
+
+/// Takes the process's engine slot, waiting up to `wait` for it to be given back.
+fn take_slot(wait: Duration) -> Result<(), EngineError> {
+    let deadline = Instant::now() + wait;
+    let mut taken = SLOT.lock().unwrap_or_else(PoisonError::into_inner);
+    while *taken {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(EngineError::Busy);
+        }
+        taken = SLOT_FREED
+            .wait_timeout(taken, left)
+            .unwrap_or_else(PoisonError::into_inner)
+            .0;
+    }
+    *taken = true;
+    Ok(())
+}
+
+fn give_back_slot() {
+    *SLOT.lock().unwrap_or_else(PoisonError::into_inner) = false;
+    SLOT_FREED.notify_all();
+}
+
 impl Engine {
     /// Creates and initialises a player with the options at start, observes its properties, reads its capabilities and starts the event
     /// thread. Blocking (mpv starts its threads and, in composition mode, its VO): call it on a blocking thread, not a core worker.
+    ///
+    /// Only one engine exists per process (module doc): this waits up to 5 s for an earlier one's destroy to finish, then fails with
+    /// [`EngineError::Busy`].
     pub fn start(config: &EngineConfig, sink: EventSink) -> Result<Engine, EngineError> {
+        Engine::start_waiting(config, sink, START_WAIT)
+    }
+
+    pub(crate) fn start_waiting(
+        config: &EngineConfig,
+        sink: EventSink,
+        wait: Duration,
+    ) -> Result<Engine, EngineError> {
         // SAFETY: no arguments; returns a number.
         let version = unsafe { sys::mpv_client_api_version() } as u64;
         let (major, minor) = ((version >> 16) as u32, (version & 0xffff) as u32);
         if major != API_MAJOR {
             return Err(EngineError::ApiVersion { major, minor });
         }
+        take_slot(wait)?;
         // SAFETY: no arguments; NULL on failure.
         let handle = unsafe { sys::mpv_create() };
         if handle.is_null() {
+            give_back_slot();
             return Err(EngineError::Create);
         }
         let shared = Arc::new(Shared {
@@ -397,6 +448,8 @@ fn get_node(h: *mut sys::mpv_handle, name: &'static str) -> Result<Node, EngineE
 fn destroy(shared: &Shared) {
     // SAFETY: called once, by whoever holds the handle last: `start` on failure (no thread exists) or the event thread at its end.
     unsafe { sys::mpv_terminate_destroy(shared.handle) };
+    // mpv is gone, FFmpeg's log callback with it: the next engine may start.
+    give_back_slot();
 }
 
 fn event_loop(shared: &Shared, mut sink: EventSink, composition: bool) {

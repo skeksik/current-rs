@@ -28,6 +28,20 @@ libmpv_test!(refuses_a_redirected_stream_and_sends_nothing_to_the_target);
 libmpv_test!(refuses_a_redirected_hls_segment_and_sends_nothing_to_the_target);
 libmpv_test!(log_lines_never_show_the_token);
 libmpv_test!(verifies_tls_against_a_self_signed_stand_in);
+libmpv_test!(a_second_engine_waits_and_then_reports_busy);
+libmpv_test!(the_next_file_reuses_the_engine);
+libmpv_test!(ffmpeg_writes_nothing_to_stderr_across_two_engines);
+
+/// The child half of `ffmpeg_writes_nothing_to_stderr_across_two_engines`, which runs this test binary again with only this test and
+/// reads its stderr. Not meant to run on its own.
+#[test]
+#[ignore = "run as a child process by ffmpeg_writes_nothing_to_stderr_across_two_engines"]
+fn stderr_child_two_engines_one_after_the_other() {
+    #[cfg(feature = "libmpv")]
+    live::stderr_child_two_engines_one_after_the_other();
+    #[cfg(not(feature = "libmpv"))]
+    panic!("built without the libmpv feature");
+}
 
 #[cfg(feature = "libmpv")]
 mod live {
@@ -35,7 +49,7 @@ mod live {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::mpsc::{Receiver, channel};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
     use std::time::{Duration, Instant};
 
     use crate::{
@@ -50,23 +64,33 @@ mod live {
     const GATE_COOKIE_VALUE: &str = "not-a-real-gate-cookie";
     const WAIT: Duration = Duration::from_secs(30);
 
+    /// One engine per process (`engine` module doc): the tests take turns.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    fn config() -> EngineConfig {
+        EngineConfig {
+            output: Output::Headless,
+            user_agent: crate::user_agent(),
+            // `v` logs more URLs than `info`, so redaction is tested on more lines.
+            log_level: LogLevel::Verbose,
+        }
+    }
+
     struct Running {
         engine: Engine,
         events: Receiver<EngineEvent>,
         logs: Vec<LogLine>,
+        // Last, so it is released after the engine.
+        _turn: MutexGuard<'static, ()>,
     }
 
     impl Running {
         fn start() -> Running {
+            // A failed test poisons the lock; the next one still runs.
+            let turn = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
             let (tx, events) = channel();
-            let config = EngineConfig {
-                output: Output::Headless,
-                user_agent: crate::user_agent(),
-                // `v` logs more URLs than `info`, so redaction is tested on more lines.
-                log_level: LogLevel::Verbose,
-            };
             let engine = Engine::start(
-                &config,
+                &config(),
                 Box::new(move |e| {
                     let _ = tx.send(e);
                 }),
@@ -76,6 +100,7 @@ mod live {
                 engine,
                 events,
                 logs: Vec::new(),
+                _turn: turn,
             }
         }
 
@@ -109,6 +134,7 @@ mod live {
                 engine,
                 events,
                 mut logs,
+                _turn,
             } = self;
             engine.shutdown();
             // The event thread has ended and dropped its sender, so this ends after the last event.
@@ -424,10 +450,9 @@ mod live {
         assert_no_secret(&running.finish());
     }
 
-    pub(super) fn refuses_a_redirected_hls_segment_and_sends_nothing_to_the_target() {
-        let target = StandIn::start(|_| Reply::Body("video/mp2t", vec![0x47; 188 * 8]));
-        let to = target.url("/elsewhere.ts");
-        let origin = StandIn::start(move |req| {
+    /// An HLS stand-in whose master playlist lists two segments with the token, each answering a redirect to `to`.
+    fn hls_origin(to: String) -> StandIn {
+        StandIn::start(move |req| {
             if req.path.starts_with("/master.m3u8") {
                 let playlist = format!(
                     "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n\
@@ -439,7 +464,12 @@ mod live {
             } else {
                 Reply::NotFound
             }
-        });
+        })
+    }
+
+    pub(super) fn refuses_a_redirected_hls_segment_and_sends_nothing_to_the_target() {
+        let target = StandIn::start(|_| Reply::Body("video/mp2t", vec![0x47; 188 * 8]));
+        let origin = hls_origin(target.url("/elsewhere.ts"));
 
         let mut running = Running::start();
         running
@@ -627,5 +657,96 @@ mod live {
             "the control request did not arrive"
         );
         running.finish();
+    }
+
+    pub(super) fn a_second_engine_waits_and_then_reports_busy() {
+        let running = Running::start();
+        let started = Instant::now();
+        let second = Engine::start_waiting(&config(), Box::new(|_| {}), Duration::from_millis(300));
+        assert!(
+            matches!(second, Err(crate::EngineError::Busy)),
+            "{second:?}"
+        );
+        assert!(
+            started.elapsed() >= Duration::from_millis(300),
+            "it did not wait"
+        );
+        // Once the first is destroyed, the slot is free again.
+        running.finish();
+        let third = Running::start();
+        third.finish();
+    }
+
+    pub(super) fn the_next_file_reuses_the_engine() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file = dir.path().join("tone.wav");
+        std::fs::write(&file, wav()).expect("write wav");
+        let request = FileRequest::new(file.to_string_lossy());
+
+        let mut running = Running::start();
+        running.engine.load(&request).expect("load");
+        running.wait_for("playback-restart", |e| {
+            matches!(e, EngineEvent::PlaybackRestart)
+        });
+        // The next file replaces the first on the same engine: the first ends as stopped, the second loads.
+        running.engine.load(&request).expect("second load");
+        let seen = running.wait_for("second file-loaded", |e| {
+            matches!(e, EngineEvent::FileLoaded)
+        });
+        assert_eq!(
+            seen.iter().find_map(end_file),
+            Some(EndReason::Stop),
+            "{seen:#?}"
+        );
+        running.finish();
+    }
+
+    /// The child: two engines one after the other, each loading gated URLs whose FFmpeg errors name the token.
+    pub(super) fn stderr_child_two_engines_one_after_the_other() {
+        let target = StandIn::start(|_| Reply::NotFound);
+        let hls = hls_origin(target.url("/elsewhere.ts"));
+        let missing = StandIn::start(|_| Reply::NotFound);
+        for _ in 0..2 {
+            let mut running = Running::start();
+            running
+                .engine
+                .load(&gated(hls.url(&format!("/master.m3u8?ApiKey={TOKEN}"))))
+                .expect("load");
+            running.wait_for("end-file", ended);
+            running
+                .engine
+                .load(&gated(
+                    missing.url(&format!("/Videos/1/stream?ApiKey={TOKEN}")),
+                ))
+                .expect("load");
+            running.wait_for("end-file", |e| end_file(e).is_some());
+            assert_no_secret(&running.finish());
+        }
+    }
+
+    pub(super) fn ffmpeg_writes_nothing_to_stderr_across_two_engines() {
+        let exe = std::env::current_exe().expect("test binary");
+        let out = std::process::Command::new(exe)
+            .args([
+                "--exact",
+                "live_tests::stderr_child_two_engines_one_after_the_other",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .output()
+            .expect("run the child");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "the child failed: {stdout}\n{stderr}"
+        );
+        for secret in [TOKEN, GATE_HEADER_VALUE, GATE_COOKIE_VALUE] {
+            assert!(
+                !stderr.contains(secret),
+                "a secret reached stderr: {stderr}"
+            );
+        }
     }
 }
