@@ -55,13 +55,22 @@ final class StandIn: @unchecked Sendable {
 
     /// Sends a command: `revoke`; `quick-connect off`, `on` or `hold` (requests stay unapproved); `hold <path>`, `release <path>`
     /// (requests to the path wait, unanswered, until released).
+    ///
+    /// The stand-in reads commands on a thread of its own, so a request sent right after a bare write could arrive before the command
+    /// applies. Each command is therefore followed by a count, which the stand-in answers only after every earlier line: when this
+    /// returns, the command has taken effect (or the stand-in did not answer within 10 s, which the test's next step shows).
     func send(_ command: String) {
+        write(command)
+        _ = try? count("/")
+    }
+
+    private func write(_ command: String) {
         input.fileHandleForWriting.write(Data("\(command)\n".utf8))
     }
 
     /// How many requests to `path` the stand-in received so far.
     func count(_ path: String) throws -> Int {
-        send("count \(path)")
+        write("count \(path)")
         guard let line = lines.next(timeout: 10), line.hasPrefix("count "), let count = Int(line.dropFirst("count ".count)) else {
             throw Failure(description: "the stand-in did not answer the count")
         }
