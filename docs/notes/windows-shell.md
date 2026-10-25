@@ -1490,3 +1490,10 @@ Also found and fixed on the run: keys did not reach the player (focus, above); a
 when another list held old marks (the core now publishes the item's marks to every list after a stop); the composition size after a
 move between monitors with different scales (the old size was sent). Seen once and not reproduced: after a rebuild the window started
 invisible (visible, not cloaked, focus on its title bar); a restart showed it.
+
+Re-checked after the review fixes (2026-10-25, 25cc568, with main's stall timeout from PR 67), by the owner: Play, Back before the
+picture, Play again: plays, no "still closing" message: **pass**. Back, then the window's X at once (and twice): the app closes and
+the dashboard shows the session stopped: **pass**. A series' Play button names its episode, in progress and fully watched (its first
+episode, not a special): **pass**. Network drop while loading, on the hotspot: "The server can't be reached" with Back after 5 to 10
+s: **pass**; that came from a failed request before the stream loaded, so the 60 s stall timeout itself was not seen live (its tests
+are in PR 67).
