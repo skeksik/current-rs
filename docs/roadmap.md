@@ -150,18 +150,25 @@ Done when: sign in and out of Jellyfin on Windows, and the app restarts signed i
 fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
 
 ## M2: First usable version: Jellyfin browse and play (Windows)
-- [ ] `current-jellyfin`: libraries, items (paging, sort, filter), latest, resume, next up, series/seasons/episodes, details, similar,
-      search, images, played state, favorites
-- [ ] Home, library grids, detail pages, search
-- [ ] `current-playback`: device profile from the engine's capabilities, route planner (direct play, direct stream, remux, transcode),
+- [x] `current-jellyfin`: libraries, items (paging, sort, filter), latest, resume, next up, series/seasons/episodes, details, similar,
+      search, images, played state, favorites (ADR 0018 tasks 1 and 2, PRs 53 and 54)
+- [x] Home, library grids, detail pages, search (ADR 0018 tasks 3 to 5, PRs 57, 60 and 63; checked live on the owner's server,
+      docs/notes/windows-shell.md "Browse: Windows run"). A grid of thousands was not checked live (the owner's largest library has
+      about 90 items; the smoke run covers the stand-in's 450)
+- [x] `current-playback`: device profile from the engine's capabilities, route planner (direct play, direct stream, remux, transcode),
       playback controller (resume, progress reporting, tracks, quality, next episode, intro skip, fallback on engine errors)
   - [x] `current-playback` (ADR 0019 task 2, feat/playback-core): the engine and server traits, planner and controller, tested with
-        a fake engine, server and clock; wired to Jellyfin and libmpv in task 4
-- [ ] The libmpv engine and the Windows player UI, media keys and the media flyout
+        a fake engine, server and clock; wired to Jellyfin and libmpv in task 4 (PR 62)
+  - [x] A stalled stream fails with a network problem after 60 s (PR 67)
+- [x] The libmpv engine and the Windows player UI, media keys and the media flyout (ADR 0019 task 5, PR 66; checked live,
+      docs/notes/windows-shell.md "Player: Windows run")
   - [x] `current-mpv` (ADR 0019 task 3, feat/mpv-engine): the engine over hand-written client API declarations, linked against the
         D6 build in CI's "mpv (Windows)" job, with redirect, TLS and log-redaction tests (docs/notes/mpv-engine.md)
-- [ ] Playback information (route, codecs, reasons for the choice) and remembered track choices
-- [ ] Servers behind an authentication gateway (after M1; ADR 0017): a password prompt for Basic gateways, a sign-in
+  - [ ] Device checks not done yet (no files or hardware on the owner's run, 2026-10-25): Dolby Vision profiles 5, 7 and 8, HDR10+,
+        120 Hz, remux, playback through cookie and Basic gateways, intro and credits skip (needs a segment plugin), a gateway session
+        expiring mid-play, the 60 s stall timeout on a real stall, and quality remembered for internet addresses
+- [x] Playback information (route, codecs, reasons for the choice) and remembered track choices (PR 66)
+- [x] Servers behind an authentication gateway (after M1; ADR 0017): a password prompt for Basic gateways, a sign-in
       window that hands the gateway's cookies to the core, advanced extra headers, per address; the 401 rule amended so that a
       gateway's 401 keeps the Jellyfin session. Choices decided by the owner (2026-10-22); the player and image parts follow the
       libmpv engine and the image path
@@ -176,10 +183,11 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
         over an https gateway; typing `https://` reaches the gateway (owner, 2026-10-24)
   - [ ] Windows installer: make sure the WebView2 Runtime is present (Windows 10); today the app links to Microsoft's download
         (owner: not now, 2026-10-24)
-  - [ ] Images and the player carry gateway credentials (with the image path and the libmpv engine)
-  - [ ] Before the player bridge ships: the core checks every HLS playlist it hands to the player with gateway headers (master and
-        each variant): every URI relative or on the stream's origin, else no headers or a playback problem; `current-mpv` refuses an
-        unchecked playlist with headers (ADR 0019, "Playlists and headers", owner 2026-10-25)
+  - [x] Images and the player carry gateway credentials (PRs 54, 62; images checked live behind each gateway in PR 63, the player
+        through a header gateway in PR 66)
+  - [x] Before the player bridge ships: the core checks every HLS playlist it hands to the player with gateway credentials (master
+        and each variant): every URI relative or on the stream's origin, else a playback problem; `current-mpv` refuses an unchecked
+        playlist with credentials (ADR 0019, "Playlists and headers", owner 2026-10-25; PR 61, cookies included since PR 62)
 
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
