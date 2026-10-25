@@ -530,6 +530,10 @@ checks D1 left to a person (`docs/notes/uniffi-bridge.md`, "What the owner runs 
     portal's page, titled "Sign in to 127.0.0.1:<port>", its origin bar showing the origin with the warning (plain http); following
     the portal's link sets its HttpOnly cookie, the window hands it over and setup reaches Ready; the window's throw-away profile
     folder is deleted after it closes. Without `-StandIn` it prints a "skip" line (the install test's run has no stand-in).
+12. with `-StandIn`, browsing in the main window (ADR 0018, task 5): signed in to the stand-in with its password, the navigation lists
+    its two libraries; the library grid (`LibraryPage`) opened on the stand-in's big library is sized to its 450 items with its first
+    page loaded, and scrolled to its end, the grid's visible range reaches the core through `SlotCollection`'s `IItemsRangeInfo` and
+    the last slots load. Without `-StandIn` it prints a "skip" line.
 No check sends anything over the network beyond 127.0.0.1; discovery (UDP) is left out.
 `smoke.ps1` fails on a non-zero exit code, a missing "smoke run passed" line or a run longer than 120 s.
 
@@ -1309,3 +1313,63 @@ app; Claude read only the request log's paths and statuses. Example addresses on
 6. Narrator, keyboard only and high contrast on the dialog, the window's origin bar and the headers editor: **pass**.
 Also changed on the run: one accent button per step on add-server ("Sign in" while offered, Connect otherwise; "Use these headers"
 not accent), and no example name in the headers editor (7f52cd1).
+
+## Browse (ADR 0018, task 5)
+The Windows screens for browsing a signed-in Jellyfin server; all logic is the core's (PRs 60 and 62, and `library_query`, the image
+cache's size and clear here).
+- **Navigation:** Home, then one item per library of each signed-in Jellyfin server in the user's order, with a server header when
+  more than one is signed in; the `NavigationView`'s `AutoSuggestBox` for search (Ctrl+E). Both hide while no Jellyfin server is
+  signed in, and Home keeps the M1 states. `Browsing/BrowseHub` follows the capabilities state: one `Browse` per signed-in server
+  (a new one after a new sign-in or another user), its libraries, its library grids and Home feed for the whole session, and the
+  core's notices, shown above every page.
+- **Home** (provisional layout): the `HomeFeed`'s rows in the core's order, each a sideways `GridView` once it has items; wide tiles
+  for Continue watching and Next up, posters for Latest. One message per server for failed rows (Retry) or offline (its last rows
+  stay). The frame keeps the page (`NavigationCacheMode="Required"`): Back shows it as left; opened from the navigation it scrolls to
+  the top and its rows to their start. F5 and Ctrl+R refresh.
+- **Library grid:** a `GridView` over `SlotCollection` (each place a `GridSlot` object: slot records compare by value), sized to the
+  total, loading what is visible; its count under the title; Sort by (name, date added, release date, rating) and Show (all,
+  unplayed, played, favourites), which `ItemQuery` takes, each a new query that starts at the top. The grid's `PagedItems` lives for
+  the session: Back and Forward return to the item the grid was left at; opened from the navigation it starts at the top. The page
+  lets go of its slots on `Unloaded`, after its exit transition. F5, Ctrl+R and a Refresh button refresh in place.
+- **Tiles** (`Browsing/ItemTile`): the picture through `TileImage` at the box's physical width, its BlurHash only if the picture has
+  not arrived within 100 ms; played, favourite and unplayed badges and a resume `ProgressBar`; Narrator reads the tile's name, line
+  and marks. A change to the same item (marks, resume point) updates the card in place: the grid's `SetItem` and the short lists'
+  `TileList` update the place's object, which the tile follows, instead of replacing it.
+- **Details:** backdrop, poster, title, facts, genres, tagline, overview, Played and Favourite toggle buttons, a place for Play
+  (`PlayActions`, the player's task), cast (`PersonPicture`, initials only when the photo is late), a series' seasons (`SelectorBar`
+  in a sideways `ScrollViewer`) and the chosen season's episodes, similar items. Each history entry keeps its `DetailsView`, the
+  season chosen and its scroll offsets (`ServerBrowse.Details`); Back binds the new page to them. Below 641 px the info goes under the
+  poster.
+- **Search:** results grouped by kind, a row per kind with matches; "Searching…", "No results" or the failure, read by Narrator.
+- **Played and favourite:** each tile's context menu (right-click, Shift+F10, the Menu key) and the detail page's buttons; a refusal
+  rolls back with a notice above every page.
+- **Settings → Storage:** the image cache's size (all servers) and Clear, which also empties the core's memory cache.
+- **Sizes:** Microsoft gives no poster size; 160 epx posters (2:3), 256 epx wide tiles (16:9) and a 360 px backdrop at most are
+  provisional, kept so by the owner (2026-10-25) until Home is redesigned. Spacing, margins and type styles are sourced in
+  `App.xaml`.
+- **Reverted on the run:** keeping Home's rows with the session, a cache of recently decoded pictures, and drawing a tile's summary
+  first on a detail page (all for blinking; the owner asked for the rebuild itself to go instead).
+
+### Browse: Windows run (2026-10-25, owner's PC, Windows 11 Pro 10.0.26300.9711)
+feat/browse-windows, final build at 618ff76, built with the four scripts (C# tests 55 passed; the smoke run passed, including the new
+browse check against the stand-in). The owner's own data folder and own Jellyfin server; the owner signed in and judged each case.
+Libraries: three, of about 13, 9 and 90 items (films, series, and a third library); no title is recorded here.
+1. Home's rows in order, only rows with items; the libraries in the navigation: **pass** (first seen with only Latest rows: the owner
+   was signed in as another user; after signing in as the right one, all rows showed, and the hub followed the new session).
+2. A large library: fast scrolling and jumping with the scroll bar leave no tile blank: **pass** on the owner's largest library
+   (about 90 items). Working set 488 MB before the full scroll, 505 MB after (private bytes 451 to 470 MB). A library of thousands
+   was not checked live: the owner has none; the smoke run checks the stand-in's 450 items.
+3. Refresh (F5, Ctrl+R, return to the app) keeps the scroll position: **pass**. Back from a detail page returned to the place after a
+   fix (the scroll was asked for before the grid had its items); a library opened from the navigation starts at the top (owner).
+4. Played and favourite from a tile show at once on details, Home and the grid; offline, a change rolls back with a notice: **pass**.
+   Changed on the run: a change updates the card in place rather than replacing it (owner's request).
+5. Details for a movie and a series, seasons switch, episodes and similar items show: **pass** after two fixes: the season bar cut off
+   seasons that did not fit (now it scrolls; the keyboard brings a hidden season into view, owner), and Back opened the first season
+   at the top (now each history entry keeps its view, season and offsets, the owner's choice).
+6. Search grouped by kind, keyboard only: **pass**; Narrator did not hear "No results" until the live region raised its event.
+7. Images behind each gateway the owner has (Basic, Cloudflare Access session, service token), and cached images offline: **pass**.
+8. Settings → Storage grows after browsing, Clear empties it and images load again, signing out deletes the server's images: **pass**.
+9. Narrator, keyboard only, high contrast, a narrow window (the navigation collapses to its rail): **pass**.
+Blinking on Home and detail pages (owner's finding): what was left at 30 fps was the page's entrance transition and the list items'
+fade-in, both platform defaults, kept. Progress bars still grow from zero when a new card is built (the control's default; owner:
+leave as is).
