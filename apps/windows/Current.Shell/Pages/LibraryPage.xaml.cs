@@ -10,8 +10,8 @@ namespace Current.Shell.Pages;
 /// <summary>
 /// A library's grid (ADR 0018, section 3): a GridView over the core's slots, sized to the library's total from the first page,
 /// loading the pages it shows (SlotCollection's IItemsRangeInfo). The grid's PagedItems lives in the hub for the whole session, so
-/// coming back to the page binds to the slots already loaded and scrolls to where the user left; a refresh only replaces slots, so
-/// the scroll position stays.
+/// coming back to the page binds to the slots already loaded: Back and Forward scroll to where the user left, opened from the
+/// navigation it starts at the top. A refresh only replaces slots, so the scroll position stays.
 /// </summary>
 public sealed partial class LibraryPage : Page
 {
@@ -54,6 +54,12 @@ public sealed partial class LibraryPage : Page
         var library = App.Browsing.FindLibrary(args.Library.Item) ?? args.Library;
         TitleText.Text = library.Name;
         _grid = server.Grid(library);
+        // Back and Forward return to where the grid was left; opening the library anew (its navigation item) starts at the top
+        // (the owner, 2026-10-25).
+        if (e.NavigationMode is not (NavigationMode.Back or NavigationMode.Forward))
+        {
+            _grid.FirstVisible = 0;
+        }
         ShowQuery(_grid.Query);
         var ui = new DispatcherQueueUi(DispatcherQueue);
         _state = _grid.Items.ObserveState(ui);
