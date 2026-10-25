@@ -21,8 +21,9 @@ player", "Threads and event rate"), ADR 0007.
   the thread then calls `mpv_terminate_destroy` on itself and reports `Shutdown` last. `Engine::shutdown` does the same and waits.
 - The swap chain: on a new `display-swapchain` value the event thread `AddRef`s the pointer through `IUnknown`'s vtable and sends
   `SwapChain { handle, generation }`; `release()` or dropping it calls `Release` once.
-- Capabilities stay mpv's own names until `EngineCapabilities` (current-model, feat/jellyfin-playback) lands; the mapping to it
-  follows then.
+- Capabilities: `BuildCapabilities` keeps mpv's own names; `engine_capabilities()` maps them onto `EngineCapabilities`
+  (current-model) in Jellyfin's names: codecs one to one, `matroska` to `mkv` and `mpegts` to `ts`, the subtitle formats `check.py`
+  checks with both spellings (`subrip`/`srt`, `webvtt`/`vtt`), external subtitles on, and no limits (mpv tone-maps every range).
 
 ## Cookies: what FFmpeg actually does (read 2026-10-25)
 FFmpeg 9.0.2, `libavformat/http.c` (the tarball D6 pins, https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz):
