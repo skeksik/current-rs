@@ -4,6 +4,7 @@ using Current.Bindings;
 using Current.Shell.Browsing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 
 namespace Current.Shell.Pages;
@@ -27,7 +28,7 @@ public sealed partial class DetailsPage : Page
     private DetailsView? _view;
     private KeptDetails? _kept;
 
-    /// <summary>Reached by Back or Forward: scroll to where the page was once it is laid out.</summary>
+    /// <summary>Reached by Back or Forward: scroll to where the page and its rows were once they are laid out.</summary>
     private bool _restore;
     private ValueSubscription<ItemDetails?>? _details;
     private ValueSubscription<LoadState>? _state;
@@ -58,7 +59,7 @@ public sealed partial class DetailsPage : Page
         var ui = new DispatcherQueueUi(DispatcherQueue);
         _kept = server.Details(args, args.Item);
         _view = _kept.View;
-        _restore = e.NavigationMode is (NavigationMode.Back or NavigationMode.Forward) && _kept.Offset > 0;
+        _restore = e.NavigationMode is NavigationMode.Back or NavigationMode.Forward;
         _details = _view.ObserveDetails(ui);
         _details.PropertyChanged += OnDetailsChanged;
         _state = _view.ObserveState(ui);
@@ -78,8 +79,40 @@ public sealed partial class DetailsPage : Page
         ShowState();
         if (_restore)
         {
-            _ = ScrollWhenLaidOutAsync(_kept.Offset);
+            _ = ScrollWhenLaidOutAsync(Scroller, _kept.Offset, horizontal: false);
+            _ = ScrollWhenLaidOutAsync(SeasonsScroller, _kept.SeasonsOffset, horizontal: true);
+            // The rows' own scroll viewers exist once their templates are applied.
+            People.Loaded += (_, _) => RestoreRow(People, _kept?.PeopleOffset ?? 0);
+            Similar.Loaded += (_, _) => RestoreRow(Similar, _kept?.SimilarOffset ?? 0);
+            RestoreRow(People, _kept.PeopleOffset);
+            RestoreRow(Similar, _kept.SimilarOffset);
         }
+    }
+
+    private void RestoreRow(ListViewBase row, double offset)
+    {
+        if (_restore && ScrollerOf(row) is { } scroller)
+        {
+            _ = ScrollWhenLaidOutAsync(scroller, offset, horizontal: true);
+        }
+    }
+
+    /// <summary>A list's own ScrollViewer, the template part it scrolls with; null before its template is applied.</summary>
+    private static ScrollViewer? ScrollerOf(DependencyObject parent)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is ScrollViewer scroller)
+            {
+                return scroller;
+            }
+            if (ScrollerOf(child) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
     }
 
     /// <summary>Before the exit transition, while the page is still in place: where it was scrolled to.</summary>
@@ -89,21 +122,37 @@ public sealed partial class DetailsPage : Page
         if (_kept is not null)
         {
             _kept.Offset = Scroller.VerticalOffset;
+            _kept.SeasonsOffset = SeasonsScroller.HorizontalOffset;
+            _kept.PeopleOffset = ScrollerOf(People)?.HorizontalOffset ?? 0;
+            _kept.SimilarOffset = ScrollerOf(Similar)?.HorizontalOffset ?? 0;
         }
     }
 
     /// <summary>
-    /// Scrolls to <paramref name="offset"/> once the page reaches it: its lists arrive and lay out a moment after it is shown, so it
-    /// tries again each frame, for at most a second. Without animation, as a return to a place is.
+    /// Scrolls <paramref name="scroller"/> to <paramref name="offset"/> once its content reaches it: the lists arrive and lay out a
+    /// moment after the page is shown, so it tries again each frame, for at most a second. Without animation, as a return to a place
+    /// is. Nothing to do for an offset of 0.
     /// </summary>
-    private async Task ScrollWhenLaidOutAsync(double offset)
+    private async Task ScrollWhenLaidOutAsync(ScrollViewer scroller, double offset, bool horizontal)
     {
+        if (offset <= 0)
+        {
+            return;
+        }
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(1);
         while (_view is not null && DateTime.UtcNow < deadline)
         {
-            if (Scroller.ScrollableHeight >= offset - 0.5)
+            var reach = horizontal ? scroller.ScrollableWidth : scroller.ScrollableHeight;
+            if (reach >= offset - 0.5)
             {
-                Scroller.ChangeView(null, offset, null, true);
+                if (horizontal)
+                {
+                    scroller.ChangeView(offset, null, null, true);
+                }
+                else
+                {
+                    scroller.ChangeView(null, offset, null, true);
+                }
                 return;
             }
             await Task.Delay(16);

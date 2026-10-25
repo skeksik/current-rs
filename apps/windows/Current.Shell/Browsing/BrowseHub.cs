@@ -283,4 +283,11 @@ internal sealed class KeptDetails(DetailsView view)
     public ItemRef? Season { get; set; }
 
     public double Offset { get; set; }
+
+    /// <summary>The sideways offsets of the season bar, the cast and the similar items.</summary>
+    public double SeasonsOffset { get; set; }
+
+    public double PeopleOffset { get; set; }
+
+    public double SimilarOffset { get; set; }
 }

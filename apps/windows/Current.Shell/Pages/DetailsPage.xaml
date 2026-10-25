@@ -109,6 +109,7 @@
                 <StackPanel x:Name="SeriesPart" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="Episodes" />
                     <ScrollViewer
+                        x:Name="SeasonsScroller"
                         HorizontalScrollMode="Enabled"
                         HorizontalScrollBarVisibility="Auto"
                         VerticalScrollMode="Disabled"
