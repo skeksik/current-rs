@@ -218,11 +218,16 @@ public sealed partial class PlayerView : UserControl
         OnSwapChain(null, null!);
         OnState(null, null!);
         OnNowPlaying(null, null!);
+        // A size change while the engine was opening found no session to tell.
+        UpdateCompositionSize();
     }
 
     /// <summary>The panel's size in physical pixels once it is laid out (ActualSize × CompositionScale, ADR 0007).</summary>
     private async Task<(uint Width, uint Height)> PanelSizeAsync()
     {
+        // A view just shown keeps its last layout's size until it is laid out again: after the window moved to a monitor with another
+        // scale, that was the old size (1905×969 sent for a 1584×843 panel, owner's PC, 2026-10-25).
+        UpdateLayout();
         for (var tries = 0; tries < 60 && (Video.ActualWidth <= 0 || Video.ActualHeight <= 0); tries++)
         {
             await Task.Delay(16);
