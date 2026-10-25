@@ -428,6 +428,39 @@ pub struct PlaybackPreferences {
     pub remember_subtitles: bool,
 }
 
+/// Where a player is (ADR 0019, "Playback controller"). Position, duration, tracks, route and the next episode ride along in the
+/// player's state, not here.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PlayerState {
+    /// Nothing loaded.
+    #[default]
+    Idle,
+    /// Asking the server how to play (planning).
+    Preparing,
+    /// The engine opens the stream.
+    Loading,
+    Playing,
+    Paused,
+    /// Waiting for data.
+    Buffering,
+    Seeking,
+    /// The file played to its end.
+    Ended,
+    Failed {
+        problem: PlaybackProblem,
+    },
+}
+
+impl PlayerState {
+    /// Whether a file is open in the engine and playback goes on (playing, paused, buffering or seeking).
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self,
+            Self::Playing | Self::Paused | Self::Buffering | Self::Seeking
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,6 +535,20 @@ mod tests {
         );
         assert_eq!(source.streams_of(&StreamKind::AUDIO).count(), 1);
         assert!(source.stream(9).is_none());
+    }
+
+    #[test]
+    fn active_states_are_the_ones_with_a_file_going() {
+        assert!(PlayerState::Playing.is_active());
+        assert!(PlayerState::Seeking.is_active());
+        assert!(!PlayerState::Preparing.is_active());
+        assert!(
+            !PlayerState::Failed {
+                problem: PlaybackProblem::Network
+            }
+            .is_active()
+        );
+        assert_eq!(PlayerState::default(), PlayerState::Idle);
     }
 
     #[test]
