@@ -104,9 +104,9 @@ pub(crate) fn auto_skip(kinds: &[String]) -> AutoSkip {
     AutoSkip::new(kinds.iter().map(|kind| SegmentKind::new(kind.clone())))
 }
 
-/// One user action.
+/// One user action, for [`Player::send`].
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Action {
+pub enum PlayerAction {
     Pause,
     Resume,
     Toggle,
@@ -125,10 +125,10 @@ pub(crate) enum Action {
     CompositionSize(CompositionSize),
 }
 
-impl Action {
+impl PlayerAction {
     /// Whether the action ends the one running (a stop does; a new play does too, see [`Command::Play`]).
     fn replaces(&self) -> bool {
-        matches!(self, Action::Stop | Action::PlayNext)
+        matches!(self, PlayerAction::Stop | PlayerAction::PlayNext)
     }
 }
 
@@ -139,8 +139,9 @@ pub(crate) enum Command {
         done: oneshot::Sender<Result<(), PlayerError>>,
     },
     Action {
-        action: Action,
-        done: oneshot::Sender<()>,
+        action: PlayerAction,
+        /// `None` for an action sent without waiting: it is never given up.
+        done: Option<oneshot::Sender<()>>,
     },
     Info(oneshot::Sender<PlaybackInfo>),
     /// The details of the item playing loaded (after a next-episode play).
@@ -200,93 +201,102 @@ impl Player {
     /// or failed (the state says why).
     pub async fn play(&self, item: ItemRef, start: Duration) -> Result<(), PlayerError> {
         let (done, answer) = oneshot::channel();
-        self.send(Command::Play { item, start, done })?;
+        self.command(Command::Play { item, start, done })?;
         answer.await.map_err(|_| PlayerError::Closed)?
     }
 
-    async fn act(&self, action: Action) -> Result<(), PlayerError> {
+    async fn act(&self, action: PlayerAction) -> Result<(), PlayerError> {
         let (done, answer) = oneshot::channel();
-        self.send(Command::Action { action, done })?;
+        self.command(Command::Action {
+            action,
+            done: Some(done),
+        })?;
         answer.await.map_err(|_| PlayerError::Closed)
     }
 
+    /// Queues `action` without waiting for it: actions run in the order they are sent. For quick actions from the UI thread (a key, a
+    /// button); a cancellable one (a track or quality change re-plans) is better awaited.
+    pub fn send(&self, action: PlayerAction) -> Result<(), PlayerError> {
+        self.command(Command::Action { action, done: None })
+    }
+
     pub async fn pause(&self) -> Result<(), PlayerError> {
-        self.act(Action::Pause).await
+        self.act(PlayerAction::Pause).await
     }
 
     pub async fn resume(&self) -> Result<(), PlayerError> {
-        self.act(Action::Resume).await
+        self.act(PlayerAction::Resume).await
     }
 
     pub async fn toggle(&self) -> Result<(), PlayerError> {
-        self.act(Action::Toggle).await
+        self.act(PlayerAction::Toggle).await
     }
 
     pub async fn seek_to(&self, position: Duration) -> Result<(), PlayerError> {
-        self.act(Action::SeekTo(position)).await
+        self.act(PlayerAction::SeekTo(position)).await
     }
 
     /// Seeks by `millis`, back when negative.
     pub async fn seek_by(&self, millis: i64) -> Result<(), PlayerError> {
-        self.act(Action::SeekBy(millis)).await
+        self.act(PlayerAction::SeekBy(millis)).await
     }
 
     pub async fn stop(&self) -> Result<(), PlayerError> {
-        self.act(Action::Stop).await
+        self.act(PlayerAction::Stop).await
     }
 
     /// The audio stream with this server index.
     pub async fn select_audio(&self, index: u32) -> Result<(), PlayerError> {
-        self.act(Action::SelectAudio(index)).await
+        self.act(PlayerAction::SelectAudio(index)).await
     }
 
     pub async fn select_subtitle(&self, choice: SubtitleChoice) -> Result<(), PlayerError> {
-        self.act(Action::SelectSubtitle(choice)).await
+        self.act(PlayerAction::SelectSubtitle(choice)).await
     }
 
     /// The quality for the kind of address in use; remembered for that kind (local or internet) in the settings.
     pub async fn set_quality(&self, quality: Quality) -> Result<(), PlayerError> {
-        self.act(Action::SetQuality(quality)).await
+        self.act(PlayerAction::SetQuality(quality)).await
     }
 
     /// Seeks past the segment under the position.
     pub async fn skip_segment(&self) -> Result<(), PlayerError> {
-        self.act(Action::SkipSegment).await
+        self.act(PlayerAction::SkipSegment).await
     }
 
     /// Plays the next episode now, from its start.
     pub async fn play_next(&self) -> Result<(), PlayerError> {
-        self.act(Action::PlayNext).await
+        self.act(PlayerAction::PlayNext).await
     }
 
     /// Hides the "Next episode" card and stops its countdown.
     pub async fn dismiss_next(&self) -> Result<(), PlayerError> {
-        self.act(Action::DismissNext).await
+        self.act(PlayerAction::DismissNext).await
     }
 
     /// 0 to 100.
     pub async fn set_volume(&self, volume: u8) -> Result<(), PlayerError> {
-        self.act(Action::SetVolume(volume)).await
+        self.act(PlayerAction::SetVolume(volume)).await
     }
 
     pub async fn set_muted(&self, muted: bool) -> Result<(), PlayerError> {
-        self.act(Action::SetMuted(muted)).await
+        self.act(PlayerAction::SetMuted(muted)).await
     }
 
     /// What the monitor the window is on reports (ADR 0007).
     pub async fn set_display_facts(&self, facts: DisplayFacts) -> Result<(), PlayerError> {
-        self.act(Action::DisplayFacts(facts)).await
+        self.act(PlayerAction::DisplayFacts(facts)).await
     }
 
     /// The panel's size in physical pixels.
     pub async fn set_composition_size(&self, size: CompositionSize) -> Result<(), PlayerError> {
-        self.act(Action::CompositionSize(size)).await
+        self.act(PlayerAction::CompositionSize(size)).await
     }
 
     /// The playback information view's content.
     pub async fn playback_info(&self) -> Result<PlaybackInfo, PlayerError> {
         let (done, answer) = oneshot::channel();
-        self.send(Command::Info(done))?;
+        self.command(Command::Info(done))?;
         answer.await.map_err(|_| PlayerError::Closed)
     }
 
@@ -294,12 +304,12 @@ impl Player {
     /// (after detaching the panel) first.
     pub async fn close(&self) {
         let (done, answer) = oneshot::channel();
-        if self.send(Command::Close(done)).is_ok() {
+        if self.command(Command::Close(done)).is_ok() {
             let _ = answer.await;
         }
     }
 
-    fn send(&self, command: Command) -> Result<(), PlayerError> {
+    fn command(&self, command: Command) -> Result<(), PlayerError> {
         self.commands.send(command).map_err(|_| PlayerError::Closed)
     }
 }

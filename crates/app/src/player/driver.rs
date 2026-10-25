@@ -16,7 +16,7 @@ use super::backend::{Backend, CompositionSize, DisplayFacts, Signal, SwapChain};
 use super::now_playing::{NowPlaying, TIMELINE_INTERVAL, now_playing};
 use super::prefs::PlaybackPrefs;
 use super::server::JellyfinMedia;
-use super::{Action, Command, PlaybackInfo, Player, PlayerError, auto_skip};
+use super::{Command, PlaybackInfo, Player, PlayerAction as Action, PlayerError, auto_skip};
 use crate::browse::Hub;
 use crate::images::{ImageCache, ImageLoad, ImageSource};
 use crate::session::Shared;
@@ -317,7 +317,10 @@ impl<B: Backend> Driver<B> {
                     None => self.controller.stop().await,
                 }
             }
-            Command::Action { action, mut done } => {
+            Command::Action {
+                action,
+                done: Some(mut done),
+            } => {
                 let caller_gone = done.closed();
                 let ran = interruptible(self.action(action), caller_gone, commands, deferred)
                     .await
@@ -325,6 +328,15 @@ impl<B: Backend> Driver<B> {
                 if ran {
                     let _ = done.send(());
                 }
+            }
+            Command::Action { action, done: None } => {
+                interruptible(
+                    self.action(action),
+                    std::future::pending(),
+                    commands,
+                    deferred,
+                )
+                .await;
             }
             Command::Info(done) => {
                 let _ = done.send(PlaybackInfo {

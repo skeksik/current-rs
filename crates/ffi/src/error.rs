@@ -1,6 +1,7 @@
 //! The one error type every export returns (ADR 0004). It becomes `CoreException` with one nested class per variant in C#, and a
 //! Swift `Error` enum.
 
+use crate::player_records::PlayerProblem;
 use crate::problems::{GatewayInputProblem, StoreProblem};
 
 /// Why a call into the core failed.
@@ -30,4 +31,7 @@ pub enum CoreError {
     /// The gateway credentials handed over were not used (ADR 0017): nothing was sent.
     #[error("the gateway credentials cannot be used")]
     Gateway { problem: GatewayInputProblem },
+    /// The player could not open or act (ADR 0019).
+    #[error("the player could not do this")]
+    Player { problem: PlayerProblem },
 }

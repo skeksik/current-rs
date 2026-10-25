@@ -48,7 +48,8 @@ pub use list::{ListSubscription, ObservableList, VectorDiff};
 pub use player::test_engine;
 pub use player::{
     CompositionSize, DisplayFacts, EngineOutput, MediaStatus, NowPlaying, PlaybackInfo, Player,
-    PlayerEngine, PlayerError, SwapChain, TIMELINE_INTERVAL, VideoOutput, player_engine,
+    PlayerAction, PlayerEngine, PlayerError, SwapChain, TIMELINE_INTERVAL, VideoOutput,
+    player_engine,
 };
 /// `current-playback`'s values that the player publishes.
 pub mod playback {

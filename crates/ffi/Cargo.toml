@@ -6,6 +6,12 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# The libmpv engine (`current-app`'s `libmpv`); the Windows app turns it on when it ships libmpv (ADR 0019 task 5).
+libmpv = ["current-app/libmpv"]
+# The test engine (`current-app`'s `test-engine`), for the C# adapter tests only: never in the published app (its build checks).
+test-engine = ["current-app/test-engine"]
+
 [lib]
 # lib for Rust tests, cdylib for C# (and the Swift generator), staticlib for the XCFramework.
 crate-type = ["lib", "cdylib", "staticlib"]
@@ -21,6 +27,8 @@ tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "syn
 uniffi.workspace = true
 
 [dev-dependencies]
+# The bridge tests open players on the test engine.
+current-app = { workspace = true, features = ["test-engine"] }
 jellyfin-stand-in.workspace = true
 tempfile.workspace = true
 

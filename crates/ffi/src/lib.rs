@@ -12,6 +12,8 @@ mod cancel;
 mod diff;
 mod error;
 mod flows;
+mod player;
+mod player_records;
 mod problems;
 mod records;
 mod runtime;
@@ -34,6 +36,17 @@ pub use flows::{
     DiscoveryState, DiscoveryStateListener, GatewayCookie, GatewayHeader, GatewaySignInFlow,
     GatewaySignInState, GatewaySignInStateListener, LocalInterface, NewServerInfo, SignInFlow,
     SignInState, SignInStateListener,
+};
+pub use player::{
+    NowPlayingListener, Player, PlayerStateListener, SwapChainHandle, SwapChainListener,
+    player_engine,
+};
+pub use player_records::{
+    CompositionSize, DisplayFacts, EngineOutputInfo, ItemRef, MediaStatusKind, NextEpisodeInfo,
+    NowPlayingSnapshot, PlanNoteInfo, PlaybackInfoSnapshot, PlaybackProblem,
+    PlaybackSettingsSnapshot, PlayerEngineKind, PlayerProblem, PlayerStateKind,
+    PlayerStateSnapshot, QualityChoice, RouteInfo, RouteKind, SegmentInfo, SourceInfo, StreamInfo,
+    StreamProtocolKind, SubtitleSelection, TrackInfo, TranscodingInfo, quality_steps,
 };
 pub use problems::{
     AddressProblem, DiscoveryProblem, GatewayInputProblem, GatewayProblem, GatewaySignInProblem,
@@ -440,5 +453,7 @@ impl Core {
 mod flow_tests;
 #[cfg(test)]
 mod gateway_tests;
+#[cfg(test)]
+mod player_tests;
 #[cfg(test)]
 mod tests;
