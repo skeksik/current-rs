@@ -143,13 +143,7 @@ internal static class PlayerText
     };
 
     /// <summary>"S1:E3 Name", or the name alone.</summary>
-    public static string Episode(NextEpisodeInfo next)
-    {
-        var number = next.Season is { } season
-            ? next.Episode is { } episode ? $"S{season}:E{episode}" : $"S{season}"
-            : next.Episode is { } only ? $"E{only}" : "";
-        return number.Length > 0 ? $"{number} {next.Name}" : next.Name;
-    }
+    public static string Episode(NextEpisodeInfo next) => next.Number.Length > 0 ? $"{next.Number} {next.Name}" : next.Name;
 
     public static string Countdown(uint seconds) => seconds == 1 ? "Starts in 1 second" : $"Starts in {seconds} seconds";
 

@@ -8,8 +8,9 @@ namespace Current.Shell.Player;
 
 /// <summary>
 /// The media keys and Windows' media flyout for the player (ADR 0007 item 3, ADR 0019 "Media keys, the media flyout and full screen"):
-/// <c>SystemMediaTransportControlsInterop.GetForWindow</c> for the main window ("C# interop classes", learn.microsoft.com, updated
-/// 2026-09-10, ADR 0007's source), filled from the core's NowPlaying: title and subtitle, artwork, video type (what keeps the screen
+/// <c>SystemMediaTransportControlsInterop.GetForWindow</c> for the main window ("Use WinRT COM interop classes in .NET",
+/// learn.microsoft.com, updated 2026-09-10, read 2026-10-25: (Windows.Media) SystemMediaTransportControlsInterop, ADR 0007's source),
+/// filled from the core's NowPlaying: title and subtitle, artwork, video type (what keeps the screen
 /// saver off, ADR 0019), status, enabled buttons, and the timeline whenever its revision changes (after every seek, so the flyout's
 /// position is never stale; the spike's case 6). Button presses and position requests become player actions on the UI thread.
 /// </summary>
@@ -58,7 +59,7 @@ internal sealed class MediaControls : IDisposable
         if (shown != _shown)
         {
             _shown = shown;
-            ShowDisplay(now);
+            _ = ShowDisplayAsync(now, shown);
         }
         if (now.TimelineRevision != _timelineRevision)
         {
@@ -75,34 +76,40 @@ internal sealed class MediaControls : IDisposable
         }
     }
 
-    private void ShowDisplay(NowPlaying now)
+    /// <summary>The title, subtitle and artwork; dropped when newer ones (<paramref name="shown"/> no longer current) or the close
+    /// came while the artwork was written.</summary>
+    private async Task ShowDisplayAsync(NowPlaying now, (ItemRef?, string?, int) shown)
     {
-        var display = _controls.DisplayUpdater;
-        display.ClearAll();
-        display.Type = MediaPlaybackType.Video;
-        display.VideoProperties.Title = now.Title ?? "";
-        display.VideoProperties.Subtitle = Subtitle(now);
-        if (now.Artwork is { Length: > 0 } artwork)
+        try
         {
-            var stream = new InMemoryRandomAccessStream();
-            using (var writer = new DataWriter(stream.GetOutputStreamAt(0)))
+            RandomAccessStreamReference? thumbnail = null;
+            if (now.Artwork is { Length: > 0 } artwork)
             {
-                writer.WriteBytes(artwork);
-                writer.StoreAsync().AsTask().GetAwaiter().GetResult();
-                writer.DetachStream();
+                var stream = new InMemoryRandomAccessStream();
+                using (var writer = new DataWriter(stream.GetOutputStreamAt(0)))
+                {
+                    writer.WriteBytes(artwork);
+                    await writer.StoreAsync();
+                    writer.DetachStream();
+                }
+                thumbnail = RandomAccessStreamReference.CreateFromStream(stream);
             }
-            display.Thumbnail = RandomAccessStreamReference.CreateFromStream(stream);
+            if (_disposed || shown != _shown)
+            {
+                return;
+            }
+            var display = _controls.DisplayUpdater;
+            display.ClearAll();
+            display.Type = MediaPlaybackType.Video;
+            display.VideoProperties.Title = now.Title ?? "";
+            display.VideoProperties.Subtitle = now.Subtitle ?? "";
+            display.Thumbnail = thumbnail;
+            display.Update();
         }
-        display.Update();
-    }
-
-    /// <summary>An episode's series, season and number: "Series · S1:E2".</summary>
-    private static string Subtitle(NowPlaying now)
-    {
-        var number = now.Season is { } season
-            ? now.Episode is { } episode ? $"S{season}:E{episode}" : $"S{season}"
-            : now.Episode is { } only ? $"E{only}" : "";
-        return string.Join(" · ", new[] { now.Series, number }.Where(part => !string.IsNullOrEmpty(part)));
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: the media controls' display failed: {error.GetType().Name}");
+        }
     }
 
     // On a system thread: queued to the UI thread, where the player's actions are called.
@@ -148,6 +155,10 @@ internal sealed class MediaControls : IDisposable
         catch (Exception error) when (error is PlayerException or OperationCanceledException)
         {
             // The state shows any problem; a replaced or closed player has nothing to say here.
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: the next episode from the media keys failed: {error.GetType().Name}");
         }
     }
 

@@ -57,6 +57,10 @@ public sealed partial class PlayerView : UserControl
     private DisplayWatcher? _display;
     private MediaControls? _media;
     private CancellationTokenSource? _play;
+    /// <summary>The engine's open, which belongs to the player rather than to one play: a play that replaces another while the engine
+    /// opens waits for the same open and plays on its session.</summary>
+    private Task _opening = Task.CompletedTask;
+    /// <summary>The last engine close, which a play waits for before it opens another (one engine per process, ADR 0019).</summary>
     private Task _closing = Task.CompletedTask;
     private bool _open;
     private readonly DispatcherQueueTimer _hideTimer;
@@ -136,6 +140,9 @@ public sealed partial class PlayerView : UserControl
     /// <summary>Whether the player is shown (playing, opening or showing a problem).</summary>
     public bool IsOpen => _open;
 
+    /// <summary>Whether the player is shown or its engine is still opening or closing.</summary>
+    internal bool IsBusy => _open || !_opening.IsCompleted || !_closing.IsCompleted;
+
     /// <summary>
     /// Shows the player and plays <paramref name="item"/> from <paramref name="start"/>. The first play opens the engine with the
     /// panel's size and the display's facts; a play while another item plays replaces it.
@@ -168,13 +175,21 @@ public sealed partial class PlayerView : UserControl
             }
             if (_session is null)
             {
-                await OpenAsync(core);
+                if (_opening.IsCompleted)
+                {
+                    _opening = OpenAsync(core);
+                }
+                await _opening;
                 if (play.IsCancellationRequested || _session is null)
                 {
                     return;
                 }
             }
             await _session.PlayAsync(item, start, play.Token);
+        }
+        catch (Exception) when (play.IsCancellationRequested)
+        {
+            // A later play or a close took over, and says what it has to.
         }
         catch (PlayerException error) when (error.Problem is PlayerProblem.Replaced or PlayerProblem.Closed)
         {
@@ -203,16 +218,32 @@ public sealed partial class PlayerView : UserControl
             throw new InvalidOperationException("the player is not attached to a window");
         }
         var size = await PanelSizeAsync();
-        _display ??= new DisplayWatcher(_window);
-        _display.Changed += OnDisplayChanged;
-        var session = await PlayerSession.OpenAsync(core, new CompositionSize(size.Width, size.Height), _display.Facts,
-            new DispatcherQueueUi(DispatcherQueue));
         if (!_open)
         {
-            // Closed while opening.
-            await session.CloseAsync();
+            // Closed while laid out, with no play since.
             return;
         }
+        var display = new DisplayWatcher(_window);
+        PlayerSession session;
+        try
+        {
+            session = await PlayerSession.OpenAsync(core, new CompositionSize(size.Width, size.Height), display.Facts,
+                new DispatcherQueueUi(DispatcherQueue));
+        }
+        catch
+        {
+            display.Dispose();
+            throw;
+        }
+        if (!_open)
+        {
+            // Closed while opening, with no play since: the engine closes, and the next play waits for that.
+            display.Dispose();
+            _closing = CloseSessionAsync(session);
+            return;
+        }
+        _display = display;
+        display.Changed += OnDisplayChanged;
         _compositionSize = size;
         _session = session;
         session.State.PropertyChanged += OnState;
@@ -695,7 +726,14 @@ public sealed partial class PlayerView : UserControl
 
     // Full screen ------------------------------------------------------------------------------------------------------------------
 
-    private void ToggleFullScreen() => _host?.SetFullScreen(_host.IsFullScreen != true);
+    /// <summary>Only while the player is shown: its accelerators (F11) stay registered while it is collapsed.</summary>
+    private void ToggleFullScreen()
+    {
+        if (_open)
+        {
+            _host?.SetFullScreen(_host.IsFullScreen != true);
+        }
+    }
 
     /// <summary>The window's presenter changed (the button, a key, or Windows): the button follows, and the cursor shows again.</summary>
     internal void FullScreenChanged(bool on)
@@ -979,21 +1017,18 @@ public sealed partial class PlayerView : UserControl
         _hideTimer.Stop();
         _seekTimer.Stop();
         _infoTimer.Stop();
-        ShowCursor();
-        if (_host?.IsFullScreen == true)
+        // Each step on its own: whatever fails, the engine still closes below.
+        Try("showing the cursor", ShowCursor);
+        Try("leaving full screen", () =>
         {
-            _host.SetFullScreen(false);
-        }
-        _media?.Dispose();
+            if (_host?.IsFullScreen == true)
+            {
+                _host.SetFullScreen(false);
+            }
+        });
+        Try("turning the media controls off", () => _media?.Dispose());
         _media = null;
-        try
-        {
-            PlayerNative.SetSwapChain(Video, IntPtr.Zero);
-        }
-        catch (Exception error)
-        {
-            Trace.TraceError($"Current: detaching the swap chain failed: {error.GetType().Name}");
-        }
+        Try("detaching the swap chain", () => PlayerNative.SetSwapChain(Video, IntPtr.Zero));
         _attached = IntPtr.Zero;
         var session = _session;
         _session = null;
@@ -1018,10 +1053,46 @@ public sealed partial class PlayerView : UserControl
         NextCard.Visibility = Visibility.Collapsed;
         BusyRing.IsActive = false;
         _shownSecond = -1;
-        _host?.ShowPlaying(null);
-        _host?.PlayerClosed();
-        _closing = session is null ? Task.CompletedTask : CloseSessionAsync(session);
+        Try("showing the page again", () =>
+        {
+            _host?.ShowPlaying(null);
+            _host?.PlayerClosed();
+        });
+        // Without a session an earlier close may still run (or an open, which closes its own engine): _closing stays that.
+        if (session is not null)
+        {
+            _closing = CloseSessionAsync(session);
+        }
         return _closing;
+    }
+
+    /// <summary>Closes the player and waits until no engine is left: the close, and an open still running, which closes the engine it
+    /// opens once it finds the player closed (OpenAsync). For the window's close, before the core goes.</summary>
+    internal async Task CloseAndWaitAsync()
+    {
+        _ = CloseAsync();
+        try
+        {
+            await _opening;
+        }
+        catch (Exception)
+        {
+            // The open failed: no engine to close.
+        }
+        // Read after the open: an open nobody wanted set it.
+        await _closing;
+    }
+
+    private static void Try(string what, Action action)
+    {
+        try
+        {
+            action();
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: {what} failed while closing the player: {error.GetType().Name}");
+        }
     }
 
     private static async Task CloseSessionAsync(PlayerSession session)

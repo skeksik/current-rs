@@ -27,6 +27,9 @@ public sealed partial class DetailsPage : Page
     private DetailsView? _view;
     private KeptDetails? _kept;
 
+    /// <summary>The item this page shows.</summary>
+    private ItemRef? _item;
+
     /// <summary>Reached by Back or Forward: scroll to where the page and its rows were once they are laid out.</summary>
     private bool _restore;
     private ValueSubscription<ItemDetails?>? _details;
@@ -61,6 +64,7 @@ public sealed partial class DetailsPage : Page
             return;
         }
         var ui = new DispatcherQueueUi(DispatcherQueue);
+        _item = args.Item;
         _kept = server.Details(args, args.Item);
         _view = _kept.View!;
         _restore = e.NavigationMode is NavigationMode.Back or NavigationMode.Forward;
@@ -277,7 +281,9 @@ public sealed partial class DetailsPage : Page
         {
             return;
         }
-        var number = _details?.Value?.Summary.Kind == "series" ? BrowseText.EpisodeNumber(target.Item) : "";
+        // Another item than the page's (a series' next episode) is named. Decided from the target alone: the details may arrive
+        // after it, on their own subscription.
+        var number = target.Item.Item != _item ? BrowseText.EpisodeNumber(target.Item) : "";
         var verb = target.Resumes ? "Resume" : "Play";
         var label = number.Length > 0 ? $"{verb} {number}" : verb;
         var main = new Button

@@ -165,8 +165,8 @@ Write-Host "libmpv components: $(($components | Where-Object shipped).name -join
 # docs/notes/windows-shell.md. Files no package claims are the app's own, the licence files, or listed as "(not in deps.json)".
 $deps = Get-Content (Join-Path $out 'Current.deps.json') -Raw | ConvertFrom-Json
 $owner = @{}
-foreach ($target in $deps.targets.PSObject.Properties) {
-    foreach ($library in $target.Value.PSObject.Properties) {
+foreach ($runtime in $deps.targets.PSObject.Properties) {
+    foreach ($library in $runtime.Value.PSObject.Properties) {
         foreach ($kind in 'runtime', 'native', 'resources') {
             $assets = $library.Value.$kind
             if (-not $assets) { continue }

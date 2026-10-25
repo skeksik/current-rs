@@ -32,7 +32,8 @@ public sealed record UserState(
     int? UnplayedCount,
     int PlayCount);
 
-/// <summary>Where an episode belongs. <c>NumberEnd</c> is the last episode of a double episode.</summary>
+/// <summary>Where an episode belongs. <c>NumberEnd</c> is the last episode of a double episode. <c>Label</c> is the core's label for
+/// the numbers: "S1:E2", "S1:E2-E3", "E5" or empty.</summary>
 public sealed record EpisodeLinks(
     ItemRef? Series,
     string? SeriesName,
@@ -40,7 +41,8 @@ public sealed record EpisodeLinks(
     string? SeasonName,
     int? Number,
     int? NumberEnd,
-    int? SeasonNumber);
+    int? SeasonNumber,
+    string Label);
 
 /// <summary>
 /// An item as a tile or a row shows it. <c>Kind</c> is the media kind: movie, series, episode..., or one the server named.
@@ -338,7 +340,8 @@ internal static class MapBrowse
         links.SeasonName,
         Count(links.Number),
         Count(links.NumberEnd),
-        Count(links.SeasonNumber));
+        Count(links.SeasonNumber),
+        links.Label);
 
     public static ItemSummary From(Ffi.ItemSummary summary) => new(
         From(summary.Item),
@@ -372,7 +375,8 @@ internal static class MapBrowse
         links.SeasonName,
         Size(links.Number, nameof(links.Number)),
         Size(links.NumberEnd, nameof(links.NumberEnd)),
-        Size(links.SeasonNumber, nameof(links.SeasonNumber)));
+        Size(links.SeasonNumber, nameof(links.SeasonNumber)),
+        links.Label);
 
     public static Ffi.ItemSummary ToFfi(ItemSummary summary) => new(
         ToFfi(summary.Item),

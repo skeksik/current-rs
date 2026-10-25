@@ -349,23 +349,39 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         Player.FullScreenChanged(full);
     }
 
-    /// <summary>Closing the window while the player is open closes the player first (its stop is reported, the engine shut down), then
-    /// the window, so the core is not disposed under it. async void, as event handlers are: it catches everything itself.</summary>
+    /// <summary>Whether the window waits for the player before it closes, and whether that wait is over.</summary>
+    private bool _closingPlayerFirst, _playerClosedForWindow;
+
+    /// <summary>Closing the window while the player is open, or its engine still opening or closing (after Back), closes the player
+    /// first and waits until no engine is left (its stop is reported, the engine shut down), then the window, so the core is not
+    /// disposed under it. A second close while it waits is held back. async void, as event handlers are: it catches everything
+    /// itself.</summary>
     private async void OnClosing(AppWindow sender, AppWindowClosingEventArgs args)
     {
-        if (!Player.IsOpen)
+        if (_playerClosedForWindow)
+        {
+            return;
+        }
+        if (_closingPlayerFirst)
+        {
+            args.Cancel = true;
+            return;
+        }
+        if (!Player.IsBusy)
         {
             return;
         }
         args.Cancel = true;
+        _closingPlayerFirst = true;
         try
         {
-            await Player.CloseAsync();
+            await Player.CloseAndWaitAsync();
         }
         catch (Exception error)
         {
             Trace.TraceError($"Current: closing the player with the window failed: {error.GetType().Name}");
         }
+        _playerClosedForWindow = true;
         Close();
     }
 
