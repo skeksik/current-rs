@@ -68,9 +68,9 @@ capabilities, node conversion, struct layouts, swap chain reference counting wit
 | An HLS playlist whose segments answer 302: segments carry header and cookie, the target gets nothing | failed: same cause | passed (run 40173566806) |
 | No log line at `v` level contains the token, the cookie or the header value; a redacted URL line exists | passed | passed (run 40173566806) |
 | TLS: `tls-verify=yes` refuses a self-signed stand-in (no request arrives); with it off the same stand-in opens | passed (GnuTLS) | passed (run 40173566806) |
-| A second engine waits, then gets `Busy`; after the first is destroyed one starts | passed | CI run of this change |
-| The next file replaces the first on the same engine (`EndFile(Stop)`, then `FileLoaded`) | passed | CI run of this change |
-| Two engines one after the other in a child process: nothing secret on its stderr | passed | CI run of this change |
+| A second engine waits, then gets `Busy`; after the first is destroyed one starts | passed | passed (run 40175292879) |
+| The next file replaces the first on the same engine (`EndFile(Stop)`, then `FileLoaded`) | passed | passed (run 40175292879) |
+| Two engines one after the other in a child process: nothing secret on its stderr | passed | passed (run 40175292879) |
 
 The TLS test makes a throwaway certificate at run time with `openssl` (nothing checked in); the Windows image lists OpenSSL 3.6.5
 (actions/runner-images, `images/windows/Windows2025-VS2026-Readme.md`, image 20261007.264.1, read 2026-10-25).
