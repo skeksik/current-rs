@@ -230,6 +230,7 @@ async fn items_send_the_query_and_page() {
     assert!(film.artwork[2].blurhash.is_some());
 
     let episode = &page.items[1];
+    assert_eq!(episode.item, item(EPISODE));
     let links = episode.episode.as_ref().unwrap();
     assert_eq!(links.series, Some(item(SERIES)));
     assert_eq!(links.series_name.as_deref(), Some("Example Series"));

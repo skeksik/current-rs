@@ -16,6 +16,7 @@ tokio = { workspace = true, features = ["net", "time"] }
 url.workspace = true
 
 [dev-dependencies]
+jellyfin-stand-in.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
 
 [lints]
