@@ -120,8 +120,9 @@ public abstract record QualityChoice
 /// <summary>A media segment for its skip button; <c>Kind</c> is an open name (<c>intro</c>, <c>outro</c>, ...).</summary>
 public sealed record SegmentInfo(string Kind, TimeSpan Start, TimeSpan End);
 
-/// <summary>The "Next episode" card; <c>Countdown</c> in whole seconds while it runs.</summary>
-public sealed record NextEpisodeInfo(ItemRef Item, string Name, string? Series, uint? Season, uint? Episode, uint? Countdown);
+/// <summary>The "Next episode" card; <c>Number</c> is the core's label ("S1:E2" or empty), <c>Countdown</c> in whole seconds while it
+/// runs.</summary>
+public sealed record NextEpisodeInfo(ItemRef Item, string Name, string? Series, uint? Season, uint? Episode, string Number, uint? Countdown);
 
 /// <summary>The player's state: at most 4 changes a second for the position, at once for anything else.</summary>
 public sealed record PlayerState(
@@ -158,7 +159,8 @@ public enum MediaStatusKind
 
 /// <summary>
 /// What the system media controls show (ADR 0019): copy it into <c>SystemMediaTransportControls</c> (display type video) and update
-/// the timeline when <c>TimelineRevision</c> changes. Previous is a restart (seek to zero). <c>Artwork</c> is encoded image bytes.
+/// the timeline when <c>TimelineRevision</c> changes. Previous is a restart (seek to zero). <c>Subtitle</c> is the core's line under the
+/// title for an episode ("Series · S1:E2"). <c>Artwork</c> is encoded image bytes.
 /// </summary>
 public sealed record NowPlaying(
     ItemRef? Item,
@@ -167,6 +169,7 @@ public sealed record NowPlaying(
     string? Series,
     uint? Season,
     uint? Episode,
+    string? Subtitle,
     byte[]? Artwork,
     MediaStatusKind Status,
     TimeSpan Position,
@@ -181,7 +184,7 @@ public sealed record NowPlaying(
     ulong TimelineRevision)
 {
     public static NowPlaying Nothing { get; } = new(
-        null, null, null, null, null, null, null, MediaStatusKind.Stopped, TimeSpan.Zero, null, null, false, false, false, false, false,
+        null, null, null, null, null, null, null, null, MediaStatusKind.Stopped, TimeSpan.Zero, null, null, false, false, false, false, false,
         false, 0);
 }
 
@@ -334,7 +337,8 @@ internal static class PlayerMap
         state.Route is { } route ? From(route) : null,
         state.Segment is { } segment ? new SegmentInfo(segment.Kind, Ms(segment.StartMs), Ms(segment.EndMs)) : null,
         state.Next is { } next
-            ? new NextEpisodeInfo(MapBrowse.From(next.Item), next.Name, next.Series, next.Season, next.Episode, next.Countdown)
+            ? new NextEpisodeInfo(
+                MapBrowse.From(next.Item), next.Name, next.Series, next.Season, next.Episode, next.Number, next.Countdown)
             : null,
         From(state.Quality),
         state.Volume,
@@ -347,6 +351,7 @@ internal static class PlayerMap
         now.Series,
         now.Season,
         now.Episode,
+        now.Subtitle,
         now.Artwork,
         now.Status switch
         {

@@ -105,6 +105,15 @@ public partial class App : Application
         }
     }
 
+    /// <summary>Plays what a Play button names, in the main window (ADR 0019 task 5). Called on the UI thread.</summary>
+    internal static void Play(PlayTarget target, bool fromStart)
+    {
+        if (!_closed)
+        {
+            _window?.Play(target, fromStart);
+        }
+    }
+
     /// <summary>Drops the back and forward history (after a finished sign-in). Called on the UI thread.</summary>
     internal static void ClearNavigationHistory() => _window?.ClearHistory();
 

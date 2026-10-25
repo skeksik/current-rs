@@ -131,15 +131,48 @@ jobs:
         shell: pwsh
         run: ./bindings/csharp/test.ps1
 
-  # The Windows app (apps/windows): build the core and the bindings, publish the app self-contained for x64, run its smoke test, build
-  # the installer and test install, upgrade and uninstall (docs/notes/windows-shell.md, ADR 0009).
+  # The Windows app (apps/windows): build the core and the bindings, publish the app self-contained for x64 with the libmpv engine, run
+  # its smoke test, build the installer and test install, upgrade and uninstall (docs/notes/windows-shell.md, ADR 0009). The libmpv
+  # build comes from the same cache as the "mpv (Windows)" job, with the same key and the same steps on a miss (about 29 minutes more).
   app-windows:
     name: App (Windows)
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 75
+    env:
+      WORK: C:\mpvb
+      MESON_VERSION: 1.12.1
+      NINJA_VERSION: 1.13.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
+      - name: Restore the libmpv build
+        id: cache-build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            C:\mpvb\prefix
+            C:\mpvb\tools
+          key: mpv-windows-build-${{ hashFiles('build/mpv-windows/**', '.github/workflows/mpv-windows.yml') }}
+      - name: Cache downloads (rebuild only)
+        if: steps.cache-build.outputs.cache-hit != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\mpvb\dl
+          key: mpv-windows-dl-${{ hashFiles('build/mpv-windows/sources.toml') }}
+      - name: Install meson and ninja; MSYS2 make for FFmpeg (rebuild only)
+        if: steps.cache-build.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check "meson==$env:MESON_VERSION" "ninja==$env:NINJA_VERSION"
+          C:\msys64\usr\bin\pacman.exe -Sy --noconfirm --needed make diffutils
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build libmpv (rebuild only)
+        if: steps.cache-build.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: python build/mpv-windows/build.py --work $env:WORK
+      - name: Licence check and the DLL set
+        shell: pwsh
+        run: python build/mpv-windows/check.py --work $env:WORK --out $env:WORK\out
       # Uncached: about 3 minutes.
       - name: Install uniffi-bindgen-cs
         run: cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.1+v0.31.0 uniffi-bindgen-cs
@@ -148,7 +181,7 @@ jobs:
         run: ./bindings/csharp/build.ps1
       - name: Publish the app
         shell: pwsh
-        run: ./apps/windows/build.ps1
+        run: ./apps/windows/build.ps1 -Mpv $env:WORK\out
       - name: Smoke run (headless start and exit, bridge checks)
         shell: pwsh
         run: ./apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe -StandIn target/x86_64-pc-windows-msvc/release/jellyfin-stand-in.exe

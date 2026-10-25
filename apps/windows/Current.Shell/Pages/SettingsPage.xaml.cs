@@ -9,7 +9,7 @@ namespace Current.Shell.Pages;
 
 /// <summary>
 /// Settings: the app theme under Personalization, the saved servers under Accounts (sign out, sign in again, sign in to the gateway
-/// again, extra headers, remove), the image cache under Storage, diagnostics, and About. It waits for the core to open (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
+/// again, extra headers, remove), skipping intros and credits under Playback, the image cache under Storage, diagnostics, and About. It waits for the core to open (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
 /// </summary>
 public sealed partial class SettingsPage : Page
 {
@@ -49,6 +49,8 @@ public sealed partial class SettingsPage : Page
             VersionText = $"Version {core.AppInfo.Version}";
             ShowTheme(core.AppTheme);
             ThemeBox.IsEnabled = true;
+            ShowAutoSkip(core.PlaybackSettings().SkipsIntrosAndCredits);
+            AutoSkipSwitch.IsEnabled = true;
             Servers ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
             Servers.Start();
             Bindings.Update();
@@ -112,6 +114,51 @@ public sealed partial class SettingsPage : Page
         ThemeInfo.Title = "Couldn't change the app theme.";
         ThemeInfo.Message = message;
         ThemeInfo.IsOpen = true;
+    }
+
+    /// <summary>The auto-skip switch is being set from the core: its Toggled is not a choice of the user's.</summary>
+    private bool _showingAutoSkip;
+
+    private void ShowAutoSkip(bool skip)
+    {
+        _showingAutoSkip = true;
+        AutoSkipSwitch.IsOn = skip;
+        _showingAutoSkip = false;
+    }
+
+    /// <summary>
+    /// Saves the auto-skip switch at once (the core; open players follow). If it cannot be saved it still stands for this run (the
+    /// core's rule), and the notice says so. async void, as event handlers are: it catches everything itself.
+    /// </summary>
+    private async void OnAutoSkipToggled(object sender, RoutedEventArgs e)
+    {
+        if (_showingAutoSkip || App.Core is not { } core)
+        {
+            return;
+        }
+        PlaybackInfo.IsOpen = false;
+        try
+        {
+            await core.SetSkipIntrosAndCreditsAsync(AutoSkipSwitch.IsOn);
+        }
+        catch (CoreStoreException error)
+        {
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing auto-skip failed: {error.GetType().Name}");
+            ShowAutoSkip(core.PlaybackSettings().SkipsIntrosAndCredits);
+            ShowPlaybackInfo(ProblemText.Unexpected);
+        }
+    }
+
+    private void ShowPlaybackInfo(string message)
+    {
+        PlaybackInfo.Severity = InfoBarSeverity.Error;
+        PlaybackInfo.Title = "Couldn't save this setting.";
+        PlaybackInfo.Message = message;
+        PlaybackInfo.IsOpen = true;
     }
 
     private void OnAddServer(object sender, RoutedEventArgs e) => Frame.Navigate(typeof(AddServerPage));

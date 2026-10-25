@@ -301,6 +301,16 @@ impl Controls {
         lock(&self.state.reports).clone()
     }
 
+    /// Marks `id` played or not on the server only, as playback or another client would, without any client being told.
+    pub fn set_played_on_server(&self, id: &str, played: bool) {
+        let mut marks = lock(&self.state.marks);
+        if played {
+            marks.played.insert(id.to_owned());
+        } else {
+            marks.played.remove(id);
+        }
+    }
+
     /// The image requests that passed the gateway so far, oldest first.
     pub fn images(&self) -> Vec<ImageSeen> {
         lock(&self.state.images).clone()

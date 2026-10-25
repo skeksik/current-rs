@@ -72,6 +72,8 @@ pub struct EpisodeLinks {
     /// The last episode of a double episode.
     pub number_end: Option<u32>,
     pub season_number: Option<u32>,
+    /// The core's label for the numbers: `S1:E2`, `S1:E2-E3`, `E5` or empty (`EpisodeLinks::number_label`). Ignored on the way in.
+    pub label: String,
 }
 
 /// An item as a tile or a row shows it.
@@ -478,6 +480,7 @@ impl From<&model::EpisodeLinks> for EpisodeLinks {
             number: links.number,
             number_end: links.number_end,
             season_number: links.season_number,
+            label: links.number_label(),
         }
     }
 }
@@ -504,6 +507,70 @@ impl From<&model::ItemSummary> for ItemSummary {
 impl From<model::ItemSummary> for ItemSummary {
     fn from(summary: model::ItemSummary) -> Self {
         (&summary).into()
+    }
+}
+
+impl From<&UserState> for model::UserState {
+    fn from(state: &UserState) -> Self {
+        Self {
+            played: state.played,
+            position: state.position_ms.map(Duration::from_millis),
+            progress: state.progress,
+            favourite: state.favourite,
+            unplayed_count: state.unplayed_count,
+            play_count: state.play_count,
+        }
+    }
+}
+
+impl From<&EpisodeLinks> for model::EpisodeLinks {
+    fn from(links: &EpisodeLinks) -> Self {
+        Self {
+            series: links.series.as_ref().map(Into::into),
+            series_name: links.series_name.clone(),
+            season: links.season.as_ref().map(Into::into),
+            season_name: links.season_name.clone(),
+            number: links.number,
+            number_end: links.number_end,
+            season_number: links.season_number,
+        }
+    }
+}
+
+/// Back to the model, for the rules the UI asks about a tile's item ([`crate::browse::play_target`]). `poster` and `wide` are picked
+/// from `artwork` again when needed.
+impl From<&ItemSummary> for model::ItemSummary {
+    fn from(summary: &ItemSummary) -> Self {
+        Self {
+            item: (&summary.item).into(),
+            kind: model::MediaKind::new(summary.kind.as_str()),
+            name: summary.name.clone(),
+            year: summary.year,
+            runtime: summary.runtime_ms.map(Duration::from_millis),
+            artwork: summary.artwork.iter().map(Into::into).collect(),
+            user: (&summary.user).into(),
+            episode: summary.episode.as_ref().map(Into::into),
+            child_count: summary.child_count,
+        }
+    }
+}
+
+/// What a Play button starts (ADR 0019, task 5): `item` (a series' next episode on its page) from `start_ms`. When `resumes`, the
+/// button says "Resume" and "Play from the beginning" goes with it.
+#[derive(Clone, Debug, PartialEq, uniffi::Record)]
+pub struct PlayTarget {
+    pub item: ItemSummary,
+    pub start_ms: u64,
+    pub resumes: bool,
+}
+
+impl From<&model::PlayTarget> for PlayTarget {
+    fn from(target: &model::PlayTarget) -> Self {
+        Self {
+            item: (&target.item).into(),
+            start_ms: millis(target.start),
+            resumes: target.resumes(),
+        }
     }
 }
 

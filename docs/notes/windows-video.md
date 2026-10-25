@@ -113,3 +113,22 @@ Not needed: no case failed in composition mode, so neither the D3D11 render API 
 - A seek from the media flyout left a stale position until the timeline was refreshed on `playback-restart`.
 - `dotnet workload list` on a fresh SDK ran the .NET first-run step and created an untrusted ASP.NET HTTPS development certificate in
   the owner's user certificate store.
+
+## ADR 0007 item 5: answered on the owner's PC (2026-10-25)
+From the player's Windows run (docs/notes/windows-shell.md, "Player: Windows run"), with the app's player, libmpv 0.41.0 (D6) in
+composition mode, the same two monitors as above (now driver 621.01).
+- **`video-sync=display-resample`:** not adopted; mpv's default (`audio`) stays (ADR 0019 choice 11). Compared by the owner with a
+  bar crossing the picture at 960 px/s (synthetic files at 23.976, 24, 25 and 60 fps; `CURRENT_MPV_VIDEO_SYNC` switched the mode for
+  the comparison): on the 60 Hz monitor `display-resample` made 23.976 fps "more uneven" and left 24 fps the same; on the 144 Hz
+  monitor 23.976 and 25 fps looked the same either way. mpv's manual says the display-sync modes "require a vsync blocked presentation
+  mode" and use "the detected display vertical refresh rate" (`--video-sync`, `DOCS/man/options.rst`, v0.41.0, read 2026-10-25); in
+  composition mode mpv sees no output (above: "Failed to query swap chain's output information") and has only
+  `display-fps-override`, which may be why it did not help (not verified). 120 Hz was not tried.
+- **Dolby Vision (profiles 5, 7, 8) and HDR10+:** not checked: no such files on the owner's server. HLG (synthetic 2160p50) played
+  through the app on the HDR monitor (the owner: right) and was tone-mapped on the SDR one, with the display facts following a move
+  between them.
+- **Direct play over HTTP:** works through the app (LAN, and through the owner's header gateway: credentials in extra headers).
+- **23.976 and 24 fps on 60, 120 and 144 Hz:** 60 and 144 Hz as above; 120 Hz not checked.
+- **The one-row gap:** WinUI places the content's window one row below the client area's top while the content is extended into the
+  title bar, in full screen too; the player turns the extension off for full screen, and the panel fills the screen (3840×2160,
+  1920×1080).

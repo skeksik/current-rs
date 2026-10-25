@@ -105,6 +105,31 @@ pub struct EngineConfig {
     /// Sent as the User-Agent of mpv's requests: `Current/<version>`.
     pub user_agent: String,
     pub log_level: LogLevel,
+    /// mpv's `video-sync` mode for a display output, from [`video_sync_mode`]; `None` keeps mpv's default (`audio`). For comparing
+    /// `display-resample` on a device (ADR 0007 item 5, ADR 0019 choice 11), not a user setting.
+    pub video_sync: Option<&'static str>,
+}
+
+/// mpv's `video-sync` modes: "audio", "the default mode", and the `display-*` and desync modes (`--video-sync`, `DOCS/man/options.rst`,
+/// mpv v0.41.0, read 2026-10-25).
+const VIDEO_SYNC_MODES: [&str; 9] = [
+    "audio",
+    "display-resample",
+    "display-resample-vdrop",
+    "display-resample-desync",
+    "display-tempo",
+    "display-vdrop",
+    "display-adrop",
+    "display-desync",
+    "desync",
+];
+
+/// `name` as one of mpv's `video-sync` modes, or `None` for anything else, so no other text reaches mpv's options.
+pub fn video_sync_mode(name: &str) -> Option<&'static str> {
+    VIDEO_SYNC_MODES
+        .iter()
+        .copied()
+        .find(|mode| *mode == name.trim())
 }
 
 /// One option set before `mpv_initialize`.
@@ -172,6 +197,9 @@ pub fn start_options(config: &EngineConfig) -> Vec<StartOption> {
                     .into_iter()
                     .map(|(name, value)| required(name, value)),
             );
+            if let Some(mode) = config.video_sync {
+                out.push(required("video-sync", mode));
+            }
         }
     }
     out
@@ -540,6 +568,7 @@ mod tests {
             output: Output::Headless,
             user_agent: "Current/0.1.0".into(),
             log_level: LogLevel::Info,
+            video_sync: None,
         };
         let opts = start_options(&config);
         assert_eq!(value(&opts, "vo"), "null");
@@ -578,8 +607,11 @@ mod tests {
             },
             user_agent: "Current/0.1.0".into(),
             log_level: LogLevel::Verbose,
+            video_sync: None,
         };
         let opts = start_options(&config);
+        // mpv's default video sync unless asked for (ADR 0019 choice 11).
+        assert!(!names(&opts).contains(&"video-sync"));
         for (n, v) in [
             ("vo", "gpu-next"),
             ("gpu-api", "d3d11"),
@@ -595,6 +627,39 @@ mod tests {
             assert_eq!(value(&opts, n), v, "{n}");
         }
         assert_eq!(LogLevel::Verbose.mpv_name(), "v");
+    }
+
+    #[test]
+    fn video_sync_takes_only_mpv_s_modes() {
+        assert_eq!(
+            video_sync_mode("display-resample"),
+            Some("display-resample")
+        );
+        assert_eq!(video_sync_mode(" audio "), Some("audio"));
+        for refused in ["", "display-resample,vo=null", "Display-Resample", "tempo"] {
+            assert_eq!(video_sync_mode(refused), None, "{refused}");
+        }
+        let config = EngineConfig {
+            output: Output::Composition {
+                size: CompositionSize {
+                    width: 1280,
+                    height: 720,
+                },
+                display: DisplayFacts {
+                    hdr: false,
+                    peak_nits: 270.0,
+                    sdr_white_nits: 80.0,
+                    refresh_hz: 60.0,
+                },
+            },
+            user_agent: "Current/0.1.0".into(),
+            log_level: LogLevel::Info,
+            video_sync: video_sync_mode("display-resample"),
+        };
+        assert_eq!(
+            value(&start_options(&config), "video-sync"),
+            "display-resample"
+        );
     }
 
     #[test]

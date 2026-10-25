@@ -35,6 +35,23 @@ pub struct EpisodeLinks {
     pub season_number: Option<u32>,
 }
 
+impl EpisodeLinks {
+    /// The episode's place as one label, as every UI shows it: `S1:E2`, `S1:E2-E3` for a file holding several, `S1` or `E5` when the
+    /// server gave only one number, empty when it gave none.
+    pub fn number_label(&self) -> String {
+        let episode = match (self.number, self.number_end) {
+            (Some(first), Some(last)) if last != first => format!("E{first}-E{last}"),
+            (Some(first), _) => format!("E{first}"),
+            (None, _) => String::new(),
+        };
+        match self.season_number {
+            Some(season) if episode.is_empty() => format!("S{season}"),
+            Some(season) => format!("S{season}:{episode}"),
+            None => episode,
+        }
+    }
+}
+
 /// What a grid tile or a row shows of an item.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ItemSummary {
@@ -164,9 +181,125 @@ pub struct ItemDetails {
     pub media: Option<MediaSummary>,
 }
 
+/// What a Play button starts (ADR 0019, task 5): the item that plays, which for a series is its next episode, and where. The details
+/// screen owns the choice of resuming or starting over (ADR 0019, "Start and resume"): it offers both when [`PlayTarget::resumes`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayTarget {
+    pub item: ItemSummary,
+    /// The resume point, or zero.
+    pub start: Duration,
+}
+
+impl PlayTarget {
+    /// Kinds that play by themselves: a film, an episode, a video, a music video. A series plays through its next episode; other
+    /// kinds (audio, folders, collections) have no player yet.
+    pub fn plays(kind: &MediaKind) -> bool {
+        [
+            MediaKind::MOVIE,
+            MediaKind::EPISODE,
+            MediaKind::VIDEO,
+            MediaKind::MUSIC_VIDEO,
+        ]
+        .contains(kind)
+    }
+
+    /// Play for `item` itself: from its resume point unless it is played (a played item with a position left over starts again),
+    /// else from the start. `None` for a kind that does not play by itself.
+    pub fn for_item(item: &ItemSummary) -> Option<Self> {
+        if !Self::plays(&item.kind) {
+            return None;
+        }
+        let start = match item.user.position {
+            Some(position) if !item.user.played => position,
+            _ => Duration::ZERO,
+        };
+        Some(Self {
+            item: item.clone(),
+            start,
+        })
+    }
+
+    /// Whether Play resumes: the button says "Resume", and "Play from the beginning" goes with it.
+    pub fn resumes(&self) -> bool {
+        !self.start.is_zero()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_episode_s_label_names_what_the_server_gave() {
+        let links = |season, number, number_end| super::EpisodeLinks {
+            season_number: season,
+            number,
+            number_end,
+            ..Default::default()
+        };
+        assert_eq!(links(Some(1), Some(2), None).number_label(), "S1:E2");
+        assert_eq!(links(Some(1), Some(2), Some(3)).number_label(), "S1:E2-E3");
+        assert_eq!(links(Some(1), Some(2), Some(2)).number_label(), "S1:E2");
+        assert_eq!(links(Some(0), None, None).number_label(), "S0");
+        assert_eq!(links(None, Some(5), None).number_label(), "E5");
+        assert_eq!(links(None, None, Some(4)).number_label(), "");
+    }
+
     use super::*;
+    use crate::identity::{ItemId, ServerKey, ServerRef, ServiceType};
+
+    fn summary(kind: MediaKind, user: UserState) -> ItemSummary {
+        ItemSummary {
+            item: ItemRef::new(
+                ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+                ItemId::new("42"),
+            ),
+            kind,
+            name: "Example".to_owned(),
+            year: None,
+            runtime: None,
+            artwork: Vec::new(),
+            user,
+            episode: None,
+            child_count: None,
+        }
+    }
+
+    #[test]
+    fn play_resumes_from_the_position_unless_played() {
+        let started = UserState {
+            position: Some(Duration::from_secs(600)),
+            ..UserState::default()
+        };
+        let target = PlayTarget::for_item(&summary(MediaKind::MOVIE, started.clone())).unwrap();
+        assert_eq!(target.start, Duration::from_secs(600));
+        assert!(target.resumes());
+
+        let played = UserState {
+            played: true,
+            ..started
+        };
+        let target = PlayTarget::for_item(&summary(MediaKind::EPISODE, played)).unwrap();
+        assert_eq!(target.start, Duration::ZERO);
+        assert!(!target.resumes());
+
+        let fresh = PlayTarget::for_item(&summary(MediaKind::VIDEO, UserState::default())).unwrap();
+        assert!(!fresh.resumes());
+    }
+
+    #[test]
+    fn only_kinds_that_play_by_themselves_get_a_target() {
+        for kind in [
+            MediaKind::SERIES,
+            MediaKind::SEASON,
+            MediaKind::AUDIO,
+            MediaKind::BOX_SET,
+            MediaKind::new("SomeFutureKind"),
+        ] {
+            assert!(PlayTarget::for_item(&summary(kind, UserState::default())).is_none());
+        }
+        assert!(
+            PlayTarget::for_item(&summary(MediaKind::MUSIC_VIDEO, UserState::default())).is_some()
+        );
+    }
 
     #[test]
     fn dates_that_cannot_exist_are_refused() {

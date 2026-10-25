@@ -24,6 +24,10 @@ use current_playback::{EndReason, EngineEvent, EngineFile, EngineTrack, External
 
 use super::backend::{EngineOutput, Signal, SwapChain, VideoOutput};
 
+/// An environment variable naming one of mpv's `video-sync` modes, for comparing `display-resample` with mpv's default on a device
+/// (ADR 0007 item 5, ADR 0019 choice 11; docs/notes/windows-video.md). A test aid, not a setting: unset, mpv keeps its default.
+pub(crate) const VIDEO_SYNC_VARIABLE: &str = "CURRENT_MPV_VIDEO_SYNC";
+
 /// Which kind of track a choice is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TrackKind {
@@ -132,9 +136,14 @@ impl MpvMapper {
         Ok(request)
     }
 
-    /// The `sub-add` for a subtitle the core fetched; its track is found once libmpv lists it.
+    /// The `sub-add` for a subtitle the core fetched; its track is found once libmpv lists it. One added to be shown is also chosen
+    /// then, as an embedded one is: `sub-add`'s `select` on a file loaded with `sid=no` left it unshown on the owner's run
+    /// (2026-10-25) although a headless libmpv selects it (`current-mpv`'s live test), and choosing it by id shows it.
     pub(crate) fn subtitle_file(&mut self, subtitle: ExternalSubtitle) -> SubtitleFile {
         self.pending_external.push_back(subtitle.index);
+        if subtitle.select {
+            self.want_subtitle = Some(subtitle.index);
+        }
         SubtitleFile {
             data: subtitle.data,
             title: subtitle.title,
@@ -343,7 +352,7 @@ mod real {
     use current_playback::{Engine, EngineFile, EngineTrack, ExternalSubtitle};
     use tokio::sync::mpsc::UnboundedSender;
 
-    use super::{MpvCommand, MpvMapper, TrackKind, engine_error_kind};
+    use super::{MpvCommand, MpvMapper, TrackKind, VIDEO_SYNC_VARIABLE, engine_error_kind};
     use crate::player::backend::{Backend, EngineOutput, Signal};
 
     /// The libmpv engine of one player.
@@ -375,6 +384,10 @@ mod real {
                 output,
                 user_agent: current_mpv::user_agent(),
                 log_level: LogLevel::Info,
+                // A test aid only (VIDEO_SYNC_VARIABLE); anything that is not one of mpv's modes is ignored.
+                video_sync: std::env::var(VIDEO_SYNC_VARIABLE)
+                    .ok()
+                    .and_then(|name| current_mpv::video_sync_mode(&name)),
             };
             let mpv = Mpv::start(
                 &config,
@@ -694,6 +707,56 @@ mod tests {
             &mut commands,
         );
         assert_eq!(commands, vec![MpvCommand::Subtitle(TrackChoice::Id(2))]);
+    }
+
+    #[test]
+    fn a_subtitle_fetched_at_start_is_chosen_once_listed() {
+        // The start with a fetched subtitle: the file loads with it off, it is added with `select`, and nothing else chooses it.
+        let mut mapper = MpvMapper::default();
+        let mut start = file("https://media.example.com/v", StreamAuth::default());
+        start.subtitle = EngineTrack::Off;
+        let request = mapper.file_request(start).unwrap();
+        assert_eq!(request.subtitle, Some(TrackChoice::Off));
+        let added = mapper.subtitle_file(ExternalSubtitle {
+            index: 3,
+            format: None,
+            data: b"1".to_vec(),
+            title: None,
+            language: None,
+            select: true,
+        });
+        assert!(added.select);
+        let (mut signals, mut commands) = (Vec::new(), Vec::new());
+        mapper.translate(
+            MpvEvent::Property(PropertyChange::TrackList(vec![
+                track(1, "video", Some(0), false),
+                track(1, "sub", None, true),
+            ])),
+            &mut signals,
+            &mut commands,
+        );
+        assert_eq!(commands, vec![MpvCommand::Subtitle(TrackChoice::Id(1))]);
+
+        // One added only to be offered is not chosen.
+        let mut mapper = MpvMapper::default();
+        mapper
+            .file_request(file("https://media.example.com/v", StreamAuth::default()))
+            .unwrap();
+        mapper.subtitle_file(ExternalSubtitle {
+            index: 4,
+            format: None,
+            data: b"1".to_vec(),
+            title: None,
+            language: None,
+            select: false,
+        });
+        commands.clear();
+        mapper.translate(
+            MpvEvent::Property(PropertyChange::TrackList(vec![track(1, "sub", None, true)])),
+            &mut signals,
+            &mut commands,
+        );
+        assert!(commands.is_empty(), "{commands:?}");
     }
 
     #[test]

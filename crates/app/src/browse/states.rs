@@ -125,8 +125,8 @@ pub(super) struct Answered {
     pub(super) parents: Vec<ItemRef>,
 }
 
-/// Only the items with changes not yet confirmed are kept: what an item shows otherwise is read from the live lists, so nothing
-/// here grows with what the session loaded.
+/// Only the items with changes not yet confirmed are kept, and a count of the changes wanted per item: what an item shows otherwise
+/// is read from the live lists, so nothing here grows with what the session loaded, only with what the user marked.
 #[derive(Default)]
 pub(super) struct ItemStates {
     inner: Mutex<Inner>,
@@ -137,6 +137,8 @@ struct Inner {
     pending: HashMap<ItemRef, Pending>,
     /// Items whose changes are being sent.
     sending: HashSet<ItemRef>,
+    /// How many changes were wanted per item.
+    wanted: HashMap<ItemRef, u64>,
 }
 
 impl ItemStates {
@@ -145,6 +147,11 @@ impl ItemStates {
         if let Some(pending) = lock(&self.inner).pending.get(&summary.item) {
             summary.user = pending.shown();
         }
+    }
+
+    /// How many changes were wanted for `item` so far: an answer asked for before a later change must not show over it.
+    pub(super) fn wanted(&self, item: &ItemRef) -> u64 {
+        lock(&self.inner).wanted.get(item).copied().unwrap_or(0)
     }
 
     /// The state of `item` while a change for it is pending.
@@ -161,6 +168,7 @@ impl ItemStates {
         shown: Option<&ItemSummary>,
     ) -> (UserState, bool) {
         let mut inner = lock(&self.inner);
+        *inner.wanted.entry(item.clone()).or_default() += 1;
         let pending = inner
             .pending
             .entry(item.clone())

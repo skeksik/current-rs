@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, Weak};
 
 use current_jellyfin::AuthError;
-use current_model::{ItemDetails, ItemRef, ItemSummary, MediaKind, UserState};
+use current_model::{ItemDetails, ItemRef, ItemSummary, MediaKind, PlayTarget, UserState};
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
@@ -26,6 +26,8 @@ struct Details {
     ctx: Arc<Context>,
     item: ItemRef,
     details: watch::Sender<Option<ItemDetails>>,
+    /// What the Play button starts: the item, or a series' next episode.
+    play: watch::Sender<Option<PlayTarget>>,
     state: watch::Sender<LoadState>,
     seasons: Arc<ObservableList<ItemSummary>>,
     episodes: Arc<ObservableList<ItemSummary>>,
@@ -64,6 +66,7 @@ impl DetailsView {
             ctx,
             item,
             details: watch::Sender::new(None),
+            play: watch::Sender::new(None),
             state: watch::Sender::new(LoadState::default()),
             seasons: ObservableList::new(),
             episodes: ObservableList::new(),
@@ -90,6 +93,12 @@ impl DetailsView {
 
     pub fn state(&self) -> watch::Receiver<LoadState> {
         self.inner.state.subscribe()
+    }
+
+    /// What the page's Play button starts, once loaded: the item itself from its resume point ([`PlayTarget::for_item`]), or for a
+    /// series its next episode (the server's next up, else its first episode). `None` for an item that does not play.
+    pub fn play(&self) -> watch::Receiver<Option<PlayTarget>> {
+        self.inner.play.subscribe()
     }
 
     /// A series' seasons; empty for other kinds.
@@ -132,23 +141,34 @@ impl Details {
                     let (details, similar) =
                         tokio::join!(client.details(&item), client.similar(&item, SIMILAR_LIMIT));
                     let mut lists = None;
+                    // A series' episode to play; `None` when it could not be asked for.
+                    let mut next = None;
                     if let Ok(details) = &details
                         && details.summary.kind == MediaKind::SERIES
                     {
-                        match client.seasons(&item).await {
-                            Ok(seasons) => {
-                                let picked = season
-                                    .filter(|season| seasons.iter().any(|s| &s.item == season))
-                                    .or_else(|| seasons.first().map(|first| first.item.clone()));
-                                let episodes = match &picked {
-                                    Some(picked) => client.episodes(&item, picked).await,
-                                    None => Ok(Vec::new()),
-                                };
-                                match episodes {
-                                    Ok(episodes) => lists = Some((seasons, episodes)),
-                                    Err(error) => failures.push(error),
-                                }
+                        let episode = async {
+                            match client.series_next_up(&item).await {
+                                Ok(None) => client.first_episode(&item).await,
+                                found => found,
                             }
+                        };
+                        let seasons = async {
+                            let seasons = client.seasons(&item).await?;
+                            let picked = season
+                                .filter(|season| seasons.iter().any(|s| &s.item == season))
+                                .or_else(|| seasons.first().map(|first| first.item.clone()));
+                            let episodes = match &picked {
+                                Some(picked) => client.episodes(&item, picked).await?,
+                                None => Vec::new(),
+                            };
+                            Ok((seasons, episodes))
+                        };
+                        let (episode, seasons) = tokio::join!(episode, seasons);
+                        // A failed answer leaves the Play button as it is, and does not fail the page: its details loaded, and a
+                        // refresh keeps what is shown until answers arrive.
+                        next = episode.ok();
+                        match seasons {
+                            Ok(found) => lists = Some(found),
                             Err(error) => failures.push(error),
                         }
                     }
@@ -160,6 +180,22 @@ impl Details {
                     match details {
                         Ok(mut details) => {
                             page.ctx.states.observe(&mut details.summary);
+                            let play = if details.summary.kind == MediaKind::SERIES {
+                                next.map(|episode| {
+                                    episode
+                                        .map(|mut episode| {
+                                            page.ctx.states.observe(&mut episode);
+                                            episode
+                                        })
+                                        .as_ref()
+                                        .and_then(PlayTarget::for_item)
+                                })
+                            } else {
+                                Some(PlayTarget::for_item(&details.summary))
+                            };
+                            if let Some(play) = play {
+                                page.play.send_replace(play);
+                            }
                             page.details.send_replace(Some(details));
                         }
                         Err(error) => failures.insert(0, error),
@@ -196,6 +232,17 @@ impl Details {
 impl Live for Details {
     fn patch(&self, item: &ItemRef, state: &UserState) {
         let _guard = lock(&self.lists);
+        // The Play button follows its item's marks: a new resume point, or played. A series' next episode marked played is no longer
+        // its next: the series is among the dependents, whose reload a second later asks for the next one (`dependents_changed`).
+        self.play.send_if_modified(|play| match play {
+            Some(target) if &target.item.item == item && &target.item.user != state => {
+                let mut episode = target.item.clone();
+                episode.user = state.clone();
+                *play = PlayTarget::for_item(&episode);
+                true
+            }
+            _ => false,
+        });
         self.details.send_if_modified(|details| match details {
             Some(details) if &details.summary.item == item && &details.summary.user != state => {
                 details.summary.user = state.clone();

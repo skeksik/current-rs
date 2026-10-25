@@ -319,6 +319,31 @@ internal static class BrowseTests
         }
     }
 
+    public static async Task PlayStartsTheItemFromWhereTheCoreSays()
+    {
+        using var standIn = StandIn.Start();
+        using var core = await SignedIn(standIn);
+        using var browse = core.Browse(FirstServer);
+        var ui = new ManualDispatcher();
+        using var details = browse.Details(new ItemRef(FirstServer, StandIn.FilmIds[0]));
+        using var play = details.ObservePlay(ui);
+        await Eventually("the film's Play", ui, () => play.Value is not null);
+        var target = play.Value!;
+        Check(target.Item.Item == new ItemRef(FirstServer, StandIn.FilmIds[0]) && !target.Resumes && target.Start == TimeSpan.Zero,
+            "a film without a resume point plays from its start");
+
+        // A tile's item: the round trip through the core keeps it (records compare their lists by reference, so by its fields), and
+        // the rule is the core's.
+        var started = target.Item with { User = target.Item.User with { Position = TimeSpan.FromSeconds(90) } };
+        var tile = PlayTarget.ForItem(started);
+        Check(tile is { Resumes: true } && tile.Start == TimeSpan.FromSeconds(90), "a tile's item with a resume point resumes");
+        Check(tile is not null && tile.Item.Item == started.Item && tile.Item.User == started.User
+            && tile.Item.Artwork.SequenceEqual(started.Artwork) && tile.Item.Poster == started.Poster, "the item crosses back unchanged");
+        Check(PlayTarget.ForItem(started with { User = started.User with { Played = true } })?.Start == TimeSpan.Zero,
+            "played, it starts again");
+        Check(PlayTarget.ForItem(started with { Kind = "series" }) is null, "a series tile has no Play of its own");
+    }
+
     public static async Task BrowseSubscriptionsAreReleased()
     {
         using var standIn = StandIn.Start();

@@ -389,6 +389,86 @@ async fn resume_and_next_up_ask_for_their_rows() {
 }
 
 #[tokio::test]
+async fn a_series_play_asks_for_its_next_and_first_episode() {
+    let stand_in = StandIn::answering(ITEMS_PAGE).await;
+    let client = client(&stand_in);
+    let next = client.series_next_up(&item(SERIES)).await.unwrap();
+    let first = client.first_episode(&item(SERIES)).await.unwrap();
+    // The first item of the answer, either way.
+    assert!(next.is_some() && next == first);
+
+    let received = stand_in.received();
+    let next_up = &received[0];
+    assert_eq!(next_up.path, "/Shows/NextUp");
+    assert_summary_fields(next_up);
+    assert_eq!(next_up.query["seriesId"], SERIES);
+    assert_eq!(next_up.query["limit"], "1");
+    // An episode in progress is the series' next one: the server's default for enableResumable (true) stays, and no cutoff.
+    assert!(!next_up.query.contains_key("enableResumable"));
+    assert!(!next_up.query.contains_key("nextUpDateCutoff"));
+    let episodes = &received[1];
+    assert_eq!(episodes.path, format!("/Shows/{SERIES}/Episodes"));
+    assert_summary_fields(episodes);
+    // Every season, without the episodes the server only knows of (shown to a user who displays missing episodes).
+    assert!(!episodes.query.contains_key("seasonId"));
+    assert_eq!(episodes.query["isMissing"], "false");
+    assert_eq!(episodes.query["startIndex"], "0");
+    assert_eq!(episodes.query["limit"], "50");
+}
+
+/// An episode answer: `season` is its season number (0: a special).
+fn episode_json(id: u32, season: u32) -> String {
+    format!(
+        r#"{{"Id":"e9150000000000000000000000{id:06}","Name":"Example Episode","Type":"Episode","ParentIndexNumber":{season},"IndexNumber":1}}"#
+    )
+}
+
+#[tokio::test]
+async fn a_series_first_episode_passes_its_specials() {
+    // 50 specials first, as the server lists Specials (season 0) before season 1; then season 1.
+    let stand_in = StandIn::start(|request| {
+        let start: u32 = request.query["startIndex"].parse().unwrap();
+        let items: Vec<String> = match start {
+            0 => (0..50).map(|id| episode_json(id, 0)).collect(),
+            _ => vec![episode_json(50, 0), episode_json(51, 1)],
+        };
+        (
+            200,
+            format!(r#"{{"Items":[{}],"TotalRecordCount":52}}"#, items.join(",")),
+        )
+    })
+    .await;
+    let first = client(&stand_in)
+        .first_episode(&item(SERIES))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.item.id.as_str(), "e9150000000000000000000000000051");
+    let received = stand_in.received();
+    assert_eq!(received.len(), 2);
+    assert_eq!(received[1].query["startIndex"], "50");
+}
+
+#[tokio::test]
+async fn a_series_with_only_specials_plays_its_first() {
+    let stand_in = StandIn::start(|_| {
+        let items = [episode_json(1, 0), episode_json(2, 0)].join(",");
+        (
+            200,
+            format!(r#"{{"Items":[{items}],"TotalRecordCount":2}}"#),
+        )
+    })
+    .await;
+    let first = client(&stand_in)
+        .first_episode(&item(SERIES))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.item.id.as_str(), "e9150000000000000000000000000001");
+    assert_eq!(stand_in.received().len(), 1);
+}
+
+#[tokio::test]
 async fn seasons_episodes_and_similar() {
     let stand_in = StandIn::answering(ITEMS_PAGE).await;
     let client = client(&stand_in);

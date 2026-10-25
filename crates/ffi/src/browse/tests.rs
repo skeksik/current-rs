@@ -537,6 +537,39 @@ fn the_core_picks_tile_artwork_and_lists_a_library_s_choices() {
     );
 }
 
+impl PlayTargetListener for Recorder<Option<PlayTarget>> {
+    fn on_value(&self, value: Option<PlayTarget>) {
+        self.send(value);
+    }
+}
+
+#[test]
+fn play_crosses_for_a_tile_and_a_detail_page() {
+    let stand_in = stand_in();
+    let (core, server) = signed_in(&stand_in);
+    let browse = core.browse(server.clone()).unwrap();
+    let details = browse.details(item(&server, FILM_IDS[0]));
+    let (listener, rx) = recorder();
+    let _play = details.subscribe_play(listener);
+    let target = loop {
+        if let Some(target) = rx.recv_timeout(WAIT).unwrap() {
+            break target;
+        }
+    };
+    assert_eq!(target.item.item, item(&server, FILM_IDS[0]));
+    assert!(!target.resumes && target.start_ms == 0);
+
+    // A tile's item with a resume point resumes; played, it starts again; a series has no tile target.
+    let mut summary = target.item.clone();
+    summary.user.position_ms = Some(90_000);
+    let tile = play_target(summary.clone()).unwrap();
+    assert!(tile.resumes && tile.start_ms == 90_000);
+    summary.user.played = true;
+    assert_eq!(play_target(summary.clone()).unwrap().start_ms, 0);
+    summary.kind = "series".into();
+    assert!(play_target(summary).is_none());
+}
+
 #[test]
 fn signing_in_again_as_the_same_user_names_a_new_session_and_ends_the_old_browse() {
     let stand_in = stand_in();

@@ -21,8 +21,8 @@ pub use records::{
     Artwork, AspectRatio, BrowseNotice, CalendarDate, Chapter, EpisodeLinks, HomeRow, HomeRowDiff,
     HomeRowKind, HomeState, ImageRef, ImageRequest, ImageSource, ItemAction, ItemDetails,
     ItemQuery, ItemRef, ItemSummary, ItemSummaryDiff, Library, LoadState, MediaSummary, NoticeKind,
-    PagedState, Person, SearchGroup, SearchGroupDiff, SeriesRun, Slot, SlotDiff, SortChoice,
-    SortOrder, StreamSummary, UserState,
+    PagedState, Person, PlayTarget, SearchGroup, SearchGroupDiff, SeriesRun, Slot, SlotDiff,
+    SortChoice, SortOrder, StreamSummary, UserState,
 };
 
 /// Receives a grid's slots: `[Reset]` first, then batches of diffs, on a core thread. Apply each batch in order. It must only hand
@@ -73,6 +73,13 @@ pub trait LoadStateListener: Send + Sync {
 #[uniffi::export(callback_interface)]
 pub trait ItemDetailsListener: Send + Sync {
     fn on_value(&self, value: Option<ItemDetails>);
+}
+
+/// Receives what a detail page's Play button starts (`None` until loaded, and for an item that does not play), as
+/// [`PagedStateListener`] does.
+#[uniffi::export(callback_interface)]
+pub trait PlayTargetListener: Send + Sync {
+    fn on_value(&self, value: Option<PlayTarget>);
 }
 
 /// Receives the latest browse notice (`None` until the first), as [`PagedStateListener`] does.
@@ -241,6 +248,15 @@ pub fn library_filter_choices() -> Vec<Option<String>> {
 #[uniffi::export]
 pub fn library_query(library: Library) -> ItemQuery {
     (&current_app::library_query(&(&library).into())).into()
+}
+
+/// What Play on a tile's item starts: the item from its resume point, unless played; `None` for a kind that does not play by itself
+/// (a series plays its next episode from its page, which asks the server). Pass the item with the user's marks as every list shows them.
+#[uniffi::export]
+pub fn play_target(item: ItemSummary) -> Option<PlayTarget> {
+    current_model::PlayTarget::for_item(&(&item).into())
+        .as_ref()
+        .map(Into::into)
 }
 
 /// Browsing one session of a signed-in Jellyfin server.
@@ -494,6 +510,14 @@ impl DetailsView {
 
     pub fn subscribe_state(&self, listener: Box<dyn LoadStateListener>) -> Arc<TaskHandle> {
         self.host.load_state(self.view.state(), listener)
+    }
+
+    /// What the Play button starts: the item from its resume point, or a series' next episode (else its first).
+    pub fn subscribe_play(&self, listener: Box<dyn PlayTargetListener>) -> Arc<TaskHandle> {
+        let listener = self.host.listeners.track(listener);
+        subscribe::watch_value(&self.host.runtime, self.view.play(), move |play| {
+            listener.listener.on_value(play.as_ref().map(Into::into));
+        })
     }
 
     /// A series' seasons; empty for other kinds.

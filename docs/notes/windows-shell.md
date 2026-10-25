@@ -1343,8 +1343,8 @@ library's sort and filter choices, the five-minute shown-again refresh). The pag
   code once per data object, not from `x:Bind`. WinUI raised the templates' `DataContextChanged` with nothing changed (after a
   refresh, the pointer over the window; why is not verified), `x:Bind` then set the list's source again, and the list built every
   card again: a row went blank for a frame. Found with a diagnostic log on the owner's run; the log is not kept.
-- **Details:** backdrop, poster, title, facts, genres, tagline, overview, Played and Favourite toggle buttons, a place for Play
-  (`PlayActions`, the player's task), cast (`PersonPicture`, its initials until the photo arrives; the cast row keeps its cards when
+- **Details:** backdrop, poster, title, facts, genres, tagline, overview, Play or Resume and "Play from the beginning" (`PlayActions`,
+  the player's section below), Played and Favourite toggle buttons, cast (`PersonPicture`, its initials until the photo arrives; the cast row keeps its cards when
   an update brings the same people), a series' seasons (`SelectorBar` in a sideways `ScrollViewer`) and the chosen season's
   episodes, similar items; a series' run as the core reads it (`ItemDetails.Run`). Each history entry keeps the season chosen and its
   scroll offsets, vertical and sideways (`ServerBrowse.Details`), and the five most recently shown keep their `DetailsView` live, so
@@ -1399,3 +1399,101 @@ handlers, the disk read, a failed Clear, release before load. All **pass** on th
   filter (now reset, as the scroll is); F5 and Ctrl+R on detail and search pages (owner's request); Back to a search searched again
   (now kept); rows on Home and in search went blank for a frame after a refresh or with the pointer over the window (the x:Bind
   cause above, fixed in dfd7637, confirmed by the log and the owner).
+
+## Player (ADR 0019, task 5)
+The player in the main window, over the pages, as Media Player plays a video in its own window (Media Player 11.2609.11.0 on the
+owner's PC, 2026-10-25: a video opened from Explorer replaced its library view in the same window). All logic is the core's
+(`PlayerSession`, `PlayTarget`); the UI words and lays out what it gives (`Player/PlayerText`).
+- **Play:** the details page's Play or Resume (accent) and "Play from the beginning", and Play or Resume first in a tile's context
+  menu, from the core's `PlayTarget`: the item from its resume point unless played; a series' page plays its next episode
+  (`Shows/NextUp?seriesId=`, else its first episode). Back (title bar, Alt+Left, the mouse's Back button) or the media controls'
+  Stop closes the player and shows the page again; the core's playback-stopped event refreshes the item's marks in every list.
+- **View** (`Player/PlayerView`): the engine's swap chain in a `SwapChainPanel` (`ISwapChainPanelNative::SetSwapChain` and
+  `IDXGISwapChain2::SetMatrixTransform(1/CompositionScale)` through COM vtables, `Player/PlayerNative`), the composition size
+  (`ActualSize` × `CompositionScale`, laid out before it is read) and the display facts (`Player/DisplayWatcher`:
+  `DisplayInformation.CreateForWindowId`, `GetAdvancedColorInfo`, the refresh rate from `QueryDisplayConfig`; again on a monitor
+  change through `AppWindow.Changed` and on `AdvancedColorInfoChanged`). Closing follows ADR 0007: the panel lets go of the swap
+  chain, the core's reference is given back, then the player closes; closing the window while playing closes the player first.
+- **Controls:** WinUI's `MediaTransportControls` template, copied because that control needs a Windows `MediaPlayer`
+  (`MediaTransportControls_themeresources.xaml`, microsoft-ui-xaml tag winui3/release/2.5.1, read 2026-10-25): acrylic panel, 12 px
+  margin, 296-720 px wide, seek slider over two caption times, a CommandBar of 40 × 40 AppBarButtons (volume flyout with mute, subtitles,
+  audio tracks, skip back 10 s, play/pause, skip forward 30 s, quality, playback info, full screen). They hide 3 s after the last input
+  while playing (`ControlPanelDisplayTimeoutInSecs`, 3.0), fading in over 0.3 s and out over 0.7 s, and stay while the pointer is over
+  them, a menu is open or the keyboard is in them. The seek bar shows the buffered range in its own track. The skip button ("Skip intro",
+  "Skip credits", ...) and the next-episode card with its countdown show as the core reports them; a problem shows as an InfoBar with
+  Back, in `PlayerText.Problem`'s words. Playback info: route, reasons in plain words, source streams, the server's transcode, the
+  engine's decoder and output, the display and the panel's sizes.
+- **Keyboard:** Space and K play or pause, Left and Right seek 10 s, Up and Down change the volume by 5, F and F11 toggle full screen,
+  Esc leaves it, M mutes; Ctrl+P, Ctrl+Left (back 10 s), Ctrl+Right (forward 30 s), F11 and Ctrl+I (playback info) are Media Player's
+  own keys, read from its controls through UI Automation and tried on the owner's PC (2026-10-25: Space and Ctrl+P play or pause,
+  Ctrl+Left and Ctrl+Right skip, F11 toggles and Esc leaves full screen; plain arrows and M did nothing there). The window's root
+  forwards keys to the player. Windows moves its focus from the XAML content to the top-level window as playback starts (found with
+  GetFocus and GetGUIThreadInfo; the cause, in libmpv's start or elsewhere, was not found), so the player takes it back with
+  `InputFocusController.TrySetFocus` on state changes, pointer moves and the controls' timer while the window is in front.
+- **Full screen:** the AppWindow's full-screen presenter. ADR 0007's one-row gap: WinUI places the content's window
+  (`DesktopChildSiteBridge`) one row below the client area's top while the content is extended into the title bar, also in full
+  screen (content 3840×2159 of 3840×2160); the player turns the extension off before the presenter changes and back on after, and the
+  panel fills 3840×2160 and 1920×1080. The pointer hides once the controls have faded out: a transparent cursor that `build.ps1` adds to
+  the published `Current.exe` (RT_GROUP_CURSOR 101, `UpdateResource`), set as the view's `ProtectedCursor`
+  (`InputDesktopResourceCursor.CreateFromModule`). `ShowCursor(false)`, `SetCursor(NULL)` (even every 200 ms) and `ProtectedCursor =
+  null` left it showing; `InputCustomCursor` is "Not implemented" (learn.microsoft.com, updated 2026-07-28, read 2026-10-25).
+- **Media keys and the flyout** (`Player/MediaControls`): `SystemMediaTransportControlsInterop.GetForWindow`, filled from the core's
+  `NowPlaying` (title, subtitle, artwork, type video, status, enabled buttons, the timeline on every revision); presses and position
+  requests become player actions. Previous restarts the item; Next plays the next episode and is off without one (ADR 0019).
+- **Settings → Playback:** "Skip intros and credits automatically", off by default, a switch in a `SettingsCard` as the other groups.
+- **Test aid:** `CURRENT_MPV_VIDEO_SYNC` names one of mpv's `video-sync` modes for the engine's start (owner, 2026-10-25); unset, mpv's
+  default stays. Not a setting.
+
+### Player: Windows run (2026-10-25)
+feat/windows-player, built with the four scripts at 82dd3e1 (C# tests 56 passed, the smoke run passed with the libmpv engine). Windows
+11 Pro 10.0.26300.9711; an NVIDIA GPU, driver 621.01 (32.0.16.2101); an HDR monitor at 3840×2160, 150 %, Windows HDR on (peak 390
+nits, SDR white 204 nits, 143.99 Hz as the display path reports it) and an SDR monitor at 1920×1080, 100 % (270 nits, 60 Hz). libmpv:
+the D6 artifact of run 39826795669. The owner's own data folder and Jellyfin server; Claude drove
+the app through computer use and UI Automation, the owner judged the picture, sound and the cases below. Media: the owner's library,
+whose titles are not recorded, and synthetic files made with FFmpeg for this run (frame-rate pans, HLG, two audio tracks with SRT, ASS
+and PGS subtitles, files that do not play). Visual C++ runtime on this PC: `HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64`
+Installed 1, v14.51.36247.00.
+1. Direct play (a 1080p HEVC 10-bit SDR film in Matroska with AC-3 5.1, SubRip and PGS subtitles) and transcode (the quality menu at 2
+   Mbit/s: HLS, video to HEVC, audio to AAC) over the LAN: **pass**. Remux: **not checked** (no file the server remuxes). Through the
+   owner's header gateway (credentials in extra headers) from a phone's hotspot: direct play **pass**; a transcode through it, a
+   sign-in portal gateway and Basic: **not checked** (the hotspot's connection broke; the owner has no Basic gateway). Resume:
+   **pass** (Resume and "Play from the beginning" on the details page and in tile menus after the core fix below). The Jellyfin dashboard
+   showed the session with a moving position, and another client the resume point: **pass**; a paused player stays a session (reports
+   every 10 s, ADR 0019 choice 7), as intended.
+2. HDR: HLG (2160p50 HEVC Main10, synthetic) on the HDR monitor looked right (owner) and was tone-mapped on the SDR one: **pass**;
+   display facts follow a move between the monitors (HDR 390/204 nits 143.99 Hz, SDR 270 nits 60 Hz): **pass**. HDR10: **not checked
+   again** (D2 spike, synthetic). Dolby Vision profiles 5, 7 and 8 and HDR10+: **not checked** (no such files on the server).
+3. Frame rates with a 960 px/s bar (synthetic, 23.976, 24, 25, 60 fps; the first files' bar did not move and were replaced): on 60 Hz
+   with mpv's default sync 23.976, 24 and 25 looked alike and "pretty smooth", 60 "way smoother"; with `display-resample` 23.976 was
+   "more uneven", 24 the same. On 144 Hz 23.976 and 25 were smooth either way ("pretty much the same"). 120 Hz: **not checked**. The
+   default stays mpv's (docs/notes/windows-video.md).
+4. Audio and subtitle switching: **pass** on direct play and transcode (two audio tracks heard apart by their tones; SRT, ASS and PGS
+   shown); Jellyfin's remembered choice applied on the next start (audio and subtitles): **pass**; mpv's `ff-index` equals Jellyfin's
+   stream index on these files (audio 1-2, subtitles 3-5, and the film's PGS 4): **pass**. Found and fixed: a subtitle the core fetched
+   at start did not show until chosen again (`MpvMapper` now chooses it by id once listed).
+5. Quality: a lower quality transcodes and plays on at the position, Maximum returns to direct play: **pass**; remembered for the local
+   address across restarts: **pass**; the internet memory: **not checked** (the server's one address is the same inside and outside).
+6. Skip intro and credits, auto-skip: **not checked** (no media segment plugin on the server: no `MediaSegments` request). The
+   next-episode card in the last 30 s and autoplay: **pass**; the countdown itself was not watched.
+7. Fallback: a file the server lists but mpv cannot open (its header zeroed after the scan) re-planned once without direct play (two
+   PlaybackInfo, then the HLS playlists), failed again on the server and showed "The player can't play this file's format." with Back:
+   **pass**. A file whose data mpv reads as an early end ends normally (no fallback, as it should). Gateway session expiring: **not
+   checked**. Network drop: **fail**: with the hotspot's connection broken while loading, the player stayed at Loading for about 100 s
+   without a message (no stall timeout in the core); recovery not checked.
+8. Media keys and the flyout (session probe and the owner's keys): play/pause and Previous (restart) **pass**, a seek from the session
+   moved playback and the flyout's timeline at once **pass**; Next is off on a film by design. Full screen on both monitors with no
+   gap after the fix above: **pass**. Cursor hiding in full screen: **pass** after the cursor resource (owner: the pointer goes with the
+   controls). Narrator, keyboard only and high contrast: **pass** (owner).
+9. Diagnostics after playing: no `ApiKey` value, token, cookie or Authorization header, and every query value of the playback
+   requests `[redacted]`: **pass**. mpv's log lines do not reach diagnostics at all (`current-app` drops them).
+Also found and fixed on the run: keys did not reach the player (focus, above); a tile's menu said Play for an item with a resume point
+when another list held old marks (the core now publishes the item's marks to every list after a stop); the composition size after a
+move between monitors with different scales (the old size was sent). Seen once and not reproduced: after a rebuild the window started
+invisible (visible, not cloaked, focus on its title bar); a restart showed it.
+
+Re-checked after the review fixes (2026-10-25, 25cc568, with main's stall timeout from PR 67), by the owner: Play, Back before the
+picture, Play again: plays, no "still closing" message: **pass**. Back, then the window's X at once (and twice): the app closes and
+the dashboard shows the session stopped: **pass**. A series' Play button names its episode, in progress and fully watched (its first
+episode, not a special): **pass**. Network drop while loading, on the hotspot: "The server can't be reached" with Back after 5 to 10
+s: **pass**; that came from a failed request before the stream loaded, so the 60 s stall timeout itself was not seen live (its tests
+are in PR 67).

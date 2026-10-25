@@ -418,6 +418,166 @@ async fn an_optimistic_change_shows_in_every_live_list_and_rolls_back_on_failure
 }
 
 #[tokio::test]
+async fn play_starts_the_item_or_the_series_next_episode() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+
+    // A film plays itself, from the start while it has no resume point.
+    let film = browse.details(&item(&server, FILM_IDS[0]));
+    let play = film.play();
+    eventually(|| play.borrow().is_some()).await;
+    let target = play.borrow().clone().unwrap();
+    assert_eq!(target.item.item, item(&server, FILM_IDS[0]));
+    assert!(!target.resumes());
+
+    // A series plays its next episode (the stand-in's next up: the first unplayed one).
+    let series = browse.details(&item(&server, SERIES_ID));
+    let play = series.play();
+    eventually(|| play.borrow().is_some() && !series.state().borrow().loading).await;
+    assert_eq!(
+        play.borrow().as_ref().unwrap().item.item,
+        item(&server, EPISODE_IDS[0])
+    );
+    assert_eq!(stand_in.count("/Shows/NextUp"), 1);
+
+    // Played, at once it starts that episode again; a second later the series' reload names the next one.
+    browse.set_played(&item(&server, EPISODE_IDS[0]), true);
+    eventually(|| {
+        play.borrow()
+            .as_ref()
+            .is_some_and(|target| target.item.user.played)
+    })
+    .await;
+    eventually(|| {
+        play.borrow()
+            .as_ref()
+            .is_some_and(|target| target.item.item == item(&server, EPISODE_IDS[1]))
+    })
+    .await;
+
+    // Every episode played: no next up, so the series' first episode, from its start.
+    browse.set_played(&item(&server, EPISODE_IDS[1]), true);
+    let episodes = format!("/Shows/{SERIES_ID}/Episodes");
+    let first = stand_in.count(&episodes);
+    eventually(|| stand_in.count(&episodes) >= first + 2).await;
+    eventually(|| {
+        play.borrow().as_ref().is_some_and(|target| {
+            target.item.item == item(&server, EPISODE_IDS[0]) && !target.resumes()
+        })
+    })
+    .await;
+    // Nothing plays a season.
+    let season = browse.details(&item(&server, jellyfin_stand_in::library::SEASON_ID));
+    eventually(|| !season.state().borrow().loading && season.details().borrow().is_some()).await;
+    assert!(season.play().borrow().is_none());
+}
+
+#[tokio::test]
+async fn a_series_keeps_its_play_button_when_its_next_episode_cannot_be_asked_for() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let series = browse.details(&item(&server, SERIES_ID));
+    let play = series.play();
+    eventually(|| play.borrow().is_some() && !series.state().borrow().loading).await;
+    let shown = play.borrow().clone();
+
+    // The refresh's next-up request fails: the button stays as it was, and the page, whose details loaded, is not failed.
+    stand_in.fail("/Shows/NextUp");
+    let asked = stand_in.count("/Shows/NextUp");
+    series.refresh();
+    eventually(|| stand_in.count("/Shows/NextUp") > asked && !series.state().borrow().loading)
+        .await;
+    assert_eq!(*play.borrow(), shown);
+    assert!(series.state().borrow().failed.is_none());
+    assert!(series.details().borrow().is_some());
+}
+
+#[tokio::test]
+async fn playback_stopping_gives_every_list_the_item_s_new_marks() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    // The half-watched film, in a list that no stop reloads: the similar items of another film.
+    let half_watched = item(&server, FILM_IDS[1]);
+    let other = browse.details(&item(&server, FILM_IDS[0]));
+    eventually(|| !other.state().borrow().loading && !other.similar().is_empty()).await;
+    let shown = || {
+        other
+            .similar()
+            .snapshot()
+            .into_iter()
+            .find(|summary| summary.item == half_watched)
+    };
+    let before = shown().expect("the half-watched film among the similar items");
+    assert!(before.user.position.is_some() && !before.user.played);
+    assert!(PlayTargetOf::resumes(&before));
+
+    // Played to the end elsewhere (the server knows, the list does not); then playback of it stops here.
+    stand_in.set_played_on_server(FILM_IDS[1], true);
+    browse.playback_stopped(&half_watched);
+    eventually(|| shown().is_some_and(|summary| summary.user.played)).await;
+    let after = shown().unwrap();
+    assert_eq!(after.user.position, None);
+    assert!(!PlayTargetOf::resumes(&after));
+    assert_eq!(
+        browse.user_state(&half_watched).map(|state| state.played),
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn a_late_answer_after_a_stop_does_not_undo_a_newer_mark() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    // The half-watched film, in a list that no stop reloads: the similar items of another film.
+    let film = item(&server, FILM_IDS[1]);
+    let other = browse.details(&item(&server, FILM_IDS[0]));
+    eventually(|| !other.state().borrow().loading && !other.similar().is_empty()).await;
+    let played = || {
+        other
+            .similar()
+            .snapshot()
+            .into_iter()
+            .find(|summary| summary.item == film)
+            .is_some_and(|summary| summary.user.played)
+    };
+    assert!(!played());
+
+    // The stop asks for the film's marks; the answer is slow.
+    let details = format!("/Items/{}", FILM_IDS[1]);
+    let asked = stand_in.count(&details);
+    stand_in.hold(&details);
+    browse.playback_stopped(&film);
+    eventually(|| stand_in.count(&details) > asked).await;
+    // Meanwhile the user marks it played, and the server confirms that.
+    let marked = format!("/UserPlayedItems/{}", FILM_IDS[1]);
+    browse.set_played(&film, true);
+    eventually(|| stand_in.count(&marked) == 1 && played()).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The answer, as the server held it before the mark, arrives last.
+    stand_in.set_played_on_server(FILM_IDS[1], false);
+    stand_in.release(&details);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(played());
+}
+
+/// What Play on a tile of the summary does, by the core's rule.
+struct PlayTargetOf;
+
+impl PlayTargetOf {
+    fn resumes(summary: &ItemSummary) -> bool {
+        current_model::PlayTarget::for_item(summary).is_some_and(|target| target.resumes())
+    }
+}
+
+#[tokio::test]
 async fn dependent_rows_reload_a_second_after_the_last_change() {
     let stand_in = StandIn::start().await.unwrap();
     let app = App::new();
@@ -444,14 +604,15 @@ async fn dependent_rows_reload_a_second_after_the_last_change() {
             .iter()
             .all(|episode| episode.user.played)
     );
-    // Not yet: the reload waits a second after the last change.
+    // Not yet: the reload waits a second after the last change. Then Home's row and the series page (its next episode for Play) each
+    // ask once.
     assert_eq!(stand_in.count("/Shows/NextUp"), next_up);
-    eventually(|| stand_in.count("/Shows/NextUp") == next_up + 1).await;
+    eventually(|| stand_in.count("/Shows/NextUp") == next_up + 2).await;
     eventually(|| stand_in.count(&seasons_path) == seasons + 1).await;
     assert_eq!(stand_in.count("/UserItems/Resume"), resume + 1);
     // Once: the two changes made one reload.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(stand_in.count("/Shows/NextUp"), next_up + 1);
+    assert_eq!(stand_in.count("/Shows/NextUp"), next_up + 2);
     // Every episode is played: "next up" has no items, so its row is gone.
     eventually(|| home.row("next_up").is_none()).await;
     assert!(
@@ -463,7 +624,7 @@ async fn dependent_rows_reload_a_second_after_the_last_change() {
 
     // Playback stopping (ADR 0019's event) reloads the same rows.
     browse.playback_stopped(&item(&server, EPISODE_IDS[0]));
-    eventually(|| stand_in.count("/Shows/NextUp") == next_up + 2).await;
+    eventually(|| stand_in.count("/Shows/NextUp") >= next_up + 3).await;
 
     // Coming back to the foreground refreshes every live list.
     let libraries = stand_in.count("/UserViews");

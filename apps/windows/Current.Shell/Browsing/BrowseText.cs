@@ -32,18 +32,8 @@ internal static class BrowseText
         return item.Year?.ToString(CultureInfo.CurrentCulture) ?? "";
     }
 
-    /// <summary>"S1:E2", "S1:E2-E3", "E5" or "", from what the server gave.</summary>
-    public static string EpisodeNumber(ItemSummary item)
-    {
-        if (item.Episode is not { } links)
-        {
-            return "";
-        }
-        var episode = links.Number is { } n
-            ? links.NumberEnd is { } end && end != n ? $"E{n}-E{end}" : $"E{n}"
-            : "";
-        return links.SeasonNumber is { } season ? (episode.Length > 0 ? $"S{season}:{episode}" : $"S{season}") : episode;
-    }
+    /// <summary>"S1:E2", "S1:E2-E3", "E5" or "": the core's label (EpisodeLinks.Label).</summary>
+    public static string EpisodeNumber(ItemSummary item) => item.Episode?.Label ?? "";
 
     /// <summary>
     /// What Narrator reads for a tile: its lines, then its marks ("played", "favourite", "3 unplayed", "in progress"), so a list of

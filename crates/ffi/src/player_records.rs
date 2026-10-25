@@ -347,6 +347,8 @@ pub struct NextEpisodeInfo {
     pub series: Option<String>,
     pub season: Option<u32>,
     pub episode: Option<u32>,
+    /// The core's label for the numbers: `S1:E2` or empty.
+    pub number: String,
     /// Whole seconds until it starts by itself, while the countdown runs.
     pub countdown: Option<u32>,
 }
@@ -360,6 +362,7 @@ impl From<&NextEpisode> for NextEpisodeInfo {
             series: links.and_then(|links| links.series_name.clone()),
             season: links.and_then(|links| links.season_number),
             episode: links.and_then(|links| links.number),
+            number: links.map(|links| links.number_label()).unwrap_or_default(),
             countdown: next.countdown,
         }
     }
@@ -450,6 +453,8 @@ pub struct NowPlayingSnapshot {
     pub series: Option<String>,
     pub season: Option<u32>,
     pub episode: Option<u32>,
+    /// What shows under the title for an episode: `Series · S1:E2`.
+    pub subtitle: Option<String>,
     /// Encoded image bytes: a placeholder first, then the server's image.
     pub artwork: Option<Vec<u8>>,
     pub status: MediaStatusKind,
@@ -475,6 +480,7 @@ impl From<&NowPlaying> for NowPlayingSnapshot {
             series: now.series.clone(),
             season: now.season,
             episode: now.episode,
+            subtitle: now.subtitle.clone(),
             artwork: now.artwork.as_ref().map(|bytes| bytes.to_vec()),
             status: match now.status {
                 MediaStatus::Stopped => MediaStatusKind::Stopped,

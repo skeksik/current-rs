@@ -27,7 +27,7 @@ pub use identity::{
 };
 pub use item::{
     CalendarDate, Chapter, CollectionKind, EpisodeLinks, ItemDetails, ItemSummary, Library, Person,
-    PersonKind, UserState,
+    PersonKind, PlayTarget, UserState,
 };
 pub use media::{MediaSummary, StreamSummary};
 pub use network::{Connectivity, InterfaceKind, LocalInterface, NetworkFacts, NetworkKey};
