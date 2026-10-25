@@ -69,8 +69,9 @@ before merging, and its PR carries only the record.
 - [ ] Linux: choose how to ship (Flatpak, per-distro packages, AppImage or tarball; ADR 0011) before M5's release work
 - [ ] Windows: move `CommunityToolkit.WinUI.Controls.SettingsControls` from 8.3.260402-preview2 to 8.3 stable when it ships with the
       same component-package dependency (docs/notes/windows-shell.md, "Windows Community Toolkit")
-- [ ] Windows: pin `Microsoft.WindowsAppSDK.WinUI` and `.InteractiveExperiences` exactly (`[x]`) like the toolkit packages; today they
-      are minimums and NuGet's NU1603 (InteractiveExperiences 2.1.8 not on nuget.org) stays a warning
+- [x] Windows: pin `Microsoft.WindowsAppSDK.WinUI` and `.InteractiveExperiences` exactly (`[x]`) like the toolkit packages (2026-10-25,
+      PR 49): WinUI, InteractiveExperiences, Foundation and Base pinned at the 2.5.1 set, no version change; NU1603 no longer exempt
+      from warnings-as-errors (docs/notes/windows-shell.md, Layout)
 - [ ] Linux HDR: revisit when GTK enables Wayland colour management by default or mpv's render API gains HDR output (ADR 0011)
 
 ## M1: Jellyfin sign-in and server setup (Windows) (done 2026-10-24)
