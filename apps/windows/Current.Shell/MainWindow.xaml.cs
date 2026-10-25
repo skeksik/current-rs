@@ -440,6 +440,7 @@ public sealed partial class MainWindow : Window
         {
             server.PruneDetails(live);
         }
+        hub.PruneSearches(live);
     }
 
     /// <summary>Pages of a server whose session ended leave the back and forward stacks; the page shown now goes to Home.</summary>

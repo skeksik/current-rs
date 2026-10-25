@@ -8,7 +8,7 @@ namespace Current.Shell.Pages;
 
 /// <summary>
 /// The results of a search from the navigation's search box: every signed-in server's best matches, grouped by kind (ADR 0018). The
-/// searches are the core's; they are opened when the page is shown and closed when it is left.
+/// searches are the core's, kept with the page's history entry (BrowseHub.Search): Back shows the results the page had.
 /// </summary>
 public sealed partial class SearchPage : Page
 {
@@ -32,18 +32,18 @@ public sealed partial class SearchPage : Page
         {
             return;
         }
-        var ui = new DispatcherQueueUi(DispatcherQueue);
-        var servers = hub.Servers;
-        foreach (var server in servers)
+        foreach (var section in hub.Search(e.Parameter!, term))
         {
-            var header = servers.Count > 1 ? hub.ServerName(server.Server) : "";
-            var section = new SearchSection(header, server.Session.Search(term), ui);
-            section.PropertyChanged += (_, _) => ShowStatus();
-            section.Rows.CollectionChanged += (_, _) => ShowStatus();
+            section.PropertyChanged += OnSectionChanged;
+            section.Rows.CollectionChanged += OnRowsChanged;
             _sections.Add(section);
         }
         ShowStatus();
     }
+
+    private void OnSectionChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => ShowStatus();
+
+    private void OnRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) => ShowStatus();
 
     /// <summary>The page reached the window: its lists go on Unloaded. One navigated from before it loaded has no Unloaded.</summary>
     private bool _wasLoaded;
@@ -58,11 +58,13 @@ public sealed partial class SearchPage : Page
         }
     }
 
+    /// <summary>Lets go of the sections; they stay with the history entry (BrowseHub.Search), which disposes them.</summary>
     private void Release()
     {
         foreach (var section in _sections)
         {
-            section.Dispose();
+            section.PropertyChanged -= OnSectionChanged;
+            section.Rows.CollectionChanged -= OnRowsChanged;
         }
         _sections.Clear();
     }

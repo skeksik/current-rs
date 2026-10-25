@@ -21,6 +21,17 @@ internal sealed class BrowseHub : IDisposable
     private ulong _lastNotice;
     private bool _disposed;
 
+    /// <summary>The searches of the history's search pages, by their navigation parameter (the same object on Back).</summary>
+    private readonly Dictionary<object, KeptSearch> _searches = new(ReferenceEqualityComparer.Instance);
+
+    private ulong _searchUses;
+
+    /// <summary>
+    /// How many history entries keep their search: the most recently shown. Each is refreshed with every list on return to the
+    /// foreground, so older entries search again on Back.
+    /// </summary>
+    private const int KeptSearches = 5;
+
     public BrowseHub(CoreHost core, IUiDispatcher ui)
     {
         _core = core;
@@ -106,7 +117,47 @@ internal sealed class BrowseHub : IDisposable
         }
         if (changed)
         {
+            // A search spans every signed-in server: one that came or went makes the kept ones out of date.
+            ForgetSearches(_ => true);
             Changed?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
+    /// The search for a history entry (<paramref name="args"/>, the page's navigation parameter), with one section per signed-in
+    /// server, kept from now on: Back to a search page shows the results it had, without searching again and without its rows
+    /// arriving one by one (the owner's run, 2026-10-25). New for an entry not seen, or one let go of as one of the older ones.
+    /// </summary>
+    public IReadOnlyList<SearchSection> Search(object args, string term)
+    {
+        if (!_searches.TryGetValue(args, out var kept))
+        {
+            var servers = Servers;
+            var sections = servers
+                .Select(server => new SearchSection(servers.Count > 1 ? ServerName(server.Server) : "", server.Session.Search(term), _ui))
+                .ToList();
+            kept = new KeptSearch(sections);
+            _searches[args] = kept;
+        }
+        kept.LastUsed = ++_searchUses;
+        var older = _searches.OrderByDescending(entry => entry.Value.LastUsed).Skip(KeptSearches).Select(entry => entry.Key).ToHashSet(
+            ReferenceEqualityComparer.Instance);
+        ForgetSearches(older.Contains);
+        return kept.Sections;
+    }
+
+    /// <summary>Drops the searches of entries no longer in the history (<paramref name="live"/>: the parameters still in it).</summary>
+    public void PruneSearches(IReadOnlySet<object> live) => ForgetSearches(args => !live.Contains(args));
+
+    private void ForgetSearches(Func<object, bool> which)
+    {
+        foreach (var args in _searches.Keys.Where(which).ToList())
+        {
+            foreach (var section in _searches[args].Sections)
+            {
+                section.Dispose();
+            }
+            _searches.Remove(args);
         }
     }
 
@@ -164,6 +215,7 @@ internal sealed class BrowseHub : IDisposable
         _capabilities.Dispose();
         _notices.PropertyChanged -= OnNotice;
         _notices.Dispose();
+        ForgetSearches(_ => true);
         foreach (var server in _servers.Values)
         {
             server.Dispose();
@@ -322,4 +374,12 @@ internal sealed class KeptDetails
     public double PeopleOffset { get; set; }
 
     public double SimilarOffset { get; set; }
+}
+
+/// <summary>A history entry's search: its sections, one per server, and when it was last shown.</summary>
+internal sealed class KeptSearch(IReadOnlyList<SearchSection> sections)
+{
+    public IReadOnlyList<SearchSection> Sections { get; } = sections;
+
+    public ulong LastUsed { get; set; }
 }
