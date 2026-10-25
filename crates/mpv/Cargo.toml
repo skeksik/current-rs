@@ -18,10 +18,11 @@ thiserror.workspace = true
 [dev-dependencies]
 # For the self-signed HTTPS stand-in of the TLS test.
 rustls.workspace = true
+tempfile.workspace = true
 
 # Not `[lints] workspace = true`: the workspace forbids `unsafe_code`, and a forbid cannot be lifted inside the crate. This crate calls
 # libmpv's C API, which needs `unsafe` (ADR 0002, ADR 0019); it denies it instead and allows it only on the `sys` declarations and the
-# handle (`engine`), each block commented with its invariant. Keep the rest equal to the workspace's lints.
+# handle (`engine`) and the swap chain (`swapchain`), each block commented with its invariant. Keep the rest equal to the workspace's lints.
 [lints.rust]
 unsafe_code = "deny"
 

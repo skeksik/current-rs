@@ -22,6 +22,9 @@ mod sys;
 #[cfg(feature = "libmpv")]
 mod engine;
 
+#[cfg(test)]
+mod live_tests;
+
 pub use caps::BuildCapabilities;
 #[cfg(feature = "libmpv")]
 pub use engine::{Engine, EventSink};

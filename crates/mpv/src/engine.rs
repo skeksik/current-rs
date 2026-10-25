@@ -303,6 +303,12 @@ impl Engine {
         }
     }
 
+    /// Sets any property: tests only (the TLS test's control case turns `tls-verify` off).
+    #[cfg(test)]
+    pub(crate) fn set_for_test(&self, name: &'static str, value: &str) -> Result<(), EngineError> {
+        self.set(Request::Display, name, value)
+    }
+
     fn request_quit(&self) {
         if self.shared.quitting.swap(true, Ordering::SeqCst) {
             return;

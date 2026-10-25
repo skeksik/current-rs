@@ -176,13 +176,14 @@ pub fn start_options(config: &EngineConfig) -> Vec<StartOption> {
     out
 }
 
-/// A cookie for the stream, from the address's gateway credentials (ADR 0017).
+/// A gateway cookie of the address the stream is on (ADR 0017). It is scoped to the stream URL's host and port by the engine, not by its
+/// own domain (see [`FileRequest::lavf_options`]).
 #[derive(Clone, PartialEq, Eq)]
 pub struct StreamCookie {
     pub name: String,
     pub value: String,
-    pub domain: String,
     pub path: String,
+    /// Sent only when the stream URL is https.
     pub secure: bool,
 }
 
@@ -191,7 +192,6 @@ impl std::fmt::Debug for StreamCookie {
         f.debug_struct("StreamCookie")
             .field("name", &self.name)
             .field("value", &"<redacted>")
-            .field("domain", &self.domain)
             .field("path", &self.path)
             .field("secure", &self.secure)
             .finish()
@@ -279,10 +279,15 @@ impl FileRequest {
     /// FFmpeg's options for this stream, as mpv's `stream-lavf-o` key-value list: `max_redirects=0` always (choice 4), then `cookies`
     /// and `headers` when there are any. Each value is written in mpv's `%<length>%<value>` form (`read_subparam` in mpv's
     /// `options/m_option.c`), which takes any bytes, so commas, `=` and newlines in a value cannot break the list.
+    ///
+    /// Cookies: FFmpeg 9.0.2 (`libavformat/http.c`, `get_cookies`) matches a cookie's `domain` as a suffix of the request's Host value,
+    /// which carries the port whenever the URL names one, and it ignores `secure`. So each cookie gets the stream URL's own host and
+    /// port as its domain (a cookie for `media.example.com` would never match `media.example.com:8096`), and a Secure cookie is left
+    /// out unless the URL is https.
     pub fn lavf_options(&self) -> String {
         let mut pairs = vec![("max_redirects".to_owned(), "0".to_owned())];
-        if !self.cookies.is_empty() {
-            pairs.push(("cookies".into(), ffmpeg_cookies(&self.cookies)));
+        if let Some(cookies) = ffmpeg_cookies(&self.url, &self.cookies) {
+            pairs.push(("cookies".into(), cookies));
         }
         if !self.headers.is_empty() {
             pairs.push(("headers".into(), ffmpeg_headers(&self.headers)));
@@ -322,21 +327,29 @@ impl FileRequest {
     }
 }
 
-/// FFmpeg's `cookies`: "newline delimited Set-Cookie HTTP field value syntax" (FFmpeg `libavformat/http.c`), with domain, path and
-/// `secure`, so FFmpeg scopes each cookie per request.
-fn ffmpeg_cookies(cookies: &[StreamCookie]) -> String {
-    cookies
+/// FFmpeg's `cookies`: "newline delimited Set-Cookie HTTP field value syntax" (FFmpeg `libavformat/http.c`), each with the URL's host
+/// and port as its domain and its path. `None` when no cookie applies or the URL has no host.
+fn ffmpeg_cookies(url: &str, cookies: &[StreamCookie]) -> Option<String> {
+    let (scheme, host) = scheme_and_host(url)?;
+    let https = scheme.eq_ignore_ascii_case("https");
+    let lines: Vec<String> = cookies
         .iter()
+        .filter(|c| https || !c.secure)
         .map(|c| {
             let path = if c.path.is_empty() { "/" } else { &c.path };
-            let mut line = format!("{}={}; domain={}; path={}", c.name, c.value, c.domain, path);
-            if c.secure {
-                line.push_str("; secure");
-            }
-            line
+            format!("{}={}; domain={host}; path={path}", c.name, c.value)
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// The scheme and the host with its port as the URL writes them (`https://user@media.example.com:8096/x` gives `https` and
+/// `media.example.com:8096`), which is the Host value FFmpeg compares cookie domains with.
+fn scheme_and_host(url: &str) -> Option<(&str, &str)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    (!host.is_empty()).then_some((scheme, host))
 }
 
 /// FFmpeg's `headers`: header lines, each ending in CRLF.
@@ -479,24 +492,22 @@ mod tests {
         let plain = FileRequest::new("https://media.example.com/x");
         assert_eq!(plain.lavf_options(), "max_redirects=%1%0");
 
-        let mut req = FileRequest::new("https://media.example.com/x");
+        let mut req = FileRequest::new("https://media.example.com:8920/x?ApiKey=t");
         req.cookies.push(StreamCookie {
             name: "gate".into(),
             value: "a,b=c".into(),
-            domain: "media.example.com".into(),
             path: String::new(),
             secure: true,
         });
         req.cookies.push(StreamCookie {
             name: "two".into(),
             value: "v".into(),
-            domain: "media.example.com".into(),
             path: "/web".into(),
             secure: false,
         });
         req.headers
             .push(("Authorization".into(), "Basic eDp5".into()));
-        let cookies = "gate=a,b=c; domain=media.example.com; path=/; secure\ntwo=v; domain=media.example.com; path=/web";
+        let cookies = "gate=a,b=c; domain=media.example.com:8920; path=/\ntwo=v; domain=media.example.com:8920; path=/web";
         let headers = "Authorization: Basic eDp5\r\n";
         assert_eq!(
             req.lavf_options(),
@@ -507,6 +518,34 @@ mod tests {
             )
         );
         assert_eq!(req.secret_values(), vec!["a,b=c", "v", "Basic eDp5"]);
+    }
+
+    #[test]
+    fn secure_cookies_only_over_https_and_none_without_a_host() {
+        let cookie = |secure| StreamCookie {
+            name: "c".into(),
+            value: "v".into(),
+            path: "/".into(),
+            secure,
+        };
+        let mut req = FileRequest::new("http://user@192.168.1.10/Videos/1/stream");
+        req.cookies = vec![cookie(true), cookie(false)];
+        assert_eq!(
+            req.lavf_options(),
+            format!(
+                "max_redirects=%1%0,cookies=%{}%c=v; domain=192.168.1.10; path=/",
+                32
+            )
+        );
+        req.cookies = vec![cookie(true)];
+        assert_eq!(req.lavf_options(), "max_redirects=%1%0");
+        let mut file = FileRequest::new("/tmp/tone.wav");
+        file.cookies = vec![cookie(false)];
+        assert_eq!(file.lavf_options(), "max_redirects=%1%0");
+        assert_eq!(
+            scheme_and_host("HTTPS://[::1]:8920?x"),
+            Some(("HTTPS", "[::1]:8920"))
+        );
     }
 
     #[test]
@@ -538,7 +577,6 @@ mod tests {
         req.cookies.push(StreamCookie {
             name: "gate".into(),
             value: "cookie-secret".into(),
-            domain: "media.example.com".into(),
             path: "/".into(),
             secure: true,
         });

@@ -300,6 +300,7 @@ name = "current-mpv"
 version = "0.1.0"
 dependencies = [
  "rustls",
+ "tempfile",
  "thiserror",
 ]
 
