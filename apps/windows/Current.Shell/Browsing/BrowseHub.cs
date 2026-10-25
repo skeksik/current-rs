@@ -46,11 +46,6 @@ internal sealed class BrowseHub : IDisposable
 
     public ServerBrowse? Find(ServerRef server) => _servers.GetValueOrDefault(server);
 
-    /// <summary>Where Home was left: its vertical offset and each row's sideways one (by HomePage's row key), for Back and Forward.</summary>
-    public double HomeOffset { get; set; }
-
-    public Dictionary<string, double> HomeRowOffsets { get; } = [];
-
     /// <summary>The saved name of <paramref name="server"/>, for the navigation's group header.</summary>
     public string ServerName(ServerRef server) =>
         _core.Servers.FirstOrDefault(saved => saved.Server == server)?.Name ?? "";
