@@ -19,6 +19,14 @@ namespace Current.Shell.Browsing;
 /// </remarks>
 public sealed class TileImage(CoreHost core) : IDisposable
 {
+    /// <summary>
+    /// How long a picture has to arrive before its BlurHash is shown in its place. A picture the core has in memory or on disk
+    /// arrives within it and shows straight away, with no blurred step before it; the BlurHash is for pictures still coming from the
+    /// server (the owner's run, 2026-10-25: pages blinked blank, then blurred, then sharp). 100 ms is about six frames at 60 Hz, a
+    /// first value to tune on screen, not from a guideline.
+    /// </summary>
+    public static readonly TimeSpan PlaceholderDelay = TimeSpan.FromMilliseconds(100);
+
     private CancellationTokenSource? _load;
 
     /// <summary>

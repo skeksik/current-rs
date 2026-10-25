@@ -194,11 +194,11 @@ public sealed partial class DetailsPage : Page
             _shownPoster = poster.Image;
             var width = (int)Math.Ceiling(PosterFrame.Width * scale);
             var height = (int)Math.Ceiling(PosterFrame.Height * scale);
+            _ = Load(_poster, Poster, new ImageRequest(new ImageSource.Server(poster.Image), width, height));
             if (poster.BlurHash is { } hash)
             {
-                _ = Load(_posterPlaceholder, PosterPlaceholder, new ImageRequest(new ImageSource.BlurHash(hash), width, height));
+                _ = ShowPlaceholderLaterAsync(new ImageRequest(new ImageSource.BlurHash(hash), width, height), poster.Image);
             }
-            _ = Load(_poster, Poster, new ImageRequest(new ImageSource.Server(poster.Image), width, height));
         }
         var backdrop = details.Backdrops.FirstOrDefault();
         BackdropFrame.Visibility = backdrop is null ? Visibility.Collapsed : Visibility.Visible;
@@ -224,11 +224,22 @@ public sealed partial class DetailsPage : Page
         }
     }
 
-    private static async Task Load(TileImage loader, Image target, ImageRequest request)
+    /// <summary>The poster's BlurHash, only if the poster has not arrived within <see cref="TileImage.PlaceholderDelay"/>.</summary>
+    private async Task ShowPlaceholderLaterAsync(ImageRequest blurHash, ImageRef poster)
+    {
+        await Task.Delay(TileImage.PlaceholderDelay);
+        if (_shownPoster == poster && Poster.Source is null)
+        {
+            await Load(_posterPlaceholder, PosterPlaceholder, blurHash, unlessShown: Poster);
+        }
+    }
+
+    /// <param name="unlessShown">For a placeholder: not set if its picture arrived meanwhile.</param>
+    private static async Task Load(TileImage loader, Image target, ImageRequest request, Image? unlessShown = null)
     {
         try
         {
-            if (await loader.LoadAsync(request) is { } bitmap)
+            if (await loader.LoadAsync(request) is { } bitmap && unlessShown?.Source is null)
             {
                 target.Source = bitmap;
             }

@@ -152,19 +152,30 @@ public sealed partial class ItemTile : UserControl
         var scale = XamlRoot.RasterizationScale;
         var width = (int)Math.Ceiling(Root.Width * scale);
         var height = (int)Math.Ceiling(Picture.Height * scale);
+        _ = LoadAsync(_artwork, Artwork, new ImageRequest(new ImageSource.Server(art.Image), width, height), art.Image);
         if (art.BlurHash is { } hash)
         {
-            _ = LoadAsync(_placeholder, Placeholder, new ImageRequest(new ImageSource.BlurHash(hash), width, height), art.Image);
+            _ = ShowPlaceholderLaterAsync(new ImageRequest(new ImageSource.BlurHash(hash), width, height), art.Image);
         }
-        _ = LoadAsync(_artwork, Artwork, new ImageRequest(new ImageSource.Server(art.Image), width, height), art.Image);
     }
 
-    private async Task LoadAsync(TileImage loader, Image target, ImageRequest request, ImageRef image)
+    /// <summary>The BlurHash, only if the picture has not arrived within <see cref="TileImage.PlaceholderDelay"/>.</summary>
+    private async Task ShowPlaceholderLaterAsync(ImageRequest blurHash, ImageRef image)
+    {
+        await Task.Delay(TileImage.PlaceholderDelay);
+        if (_shown == image && Artwork.Source is null)
+        {
+            await LoadAsync(_placeholder, Placeholder, blurHash, image, unlessShown: Artwork);
+        }
+    }
+
+    /// <param name="unlessShown">For the placeholder: not set if this picture arrived meanwhile.</param>
+    private async Task LoadAsync(TileImage loader, Image target, ImageRequest request, ImageRef image, Image? unlessShown = null)
     {
         try
         {
             var bitmap = await loader.LoadAsync(request);
-            if (bitmap is not null && _shown == image)
+            if (bitmap is not null && _shown == image && unlessShown?.Source is null)
             {
                 target.Source = bitmap;
             }
