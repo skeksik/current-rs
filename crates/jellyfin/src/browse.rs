@@ -9,12 +9,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use current_model::{
     Artwork, AspectRatio, CalendarDate, Chapter, CollectionKind, EpisodeLinks, ImageRef, ImageType,
     ItemDetails, ItemFilter, ItemId, ItemQuery, ItemRef, ItemSummary, Library, MediaKind,
-    MediaSummary, Person, PersonKind, SortKey, SortOrder, StreamSummary, UserState,
+    MediaSummary, Person, PersonKind, SortKey, SortOrder, UserState,
 };
 use current_net::{Method, Request};
 
 use crate::browse_wire::{self as wire, BaseItemDto, ItemsResult, UserItemDataDto};
 use crate::client::{AuthError, JellyfinClient};
+use crate::playback;
 
 /// How many items one search group returns. Search is not paged: Jellyfin 12.2 asks its search providers for three times `limit`
 /// candidates and pages within those, so later pages are not the next best matches (`docs/notes/jellyfin-browse.md`).
@@ -518,37 +519,28 @@ fn user_state(data: Option<UserItemDataDto>) -> UserState {
     }
 }
 
+/// The summary of the item's first media source (ADR 0019: derived from the playback types), or of the item's own streams when it
+/// lists no source.
 fn media_summary(dto: &BaseItemDto) -> Option<MediaSummary> {
-    let source = dto.media_sources.first();
-    let streams = source
-        .map(|source| &source.media_streams)
-        .filter(|streams| !streams.is_empty())
-        .unwrap_or(&dto.media_streams);
-    if source.is_none() && streams.is_empty() {
+    let source = dto.media_sources.first().map(playback::map_source);
+    if source.is_none() && dto.media_streams.is_empty() {
         return None;
     }
-    let of = |kind: &'static str| {
-        streams
-            .iter()
-            .filter(move |stream| stream.kind.as_deref() == Some(kind))
-            .map(|stream| StreamSummary {
-                label: stream.display_title.clone().unwrap_or_default(),
-                language: stream.language.clone(),
-                codec: stream.codec.clone(),
-            })
-    };
     let source_count = dto
         .media_source_count
         .and_then(to_u32)
         .unwrap_or_else(|| u32::try_from(dto.media_sources.len()).unwrap_or(u32::MAX));
-    Some(MediaSummary {
-        source_count,
-        container: source
-            .and_then(|source| source.container.clone())
-            .or_else(|| dto.container.clone()),
-        video: of("Video").next(),
-        audio: of("Audio").collect(),
-        subtitles: of("Subtitle").collect(),
+    Some(match source {
+        Some(source) if !source.streams.is_empty() => {
+            MediaSummary::from_source(&source, source_count)
+        }
+        source => MediaSummary::from_streams(
+            source_count,
+            source
+                .and_then(|source| source.container)
+                .or_else(|| dto.container.clone()),
+            &playback::map_streams(&dto.media_streams),
+        ),
     })
 }
 

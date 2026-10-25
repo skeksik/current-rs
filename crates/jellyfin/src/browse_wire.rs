@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer};
 
+use crate::playback_wire::{MediaSourceInfo, MediaStream};
+
 /// Reads `null` as the empty value. Jellyfin 12.2 leaves nulls out (`JsonDefaults`: `WhenWritingNull`), but a list that arrives as
 /// `null` still means "none".
 fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -129,25 +131,4 @@ pub(crate) struct BaseItemPerson {
 pub(crate) struct ChapterInfo {
     pub start_position_ticks: Option<i64>,
     pub name: Option<String>,
-}
-
-/// `MediaSourceInfo`, the fields the detail page's summary reads (ADR 0019 owns the rest).
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "PascalCase", default)]
-pub(crate) struct MediaSourceInfo {
-    pub container: Option<String>,
-    #[serde(deserialize_with = "null_as_default")]
-    pub media_streams: Vec<MediaStream>,
-}
-
-/// `MediaStream`, the fields the detail page's summary reads.
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "PascalCase", default)]
-pub(crate) struct MediaStream {
-    /// `MediaStreamType`: `Video`, `Audio`, `Subtitle`, ...
-    #[serde(rename = "Type")]
-    pub kind: Option<String>,
-    pub display_title: Option<String>,
-    pub language: Option<String>,
-    pub codec: Option<String>,
 }

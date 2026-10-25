@@ -14,6 +14,10 @@ offers. Anyone may point Current at any mix of Jellyfin, Seerr and Stash servers
   with associated constants for the values Current gives meaning to. Any other value is still valid and round-trips byte for byte: no
   case folding, no trimming, no mapping to "unknown". Service crates map their server's wire values to the constants where the meaning
   matches and pass everything else through. `Reachability` is a closed enum because Current, not a server, defines it.
+- **Playback values** (ADR 0019, amended 2026-10-25): `MediaSource`, `MediaStream`, `Route`, `PlaybackPlan`, `Segment`,
+  `PlaybackProblem`, `TranscodingFacts`, `PlaybackPreferences` and `EngineCapabilities`, with the open values `StreamKind`, `Codec`,
+  `Container`, `SubtitleFormat`, `VideoRange`, `VideoRangeType`, `SubtitleDelivery`, `RouteReason`, `SegmentKind`, `SubtitleMode`
+  and `EngineErrorKind`. `Route` is closed: Current defines the routes. No URL, path or token is in any of them.
 - **Artwork** carries its type, URL (a string: the model parses nothing), an optional aspect ratio stored reduced (`AspectRatio::new`
   reduces 1920:1080 to 16:9 and rejects zero sides) and an optional BlurHash.
 - **Users** carry id, server, name, permissions and an optional avatar.

@@ -6,11 +6,13 @@
 mod appearance;
 mod artwork;
 mod capabilities;
+mod engine;
 mod identity;
 mod item;
 mod media;
 mod network;
 mod open;
+mod playback;
 mod query;
 mod saved;
 mod server;
@@ -19,6 +21,7 @@ mod user;
 pub use appearance::AppTheme;
 pub use artwork::{Artwork, AspectRatio, ImageRef, ImageType};
 pub use capabilities::{Capabilities, Feature, Reachability, ServerStatus};
+pub use engine::{CodecSupport, Container, EngineCapabilities, SubtitleFormat};
 pub use identity::{
     ItemId, ItemRef, MediaKind, ServerId, ServerKey, ServerRef, ServiceType, UserId,
 };
@@ -28,6 +31,12 @@ pub use item::{
 };
 pub use media::{MediaSummary, StreamSummary};
 pub use network::{Connectivity, InterfaceKind, LocalInterface, NetworkFacts, NetworkKey};
+pub use playback::{
+    AudioFacts, Codec, EngineErrorKind, MediaSource, MediaStream, PlaybackPlan,
+    PlaybackPreferences, PlaybackProblem, Route, RouteLabel, RouteReason, Segment, SegmentKind,
+    StreamAction, StreamKind, StreamProtocol, SubtitleChoice, SubtitleDelivery, SubtitleMode,
+    TrackChoice, TranscodingFacts, VideoFacts, VideoRange, VideoRangeType,
+};
 pub use query::{ItemFilter, ItemQuery, SortKey, SortOrder};
 pub use saved::{AuthHeader, SavedServer, SavedUser};
 pub use server::{AddressId, GatewayKind, PublicServerInfo, ServerAddress};
