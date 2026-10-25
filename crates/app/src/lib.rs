@@ -6,6 +6,7 @@
 //! `current-ffi` and the Linux app bring their own, and its async methods expect tokio's.
 
 mod add_server;
+mod browse;
 mod discovery;
 mod gateway;
 mod gateway_sign_in;
@@ -31,6 +32,12 @@ use current_store::{DeviceId, LoadReport, Secrets, SettingsStore, StoreError};
 use tokio::sync::watch;
 
 pub use add_server::{AddServer, AddServerState, NewServer};
+pub use browse::{
+    BACKLOG_PAGES, Browse, BrowseNotice, DEPENDENT_RELOAD_DELAY, DetailsView, HomeFeed, HomeRow,
+    HomeRowKind, HomeState, ItemAction, LATEST_LIMIT, LoadState, MAX_PAGE_REQUESTS, NEXT_UP_LIMIT,
+    NoticeKind, PAGE_SIZE, PagedItems, PagedState, RESUME_LIMIT, SIMILAR_LIMIT, SearchResults,
+    Slot,
+};
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
 pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState};
@@ -68,6 +75,7 @@ pub struct App {
     /// Serializes [`App::set_app_theme`], so the published theme is the one saved last.
     theme_write: Mutex<()>,
     images: ImageCache,
+    browse: browse::Hub,
 }
 
 impl std::fmt::Debug for App {
@@ -107,6 +115,7 @@ impl App {
             app_theme: watch::Sender::new(AppTheme::System),
             theme_write: Mutex::new(()),
             images: ImageCache::in_memory(),
+            browse: browse::Hub::default(),
         }
     }
 
@@ -140,6 +149,7 @@ impl App {
             app_theme: watch::Sender::new(stored.app_theme),
             theme_write: Mutex::new(()),
             images,
+            browse: browse::Hub::default(),
         };
         Ok((app, report))
     }
@@ -365,12 +375,29 @@ impl App {
         }
     }
 
-    /// The app came back to the foreground: servers that are unreachable try again at once (ADR 0014).
+    /// The app came back to the foreground: servers that are unreachable try again at once (ADR 0014), and every live browse list
+    /// refreshes without resetting (ADR 0018).
     pub fn returned_to_foreground(&self) {
         let providers = self.lock_roaming().providers.clone();
         for provider in providers.iter().filter_map(Weak::upgrade) {
             provider.retry_now();
         }
+        self.browse.refresh_all();
+    }
+
+    /// Browsing `server` (ADR 0018): `None` unless it is a Jellyfin server that is signed in (its status is available, as
+    /// [`Capabilities::is_available`] reads it) with a live session, and the call is made on the tokio runtime. The `Browse`
+    /// belongs to that session: after a sign-out, a removal or a new sign-in its lists stop loading and its actions fail with
+    /// [`AuthError::NotSignedIn`], and a new `Browse` is needed. Every `Browse` of one session shares its played and favourite
+    /// state. Lists load when opened: that is the refresh "on start".
+    pub fn browse(&self, server: &ServerRef) -> Option<Browse> {
+        self.browse.browse(&self.shared, server)
+    }
+
+    /// The latest browse notice (a played or favourite change the server did not take), for a message bar. Only the latest is
+    /// kept; its `seq` tells two identical notices apart.
+    pub fn browse_notices(&self) -> watch::Receiver<Option<BrowseNotice>> {
+        self.browse.notices()
     }
 
     /// An address provider of a Jellyfin server with id `id` reached at `addresses` (the user's order), for a `ServerClient` of its

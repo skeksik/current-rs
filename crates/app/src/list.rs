@@ -103,6 +103,11 @@ impl<T: Clone + Send + 'static> ObservableList<T> {
         self.lock().values.is_empty()
     }
 
+    /// The value at `index`, if it exists.
+    pub fn get(&self, index: usize) -> Option<T> {
+        self.lock().values.get(index).cloned()
+    }
+
     pub fn append(&self, values: Vec<T>) {
         if !values.is_empty() {
             // Cannot fail: an append has no index.
@@ -142,6 +147,20 @@ impl<T: Clone + Send + 'static> ObservableList<T> {
             first: Some(inner.values.clone()),
             reset_requested: false,
         }
+    }
+
+    /// Applies `diffs` in order as one change: a subscriber receives them in one batch. Stops at the first diff whose index does
+    /// not exist; the diffs before it stay applied and sent.
+    ///
+    /// # Errors
+    /// [`OutOfRange`] for the first diff whose index does not exist.
+    pub fn change_many(&self, diffs: Vec<VectorDiff<T>>) -> Result<(), OutOfRange> {
+        let mut inner = self.lock();
+        for diff in diffs {
+            diff.clone().apply(&mut inner.values)?;
+            let _ = inner.tx.send(diff);
+        }
+        Ok(())
     }
 
     fn change(&self, diff: VectorDiff<T>) -> Result<(), OutOfRange> {
@@ -191,13 +210,23 @@ impl<T: Clone + Send + 'static> ListSubscription<T> {
             Err(RecvError::Closed) => return None,
         };
         let mut batch = vec![first];
-        loop {
-            match self.rx.try_recv() {
-                Ok(diff) => batch.push(diff),
-                Err(TryRecvError::Lagged(_)) => return self.resync(),
-                Err(TryRecvError::Empty | TryRecvError::Closed) => return Some(batch),
+        // A change of several diffs is sent under the list's lock: taking it here waits for the rest of that change, so it arrives
+        // in this batch.
+        let lagged = {
+            let list = self.list.upgrade();
+            let _whole = list.as_ref().map(|list| list.lock());
+            loop {
+                match self.rx.try_recv() {
+                    Ok(diff) => batch.push(diff),
+                    Err(TryRecvError::Lagged(_)) => break true,
+                    Err(TryRecvError::Empty | TryRecvError::Closed) => break false,
+                }
             }
+        };
+        if lagged {
+            return self.resync();
         }
+        Some(batch)
     }
 
     fn resync(&mut self) -> Option<Vec<VectorDiff<T>>> {
@@ -287,6 +316,32 @@ mod tests {
         assert_eq!(
             sub.next_batch().await,
             Some(vec![VectorDiff::Append { values: vec![2] }])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_change_of_many_diffs_arrives_in_one_batch() {
+        let list = ObservableList::new();
+        list.append(vec![0, 0, 0]);
+        let mut sub = list.subscribe();
+        sub.next_batch().await.unwrap();
+        list.change_many(vec![
+            VectorDiff::Set { index: 0, value: 1 },
+            VectorDiff::Set { index: 2, value: 3 },
+        ])
+        .unwrap();
+        assert_eq!(
+            sub.next_batch().await,
+            Some(vec![
+                VectorDiff::Set { index: 0, value: 1 },
+                VectorDiff::Set { index: 2, value: 3 },
+            ])
+        );
+        assert_eq!(list.get(2), Some(3));
+        assert_eq!(list.get(3), None);
+        assert_eq!(
+            list.change_many(vec![VectorDiff::Remove { index: 5 }]),
+            Err(OutOfRange { index: 5, len: 3 })
         );
     }
 

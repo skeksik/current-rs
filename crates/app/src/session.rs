@@ -254,7 +254,14 @@ impl Shared {
             .map(|session| session.client.clone())
     }
 
-    fn session_id(&self, server: &ServerRef) -> Option<u64> {
+    /// The server's live session: its id, which tells it apart from earlier and later ones, and its client.
+    pub(crate) fn current_session(&self, server: &ServerRef) -> Option<(u64, Arc<JellyfinClient>)> {
+        lock(&self.sessions)
+            .get(server)
+            .map(|session| (session.id, session.client.clone()))
+    }
+
+    pub(crate) fn session_id(&self, server: &ServerRef) -> Option<u64> {
         lock(&self.sessions).get(server).map(|session| session.id)
     }
 
