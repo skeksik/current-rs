@@ -36,9 +36,9 @@ What the research found (details and quotes in the notes):
 ### Crates and where things live
 | Crate | Gets |
 |---|---|
-| `current-model` | The playback types the bridge and other crates see: `MediaSource`, `MediaStream`, `StreamKind`, `Codec`, `VideoRange`, `Route`, `RouteReason`, `PlaybackPlan`, `TrackChoice`, `Segment`, `SegmentKind`, `PlaybackProblem`, `PlayerState`, `NowPlaying`. Open values for what a server defines (codecs, stream kinds, ranges, reasons, segment kinds) |
+| `current-model` | The playback types the bridge and other crates see: `MediaSource`, `MediaStream`, `StreamKind`, `Codec`, `VideoRange`, `Route`, `RouteReason`, `PlaybackPlan`, `TrackChoice`, `Segment`, `SegmentKind`, `PlaybackProblem`, `PlayerState`, `NowPlaying`, and `EngineCapabilities` (amended 2026-10-25: model, so current-jellyfin can take it without depending on current-playback). Open values for what a server defines (codecs, stream kinds, ranges, reasons, segment kinds) |
 | `current-jellyfin` | Wire types (private) and calls: `PlaybackInfo` with the Jellyfin `DeviceProfile` built from `current-playback`'s capabilities, the static stream URL, `Sessions/Playing`, `/Progress`, `/Stopped`, `MediaSegments`, the session's `TranscodingInfo`, the user's playback configuration |
-| `current-playback` | Logic only, no HTTP and no libmpv: engine capabilities, the `Engine` trait, the `MediaServer` trait (what a server must answer for playback), the planner, the controller, track selection, segments, next episode, fallback, progress cadence |
+| `current-playback` | Logic only, no HTTP and no libmpv: the `Engine` trait, the `MediaServer` trait (what a server must answer for playback), the planner, the controller, track selection, segments, next episode, fallback, progress cadence |
 | `current-mpv` | The libmpv engine: the only crate with `unsafe` (ADR 0002), the event thread, option mapping (ADR 0007's colour mapping included), capabilities of our build |
 | `current-app` | Composition: a `Player` per window that joins a `current-playback` controller, a `current-mpv` engine and the signed-in `JellyfinClient` (as `MediaServer`); gateway credentials and the 401 rule (ADR 0017) |
 | `current-ffi` | The player object for C# and Swift (below) |
