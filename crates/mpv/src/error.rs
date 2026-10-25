@@ -63,6 +63,14 @@ pub enum EngineError {
     Mpv { what: &'static str, error: MpvError },
     #[error("a text value contains a NUL byte: {what}")]
     Nul { what: &'static str },
+    /// The file carries gateway credentials, but this FFmpeg cannot refuse redirects (`max_redirects` needs FFmpeg 9.0 or later), so
+    /// its headers could follow a redirect to another host (ADR 0019, choice 4).
+    #[error("this FFmpeg cannot refuse redirects; not sending gateway credentials")]
+    RedirectsNotRefused,
+    /// A cookie or header has a character that would change its meaning (a control character, `;` in a cookie, `:` in a header name).
+    /// `what` names the field, never its value.
+    #[error("invalid gateway credential: {what}")]
+    InvalidCredential { what: &'static str },
     /// Another engine still exists in this process (one per process, `engine` module doc).
     #[error("another player engine is still running")]
     Busy,

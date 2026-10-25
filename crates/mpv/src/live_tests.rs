@@ -31,6 +31,9 @@ libmpv_test!(verifies_tls_against_a_self_signed_stand_in);
 libmpv_test!(a_second_engine_waits_and_then_reports_busy);
 libmpv_test!(the_next_file_reuses_the_engine);
 libmpv_test!(ffmpeg_writes_nothing_to_stderr_across_two_engines);
+libmpv_test!(mpv_quitting_on_its_own_waits_for_the_drop);
+libmpv_test!(a_panicking_sink_still_frees_the_engine);
+libmpv_test!(hls_segment_over_https_is_verified);
 
 /// The child half of `ffmpeg_writes_nothing_to_stderr_across_two_engines`, which runs this test binary again with only this test and
 /// reads its stderr. Not meant to run on its own.
@@ -302,6 +305,8 @@ mod live {
         let _ = out.flush();
     }
 
+    /// One request per connection, answered with `Connection: close`: every request (each HLS segment included) arrives on a fresh
+    /// connection, so a refused redirect is not an artefact of a reused keep-alive connection.
     fn serve(stream: TcpStream, seen: &Mutex<Vec<Seen>>, handler: &Handler) {
         let mut writer = match stream.try_clone() {
             Ok(w) => w,
@@ -783,5 +788,66 @@ mod live {
                 "a secret reached stderr: {stderr}"
             );
         }
+    }
+
+    pub(super) fn mpv_quitting_on_its_own_waits_for_the_drop() {
+        let mut running = Running::start();
+        running.engine.command_for_test(&["quit"]).expect("quit");
+        running.wait_for("terminated", |e| matches!(e, EngineEvent::Terminated));
+        // The handle is still valid: calls fail or do nothing, but touch no freed memory.
+        let _ = running.engine.set_paused(true);
+        let _ = running.engine.stop();
+        // Nothing is destroyed before the engine is released.
+        assert!(
+            running
+                .events
+                .recv_timeout(Duration::from_millis(300))
+                .is_err(),
+            "an event after Terminated before the drop"
+        );
+        running.finish();
+        // The slot is free again.
+        Running::start().finish();
+    }
+
+    pub(super) fn a_panicking_sink_still_frees_the_engine() {
+        let _turn = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+        let engine = Engine::start(&config(), Box::new(|_| panic!("a sink that panics")))
+            .expect("engine starts");
+        // The first event (`Idle`) panics the sink; the engine still shuts down, and the slot comes back.
+        std::thread::sleep(Duration::from_millis(200));
+        engine.shutdown();
+        let next = Engine::start_waiting(&config(), Box::new(|_| {}), Duration::from_secs(2))
+            .expect("the slot is free");
+        next.shutdown();
+    }
+
+    pub(super) fn hls_segment_over_https_is_verified() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (cert, key) = self_signed(dir.path());
+        let (port, seen) = tls_stand_in(cert, key);
+        let segment = format!("https://127.0.0.1:{port}/segment0.ts");
+        let origin = StandIn::start(move |req| {
+            if req.path.starts_with("/master.m3u8") {
+                let playlist = format!(
+                    "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n\
+                     #EXTINF:2.0,\n{segment}\n#EXT-X-ENDLIST\n"
+                );
+                Reply::Body("application/vnd.apple.mpegurl", playlist.into_bytes())
+            } else {
+                Reply::NotFound
+            }
+        });
+        let mut running = Running::start();
+        running
+            .engine
+            .load(&FileRequest::new(origin.url("/master.m3u8")))
+            .expect("load");
+        running.wait_for("end-file", ended);
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "a segment request passed an unverified certificate"
+        );
+        running.finish();
     }
 }

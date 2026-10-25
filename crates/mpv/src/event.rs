@@ -63,6 +63,8 @@ pub enum EngineEvent {
     Log(LogLine),
     /// mpv's event queue overflowed and events were lost: the controller should re-read its state.
     Overflow,
+    /// mpv quit on its own (not asked by the engine): nothing more will play. Drop the engine; [`EngineEvent::Shutdown`] follows then.
+    Terminated,
     /// The engine stopped; no events follow.
     Shutdown,
 }

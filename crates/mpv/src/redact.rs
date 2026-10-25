@@ -7,9 +7,9 @@ pub const REDACTED: &str = "<redacted>";
 /// Query keys whose value is always redacted, matched without regard to case.
 const SECRET_KEYS: [&str; 2] = ["apikey=", "api_key="];
 
-/// Shorter secrets are not matched on their own: a three-letter value would shred ordinary text. Tokens, cookies and Basic
-/// credentials are far longer.
-const MIN_SECRET_LEN: usize = 6;
+/// Forms derived from a secret (its encodings, the part after a scheme) shorter than this are not matched: a three-letter fragment
+/// would shred ordinary text. A registered value is always matched, whatever its length.
+const MIN_DERIVED_LEN: usize = 6;
 
 /// The secret values known to the engine. Values are only added, never removed, so a line about an earlier file is still redacted.
 #[derive(Default, Clone)]
@@ -32,15 +32,27 @@ impl Redactor {
         Redactor::default()
     }
 
-    /// Adds a secret value: a token, a cookie value or a header value. Its percent-encoded form is added too, since URLs carry it
-    /// encoded, and for a value with a scheme (`Basic <credentials>`) the part after the scheme as well.
+    /// Adds a secret value: a token, a cookie value or a header value. Its percent-encoded forms are added too, since URLs carry it
+    /// encoded (upper- and lowercase hex, and with `+` for a space as forms encode it), and for a value with a scheme
+    /// (`Basic <credentials>`) the part after the scheme as well.
     pub fn add(&mut self, secret: &str) {
-        let mut forms = vec![secret.to_owned(), percent_encode(secret)];
-        if let Some((_, rest)) = secret.split_once(' ') {
-            forms.push(rest.trim().to_owned());
+        if secret.is_empty() {
+            return;
         }
-        for form in forms {
-            if form.len() >= MIN_SECRET_LEN && !self.secrets.contains(&form) {
+        if !self.secrets.iter().any(|s| s == secret) {
+            self.secrets.push(secret.to_owned());
+        }
+        let mut derived = vec![
+            percent_encode(secret, false, false),
+            percent_encode(secret, true, false),
+            percent_encode(secret, false, true),
+            percent_encode(secret, true, true),
+        ];
+        if let Some((_, rest)) = secret.split_once(' ') {
+            derived.push(rest.trim().to_owned());
+        }
+        for form in derived {
+            if form.len() >= MIN_DERIVED_LEN && !self.secrets.contains(&form) {
                 self.secrets.push(form);
             }
         }
@@ -95,11 +107,15 @@ fn is_value_end(c: char) -> bool {
 }
 
 /// RFC 3986 percent-encoding of everything but unreserved characters.
-fn percent_encode(s: &str) -> String {
+fn percent_encode(s: &str, lowercase: bool, plus_for_space: bool) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
             out.push(b as char);
+        } else if b == b' ' && plus_for_space {
+            out.push('+');
+        } else if lowercase {
+            out.push_str(&format!("%{b:02x}"));
         } else {
             out.push_str(&format!("%{b:02X}"));
         }
@@ -155,11 +171,33 @@ mod tests {
     }
 
     #[test]
-    fn short_values_and_ordinary_text_are_left_alone() {
+    fn short_registered_values_are_still_redacted() {
         let mut r = Redactor::new();
         r.add("abc");
+        assert_eq!(r.redact("abc xabcx"), "<redacted> x<redacted>x");
+        // The derived form "c" (after the scheme) is too short to match on its own.
+        r.add("B c");
+        assert_eq!(r.redact("B c, cc"), "<redacted>, cc");
+    }
+
+    #[test]
+    fn every_encoding_of_a_secret_is_redacted() {
+        let mut r = Redactor::new();
+        r.add("gate value/1");
+        for encoded in [
+            "gate%20value%2F1",
+            "gate%20value%2f1",
+            "gate+value%2F1",
+            "gate+value%2f1",
+        ] {
+            assert_eq!(r.redact(encoded), REDACTED, "{encoded}");
+        }
+    }
+
+    #[test]
+    fn ordinary_text_is_left_alone() {
+        let mut r = Redactor::new();
         r.add("");
-        assert_eq!(r.redact("abc abc"), "abc abc");
         assert_eq!(
             r.redact("[ffmpeg/demuxer] hls: Opening segment 3"),
             "[ffmpeg/demuxer] hls: Opening segment 3"

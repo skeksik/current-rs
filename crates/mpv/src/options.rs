@@ -1,6 +1,7 @@
 //! What the engine sets: the options at start (ADR 0019 "Options at start", ADR 0007's route), the display facts mapping (ADR 0007)
 //! and the per-file options of `loadfile` (ADR 0019 "Gateways, tokens and the player").
 
+use crate::error::EngineError;
 use crate::node::Node;
 
 /// Where video goes.
@@ -268,6 +269,48 @@ impl FileRequest {
         }
     }
 
+    /// Whether the request carries gateway credentials (cookies or headers).
+    pub fn has_credentials(&self) -> bool {
+        !self.cookies.is_empty() || !self.headers.is_empty()
+    }
+
+    /// Checks cookies and headers for characters that would change what FFmpeg sends: control characters (CR and LF would start a new
+    /// header line, a newline a new cookie), `;` and `=` in a cookie name, `;` in a cookie value or path (a new attribute), and `:` in
+    /// a header name.
+    pub fn validate(&self) -> Result<(), EngineError> {
+        let bad = |s: &str, extra: &[char]| s.chars().any(|c| c.is_control() || extra.contains(&c));
+        for c in &self.cookies {
+            if c.name.is_empty() || bad(&c.name, &[';', '=', ' ']) {
+                return Err(EngineError::InvalidCredential {
+                    what: "cookie name",
+                });
+            }
+            if bad(&c.value, &[';']) {
+                return Err(EngineError::InvalidCredential {
+                    what: "cookie value",
+                });
+            }
+            if bad(&c.path, &[';']) {
+                return Err(EngineError::InvalidCredential {
+                    what: "cookie path",
+                });
+            }
+        }
+        for (name, value) in &self.headers {
+            if name.is_empty() || bad(name, &[':', ' ']) {
+                return Err(EngineError::InvalidCredential {
+                    what: "header name",
+                });
+            }
+            if bad(value, &[]) {
+                return Err(EngineError::InvalidCredential {
+                    what: "header value",
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// Every secret this request holds: the URL's, the cookie values and the header values.
     pub fn secret_values(&self) -> Vec<&str> {
         let mut out: Vec<&str> = self.secrets.iter().map(String::as_str).collect();
@@ -325,6 +368,15 @@ impl FileRequest {
             ("options".into(), self.file_options()),
         ])
     }
+}
+
+/// Whether an FFmpeg version string (`av_version_info()`, mpv's `ffmpeg-version`) names FFmpeg 9.0 or later, the first with the http
+/// protocol's `max_redirects` (in FFmpeg 9.0.2's `libavformat/http.c`, not in n8.0's; docs/notes/mpv-engine.md). Release builds read
+/// `9.0.2` or `n9.0.2`, distribution builds `6.1.1-3ubuntu5`; a git build (`N-12345-g...`) or anything else unreadable counts as no.
+pub fn ffmpeg_has_max_redirects(version: &str) -> bool {
+    let digits = version.strip_prefix('n').unwrap_or(version);
+    let major: String = digits.chars().take_while(char::is_ascii_digit).collect();
+    major.parse::<u32>().is_ok_and(|m| m >= 9)
 }
 
 /// FFmpeg's `cookies`: "newline delimited Set-Cookie HTTP field value syntax" (FFmpeg `libavformat/http.c`), each with the URL's host
@@ -546,6 +598,76 @@ mod tests {
             scheme_and_host("HTTPS://[::1]:8920?x"),
             Some(("HTTPS", "[::1]:8920"))
         );
+    }
+
+    #[test]
+    fn ffmpeg_versions() {
+        for yes in ["9.0.2", "n9.0.2", "10.1", "n12.0-dev"] {
+            assert!(ffmpeg_has_max_redirects(yes), "{yes}");
+        }
+        for no in [
+            "8.0",
+            "n8.0.1",
+            "6.1.1-3ubuntu5",
+            "N-12345-gabcdef",
+            "",
+            "git-2026",
+        ] {
+            assert!(!ffmpeg_has_max_redirects(no), "{no}");
+        }
+    }
+
+    #[test]
+    fn credentials_that_would_change_the_request_are_refused() {
+        let cookie = |name: &str, value: &str, path: &str| StreamCookie {
+            name: name.into(),
+            value: value.into(),
+            path: path.into(),
+            secure: false,
+        };
+        let with = |cookies: Vec<StreamCookie>, headers: Vec<(&str, &str)>| {
+            let mut r = FileRequest::new("https://media.example.com/x");
+            r.cookies = cookies;
+            r.headers = headers
+                .into_iter()
+                .map(|(n, v)| (n.into(), v.into()))
+                .collect();
+            r.validate().err().map(|e| e.to_string())
+        };
+        assert_eq!(
+            with(
+                vec![cookie("gate", "a=b,c", "/")],
+                vec![("X-Gate", "v=1; x")]
+            ),
+            None
+        );
+        assert!(!FileRequest::new("https://media.example.com/x").has_credentials());
+        for (cookies, headers, what) in [
+            (vec![cookie("ga;te", "v", "/")], vec![], "cookie name"),
+            (vec![cookie("", "v", "/")], vec![], "cookie name"),
+            (
+                vec![cookie("gate", "v; domain=evil", "/")],
+                vec![],
+                "cookie value",
+            ),
+            (
+                vec![cookie("gate", "v\nother=1", "/")],
+                vec![],
+                "cookie value",
+            ),
+            (
+                vec![cookie("gate", "v", "/; secure")],
+                vec![],
+                "cookie path",
+            ),
+            (vec![], vec![("X-Gate", "v\r\nHost: evil")], "header value"),
+            (vec![], vec![("X-Gate: a", "v")], "header name"),
+        ] {
+            assert_eq!(
+                with(cookies, headers),
+                Some(format!("invalid gateway credential: {what}"))
+            );
+        }
     }
 
     #[test]

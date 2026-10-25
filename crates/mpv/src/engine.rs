@@ -7,7 +7,8 @@
 //!   (the sink is the controller's channel). No wakeup callback is used.
 //! - Dropping the engine sends `quit`; the event thread then calls `mpv_terminate_destroy` (which blocks until mpv's VO thread has
 //!   ended, ADR 0007) on itself, off any core worker, and reports [`EngineEvent::Shutdown`] last. [`Engine::shutdown`] does the same and
-//!   waits for it.
+//!   waits for it. The handle is destroyed only after the `Engine` has made its last call (`released`): if mpv shuts down on its own,
+//!   the thread reports [`EngineEvent::Terminated`] and waits for the drop. A panicking sink stops delivery but not that cleanup.
 //! - mpv's messages arrive at `info` (or `v`) through `mpv_request_log_messages` and are redacted before they reach the sink. The engine
 //!   never sets `log-file` and never reads a URL-valued property.
 //! - **One engine per process at a time** (ADR 0019, 2026-10-25). mpv routes FFmpeg's log to the first mpv instance of the process only,
@@ -22,6 +23,7 @@
 #![allow(unsafe_code)]
 
 use std::ffi::{CString, c_char, c_void};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
@@ -101,12 +103,33 @@ impl Request {
 struct Shared {
     handle: *mut sys::mpv_handle,
     redactor: Mutex<Redactor>,
+    /// The engine asked mpv to quit (set before the `quit` command, so a `SHUTDOWN` that follows is not reported as unrequested).
     quitting: AtomicBool,
+    /// The engine made its last call on the handle (set after `quit`); only then may the event thread destroy it.
+    released: Mutex<bool>,
+    released_cv: Condvar,
+}
+
+impl Shared {
+    fn release(&self) {
+        *self.released.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.released_cv.notify_all();
+    }
+
+    fn wait_released(&self) {
+        let mut released = self.released.lock().unwrap_or_else(PoisonError::into_inner);
+        while !*released {
+            released = self
+                .released_cv
+                .wait(released)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
 }
 
 // SAFETY: libmpv's client API may be called on one handle from any thread ("generally fully thread-safe", `client.h`), except
-// `mpv_terminate_destroy`, which only the event thread calls, after the `Engine` (the only other user) is gone or has asked to quit and
-// stopped issuing calls.
+// `mpv_terminate_destroy`, which only the event thread calls, after the `Engine` (the only other user) has set `released` and makes no
+// further call.
 unsafe impl Send for Shared {}
 // SAFETY: as above; the redactor is behind a mutex and the flag is atomic.
 unsafe impl Sync for Shared {}
@@ -116,6 +139,8 @@ pub struct Engine {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
     capabilities: BuildCapabilities,
+    /// FFmpeg honours `max_redirects` (9.0 or later): without it, files with gateway credentials are refused.
+    refuses_redirects: bool,
 }
 
 impl std::fmt::Debug for Engine {
@@ -191,9 +216,11 @@ impl Engine {
             handle,
             redactor: Mutex::new(Redactor::new()),
             quitting: AtomicBool::new(false),
+            released: Mutex::new(false),
+            released_cv: Condvar::new(),
         });
         match Engine::init(&shared, config) {
-            Ok(capabilities) => {
+            Ok((capabilities, refuses_redirects)) => {
                 let thread_shared = Arc::clone(&shared);
                 let composition = matches!(config.output, Output::Composition { .. });
                 let spawned = std::thread::Builder::new()
@@ -204,6 +231,7 @@ impl Engine {
                         shared,
                         thread: Some(thread),
                         capabilities,
+                        refuses_redirects,
                     }),
                     Err(e) => {
                         destroy(&shared);
@@ -218,7 +246,11 @@ impl Engine {
         }
     }
 
-    fn init(shared: &Shared, config: &EngineConfig) -> Result<BuildCapabilities, EngineError> {
+    /// The capabilities, and whether FFmpeg refuses redirects.
+    fn init(
+        shared: &Shared,
+        config: &EngineConfig,
+    ) -> Result<(BuildCapabilities, bool), EngineError> {
         let h = shared.handle;
         for opt in options::start_options(config) {
             let name = cstring(opt.name, "option name")?;
@@ -257,7 +289,15 @@ impl Engine {
         }
         let decoders = get_node(h, "decoder-list")?;
         let demuxers = get_node(h, "demuxer-lavf-list")?;
-        Ok(BuildCapabilities::from_nodes(&decoders, &demuxers))
+        // `ffmpeg-version` is FFmpeg's `av_version_info()` (mpv's `input.rst`).
+        let ffmpeg = get_node(h, "ffmpeg-version")?;
+        let refuses_redirects = ffmpeg
+            .as_str()
+            .is_some_and(options::ffmpeg_has_max_redirects);
+        Ok((
+            BuildCapabilities::from_nodes(&decoders, &demuxers),
+            refuses_redirects,
+        ))
     }
 
     /// What this build decodes and demuxes, read after `mpv_initialize`.
@@ -267,7 +307,14 @@ impl Engine {
 
     /// Loads a file, replacing whatever plays, with its per-file options (`start`, `aid`, `sid`, `stream-lavf-o`). Its secrets join the
     /// redaction set first, so no log line about it shows them.
+    ///
+    /// Refused when a cookie or header is malformed, and when the file carries gateway credentials but FFmpeg cannot refuse redirects
+    /// (`max_redirects` needs FFmpeg 9.0 or later): FFmpeg keeps headers on a redirect to another host (ADR 0019, choice 4).
     pub fn load(&self, file: &FileRequest) -> Result<(), EngineError> {
+        file.validate()?;
+        if file.has_credentials() && !self.refuses_redirects {
+            return Err(EngineError::RedirectsNotRefused);
+        }
         {
             let mut redactor = self
                 .shared
@@ -360,15 +407,23 @@ impl Engine {
         self.set(Request::Display, name, value)
     }
 
+    /// Runs any command: tests only (mpv quitting on its own).
+    #[cfg(test)]
+    pub(crate) fn command_for_test(&self, args: &[&str]) -> Result<(), EngineError> {
+        self.command(Request::Stop, &command(args))
+    }
+
     fn request_quit(&self) {
         if self.shared.quitting.swap(true, Ordering::SeqCst) {
             return;
         }
         if self.command(Request::Quit, &command(&["quit"])).is_err() {
             // The event thread checks the flag whenever it wakes.
-            // SAFETY: valid handle; destroyed only by the event thread, after this.
+            // SAFETY: valid handle; destroyed only after `release` below.
             unsafe { sys::mpv_wakeup(self.shared.handle) };
         }
+        // The last call on the handle from this side: the event thread may destroy it now.
+        self.shared.release();
     }
 
     fn command(&self, request: Request, cmd: &Node) -> Result<(), EngineError> {
@@ -439,8 +494,9 @@ fn get_node(h: *mut sys::mpv_handle, name: &'static str) -> Result<Node, EngineE
         )
     };
     check(name, status)?;
-    // SAFETY: mpv filled `raw` with a valid tree, which is copied and then freed exactly once.
+    // SAFETY: mpv filled `raw` with a valid tree, which is only read here.
     let node = unsafe { sys::read_node(&raw) };
+    // SAFETY: `raw` holds what mpv allocated for this call; it is freed exactly once and not used after.
     unsafe { sys::mpv_free_node_contents(&mut raw) };
     Ok(node)
 }
@@ -452,7 +508,20 @@ fn destroy(shared: &Shared) {
     give_back_slot();
 }
 
+/// The `mpv-events` thread: pumps events, then destroys mpv once the engine has released the handle, whatever happened in between (a
+/// panicking sink included), and reports [`EngineEvent::Shutdown`] last.
 fn event_loop(shared: &Shared, mut sink: EventSink, composition: bool) {
+    let pumped = catch_unwind(AssertUnwindSafe(|| pump(shared, &mut sink, composition)));
+    shared.wait_released();
+    destroy(shared);
+    if pumped.is_ok() {
+        // A sink that panicked before gets nothing more.
+        let _ = catch_unwind(AssertUnwindSafe(|| sink(EngineEvent::Shutdown)));
+    }
+}
+
+/// Hands mpv's events to the sink until mpv shuts down or the engine quits. A panic in the sink unwinds out of here.
+fn pump(shared: &Shared, sink: &mut EventSink, composition: bool) {
     let mut swap_chain_ptr: u64 = 0;
     let mut generation: u64 = 0;
     loop {
@@ -466,7 +535,13 @@ fn event_loop(shared: &Shared, mut sink: EventSink, composition: bool) {
                 }
                 None
             }
-            sys::EVENT_SHUTDOWN => break,
+            sys::EVENT_SHUTDOWN => {
+                if !shared.quitting.load(Ordering::SeqCst) {
+                    // mpv quit on its own; the handle stays valid until the engine is dropped (`event_loop`).
+                    sink(EngineEvent::Terminated);
+                }
+                break;
+            }
             sys::EVENT_LOG_MESSAGE if !ev.data.is_null() => {
                 // SAFETY: a log message event's data is an `mpv_event_log_message`.
                 let msg = unsafe { &*(ev.data as *const sys::mpv_event_log_message) };
@@ -520,13 +595,19 @@ fn event_loop(shared: &Shared, mut sink: EventSink, composition: bool) {
                 };
                 match event::observed(ev.reply_userdata, &value) {
                     Observed::Change(change) => Some(EngineEvent::Property(change)),
+                    // Once quitting, mpv is tearing its VO down: no new reference.
                     Observed::SwapChain(ptr)
-                        if composition && ptr != 0 && ptr != swap_chain_ptr =>
+                        if composition
+                            && ptr != 0
+                            && ptr != swap_chain_ptr
+                            && !shared.quitting.load(Ordering::SeqCst) =>
                     {
                         swap_chain_ptr = ptr;
                         generation += 1;
-                        // SAFETY: mpv just reported this address as its live swap chain (`display-swapchain`, an `IDXGISwapChain*`);
-                        // the reference is taken before this thread waits again.
+                        // SAFETY: mpv reported this address as its swap chain (`display-swapchain`, an `IDXGISwapChain*`), and the
+                        // reference is taken before this thread waits again. Not guaranteed: mpv reads the value on its own thread
+                        // and its VO thread may release that swap chain (a VO recreation) between that read and this `AddRef`;
+                        // mpv offers no way to hold it across the notice (docs/notes/mpv-engine.md, "Not verified").
                         Some(EngineEvent::SwapChain(unsafe {
                             SwapChain::add_ref(ptr as usize as *mut c_void, generation)
                         }))
@@ -546,6 +627,4 @@ fn event_loop(shared: &Shared, mut sink: EventSink, composition: bool) {
             sink(event);
         }
     }
-    destroy(shared);
-    sink(EngineEvent::Shutdown);
 }

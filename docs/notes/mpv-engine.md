@@ -55,6 +55,30 @@ token>'` on stderr. So the engine allows one instance per process (`Engine::star
 else `EngineError::Busy`), a player reuses its engine for every file, and a test runs two engines one after the other in a child
 process and checks its stderr for the token, the cookie and the header value. Several player windows: roadmap follow-up.
 
+## HLS sub-requests: what reaches segments (read 2026-10-25)
+- FFmpeg 9.0.2 `libavformat/aviobuf.c`, `ffio_copy_url_options`: `"headers", "user_agent", "cookies", "http_proxy", "referer",
+  "rw_timeout", "icy"`. HLS (`hls.c`, `open_url`) copies these from the playlist's context into every playlist, segment and key
+  request; `max_redirects` and `tls_verify` are not in the list.
+- mpv v0.41.0 `demux/demux_lavf.c`: the `hls` and `dash` formats are `no_stream` (libavformat opens the URL itself), so the demuxer's
+  options are built by `mp_setup_av_network_options` (`stream/stream_lavf.c`: `tls_verify`, then `stream-lavf-o` last, so
+  `max_redirects=0`, `cookies` and `headers`). mpv installs `nested_io_open` for every nested open, which, with
+  `demuxer-lavf-propagate-opts` (default yes), copies each of these options into the nested open's options unless already present.
+  So `max_redirects=0` and `tls_verify=1` reach every segment request on any connection: read from code, and shown by the tests below
+  (each stand-in request is a fresh connection).
+- **Headers go to every segment host.** A segment named by an absolute URL on another host or port gets the gateway headers (the
+  test held back from this PR showed `X-Stand-In-Gate` on a second port, 2026-10-25, Linux container). Cookies do not: they carry the
+  stream's host and port as their domain (above). Jellyfin's own playlists name segments relatively (docs/notes/playback.md); the fix
+  for a playlist that does not is open (manager).
+
+## Shutdown and the sink
+- The handle is destroyed only after the `Engine` made its last call: `request_quit` sets `quitting`, sends `quit`, then `released`;
+  the event thread waits for `released` before `mpv_terminate_destroy`. If mpv shuts down on its own, the engine reports `Terminated`
+  and keeps the (still valid) handle until it is dropped.
+- The event loop runs under `catch_unwind`: a sink that panics gets no more events, and mpv is still destroyed and the one-engine slot
+  given back.
+- `FileRequest`s with cookies or headers are refused unless `ffmpeg-version` names FFmpeg 9.0 or later (`max_redirects`); cookies and
+  headers with control characters, `;` in a cookie, or `:` in a header name are refused.
+
 ## Tests
 `cargo test -p current-mpv` runs the logic everywhere (options, display mapping, per-file options and escaping, redaction, events,
 capabilities, node conversion, struct layouts, swap chain reference counting with a fake COM object). The live tests in
@@ -71,13 +95,18 @@ capabilities, node conversion, struct layouts, swap chain reference counting wit
 | A second engine waits, then gets `Busy`; after the first is destroyed one starts | passed | passed (run 40175292879) |
 | The next file replaces the first on the same engine (`EndFile(Stop)`, then `FileLoaded`) | passed | passed (run 40175292879) |
 | Two engines one after the other in a child process: nothing secret on its stderr | passed | passed (run 40175292879) |
+| mpv quits on its own: `Terminated`, calls stay safe, nothing destroyed before the drop, then the slot is free | passed | see the PR |
+| A sink that panics: the engine still shuts down and the slot is free | passed | see the PR |
+| An HLS segment over https with a self-signed certificate on another port: no request arrives | passed | see the PR |
 
 The TLS test makes a throwaway certificate at run time with `openssl` (nothing checked in); the Windows image lists OpenSSL 3.6.5
 (actions/runner-images, `images/windows/Windows2025-VS2026-Readme.md`, image 20261007.264.1, read 2026-10-25).
 
 ## Not verified
 - Anything in composition mode (`vo=gpu-next`, D3D11, the swap chain): CI runs headless. That is ADR 0019 task 5, on a device.
-- That `AddRef` on the `display-swapchain` pointer cannot race mpv recreating its VO: the reference is taken as soon as the change
-  arrives, before the event thread waits again, but mpv does not promise the pointer outlives the notice.
+- That `AddRef` on the `display-swapchain` pointer cannot race mpv's VO thread: mpv reads the property on its own thread and may
+  release that swap chain (a VO recreation) before the event thread's `AddRef`. The engine takes the reference as soon as the notice
+  arrives and never once quitting, which narrows the window but cannot close it; mpv offers no way to hold the swap chain across the
+  notice.
 - COM reference counting of the DXGI swap chain from the event thread (DXGI objects are free-threaded; not checked).
 - SChannel's revocation check when the revocation server is unreachable (docs/notes/playback.md).
