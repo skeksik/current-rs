@@ -153,6 +153,15 @@ pub trait MediaServer {
         stream: &MediaStream,
     ) -> impl Future<Output = Result<Vec<u8>, PlaybackProblem>> + Send;
 
+    /// Checks the HLS playlist at `url` before the engine opens it with gateway headers: the master playlist and every playlist it
+    /// names are fetched with the address's credentials, and every URI in them must be relative or on the URL's own scheme, host and
+    /// port, because the engine sends the headers to whatever host a playlist names (ADR 0019, "Playlists and headers").
+    /// [`PlaybackProblem::PlaylistElsewhere`] when one is not; a check, not enforcement, since the engine fetches the playlists again.
+    fn check_playlist(
+        &self,
+        url: &StreamUrl,
+    ) -> impl Future<Output = Result<(), PlaybackProblem>> + Send;
+
     /// Whether the address in use is a local one, for the remembered quality.
     fn is_local_address(&self) -> bool;
 }

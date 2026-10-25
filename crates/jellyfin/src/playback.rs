@@ -365,7 +365,7 @@ impl JellyfinClient {
     }
 
     /// The base of stream URLs: the address the client sends its token to now, so the token's transport rule (ADR 0012) holds.
-    fn stream_base(&self) -> Result<Url, AuthError> {
+    pub(crate) fn stream_base(&self) -> Result<Url, AuthError> {
         self.http
             .current_address()
             .map(|selected| selected.url().clone())
