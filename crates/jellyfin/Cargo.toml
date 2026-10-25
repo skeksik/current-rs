@@ -17,7 +17,7 @@ url.workspace = true
 
 [dev-dependencies]
 jellyfin-stand-in.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "sync", "time"] }
 
 [lints]
 workspace = true
