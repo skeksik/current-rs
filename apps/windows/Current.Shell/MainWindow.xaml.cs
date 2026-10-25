@@ -154,6 +154,9 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>The page shown now (the smoke run).</summary>
     internal Page? ShownPage => ContentFrame.Content as Page;
 
+    /// <summary>The titles of the notices above the pages now (the smoke run).</summary>
+    internal IReadOnlyList<string> NoticeTitles => [.. Notices.Children.OfType<InfoBar>().Select(notice => notice.Title)];
+
     /// <summary>The navigation's library items now, headers left out (the smoke run).</summary>
     internal int LibraryItemCount => _libraryItems.OfType<NavigationViewItem>().Count();
 
@@ -470,8 +473,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     /// <summary>
     /// Follows the window's browse sessions (App.Browsing): the search box and one navigation item per library show while a Jellyfin
-    /// server is signed in, and pages of a server that is gone leave the history (a page shown now goes back to Home). Called once
-    /// the core is open.
+    /// server is signed in, and pages of a server or a library that is gone leave the history (a page shown now goes back to Home).
+    /// Called once the core is open.
     /// </summary>
     internal void FollowBrowsing(BrowseHub hub)
     {
@@ -487,34 +490,76 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         // owner's run, 2026-10-25).
         SearchBox.Visibility = hub.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
         NavView.AutoSuggestBox = hub.IsAvailable ? SearchBox : null;
-        foreach (var item in _libraryItems)
-        {
-            NavView.MenuItems.Remove(item);
-        }
-        _libraryItems.Clear();
+        ShowLibraries(hub);
+        DropHistoryOfGoneServers(hub);
+        DropHistoryOfGoneLibraries(hub);
+        SelectShownPage();
+    }
+
+    /// <summary>
+    /// The library items follow the core's lists in place: an item for a library still listed is kept (and renamed), a new library's
+    /// item is inserted where the user's order puts it, a gone library's item is removed, and the rest stay as they are, so the
+    /// selection and keyboard focus stay on what they were on. The library items always end the pane's list, after Home.
+    /// </summary>
+    private void ShowLibraries(BrowseHub hub)
+    {
+        var wanted = new List<object>();
         var servers = hub.Servers;
         foreach (var server in servers)
         {
             if (servers.Count > 1)
             {
-                _libraryItems.Add(new NavigationViewItemHeader { Content = hub.ServerName(server.Server) });
+                var header = _libraryItems.OfType<NavigationViewItemHeader>().FirstOrDefault(known => Equals(known.Tag, server.Server))
+                    ?? new NavigationViewItemHeader { Tag = server.Server };
+                var name = hub.ServerName(server.Server);
+                if (!Equals(header.Content, name))
+                {
+                    header.Content = name;
+                }
+                wanted.Add(header);
             }
             foreach (var library in server.Libraries)
             {
-                _libraryItems.Add(new NavigationViewItem
+                var item = _libraryItems.OfType<NavigationViewItem>()
+                    .FirstOrDefault(known => known.Tag is LibraryArgs args && args.Library.Item == library.Item);
+                if (item is null)
                 {
-                    Content = library.Name,
-                    Tag = new LibraryArgs(library),
-                    Icon = new FontIcon { Glyph = LibraryGlyph(library.Collection) },
-                });
+                    item = new NavigationViewItem { Content = library.Name, Icon = new FontIcon { Glyph = LibraryGlyph(library.Collection) } };
+                }
+                else
+                {
+                    var shown = ((LibraryArgs)item.Tag).Library;
+                    if (shown.Name != library.Name)
+                    {
+                        item.Content = library.Name;
+                    }
+                    if (shown.Collection != library.Collection)
+                    {
+                        item.Icon = new FontIcon { Glyph = LibraryGlyph(library.Collection) };
+                    }
+                }
+                item.Tag = new LibraryArgs(library);
+                wanted.Add(item);
             }
         }
-        foreach (var item in _libraryItems)
+        var start = NavView.MenuItems.Count - _libraryItems.Count;
+        for (var i = 0; i < wanted.Count; i++)
         {
-            NavView.MenuItems.Add(item);
+            var at = start + i;
+            if (at < NavView.MenuItems.Count && ReferenceEquals(NavView.MenuItems[at], wanted[i]))
+            {
+                continue;
+            }
+            // Moved (the user's order changed) or new: every item before it is already in place.
+            NavView.MenuItems.Remove(wanted[i]);
+            NavView.MenuItems.Insert(at, wanted[i]);
         }
-        DropHistoryOfGoneServers(hub);
-        SelectShownPage();
+        while (NavView.MenuItems.Count > start + wanted.Count)
+        {
+            NavView.MenuItems.RemoveAt(NavView.MenuItems.Count - 1);
+        }
+        _libraryItems.Clear();
+        _libraryItems.AddRange(wanted);
     }
 
     /// <summary>
@@ -585,6 +630,32 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         if (Gone(ContentFrame.SourcePageType, _shownParameter))
         {
             ContentFrame.Navigate(typeof(HomePage), null, new SuppressNavigationTransitionInfo());
+        }
+        UpdateBackButton();
+    }
+
+    /// <summary>
+    /// Pages of a library that left its server's list (the core no longer lists it: removed on the server, or hidden from the user)
+    /// leave the back and forward stacks, as a gone server's do. The page shown now goes back to Home with a short notice; that is
+    /// also how opening a stale entry ends, once the core has found the library gone.
+    /// </summary>
+    private void DropHistoryOfGoneLibraries(BrowseHub hub)
+    {
+        bool Gone(object? parameter) => parameter is LibraryArgs args && hub.IsGone(args.Library.Item);
+        foreach (var stack in new[] { ContentFrame.BackStack, ContentFrame.ForwardStack })
+        {
+            for (var i = stack.Count - 1; i >= 0; i--)
+            {
+                if (Gone(stack[i].Parameter))
+                {
+                    stack.RemoveAt(i);
+                }
+            }
+        }
+        if (ContentFrame.SourcePageType == typeof(LibraryPage) && Gone(_shownParameter))
+        {
+            ContentFrame.Navigate(typeof(HomePage), null, new SuppressNavigationTransitionInfo());
+            ShowNotice(InfoBarSeverity.Informational, BrowseText.LibraryGoneTitle, BrowseText.LibraryGoneMessage);
         }
         UpdateBackButton();
     }

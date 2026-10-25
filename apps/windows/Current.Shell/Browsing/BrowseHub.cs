@@ -1,13 +1,12 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using Current.Bindings;
 
 namespace Current.Shell.Browsing;
 
 /// <summary>
 /// The browse sessions of the window (ADR 0018): one <see cref="Browse"/> per signed-in Jellyfin server, its libraries for the
-/// navigation, the library grids that stay open while the app runs (so going back to one keeps its place), and the core's played and
-/// favourite notices. It follows the capabilities state: a server signed out of, removed or signed in to again gets its session
+/// navigation as the core's list follows the server (added, renamed, reordered, gone), the library grids that stay open while the app
+/// runs (so going back to one keeps its place), and the core's played and favourite notices. It follows the capabilities state: a server signed out of, removed or signed in to again gets its session
 /// dropped or a new one, and everything browse-related hides while no server is signed in (<see cref="IsAvailable"/>). Use it on
 /// the UI thread; dispose it with the window.
 /// </summary>
@@ -43,7 +42,7 @@ internal sealed class BrowseHub : IDisposable
         Sync();
     }
 
-    /// <summary>Raised on the UI thread when a session starts or ends, or a server's libraries arrive.</summary>
+    /// <summary>Raised on the UI thread when a session starts or ends, or a server's libraries change.</summary>
     public event EventHandler? Changed;
 
     public CoreHost Core => _core;
@@ -65,13 +64,19 @@ internal sealed class BrowseHub : IDisposable
     public Library? FindLibrary(ItemRef library) =>
         Find(library.Server)?.Libraries.FirstOrDefault(known => known.Item == library);
 
+    /// <summary>
+    /// Whether <paramref name="library"/> left its server's list in this session: the core no longer lists it (removed on the server,
+    /// or hidden from the user). A library never listed (the smoke run opens one by its id) is not gone.
+    /// </summary>
+    public bool IsGone(ItemRef library) => Find(library.Server)?.IsGone(library) ?? false;
+
     private void OnCapabilitiesChanged(object? sender, PropertyChangedEventArgs e) => Sync();
 
     /// <summary>
     /// A Jellyfin server with a live session gets a browse session, one signed out or gone loses it, and one whose session number
     /// changed (a new sign-in, even as the same user) gets a new one: the core names the session in the status
     /// (<see cref="ServerStatus.Session"/>), so the hub decides nothing itself. A server that is unreachable keeps its session and its
-    /// last libraries; they are read again once it answers.
+    /// last libraries; the core reads them again once it answers.
     /// </summary>
     private void Sync()
     {
@@ -87,6 +92,7 @@ internal sealed class BrowseHub : IDisposable
         {
             if (!live.TryGetValue(server, out var status) || status.Session != _servers[server].SessionNumber)
             {
+                _servers[server].LibrariesChanged -= OnLibrariesChanged;
                 _servers[server].Dispose();
                 _servers.Remove(server);
                 changed = true;
@@ -106,13 +112,10 @@ internal sealed class BrowseHub : IDisposable
                     // The session ended between the status and this call: the next status change tries again.
                     continue;
                 }
-                browse = new ServerBrowse(server, status.Session, session);
+                browse = new ServerBrowse(server, status.Session, session, _ui);
+                browse.LibrariesChanged += OnLibrariesChanged;
                 _servers[server] = browse;
                 changed = true;
-            }
-            if (status.Reachability == Reachability.Reachable && !browse.LibrariesLoaded)
-            {
-                _ = LoadLibrariesAsync(browse);
             }
         }
         if (changed)
@@ -161,35 +164,11 @@ internal sealed class BrowseHub : IDisposable
         }
     }
 
-    private async Task LoadLibrariesAsync(ServerBrowse server)
+    private void OnLibrariesChanged(object? sender, EventArgs e)
     {
-        if (server.LoadingLibraries)
+        if (!_disposed && sender is ServerBrowse { IsDisposed: false })
         {
-            return;
-        }
-        server.LoadingLibraries = true;
-        try
-        {
-            var libraries = await server.Session.LibrariesAsync();
-            if (_disposed || server.IsDisposed)
-            {
-                return;
-            }
-            server.Libraries = libraries;
-            server.LibrariesLoaded = true;
             Changed?.Invoke(this, EventArgs.Empty);
-        }
-        catch (BrowseRequestException)
-        {
-            // Unreachable or refused: the navigation keeps what it had, and the next status change tries again.
-        }
-        catch (Exception error)
-        {
-            Trace.TraceError($"Current: reading the libraries failed: {error.GetType().Name}");
-        }
-        finally
-        {
-            server.LoadingLibraries = false;
         }
     }
 
@@ -218,6 +197,7 @@ internal sealed class BrowseHub : IDisposable
         ForgetSearches(_ => true);
         foreach (var server in _servers.Values)
         {
+            server.LibrariesChanged -= OnLibrariesChanged;
             server.Dispose();
         }
         _servers.Clear();
@@ -225,29 +205,71 @@ internal sealed class BrowseHub : IDisposable
 }
 
 /// <summary>One signed-in server's browse session, its libraries, and the grids opened on it.</summary>
-internal sealed class ServerBrowse(ServerRef server, ulong? sessionNumber, Browse session) : IDisposable
+internal sealed class ServerBrowse : IDisposable
 {
     private readonly Dictionary<ItemRef, LibraryGrid> _grids = [];
+
+    /// <summary>The core's list of the user's libraries: it follows the server.</summary>
+    private readonly ValueSubscription<IReadOnlyList<Library>?> _libraries;
+
+    /// <summary>Libraries that left the list in this session; one listed again leaves this set.</summary>
+    private readonly HashSet<ItemRef> _gone = [];
+
+    public ServerBrowse(ServerRef server, ulong? sessionNumber, Browse session, IUiDispatcher ui)
+    {
+        Server = server;
+        SessionNumber = sessionNumber;
+        Session = session;
+        _libraries = session.ObserveLibraries(ui);
+        _libraries.PropertyChanged += OnLibrariesChanged;
+    }
+
+    /// <summary>Raised on the UI thread when the core's list of libraries changed.</summary>
+    public event EventHandler? LibrariesChanged;
 
     /// <summary>The detail views of the history's detail pages, by their navigation parameter (the same object on Back).</summary>
     private readonly Dictionary<object, KeptDetails> _details = new(ReferenceEqualityComparer.Instance);
     private HomeFeed? _home;
 
-    public ServerRef Server { get; } = server;
+    public ServerRef Server { get; }
 
     /// <summary>The core's number for the session this browses (<see cref="ServerStatus.Session"/>).</summary>
-    public ulong? SessionNumber { get; } = sessionNumber;
+    public ulong? SessionNumber { get; }
 
-    public Browse Session { get; } = session;
+    public Browse Session { get; }
 
     /// <summary>The user's libraries in the user's order; empty until the server first answered.</summary>
-    public IReadOnlyList<Library> Libraries { get; set; } = [];
-
-    public bool LibrariesLoaded { get; set; }
-
-    public bool LoadingLibraries { get; set; }
+    public IReadOnlyList<Library> Libraries { get; private set; } = [];
 
     public bool IsDisposed { get; private set; }
+
+    /// <summary>Whether <paramref name="library"/> left the list in this session (see <see cref="BrowseHub.IsGone"/>).</summary>
+    public bool IsGone(ItemRef library) => _gone.Contains(library);
+
+    /// <summary>
+    /// The core's list changed. A library that left a loaded list is gone: its grid is let go of once the window has heard of it, so
+    /// the page showing it has gone back to Home first.
+    /// </summary>
+    private void OnLibrariesChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (IsDisposed || _libraries.Value is not { } libraries)
+        {
+            return;
+        }
+        var listed = libraries.Select(library => library.Item).ToHashSet();
+        var left = Libraries.Select(library => library.Item).Where(item => !listed.Contains(item)).ToList();
+        _gone.UnionWith(left);
+        _gone.ExceptWith(listed);
+        Libraries = libraries;
+        LibrariesChanged?.Invoke(this, EventArgs.Empty);
+        foreach (var item in left)
+        {
+            if (_grids.Remove(item, out var grid))
+            {
+                grid.Items.Dispose();
+            }
+        }
+    }
 
     /// <summary>
     /// The grid of <paramref name="library"/>, opened on first use and kept for the life of the session, so a page shown again binds
@@ -326,6 +348,8 @@ internal sealed class ServerBrowse(ServerRef server, ulong? sessionNumber, Brows
     public void Dispose()
     {
         IsDisposed = true;
+        _libraries.PropertyChanged -= OnLibrariesChanged;
+        _libraries.Dispose();
         foreach (var kept in _details.Values)
         {
             kept.View?.Dispose();
