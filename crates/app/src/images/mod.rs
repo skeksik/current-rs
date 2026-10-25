@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use current_jellyfin::{AuthError, ImageRequest};
-use current_model::{ImageType, ItemRef, SavedServer, ServerRef};
+use current_model::{ImageRef, SavedServer, ServerRef};
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
@@ -43,13 +43,8 @@ pub struct ImageLoad {
 /// Where an image comes from.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ImageSource {
-    /// A server's image of an item: its type, index (for backdrops after the first) and tag (the server's version of it).
-    Server {
-        item: ItemRef,
-        kind: ImageType,
-        index: u32,
-        tag: String,
-    },
+    /// A server's image of an item, as the item's artwork names it.
+    Server(ImageRef),
     /// A BlurHash placeholder, decoded to a BMP at most 32 pixels on its long side, at the box's ratio.
     BlurHash(String),
 }
@@ -235,24 +230,19 @@ impl ImageCache {
     /// See [`App::load_image`](crate::App::load_image).
     pub(crate) async fn load(&self, shared: &Arc<Shared>, load: &ImageLoad) -> Outcome {
         let (width, height) = bucket(load.width, load.height).ok_or(ImageError::EmptyBox)?;
-        let (item, kind, index, tag) = match &load.source {
+        let image = match &load.source {
             ImageSource::BlurHash(hash) => {
                 return blurhash::placeholder(hash, load.width, load.height)
                     .map(Into::into)
                     .ok_or(ImageError::InvalidBlurHash);
             }
-            ImageSource::Server {
-                item,
-                kind,
-                index,
-                tag,
-            } => (item, kind, index, tag),
+            ImageSource::Server(image) => image,
         };
         let request = ImageRequest {
-            item: item.clone(),
-            kind: kind.clone(),
-            index: *index,
-            tag: tag.clone(),
+            item: image.item.clone(),
+            kind: image.kind.clone(),
+            index: image.index,
+            tag: image.tag.clone(),
             width,
             height,
         };
@@ -326,7 +316,7 @@ impl ImageCache {
 
 #[cfg(test)]
 mod tests {
-    use current_model::{ItemId, ServerKey, ServiceType};
+    use current_model::{ImageType, ItemId, ItemRef, ServerKey, ServiceType};
 
     use super::*;
 

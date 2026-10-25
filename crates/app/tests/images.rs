@@ -12,7 +12,7 @@ use current_app::{
     AddServerState, App, HeaderInput, ImageError, ImageLoad, ImageSource, SignInState,
 };
 use current_jellyfin::AuthError;
-use current_model::{ImageType, ItemId, ItemRef, ServerKey, ServerRef, ServiceType};
+use current_model::{ImageRef, ImageType, ItemId, ItemRef, ServerKey, ServerRef, ServiceType};
 use current_store::{MemorySecrets, Secrets};
 use jellyfin_stand_in::{
     GATE_HEADER, GATE_HEADER_VALUE, Gate, IMAGE, PASSWORD, SERVER_NAME, StandIn, USER_NAME,
@@ -35,12 +35,12 @@ fn open(dir: &Path, secrets: &Arc<MemorySecrets>) -> App {
 
 fn poster(item: &str, width: u32, height: u32) -> ImageLoad {
     ImageLoad {
-        source: ImageSource::Server {
+        source: ImageSource::Server(ImageRef {
             item: ItemRef::new(jellyfin("1"), ItemId::new(item)),
             kind: ImageType::PRIMARY,
             index: 0,
             tag: TAG.into(),
-        },
+        }),
         width,
         height,
     }
