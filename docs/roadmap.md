@@ -224,6 +224,23 @@ Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 whe
 - [ ] Each LGPL library's source and build scripts published with the release; licence texts and notices shipped (ADR 0003)
 - [ ] Store policies checked before any store submission (adult content, M6)
 
+## Later
+- [ ] Generated subtitles for videos without any (owner, 2026-10-25): speech to text on the device, with translation into English
+      (for example Japanese audio to English subtitles). The first candidate is Whisper through whisper.cpp: MIT code and weights;
+      Whisper's `translate` task targets English only, and its turbo model does not translate; models are 1.5 GiB (medium) to 2.9 GiB
+      (large); GPU backends include Vulkan and CUDA on Windows and Metal on macOS (github.com/openai/whisper and
+      github.com/ggml-org/whisper.cpp, read 2026-10-25). The core extracts the audio, generates ahead of the playhead, caches the
+      result and loads it as an added subtitle; for Jellyfin it may upload the result as an external subtitle so every client gets it
+      (the SDKs list an `uploadSubtitle` operation; its route is not verified). Other target languages need a second translation
+      model. Before generating, offer the server's own subtitles: Jellyfin's remote subtitle search, and Stash's captions (external
+      SRT/VTT files beside the scene; GraphQL `Scene.captions` and `paths.caption`, served as WebVTT; docs.stashapp.cc "Captions" and
+      stashapp/stash `internal/api/routes_scene.go`, read 2026-10-25). Start with a spike: speed and quality of medium and large on
+      the owner's GPU with one Japanese file, ending in an ADR; the dependency and the model download need the owner's approval.
+      Models are not shipped in the app: downloaded on first use after the user picks a size, checked against a pinned checksum,
+      kept in the data folder and deleted from Settings → Storage. whisper.cpp's files: medium 1.53 GB (539 MB as q5_0), large-v3
+      3.1 GB (1.08 GB as q5_0); the quality cost of q5_0 on Japanese is for the spike (huggingface.co/ggerganov/whisper.cpp, read
+      2026-10-25). On Apple platforms, Apple-hosted asset packs (200 GB per app record, App Store Connect Help, read 2026-10-25) are
+      an alternative; whether the App Store guidelines treat model weights as allowed downloaded data is not verified
 - [ ] Android (Compose, Media3 plus a fallback engine), iOS and iPadOS (SwiftUI from macOS), tvOS, the web (the core on WebAssembly)
 - [ ] Local files, downloads and offline playback; several servers and user switching; casting and watch-together
 - Not planned yet (ask to add): music, live TV, books, photos, other media servers.
