@@ -39,6 +39,9 @@ pub enum SignInError {
 }
 
 /// Where the flow is. The UI renders one screen state per variant. No variant holds a password, token or Quick Connect secret.
+// `SignedIn` holds a `User`, whose avatar `Artwork` grew an `ImageRef` (ADR 0018). The state is a value published a few times per
+// sign-in, so its size does not matter and boxing would only change the API.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SignInState {
     /// Waiting for the user to choose. `quick_connect` says whether the server offers it, once known.
