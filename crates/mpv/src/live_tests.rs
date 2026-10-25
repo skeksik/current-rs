@@ -34,6 +34,7 @@ libmpv_test!(ffmpeg_writes_nothing_to_stderr_across_two_engines);
 libmpv_test!(mpv_quitting_on_its_own_waits_for_the_drop);
 libmpv_test!(a_panicking_sink_still_frees_the_engine);
 libmpv_test!(hls_segment_over_https_is_verified);
+libmpv_test!(gateway_headers_never_reach_an_unchecked_playlist_segment);
 
 /// The child half of `ffmpeg_writes_nothing_to_stderr_across_two_engines`, which runs this test binary again with only this test and
 /// reads its stderr. Not meant to run on its own.
@@ -514,7 +515,11 @@ mod live {
         let mut running = Running::start();
         running
             .engine
-            .load(&gated(origin.url(&format!("/master.m3u8?ApiKey={TOKEN}"))))
+            .load(
+                &gated(origin.url(&format!("/master.m3u8?ApiKey={TOKEN}")))
+                    // Its segments are relative: the same-origin check would pass.
+                    .playlist_checked_same_origin(),
+            )
             .expect("load");
         let seen = running.wait_for("end-file", ended);
 
@@ -750,7 +755,11 @@ mod live {
             let mut running = Running::start();
             running
                 .engine
-                .load(&gated(hls.url(&format!("/master.m3u8?ApiKey={TOKEN}"))))
+                .load(
+                    &gated(hls.url(&format!("/master.m3u8?ApiKey={TOKEN}")))
+                        // Its segments are relative: the same-origin check would pass.
+                        .playlist_checked_same_origin(),
+                )
                 .expect("load");
             running.wait_for("end-file", ended);
             running
@@ -849,5 +858,76 @@ mod live {
             "a segment request passed an unverified certificate"
         );
         running.finish();
+    }
+
+    /// A playlist on the origin whose segment is an absolute URL on another port, so FFmpeg would send it the gateway headers.
+    fn foreign_segment_origin(other: &StandIn) -> StandIn {
+        let segment = other.url(&format!("/segment0.ts?ApiKey={TOKEN}"));
+        StandIn::start(move |req| {
+            // Served both as a playlist URL and under a direct-play path, which is not a playlist by its URL.
+            if req.path.starts_with("/master.m3u8") || req.path.starts_with("/Videos/1/stream") {
+                let playlist = format!(
+                    "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n\
+                     #EXTINF:2.0,\n{segment}\n#EXT-X-ENDLIST\n"
+                );
+                Reply::Body("application/vnd.apple.mpegurl", playlist.into_bytes())
+            } else {
+                Reply::NotFound
+            }
+        })
+    }
+
+    pub(super) fn gateway_headers_never_reach_an_unchecked_playlist_segment() {
+        let other = StandIn::start(|_| Reply::Body("video/mp2t", vec![0x47; 188 * 8]));
+        let origin = foreign_segment_origin(&other);
+        let mut running = Running::start();
+
+        // A playlist URL with headers and no same-origin mark is refused before mpv sees it.
+        let refused = running
+            .engine
+            .load(&gated(origin.url(&format!("/master.m3u8?ApiKey={TOKEN}"))));
+        assert!(
+            matches!(refused, Err(crate::EngineError::UncheckedPlaylist)),
+            "{refused:?}"
+        );
+
+        // A URL that is not a playlist by its name but serves one: mpv opens no segment (`access-references=no`).
+        running
+            .engine
+            .load(&gated(
+                origin.url(&format!("/Videos/1/stream?static=true&ApiKey={TOKEN}")),
+            ))
+            .expect("load");
+        running.wait_for("end-file", ended);
+        assert!(
+            other.seen().is_empty(),
+            "a segment was opened: {:?}",
+            other.seen()
+        );
+
+        // With the mark, the segment is opened. Its cookie stays on the origin (host and port domain); the header is not checked
+        // here: it does reach the other port, which is why the core checks playlists first and the M3 relay will enforce it.
+        running
+            .engine
+            .load(
+                &gated(origin.url(&format!("/master.m3u8?ApiKey={TOKEN}")))
+                    .playlist_checked_same_origin(),
+            )
+            .expect("load");
+        running.wait_for("end-file", ended);
+        let asked = other.seen();
+        assert!(
+            !asked.is_empty(),
+            "the marked playlist's segment was not opened"
+        );
+        for request in &asked {
+            assert!(
+                !request
+                    .header("cookie")
+                    .is_some_and(|c| c.contains(GATE_COOKIE_VALUE)),
+                "gateway cookie sent to another port: {request:?}"
+            );
+        }
+        assert_no_secret(&running.finish());
     }
 }

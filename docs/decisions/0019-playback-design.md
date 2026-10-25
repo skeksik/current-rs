@@ -133,6 +133,17 @@ fake engine, a fake server and a fake clock):
 - **Redirects off the address** (choice 4): every stream Current gives mpv gets `max_redirects=0`. Jellyfin's stream endpoints
   do not redirect (remote sources are proxied by the server), so a redirect means a gateway or a misconfigured proxy, which the 401
   rule then classifies. Headers therefore never follow a redirect to another host.
+- **Playlists and headers** (2026-10-25, found in task 3; the owner's choice: check now, relay in M3): FFmpeg copies `headers` and
+  `cookies` into every HLS and DASH sub-request (FFmpeg 9.0.2 `libavformat/aviobuf.c`, `ffio_copy_url_options`: `"headers",
+  "user_agent", "cookies", "http_proxy", "referer", "rw_timeout", "icy"`), so a playlist that names another host gets the gateway
+  headers (cookies do not: the engine scopes them to the stream's host and port). `max_redirects=0` and `tls_verify` are not in that
+  list, but reach every nested open through mpv: `hls` and `dash` take their options from `mp_setup_av_network_options` (`tls_verify`,
+  then `stream-lavf-o`), and `nested_io_open` copies them into each nested open with `demuxer-lavf-propagate-opts` (default yes) (mpv
+  v0.41.0 `demux/demux_lavf.c`, `stream/stream_lavf.c`; read 2026-10-25; shown by task 3's tests). So the core checks, before it
+  hands over a playlist with headers, that every URI in the master and each variant playlist is relative or on the stream's origin
+  (a follow-up task); `current-mpv` refuses a playlist URL with headers unless the caller marks it checked, and opens no nested
+  reference at all for any other load with headers (`access-references=no`). mpv re-fetches the playlists itself, so this is a check,
+  not enforcement; the loopback relay in M3 (shared with AVPlayer's header gap, ADR 0017) enforces it, on Windows too.
 - **Redaction:** no URL that carries a token or a cookie crosses `current-ffi`, enters the request log, the playback information view
   or a file. The engine never sets `log-file`; it takes mpv's messages through `mpv_request_log_messages` at `info` (`v` while
   diagnosing), and replaces the session token, every gateway secret value and any `ApiKey=`/`api_key=` value with `<redacted>` before a

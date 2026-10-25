@@ -233,6 +233,8 @@ pub struct FileRequest {
     pub headers: Vec<(String, String)>,
     /// Secret values the URL holds (the session token), for log redaction. Cookie and header values are added by the engine.
     pub secrets: Vec<String>,
+    /// Set only through [`FileRequest::playlist_checked_same_origin`].
+    playlist_checked: bool,
 }
 
 impl std::fmt::Debug for FileRequest {
@@ -252,6 +254,7 @@ impl std::fmt::Debug for FileRequest {
                     .collect::<Vec<_>>(),
             )
             .field("secrets", &self.secrets.len())
+            .field("playlist_checked", &self.playlist_checked)
             .finish()
     }
 }
@@ -266,7 +269,44 @@ impl FileRequest {
             cookies: Vec::new(),
             headers: Vec::new(),
             secrets: Vec::new(),
+            playlist_checked: false,
         }
+    }
+
+    /// Marks an HLS or DASH stream whose playlists the caller has checked: it fetched the master playlist and every playlist it names,
+    /// and found every URI (variants, segments, keys, maps) relative or on the stream's own origin. Only then may a playlist load carry
+    /// gateway headers, because FFmpeg copies `headers` into every playlist, segment and key request, to whatever host it names
+    /// (FFmpeg 9.0.2 `libavformat/aviobuf.c`, `ffio_copy_url_options`; ADR 0019, 2026-10-25).
+    ///
+    /// Not enforced by this: mpv fetches the playlists again itself, so a playlist that changes after the check (a live one) could
+    /// still name another host and get the headers. The loopback relay planned for M3 enforces it (roadmap). Cookies are not affected:
+    /// they carry the stream's host and port as their domain.
+    pub fn playlist_checked_same_origin(mut self) -> FileRequest {
+        self.playlist_checked = true;
+        self
+    }
+
+    /// Whether the URL's path names an HLS or DASH playlist (`.m3u8`, `.m3u`, `.mpd`).
+    pub fn looks_like_playlist(&self) -> bool {
+        let path = self
+            .url
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        [".m3u8", ".m3u", ".mpd"]
+            .iter()
+            .any(|ext| path.ends_with(ext))
+    }
+
+    /// Refuses a playlist URL that carries gateway headers without [`FileRequest::playlist_checked_same_origin`]. Any other load with
+    /// headers and no mark gets mpv's `access-references=no` ([`FileRequest::file_options`]), so a stream that turns out to be a
+    /// playlist cannot open its segments with the headers either.
+    pub fn check_header_scope(&self) -> Result<(), EngineError> {
+        if !self.headers.is_empty() && !self.playlist_checked && self.looks_like_playlist() {
+            return Err(EngineError::UncheckedPlaylist);
+        }
+        Ok(())
     }
 
     /// Whether the request carries gateway credentials (cookies or headers).
@@ -355,6 +395,11 @@ impl FileRequest {
             pairs.push(("sid".into(), sid.option_value()));
         }
         pairs.push(("stream-lavf-o".into(), self.lavf_options()));
+        if !self.headers.is_empty() && !self.playlist_checked {
+            // No nested opens (playlist entries, segments, references): they would carry the headers to any host. mpv's
+            // `block_io_open` refuses them ("Not opening '%s' due to --access-references=no", `demux/demux_lavf.c`).
+            pairs.push(("access-references".into(), "no".into()));
+        }
         Node::string_map(pairs)
     }
 
@@ -598,6 +643,44 @@ mod tests {
             scheme_and_host("HTTPS://[::1]:8920?x"),
             Some(("HTTPS", "[::1]:8920"))
         );
+    }
+
+    #[test]
+    fn headers_on_a_playlist_need_the_same_origin_check() {
+        let with_header = |url: &str| {
+            let mut r = FileRequest::new(url);
+            r.headers.push(("X-Gate".into(), "v".into()));
+            r
+        };
+        for playlist in [
+            "https://media.example.com/videos/1/master.m3u8?ApiKey=t",
+            "https://media.example.com/a/MAIN.M3U8",
+            "https://media.example.com/x.mpd#t=1",
+        ] {
+            let unchecked = with_header(playlist);
+            assert!(unchecked.looks_like_playlist(), "{playlist}");
+            assert!(matches!(
+                unchecked.check_header_scope(),
+                Err(EngineError::UncheckedPlaylist)
+            ));
+            let checked = with_header(playlist).playlist_checked_same_origin();
+            assert!(checked.check_header_scope().is_ok());
+            assert!(checked.file_options().get("access-references").is_none());
+        }
+        // Not a playlist by its URL: allowed, but with nested opens blocked.
+        let direct = with_header("https://media.example.com/Videos/1/stream?static=true&x=.m3u8");
+        assert!(direct.check_header_scope().is_ok());
+        assert_eq!(
+            direct
+                .file_options()
+                .get("access-references")
+                .and_then(Node::as_str),
+            Some("no")
+        );
+        // Without headers nothing changes.
+        let plain = FileRequest::new("https://media.example.com/master.m3u8");
+        assert!(plain.check_header_scope().is_ok());
+        assert!(plain.file_options().get("access-references").is_none());
     }
 
     #[test]

@@ -308,10 +308,12 @@ impl Engine {
     /// Loads a file, replacing whatever plays, with its per-file options (`start`, `aid`, `sid`, `stream-lavf-o`). Its secrets join the
     /// redaction set first, so no log line about it shows them.
     ///
-    /// Refused when a cookie or header is malformed, and when the file carries gateway credentials but FFmpeg cannot refuse redirects
-    /// (`max_redirects` needs FFmpeg 9.0 or later): FFmpeg keeps headers on a redirect to another host (ADR 0019, choice 4).
+    /// Refused when a cookie or header is malformed, when the file carries gateway credentials but FFmpeg cannot refuse redirects
+    /// (`max_redirects` needs FFmpeg 9.0 or later: FFmpeg keeps headers on a redirect to another host, ADR 0019 choice 4), and when a
+    /// playlist carries headers without [`FileRequest::playlist_checked_same_origin`].
     pub fn load(&self, file: &FileRequest) -> Result<(), EngineError> {
         file.validate()?;
+        file.check_header_scope()?;
         if file.has_credentials() && !self.refuses_redirects {
             return Err(EngineError::RedirectsNotRefused);
         }

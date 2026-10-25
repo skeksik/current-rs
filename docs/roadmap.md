@@ -160,6 +160,9 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
   - [ ] Windows installer: make sure the WebView2 Runtime is present (Windows 10); today the app links to Microsoft's download
         (owner: not now, 2026-10-24)
   - [ ] Images and the player carry gateway credentials (with the image path and the libmpv engine)
+  - [ ] Before the player bridge ships: the core checks every HLS playlist it hands to the player with gateway headers (master and
+        each variant): every URI relative or on the stream's origin, else no headers or a playback problem; `current-mpv` refuses an
+        unchecked playlist with headers (ADR 0019, "Playlists and headers", owner 2026-10-25)
 
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
@@ -167,6 +170,9 @@ Done when: a Jellyfin library is browsable and playable on Windows every day, wi
 - [ ] The M1-M2 screens in SwiftUI on the shared core; AVPlayer with our own subtitle layer (ADR 0010: libass, PGS/VobSub decoder in
       the core, External delivery from Jellyfin); Keychain; Now Playing, PiP, AirPlay
 - [ ] Local discovery from each up interface: list the IPv4 interfaces with `getifaddrs` and pass them to each search (ADR 0016)
+- [ ] A loopback relay in the core for streams with gateway credentials: the player talks to 127.0.0.1 without credentials and the
+      relay adds them only for same-origin requests. It closes AVPlayer's header gap (ADR 0017) and enforces the same-origin rule for
+      libmpv's HLS sub-requests on Windows too, replacing the playlist check (ADR 0019, "Playlists and headers", owner 2026-10-25)
 
 Done when: everything from M1-M2 works on a Mac.
 

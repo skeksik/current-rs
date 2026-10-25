@@ -67,8 +67,11 @@ process and checks its stderr for the token, the cookie and the header value. Se
   (each stand-in request is a fresh connection).
 - **Headers go to every segment host.** A segment named by an absolute URL on another host or port gets the gateway headers (the
   test held back from this PR showed `X-Stand-In-Gate` on a second port, 2026-10-25, Linux container). Cookies do not: they carry the
-  stream's host and port as their domain (above). Jellyfin's own playlists name segments relatively (docs/notes/playback.md); the fix
-  for a playlist that does not is open (manager).
+  stream's host and port as their domain (above). Jellyfin's own playlists name segments relatively (docs/notes/playback.md).
+- The owner's choice (2026-10-25, ADR 0019 "Playlists and headers"): the core checks playlists now, a loopback relay enforces it in
+  M3. The engine refuses a playlist URL (`.m3u8`, `.m3u`, `.mpd`) with headers unless the caller marks it
+  (`FileRequest::playlist_checked_same_origin`), and gives every other load with headers `access-references=no`, so mpv opens no
+  nested reference with them (`block_io_open`). Still unenforced with the mark: a playlist that changes after the check.
 
 ## Shutdown and the sink
 - The handle is destroyed only after the `Engine` made its last call: `request_quit` sets `quitting`, sends `quit`, then `released`;
@@ -98,6 +101,7 @@ capabilities, node conversion, struct layouts, swap chain reference counting wit
 | mpv quits on its own: `Terminated`, calls stay safe, nothing destroyed before the drop, then the slot is free | passed | see the PR |
 | A sink that panics: the engine still shuts down and the slot is free | passed | see the PR |
 | An HLS segment over https with a self-signed certificate on another port: no request arrives | passed | see the PR |
+| A playlist whose segment is on another port: refused unmarked; served under a non-playlist URL, no segment opened; marked, the segment is opened without the cookie | passed (with the FFmpeg version guard bypassed for the run) | see the PR |
 
 The TLS test makes a throwaway certificate at run time with `openssl` (nothing checked in); the Windows image lists OpenSSL 3.6.5
 (actions/runner-images, `images/windows/Windows2025-VS2026-Readme.md`, image 20261007.264.1, read 2026-10-25).
