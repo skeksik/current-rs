@@ -9,9 +9,9 @@
 use std::time::Duration;
 
 use current_model::{
-    ItemRef, ItemSummary, MediaKind, MediaStream, PlaybackProblem, PlayerState, RouteReason,
-    Segment, SegmentKind, StreamKind, SubtitleChoice, SubtitleDelivery, SubtitleFormat,
-    TrackChoice, TranscodingFacts,
+    ItemRef, ItemSummary, MediaKind, MediaStream, PlaybackProblem, PlayerState, Route, RouteReason,
+    Segment, SegmentKind, StreamKind, StreamProtocol, SubtitleChoice, SubtitleDelivery,
+    SubtitleFormat, TrackChoice, TranscodingFacts,
 };
 
 use crate::clock::Clock;
@@ -787,6 +787,28 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             }
         };
         let planned = planner::plan(&item, &request, answer, &own, &session.permissions, local);
+        // FFmpeg sends the headers to every host a playlist names, so an HLS stream with headers is checked first (ADR 0019).
+        let playlist_checked = !planned.auth.headers.is_empty()
+            && matches!(
+                planned.plan.route,
+                Route::ServerStream {
+                    protocol: StreamProtocol::Hls,
+                    ..
+                }
+            );
+        if playlist_checked {
+            let checked = self.server.check_playlist(&planned.url).await;
+            let Some(session) = &mut self.session else {
+                return Ok(());
+            };
+            if let Err(problem) = checked {
+                session.planned = None;
+                return Err(problem);
+            }
+        }
+        let Some(session) = &mut self.session else {
+            return Ok(());
+        };
         let file = EngineFile {
             url: planned.url.clone(),
             auth: planned.auth.clone(),
@@ -801,6 +823,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 EngineTrack::Auto
             },
             subtitle: EngineTrack::Off,
+            playlist_checked,
         };
         session.planned = Some(planned);
         session.position = start;

@@ -23,6 +23,8 @@ enum Reply {
     With(u16, &'static str),
     /// Answers this redirect status to `/start` with this location, and 200 to anything else.
     Redirect(u16, String),
+    /// Answers 200 with this body and no content-length: the body ends when the connection closes.
+    Unsized(&'static str),
     /// Reads the request and never answers.
     Silent,
     /// Answers in plain HTTP as soon as the connection opens, without reading (what a TLS client meets at a plain-HTTP port).
@@ -69,6 +71,9 @@ impl StandIn {
                             Some(answer(*status, &format!("location: {location}\r\n"), ""))
                         }
                         Reply::Redirect(..) => Some(answer(200, "", "{}")),
+                        Reply::Unsized(body) => Some(format!(
+                            "HTTP/1.1 200 X\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n{body}"
+                        )),
                         Reply::Silent | Reply::PlainHttp => None,
                     };
                     if let Some(response) = response {
@@ -76,7 +81,7 @@ impl StandIn {
                         let _ = socket.shutdown().await;
                     }
                     match reply {
-                        Reply::With(..) | Reply::Redirect(..) => {}
+                        Reply::With(..) | Reply::Redirect(..) | Reply::Unsized(_) => {}
                         Reply::Silent => tokio::time::sleep(Duration::from_secs(30)).await,
                         Reply::PlainHttp => {}
                     }
@@ -390,6 +395,20 @@ async fn an_unexpected_body_is_a_decode_error() {
     assert!(!format!("{error} {error:?}").contains("Title"));
     // The transfer itself succeeded.
     assert_eq!(log.entries()[0].outcome, Outcome::Status(200));
+}
+
+#[tokio::test]
+async fn a_body_over_the_limit_is_too_large_with_or_without_a_length() {
+    for reply in [Reply::With(200, "0123456789"), Reply::Unsized("0123456789")] {
+        let server = StandIn::start(reply).await;
+        let log = Arc::new(RequestLog::default());
+        let client = client(&server.address, &log, Duration::from_secs(5));
+        let error = client.send(Request::get("/list").max_body(9)).await;
+        assert!(matches!(error, Err(NetError::TooLarge)), "{error:?}");
+        assert_eq!(log.entries()[0].outcome, Outcome::Error("too large"));
+        let response = ok(client.send(Request::get("/list").max_body(10)).await);
+        assert_eq!(response.body, b"0123456789");
+    }
 }
 
 #[tokio::test]

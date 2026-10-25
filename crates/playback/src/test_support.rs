@@ -158,6 +158,10 @@ pub struct ServerState {
     pub facts: Option<TranscodingFacts>,
     pub subtitle_fetches: Vec<u32>,
     pub local: bool,
+    /// The URLs given to `check_playlist`, exposed.
+    pub playlist_checks: Vec<String>,
+    /// What `check_playlist` answers; `None` passes.
+    pub playlist_problem: Option<PlaybackProblem>,
 }
 
 #[derive(Clone, Debug)]
@@ -190,6 +194,8 @@ impl FakeServer {
                 facts: None,
                 subtitle_fetches: Vec::new(),
                 local: true,
+                playlist_checks: Vec::new(),
+                playlist_problem: None,
             })),
             clock,
         }
@@ -278,6 +284,12 @@ impl MediaServer for FakeServer {
     ) -> Result<Vec<u8>, PlaybackProblem> {
         self.state().subtitle_fetches.push(stream.index);
         Ok(b"1\n00:00:01,000 --> 00:00:02,000\nHello\n".to_vec())
+    }
+
+    async fn check_playlist(&self, url: &StreamUrl) -> Result<(), PlaybackProblem> {
+        let mut state = self.state();
+        state.playlist_checks.push(url.expose().to_owned());
+        state.playlist_problem.clone().map_or(Ok(()), Err)
     }
 
     fn is_local_address(&self) -> bool {

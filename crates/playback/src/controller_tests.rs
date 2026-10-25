@@ -984,3 +984,66 @@ fn nothing_published_or_loaded_shows_a_secret() {
         assert!(!shown.contains(secret), "{secret} shown");
     }
 }
+
+#[test]
+fn an_hls_stream_with_headers_is_checked_before_it_loads_and_marked_checked() {
+    let mut player = Harness::new(AutoSkip::off());
+    player.server.answer(Ok(answer(
+        hls(StreamAction::Transcode, StreamAction::Copy),
+        vec![RouteReason::VIDEO_CODEC_NOT_SUPPORTED],
+    )));
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    let checks = player.server.state().playlist_checks.clone();
+    assert_eq!(checks.len(), 1);
+    assert!(checks[0].contains(SECRETS[0]), "the stream's own URL");
+    let commands = player.commands();
+    let [Command::Load(file)] = commands.as_slice() else {
+        panic!("one load: {commands:?}");
+    };
+    assert!(file.playlist_checked);
+}
+
+#[test]
+fn direct_play_progressive_streams_and_hls_without_headers_are_not_checked() {
+    let progressive = Route::ServerStream {
+        protocol: current_model::StreamProtocol::Progressive,
+        container: Some("mkv".into()),
+        video: StreamAction::Copy,
+        audio: StreamAction::Transcode,
+    };
+    let mut no_headers = answer(hls(StreamAction::Copy, StreamAction::Copy), vec![]);
+    no_headers.auth.headers.clear();
+    for answer in [
+        answer(Route::DirectPlay, vec![]),
+        answer(progressive, vec![RouteReason::AUDIO_CODEC_NOT_SUPPORTED]),
+        no_headers,
+    ] {
+        let mut player = Harness::new(AutoSkip::off());
+        player.server.answer(Ok(answer));
+        player.play(MediaKind::MOVIE, Duration::ZERO);
+        assert!(player.server.state().playlist_checks.is_empty());
+        let commands = player.commands();
+        let [Command::Load(file)] = commands.as_slice() else {
+            panic!("one load: {commands:?}");
+        };
+        assert!(!file.playlist_checked);
+    }
+}
+
+#[test]
+fn a_playlist_that_points_elsewhere_fails_without_loading() {
+    let mut player = Harness::new(AutoSkip::off());
+    player.server.answer(Ok(answer(
+        hls(StreamAction::Copy, StreamAction::Copy),
+        vec![RouteReason::CONTAINER_NOT_SUPPORTED],
+    )));
+    player.server.state().playlist_problem = Some(PlaybackProblem::PlaylistElsewhere);
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    assert_eq!(
+        player.state(),
+        PlayerState::Failed {
+            problem: PlaybackProblem::PlaylistElsewhere
+        }
+    );
+    assert!(player.commands().is_empty());
+}

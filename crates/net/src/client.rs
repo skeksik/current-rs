@@ -51,6 +51,7 @@ pub struct Request {
     headers: HeaderMap,
     body: Option<Vec<u8>>,
     timeout: Option<Duration>,
+    max_body: Option<usize>,
 }
 
 impl Request {
@@ -63,6 +64,7 @@ impl Request {
             headers: HeaderMap::new(),
             body: None,
             timeout: None,
+            max_body: None,
         }
     }
 
@@ -104,6 +106,13 @@ impl Request {
     /// Overrides the client's timeout for this request.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Limits the response's body to `bytes`: the body is read in chunks and a longer one ends the request with
+    /// [`NetError::TooLarge`], whatever its status, without reading the rest.
+    pub fn max_body(mut self, bytes: usize) -> Self {
+        self.max_body = Some(bytes);
         self
     }
 }
@@ -347,6 +356,7 @@ impl ServerClient {
             mut headers,
             mut body,
             timeout: _,
+            max_body,
         } = request;
         let original = join(selected.url(), &path, &query).map_err(Failure::unsent)?;
         let mut url = original.clone();
@@ -410,15 +420,13 @@ impl ServerClient {
                 continue;
             }
 
-            let body = response
-                .bytes()
+            let body = read_body(response, max_body)
                 .await
                 .map_err(|error| Failure {
-                    error: NetError::from_reqwest(error),
+                    error,
                     sent: true,
                     expired: false,
-                })?
-                .to_vec();
+                })?;
             if !(200..300).contains(&status) {
                 return Err(Failure {
                     error: NetError::from_status(status, &response_headers, &body),
@@ -435,6 +443,34 @@ impl ServerClient {
             });
         }
     }
+}
+
+/// The response's body, at most `limit` bytes when there is a limit.
+async fn read_body(
+    mut response: reqwest::Response,
+    limit: Option<usize>,
+) -> Result<Vec<u8>, NetError> {
+    let Some(limit) = limit else {
+        return Ok(response
+            .bytes()
+            .await
+            .map_err(NetError::from_reqwest)?
+            .to_vec());
+    };
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(NetError::TooLarge);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(NetError::from_reqwest)? {
+        if body.len() + chunk.len() > limit {
+            return Err(NetError::TooLarge);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// The selected address's gateway, if its credentials may go to `url` (a hop on that address): https, plain HTTP to the local
