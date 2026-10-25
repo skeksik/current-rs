@@ -1,7 +1,8 @@
 # 0018: Browsing: items, queries, paged lists and images
 
 Status: proposed (2026-10-25), from the browse spike; accepted when its PR merges; open choices decided by the owner 2026-10-25
-(see "Decided by the owner").
+(see "Decided by the owner"). Amended 2026-10-25 (fix/library-changes): the navigation's libraries follow the server, below under
+"Libraries that follow the server".
 Research, quotes and sources: `docs/notes/jellyfin-browse.md`. Playback, media sources and streams are ADR 0019's (spike/playback-design);
 section 6 of the notes lists what is left to it.
 
@@ -175,6 +176,17 @@ Home is a **`HomeFeed`**: a list of rows, each with its own item list.
 - Refresh: on start, on return to the foreground (the existing session hook), after played or favourite changes (the dependent rows),
   after playback stops (an event ADR 0019 provides), and on request.
 - Libraries are reached from the app's navigation (one entry per library), not from a tile row on Home (open choice 6).
+
+### Libraries that follow the server (amended 2026-10-25)
+On the owner's server, a library added while the app ran showed on Home but not in the navigation until a restart, and a removed one
+kept its entry: the UI read `libraries()` once per session. Now each session's `Browse` holds the user's libraries as a value
+(`Browse::library_list`, across the bridge `subscribe_libraries`): `None` until first loaded, then the last list loaded, in the user's
+order, unknown collection kinds passed through. It loads when the session's browse state is made and again on a refresh, the
+foreground refresh, Home's reload (which joins a load already running, so one `GET UserViews` serves both), after a library request
+that fails as it does for a gone library (`NotAvailable`, 400 or 404), and when the server is reached again after a failed load. A
+failed load keeps the list. A library grid whose library left the list says `NotAvailable` (ADR 0015's 401 rule, amended 2026-10-25).
+The UI updates its navigation in place and decides what to show when the library on screen leaves the list; whether a library is gone
+comes from the core's list.
 
 ### 7. Across the bridge
 Records mirror the model types (`ItemSummary`, `ItemDetails`, `Library`, `ImageRef`, `Artwork`, `UserState`, `Slot`, `PagedState`, ...);

@@ -719,8 +719,8 @@ async fn a_401_mid_session_signs_out_and_deletes_the_token() {
     capabilities.borrow_and_update();
 
     server.revoke_user(USER_ID);
-    // Kept until the identity probe confirms the 401 was the server's own (ADR 0015 as amended).
-    assert_eq!(client.current_user().await, Err(AuthError::Unconfirmed));
+    // Kept until the identity probe confirms the 401 was the server's own and the token check fails (ADR 0015 as amended).
+    assert_eq!(client.current_user().await, Err(AuthError::SessionRevoked));
     eventually(|| !capabilities.borrow().servers[0].signed_in).await;
     let status = capabilities.borrow().servers[0].clone();
     assert!(!status.signed_in);
@@ -898,7 +898,8 @@ async fn a_401_on_an_old_client_leaves_a_newer_session_alone() {
     ));
     let token = stored(&secrets, USER_ID).unwrap();
 
-    assert_eq!(old.current_user().await, Err(AuthError::Unconfirmed));
+    // The old token fails the check: the old client forgets it, and the newer session stays.
+    assert_eq!(old.current_user().await, Err(AuthError::SessionRevoked));
     settle().await;
     assert!(app.capabilities().borrow().servers[0].signed_in);
     assert_eq!(stored(&secrets, USER_ID), Some(token));
@@ -928,7 +929,7 @@ async fn a_401_on_another_users_old_client_leaves_the_new_user_alone() {
     ));
 
     server.revoke_user(USER_ID);
-    assert_eq!(first.current_user().await, Err(AuthError::Unconfirmed));
+    assert_eq!(first.current_user().await, Err(AuthError::SessionRevoked));
     settle().await;
     let status = app.capabilities().borrow().servers[0].clone();
     assert!(status.signed_in);

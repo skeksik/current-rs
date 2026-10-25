@@ -857,8 +857,9 @@ async fn a_jellyfin_401_through_the_gateway_still_ends_the_session() {
     let secrets = Arc::new(MemorySecrets::new());
     let (server, app, client) = signed_in_through_portal(temp.path(), &secrets).await;
     server.revoke_all();
-    assert_eq!(client.current_user().await, Err(AuthError::Unconfirmed));
-    // The confirming probe passed the gateway with its cookie and found the server: the 401 was Jellyfin's.
+    // The confirming probe passed the gateway with its cookie and found the server: the 401 was Jellyfin's, and the token check
+    // that follows got 401 too.
+    assert_eq!(client.current_user().await, Err(AuthError::SessionRevoked));
     eventually(|| !app.capabilities().borrow().servers[0].signed_in).await;
     eventually(|| !token_kept(&app, &secrets)).await;
     assert!(!client.has_token());
@@ -1012,8 +1013,15 @@ async fn concurrent_401s_start_one_probe() {
     server.info_slow.store(true, Ordering::SeqCst);
     server.revoke_all();
     let results = futures_join(&client, 5).await;
+    // A request that got the 401 waits for the check and learns the session ended; one sent while the check ran is held back.
     assert!(
-        results.iter().all(|r| *r == Err(AuthError::Unconfirmed)),
+        results
+            .iter()
+            .all(|r| matches!(r, Err(AuthError::Unconfirmed | AuthError::SessionRevoked))),
+        "{results:?}"
+    );
+    assert!(
+        results.contains(&Err(AuthError::SessionRevoked)),
         "{results:?}"
     );
     eventually(|| !app.capabilities().borrow().servers[0].signed_in).await;

@@ -262,6 +262,8 @@ impl From<&AuthError> for SignInProblem {
             AuthError::SessionRevoked => Self::SessionRevoked,
             AuthError::NotSignedIn => Self::NotSignedIn,
             AuthError::Unconfirmed => Self::Unconfirmed,
+            // Mid-session only, never from a sign-in: the server refused one resource to a user it accepts.
+            AuthError::NotAvailable => Self::Refused,
             AuthError::Network(error) => Self::Network {
                 problem: error.into(),
             },

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use current_jellyfin::{
     AccessToken, AuthError, ClientIdentity, JellyfinClient, QuickConnectSecret, SessionEvent,
-    WaitClock,
+    TOKEN_CHECK_TIMEOUT, TokenCheck, WaitClock,
 };
 use current_model::{Permission, ServerId, ServerKey, ServerRef, ServiceType, UserId};
 use current_net::{FixedAddress, NetError, Request, RequestLog, Url};
@@ -542,16 +542,34 @@ fn recorder(client: &JellyfinClient) -> Arc<Mutex<Vec<SessionEvent>>> {
     events
 }
 
+/// Asks for the current user in a task of its own and waits until the hook heard `count` events: the request then waits for the
+/// app's decision.
+async fn waiting_for_the_check(
+    client: &Arc<JellyfinClient>,
+    events: &Arc<Mutex<Vec<SessionEvent>>>,
+    count: usize,
+) -> tokio::task::JoinHandle<Result<current_model::User, AuthError>> {
+    let asking = client.clone();
+    let request = tokio::spawn(async move { asking.current_user().await });
+    for _ in 0..500 {
+        if events.lock().unwrap().len() >= count {
+            return request;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the hook did not hear the 401 within 5 s");
+}
+
 #[tokio::test]
 async fn with_a_hook_a_401_keeps_the_token_until_the_app_decides() {
     let server = StandIn::start(|_: &Received| (401, String::new())).await;
     let log = Arc::new(RequestLog::default());
-    let client = client(&server, &log);
+    let client = Arc::new(client(&server, &log));
     let events = recorder(&client);
     client.set_token(AccessToken::new(TOKEN));
 
-    let result = client.current_user().await;
-    assert_eq!(result, Err(AuthError::Unconfirmed));
+    // The request that got the 401 waits for the app's decision.
+    let first = waiting_for_the_check(&client, &events, 1).await;
     assert!(client.has_token());
     assert_eq!(
         *events.lock().unwrap(),
@@ -560,26 +578,136 @@ async fn with_a_hook_a_401_keeps_the_token_until_the_app_decides() {
             unauthorized: true,
         }]
     );
-    assert_no_secret(&log, &format!("{result:?} {client:?} {events:?}"));
 
-    // While the app checks, requests join the check: nothing is sent and the hook does not run again.
+    // While the app checks, other requests are held back: nothing is sent and the hook does not run again.
     assert_eq!(client.current_user().await, Err(AuthError::Unconfirmed));
     assert_eq!(server.received().len(), 1);
     assert_eq!(events.lock().unwrap().len(), 1);
 
-    // Resumed (a gateway's answer): requests go out again and a new answer starts a new check.
+    // Resumed (a gateway's answer, or no answer): the request answers that nothing was decided, and requests go out again.
     client.resume();
-    assert_eq!(client.current_user().await, Err(AuthError::Unconfirmed));
-    assert_eq!(server.received().len(), 2);
-    assert_eq!(events.lock().unwrap().len(), 2);
+    let result = first.await.unwrap();
+    assert_eq!(result, Err(AuthError::Unconfirmed));
+    assert_no_secret(&log, &format!("{result:?} {client:?} {events:?}"));
 
+    // A new 401 starts a new check. The token works (ADR 0015 as amended 2026-10-25): the request answers "not available" and
+    // the token stays.
+    let second = waiting_for_the_check(&client, &events, 2).await;
+    assert_eq!(server.received().len(), 2);
+    client.keep(&AccessToken::new(TOKEN));
+    assert_eq!(second.await.unwrap(), Err(AuthError::NotAvailable));
+    assert!(client.has_token());
+
+    // Confirmed as Jellyfin's 401 with a token that fails: the token is forgotten and the request says the session ended.
+    let third = waiting_for_the_check(&client, &events, 3).await;
     // An older token is never revoked over a newer one.
     assert!(!client.revoke(&AccessToken::new("an-older-token")));
     assert!(client.has_token());
-    // Confirmed as Jellyfin's 401: the token is forgotten.
     assert!(client.revoke(&AccessToken::new(TOKEN)));
+    assert_eq!(third.await.unwrap(), Err(AuthError::SessionRevoked));
     assert!(!client.has_token());
     assert_eq!(client.current_user().await, Err(AuthError::NotSignedIn));
+}
+
+#[tokio::test]
+async fn the_token_check_asks_who_the_token_belongs_to() {
+    for (status, body, expected) in [
+        (200, user_json(), TokenCheck::Works),
+        // The user is refused right now (a parental time limit): the token still works.
+        (403, String::new(), TokenCheck::Works),
+        (401, String::new(), TokenCheck::Fails),
+        (500, String::new(), TokenCheck::Unknown),
+        // A page where JSON was expected, or a 401 page: no answer of Jellyfin's, which never sends pages (ADR 0017).
+        (200, "<html>sign in</html>".to_owned(), TokenCheck::Unknown),
+        (401, "<html>sign in</html>".to_owned(), TokenCheck::Unknown),
+    ] {
+        let server = StandIn::start(move |_: &Received| (status, body.clone())).await;
+        let client = client(&server, &Arc::new(RequestLog::default()));
+        client.set_token(AccessToken::new(TOKEN));
+        assert_eq!(
+            client.check_token(&AccessToken::new(TOKEN)).await,
+            expected,
+            "{status}"
+        );
+        let request = &server.received()[0];
+        assert_eq!(
+            (request.method.as_str(), request.path.as_str()),
+            ("GET", "/Users/Me")
+        );
+        assert!(request.authorization.contains(TOKEN));
+        // A token no longer in use is not checked.
+        assert_eq!(
+            client
+                .check_token(&AccessToken::new("an-older-token"))
+                .await,
+            TokenCheck::Unknown
+        );
+        assert_eq!(server.received().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn the_token_check_decides_nothing_without_an_answer() {
+    // Nothing listens: no answer at all.
+    let unreachable = JellyfinClient::new(
+        ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+        Arc::new(FixedAddress(Url::parse("http://127.0.0.1:1").unwrap())),
+        identity(),
+        Arc::new(RequestLog::default()),
+    )
+    .unwrap();
+    unreachable.set_token(AccessToken::new(TOKEN));
+    assert_eq!(
+        unreachable.check_token(&AccessToken::new(TOKEN)).await,
+        TokenCheck::Unknown
+    );
+
+    // A server that takes the request and never answers: the check gives up after its own timeout.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = Url::parse(&format!(
+        "http://127.0.0.1:{}",
+        listener.local_addr().unwrap().port()
+    ))
+    .unwrap();
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let holding = held.clone();
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            holding.lock().unwrap().push(socket);
+        }
+    });
+    let silent = JellyfinClient::new(
+        ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+        Arc::new(FixedAddress(address)),
+        identity(),
+        Arc::new(RequestLog::default()),
+    )
+    .unwrap();
+    silent.set_token(AccessToken::new(TOKEN));
+    let started = tokio::time::Instant::now();
+    assert_eq!(
+        silent.check_token(&AccessToken::new(TOKEN)).await,
+        TokenCheck::Unknown
+    );
+    assert!(started.elapsed() < TOKEN_CHECK_TIMEOUT + Duration::from_secs(5));
+    assert!(silent.has_token());
+}
+
+#[tokio::test]
+async fn a_401_waits_for_the_check_no_longer_than_the_request_s_deadline() {
+    let server = StandIn::start(|_: &Received| (401, String::new())).await;
+    let client = client(&server, &Arc::new(RequestLog::default()));
+    let events = recorder(&client);
+    client.set_token(AccessToken::new(TOKEN));
+    // The app's check never ends here: the request answers once its own deadline passed.
+    let started = tokio::time::Instant::now();
+    let result = client
+        .send_authenticated(Request::get("/Items").timeout(Duration::from_millis(300)))
+        .await;
+    assert_eq!(result.unwrap_err(), AuthError::Unconfirmed);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(events.lock().unwrap().len(), 1);
+    assert!(client.has_token());
 }
 
 #[tokio::test]

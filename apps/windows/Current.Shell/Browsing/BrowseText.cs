@@ -125,12 +125,18 @@ internal static class BrowseText
         };
     }
 
+    /// <summary>The notice shown when the library on screen left its server's list.</summary>
+    public const string LibraryGoneTitle = "This library is no longer available";
+
+    public const string LibraryGoneMessage = "It was removed from the server, or you no longer have access to it.";
+
     public static string Problem(BrowseProblem problem) => problem switch
     {
         BrowseProblem.NotSignedIn => "You're no longer signed in to this server.",
         BrowseProblem.SessionRevoked => "The server ended the session. Sign in again in Settings.",
         BrowseProblem.Refused => "The server refused it.",
         BrowseProblem.Unconfirmed => "The server's answer is being checked. Try again in a moment.",
+        BrowseProblem.NotAvailable => "It's no longer available to you on this server.",
         BrowseProblem.Gateway => "The gateway in front of the server wants you to sign in again. Sign in to the gateway in Settings.",
         BrowseProblem.Network network => ProblemText.Net(network.Problem),
         _ => ProblemText.Unexpected,

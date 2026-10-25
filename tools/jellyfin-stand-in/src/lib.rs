@@ -173,6 +173,8 @@ struct State {
     cancelled: Mutex<Vec<String>>,
     /// What the user marked played or favourite.
     marks: Mutex<library::Marks>,
+    /// The user's libraries.
+    views: Mutex<library::Views>,
     /// The generated library and its controls.
     paging: paging::Paging,
 }
@@ -338,6 +340,77 @@ impl Controls {
     pub fn live_sessions(&self) -> usize {
         lock(&self.state.tokens).len()
     }
+
+    /// Adds a library at the end of the user's list, as an administrator adding one would. `collection` is its `CollectionType`,
+    /// passed as given. It holds no items.
+    pub fn add_library(&self, id: &str, collection: &str, name: &str) {
+        let mut views = lock(&self.state.views);
+        views.hidden.remove(id);
+        views.forgotten.remove(id);
+        views.listed.retain(|view| view.id != id);
+        views.listed.push(library::View {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            collection: collection.to_owned(),
+        });
+    }
+
+    /// Removes a library from the user's list while the server still knows it: `GET Items` under it answers 401 to a valid
+    /// token from now on, as Jellyfin 12.2 does for a library the user cannot see.
+    pub fn remove_library(&self, id: &str) {
+        let mut views = lock(&self.state.views);
+        views.listed.retain(|view| view.id != id);
+        views.forgotten.remove(id);
+        views.hidden.insert(id.to_owned());
+    }
+
+    /// Removes a library the server then forgets: `GET Items` under it answers 400, as Jellyfin 12.2 does for an unknown parent.
+    pub fn forget_library(&self, id: &str) {
+        let mut views = lock(&self.state.views);
+        views.listed.retain(|view| view.id != id);
+        views.hidden.remove(id);
+        views.forgotten.insert(id.to_owned());
+    }
+
+    /// Renames a listed library.
+    pub fn rename_library(&self, id: &str, name: &str) {
+        if let Some(view) = lock(&self.state.views)
+            .listed
+            .iter_mut()
+            .find(|view| view.id == id)
+        {
+            name.clone_into(&mut view.name);
+        }
+    }
+
+    /// Puts the listed libraries in the order of `ids` (the user's order changed); those not named follow, in their order.
+    pub fn order_libraries(&self, ids: &[&str]) {
+        let rank = |id: &str| {
+            ids.iter()
+                .position(|named| *named == id)
+                .unwrap_or(usize::MAX)
+        };
+        lock(&self.state.views)
+            .listed
+            .sort_by_key(|view| rank(&view.id));
+    }
+
+    /// The ids of the user's libraries, in the user's order.
+    pub fn library_ids(&self) -> Vec<String> {
+        lock(&self.state.views)
+            .listed
+            .iter()
+            .map(|view| view.id.clone())
+            .collect()
+    }
+}
+
+/// The value of the query parameter `key` (any case), if present.
+fn param<'a>(query: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    query
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value.as_str())
 }
 
 fn revoke_all(state: &State) {
@@ -546,6 +619,12 @@ fn answer(state: &State, received: &Received) -> (u16, String) {
         path if library::is_browse_path(path) && !authorized(state, received) => {
             (401, String::new())
         }
+        "/Items"
+            if let Some(status) =
+                lock(&state.views).refusal(param(&received.query, "parentId")) =>
+        {
+            (status, String::new())
+        }
         "/Items" if paging::key(&received.path, &received.query).is_some() => {
             paging::answer(&state.paging, &received.query)
         }
@@ -555,7 +634,8 @@ fn answer(state: &State, received: &Received) -> (u16, String) {
                 path,
                 query: &received.query,
             };
-            library::answer(&request, &mut lock(&state.marks)).unwrap_or((404, String::new()))
+            library::answer(&request, &mut lock(&state.marks), &lock(&state.views))
+                .unwrap_or((404, String::new()))
         }
     }
 }

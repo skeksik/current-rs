@@ -56,6 +56,8 @@ pub(crate) fn problem(error: &AuthError) -> PlaybackProblem {
             PlaybackProblem::SignedOut
         }
         AuthError::Refused => PlaybackProblem::Server { status: 403 },
+        // Jellyfin refused this item to the user while the session goes on: gone, or hidden from the user.
+        AuthError::NotAvailable => PlaybackProblem::NotFound,
         AuthError::Network(error) => match error {
             NetError::Status { status: 404, .. } => PlaybackProblem::NotFound,
             NetError::Status { status, .. } | NetError::Auth { status, .. } => {
@@ -245,5 +247,20 @@ impl MediaServer for JellyfinMedia {
     fn is_local_address(&self) -> bool {
         self.client()
             .is_some_and(|client| client.address_is_local())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_item_refused_to_a_session_that_goes_on_is_not_found() {
+        // ADR 0015 as amended 2026-10-25: a 401 to a token that still works is about the one item.
+        assert_eq!(problem(&AuthError::NotAvailable), PlaybackProblem::NotFound);
+        assert_eq!(
+            problem(&AuthError::SessionRevoked),
+            PlaybackProblem::SignedOut
+        );
     }
 }

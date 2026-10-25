@@ -149,8 +149,10 @@ A 401 ends the Jellyfin session only if it is Jellyfin's:
    reappears.
 2. Any other 401 (and any redirect or HTML page where JSON was expected) on a server: the core re-runs the identity probe with the
    address's gateway credentials before acting. If the probe answers Jellyfin's JSON with the right identity, the 401 was Jellyfin's:
-   ADR 0015's rule applies. If the probe gets a gateway shape, the server shows "Sign in to the gateway again" and the session and
-   token are kept. If the probe fails to connect, nothing changes (roaming handles it).
+   ADR 0015's rule applies, which since 2026-10-25 first asks Jellyfin who the token belongs to and ends the session only when the
+   token fails (Jellyfin also answers 401 to a valid token for a library the user cannot see; ADR 0015, "The 401 rule", amended
+   2026-10-25). If the probe gets a gateway shape, the server shows "Sign in to the gateway again" and the session and token are
+   kept. If the probe fails to connect, nothing changes (roaming handles it).
 This also covers gateways that answer 401 without a challenge (Pomerium, oauth2-proxy's JSON errors, Authelia's 401 with a `Location`).
 `NetError::Auth` gains the challenge schemes (`Basic`, others by name; no realm or parameters in Debug), which is a proposed amendment
 to ADR 0006.

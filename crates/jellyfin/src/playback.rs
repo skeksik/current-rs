@@ -293,6 +293,8 @@ impl JellyfinClient {
         .await
     }
 
+    /// Sends a playstate report. A 401 answers at once rather than waiting for the session's check of it: the player awaits its
+    /// reports in its loop and at exit, within their timeouts.
     async fn report(
         &self,
         path: &str,
@@ -303,7 +305,7 @@ impl JellyfinClient {
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
-        self.send_authenticated(request).await.map(|_| ())
+        self.send_authenticated_now(request).await.map(|_| ())
     }
 
     /// The item's media segments (`GET /MediaSegments/{item}`), in the server's order. Only worth asking when the source
