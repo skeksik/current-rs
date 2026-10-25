@@ -378,6 +378,9 @@ pub enum PlaybackProblem {
         status: u16,
     },
     NotFound,
+    /// The server's HLS playlist names another host, port or scheme than the stream's address, or could not be read, so it cannot
+    /// be played with the address's gateway headers (ADR 0019, "Playlists and headers"). Holds no address.
+    PlaylistElsewhere,
 }
 
 /// What the server reports about its transcode of this playback (a session's transcoding information). Before start the route is
