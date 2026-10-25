@@ -187,9 +187,14 @@ fn item_paths(request: &Browse<'_>, marks: &Marks) -> Option<(u16, String)> {
             "Episodes" => request.param("seasonId").unwrap_or(SEASON_ID),
             _ => return None,
         };
+        // `startItemId` skips to that item; `limit` caps what follows (`TvShowsController.GetEpisodes`).
+        let start = request.param("startItemId");
+        let limit = request.number("limit").unwrap_or(usize::MAX);
         let children: Vec<String> = ITEMS
             .iter()
             .filter(|item| item.parent == parent)
+            .skip_while(|item| start.is_some_and(|start| item.id != start))
+            .take(limit)
             .map(|item| record(item, marks, ""))
             .collect();
         let total = children.len();

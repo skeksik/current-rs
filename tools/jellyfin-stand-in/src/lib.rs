@@ -49,6 +49,13 @@ pub const TRANSCODE_ITEM: &str = "57a2d1e0000000000000000000000011";
 pub const MEDIA_SOURCE: &str = "57a2d1e0000000000000000000000012";
 /// The play session id PlaybackInfo hands out.
 pub const PLAY_SESSION: &str = "57a2d1e0000000000000000000000013";
+/// The name of [`DIRECT_PLAY_ITEM`] and [`TRANSCODE_ITEM`] in their details (`/Items/{id}`), a film each.
+pub const DIRECT_PLAY_NAME: &str = "Stand-in Direct Play";
+pub const TRANSCODE_NAME: &str = "Stand-in Remux";
+/// What every subtitle request (`/Videos/{item}/{source}/Subtitles/{index}/Stream.{format}`) of the two items gets: a SubRip file.
+pub const SUBTITLE: &str = "1\r\n00:00:01,000 --> 00:00:02,000\r\nStand-in subtitle\r\n";
+/// The user's `RemoteClientBitrateLimit` in bits per second.
+pub const REMOTE_BITRATE_LIMIT: u32 = 8_000_000;
 /// What every `/Items/{id}/Images/...` request gets: a 1 by 1 PNG. Jellyfin serves images without a token, and so does this.
 pub const IMAGE: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -467,6 +474,22 @@ fn is_playback_path(path: &str) -> bool {
         || path.starts_with("/MediaSegments/")
         || path == "/Sessions"
         || path.starts_with("/Sessions/Playing")
+        || [DIRECT_PLAY_ITEM, TRANSCODE_ITEM]
+            .iter()
+            .any(|item| path == format!("/Items/{item}") || subtitle_item(path) == Some(*item))
+}
+
+/// The item of a subtitle request: `/Videos/{item}/{MEDIA_SOURCE}/Subtitles/{index}/Stream.{format}`.
+fn subtitle_item(path: &str) -> Option<&str> {
+    let parts: Vec<&str> = path.split('/').collect();
+    match parts.as_slice() {
+        ["", "Videos", item, source, "Subtitles", _, file]
+            if *source == MEDIA_SOURCE && file.starts_with("Stream.") =>
+        {
+            Some(item)
+        }
+        _ => None,
+    }
 }
 
 /// Playback's endpoints, for a signed-in caller.
@@ -493,6 +516,13 @@ fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
             )
         }
         _ if path == format!("/MediaSegments/{DIRECT_PLAY_ITEM}") => (200, segments()),
+        _ if path == format!("/Items/{DIRECT_PLAY_ITEM}") => {
+            (200, film(DIRECT_PLAY_ITEM, DIRECT_PLAY_NAME))
+        }
+        _ if path == format!("/Items/{TRANSCODE_ITEM}") => {
+            (200, film(TRANSCODE_ITEM, TRANSCODE_NAME))
+        }
+        _ if subtitle_item(path).is_some() => (200, SUBTITLE.to_owned()),
         _ => (404, String::new()),
     }
 }
@@ -501,6 +531,13 @@ fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
 fn playback_info(route: String) -> String {
     format!(
         r#"{{"MediaSources":[{{"Protocol":"File","Id":"{MEDIA_SOURCE}","Path":"/media/stand-in/file.mkv","Type":"Default","Container":"mkv","Size":104857600,"Name":"Stand-in 1080p","IsRemote":false,"ETag":"5ad01e","RunTimeTicks":6000000000,"SupportsTranscoding":true,"SupportsDirectStream":false,{route},"MediaStreams":[{{"Codec":"hevc","DisplayTitle":"1080p HEVC SDR","BitDepth":8,"Height":1080,"Width":1920,"RealFrameRate":24,"VideoRange":"SDR","VideoRangeType":"SDR","Profile":"Main","Type":"Video","Index":0,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false,"Level":120}},{{"Codec":"aac","Language":"eng","DisplayTitle":"English - AAC - Stereo - Default","ChannelLayout":"stereo","Channels":2,"SampleRate":48000,"Type":"Audio","Index":1,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false}}],"Bitrate":1398101,"DefaultAudioStreamIndex":1,"HasSegments":true}}],"PlaySessionId":"{PLAY_SESSION}"}}"#
+    )
+}
+
+/// A playback item's details: a film with a primary image.
+fn film(id: &str, name: &str) -> String {
+    format!(
+        r#"{{"Name":"{name}","ServerId":"{SERVER_ID}","Id":"{id}","Type":"Movie","MediaType":"Video","RunTimeTicks":6000000000,"ProductionYear":2026,"ImageTags":{{"Primary":"5ad01e"}},"ImageBlurHashes":{{"Primary":{{"5ad01e":"LEHV6nWB2yk8pyo0adR*.7kCMdnj"}}}},"UserData":{{"PlaybackPositionTicks":0,"PlayCount":0,"IsFavorite":false,"Played":false,"Key":"{id}","ItemId":"{id}"}}}}"#
     )
 }
 
@@ -539,7 +576,7 @@ fn user(state: &State) -> String {
         .collect();
     let excludes = excludes.join(",");
     format!(
-        r#"{{"Name":"{USER_NAME}","Id":"{USER_ID}","Configuration":{{"LatestItemsExcludes":[{excludes}],"AudioLanguagePreference":"eng","PlayDefaultAudioTrack":true,"SubtitleLanguagePreference":"","SubtitleMode":"Default","RememberAudioSelections":true,"RememberSubtitleSelections":true,"EnableNextEpisodeAutoPlay":true}},"Policy":{{"IsAdministrator":false,"EnableMediaPlayback":true}}}}"#
+        r#"{{"Name":"{USER_NAME}","Id":"{USER_ID}","Configuration":{{"LatestItemsExcludes":[{excludes}],"AudioLanguagePreference":"eng","PlayDefaultAudioTrack":true,"SubtitleLanguagePreference":"","SubtitleMode":"Default","RememberAudioSelections":true,"RememberSubtitleSelections":true,"EnableNextEpisodeAutoPlay":true}},"Policy":{{"IsAdministrator":false,"EnableMediaPlayback":true,"EnableVideoPlaybackTranscoding":true,"EnablePlaybackRemuxing":false,"ForceRemoteSourceTranscoding":false,"RemoteClientBitrateLimit":{REMOTE_BITRATE_LIMIT}}}}}"#
     )
 }
 

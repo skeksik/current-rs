@@ -462,6 +462,44 @@ impl Gateway {
         }
     }
 
+    /// The credentials a stream at `url` needs, for a player that sends its own requests (ADR 0019, "Gateways, tokens and the
+    /// player"): the Basic header, the extra headers and the cookies that apply to `url` now, longer paths first.
+    pub(crate) fn for_stream(&self, url: &Url, now: SystemTime) -> StreamCredentials {
+        let credentials = self.lock();
+        let mut headers = Vec::new();
+        if let Some(value) = credentials
+            .basic
+            .as_ref()
+            .and_then(BasicCredentials::header_value)
+            .and_then(|value| value.to_str().map(str::to_owned).ok())
+        {
+            headers.push((AUTHORIZATION.as_str().to_owned(), value));
+        }
+        for header in &credentials.headers {
+            if let Some(value) = header.value() {
+                headers.push((header.name().to_owned(), value.to_owned()));
+            }
+        }
+        let mut cookies: Vec<&GatewayCookie> = credentials
+            .cookies
+            .iter()
+            .filter(|cookie| cookie.applies(url, now))
+            .collect();
+        cookies.sort_by_key(|cookie| std::cmp::Reverse(cookie.path.len()));
+        StreamCredentials {
+            headers,
+            cookies: cookies
+                .into_iter()
+                .map(|cookie| StreamCookie {
+                    name: cookie.name.clone(),
+                    value: cookie.value.clone(),
+                    path: cookie.path.clone(),
+                    secure: cookie.secure,
+                })
+                .collect(),
+        }
+    }
+
     /// Reads the `Set-Cookie` headers of an answer from `url` and updates the cookies they name that already apply to `url` (same
     /// name, domain and path). New cookies are ignored, and a Secure cookie is never changed by an answer over http.
     pub(crate) fn update(&self, url: &Url, headers: &HeaderMap, now: SystemTime) {
@@ -1200,5 +1238,49 @@ mod tests {
             .with_path("/other")
             .unwrap();
         assert!(!path.applies_to(&url("http://media.example.com/jellyfin")));
+    }
+}
+
+/// The gateway credentials for one stream that a player fetches itself ([`ServerClient::stream_credentials`](crate::ServerClient::stream_credentials)).
+/// Empty for an address without a gateway. Its Debug shows header and cookie names only.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct StreamCredentials {
+    /// Header name and value: the Basic `Authorization` header and the extra headers.
+    pub headers: Vec<(String, String)>,
+    /// The cookies that apply to the stream's URL.
+    pub cookies: Vec<StreamCookie>,
+}
+
+impl StreamCredentials {
+    pub fn is_empty(&self) -> bool {
+        self.headers.is_empty() && self.cookies.is_empty()
+    }
+}
+
+impl std::fmt::Debug for StreamCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamCredentials")
+            .field("headers", &self.headers.len())
+            .field("cookies", &self.cookies)
+            .finish()
+    }
+}
+
+/// A cookie for a stream: the player scopes it to the stream's host.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StreamCookie {
+    pub name: String,
+    pub value: String,
+    pub path: String,
+    /// Sent only over https.
+    pub secure: bool,
+}
+
+impl std::fmt::Debug for StreamCookie {
+    /// Flags only, as [`GatewayCookie`]'s.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamCookie")
+            .field("secure", &self.secure)
+            .finish_non_exhaustive()
     }
 }
