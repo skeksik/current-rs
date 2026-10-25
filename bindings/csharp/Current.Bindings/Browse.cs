@@ -83,11 +83,14 @@ public sealed class Browse : IDisposable
         return Array.ConvertAll(libraries, library => MapBrowse.From(library));
     }
 
-    /// <summary>A grid of <paramref name="library"/>'s items, sorted and filtered by <paramref name="query"/>. Starts loading at once.</summary>
+    /// <summary>
+    /// A grid of <paramref name="library"/>'s items, sorted and filtered by <paramref name="query"/>; without one, what
+    /// <see cref="ItemQuery.ForLibrary"/> gives. Starts loading at once.
+    /// </summary>
     public PagedItems OpenLibrary(Library library, ItemQuery? query = null)
     {
         ArgumentNullException.ThrowIfNull(library);
-        return new(_browse.OpenLibrary(MapBrowse.ToFfi(library), MapBrowse.ToFfi(query ?? new ItemQuery())));
+        return new(_browse.OpenLibrary(MapBrowse.ToFfi(library), MapBrowse.ToFfi(query ?? ItemQuery.ForLibrary(library))));
     }
 
     /// <summary>Home's rows. Starts loading at once.</summary>

@@ -66,6 +66,9 @@ internal static class BrowseTests
         using var core = await SignedIn(standIn);
         using var browse = core.Browse(FirstServer);
         Check(browse.Server == FirstServer, "the browse's server");
+        var first = ItemQuery.ForLibrary(BigLibrary());
+        Check(first.Kinds.SequenceEqual(["movie"]) && first.Recursive && first.Sort.SequenceEqual(["sort_name"]),
+            "a film library's first query lists its films by name");
         var ui = new ManualDispatcher();
         using var items = browse.OpenLibrary(BigLibrary());
         using var grid = items.Collect(ui);

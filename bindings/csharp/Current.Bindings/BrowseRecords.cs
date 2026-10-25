@@ -121,6 +121,16 @@ public sealed record ItemQuery
     public IReadOnlyList<int> Years { get; init; } = [];
 
     public string? NameStartsWith { get; init; }
+
+    /// <summary>
+    /// What <paramref name="library"/>'s grid shows before the user sorts or filters it, by name (the core decides): a film library
+    /// its films and a TV library its series, wherever they sit below it; any other library its top level.
+    /// </summary>
+    public static ItemQuery ForLibrary(Library library)
+    {
+        ArgumentNullException.ThrowIfNull(library);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.LibraryQuery(MapBrowse.ToFfi(library)));
+    }
 }
 
 /// <summary>
@@ -363,6 +373,18 @@ internal static class MapBrowse
         query.Genres.ToArray(),
         query.Years.ToArray(),
         query.NameStartsWith);
+
+    public static ItemQuery From(Ffi.ItemQuery query) => new()
+    {
+        Kinds = query.Kinds,
+        Recursive = query.Recursive,
+        Sort = query.Sort,
+        Order = query.Order == Ffi.SortOrder.Descending ? SortOrder.Descending : SortOrder.Ascending,
+        Filters = query.Filters,
+        Genres = query.Genres,
+        Years = query.Years,
+        NameStartsWith = query.NameStartsWith,
+    };
 
     public static Slot From(Ffi.Slot slot) => slot switch
     {

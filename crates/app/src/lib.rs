@@ -37,7 +37,7 @@ pub use browse::{
     BACKLOG_PAGES, Browse, BrowseNotice, DEPENDENT_RELOAD_DELAY, DetailsView, HomeFeed, HomeRow,
     HomeRowKind, HomeState, ItemAction, LATEST_LIMIT, LoadState, MAX_PAGE_REQUESTS, NEXT_UP_LIMIT,
     NoticeKind, PAGE_SIZE, PagedItems, PagedState, RESUME_LIMIT, SIMILAR_LIMIT, SearchResults,
-    Slot,
+    Slot, library_query,
 };
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};

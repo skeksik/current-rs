@@ -38,7 +38,7 @@ pub use browse::{
     ItemSummaryDiff, ItemsListener, Library, LoadState, LoadStateListener, MediaSummary,
     NoticeKind, PagedItems, PagedState, PagedStateListener, Person, SearchGroup, SearchGroupDiff,
     SearchGroupsListener, SearchResults, Slot, SlotDiff, SlotsListener, SortOrder, StreamSummary,
-    UserState,
+    UserState, library_query,
 };
 pub use cancel::CancelToken;
 pub use error::CoreError;

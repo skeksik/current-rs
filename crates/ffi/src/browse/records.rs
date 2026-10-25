@@ -583,6 +583,37 @@ impl From<&model::ItemDetails> for ItemDetails {
     }
 }
 
+impl From<&model::ItemQuery> for ItemQuery {
+    /// The parent stays behind: across the bridge a query's library is passed beside it.
+    fn from(query: &model::ItemQuery) -> Self {
+        Self {
+            kinds: query
+                .kinds
+                .iter()
+                .map(|kind| kind.as_str().to_owned())
+                .collect(),
+            recursive: query.recursive,
+            sort: query
+                .sort
+                .iter()
+                .map(|key| key.as_str().to_owned())
+                .collect(),
+            order: match query.order {
+                model::SortOrder::Ascending => SortOrder::Ascending,
+                model::SortOrder::Descending => SortOrder::Descending,
+            },
+            filters: query
+                .filters
+                .iter()
+                .map(|filter| filter.as_str().to_owned())
+                .collect(),
+            genres: query.genres.clone(),
+            years: query.years.clone(),
+            name_starts_with: query.name_starts_with.clone(),
+        }
+    }
+}
+
 impl From<&ItemQuery> for model::ItemQuery {
     fn from(query: &ItemQuery) -> Self {
         Self {

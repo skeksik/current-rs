@@ -210,6 +210,13 @@ impl Core {
     }
 }
 
+/// What `library`'s grid shows before the user sorts or filters it, by name: a film library its films and a TV library its series,
+/// wherever they sit below it; any other library its top level.
+#[uniffi::export]
+pub fn library_query(library: Library) -> ItemQuery {
+    (&current_app::library_query(&(&library).into())).into()
+}
+
 /// Browsing one session of a signed-in Jellyfin server.
 #[derive(uniffi::Object)]
 pub struct Browse {
