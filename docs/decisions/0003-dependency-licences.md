@@ -69,7 +69,9 @@ Status: accepted (2026-10-22).
   fees, related to the distribution or use of your programs." Among its restrictions: "Distribute Distributable Code to run on a
   platform other than the Microsoft operating system platform" is not allowed.
 
-  The Visual C++ runtime (owner, 2026-10-25: Microsoft's installer, not app-local copies or a static CRT): the app's installer runs
+  The Visual C++ runtime (owner, 2026-10-25: Microsoft's installer, not app-local copies or a static CRT) is needed already: the core's own
+  `current_ffi.dll` imports `VCRUNTIME140.dll` (Rust's MSVC target links the CRT dynamically; listed by CI's "Bindings (C#, Windows)"
+  job with `llvm-readobj --coff-imports`, run 40173566806, 2026-10-25), and so do the libmpv DLLs. The app's installer runs
   Microsoft's `vc_redist.x64.exe` when `HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64` shows the runtime missing or
   older than the toolset that built the DLLs ("We only support using a Redistributable package that's the same as or newer than your
   toolset version", "Determine which DLLs to redistribute", learn.microsoft.com, updated 2023-10-26). Central deployment lets Windows
