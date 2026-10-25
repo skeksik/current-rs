@@ -4,6 +4,8 @@ Status: proposed (2026-10-22), from M1; accepted when its PR merges. The device 
 owner (2026-10-22, marked **Decided by the owner**). Amended 2026-10-23: removing a saved server (owner's request; manager's answers
 on the design), below under "Remove a server" and in "Saved servers". Amended 2026-10-24: the 401 rule and Jellyfin's header
 placement behind an authentication gateway (ADR 0017, approved by the owner), below under "The 401 rule" and "Header placement".
+Amended 2026-10-25: the token check after a 401 that the identity probe confirms as Jellyfin's (approved by the owner 2026-10-25),
+below under "The 401 rule".
 
 ## Context
 After setup finds a server (ADR 0012), the user signs in with a password or Quick Connect. The app must remember the server and user,
@@ -102,6 +104,54 @@ built now (manager, 2026-10-22).
    Built in `current-app`: the client keeps the token, reports `SessionEvent::Unconfirmed` to the session hook once, and answers
    `AuthError::Unconfirmed` without sending until the app calls `revoke` (Jellyfin's 401) or `resume`.
 This also covers gateways that answer 401 without a challenge.
+
+**Amended 2026-10-25 (approved by the owner 2026-10-25, "check the token"):** a 401 that the identity probe confirms as Jellyfin's
+no longer ends the session by itself: the core first asks Jellyfin who the token belongs to.
+
+Why: the probe proves only that the 401 came from Jellyfin, not that the token is invalid. On the owner's server (2026-10-25),
+clicking the navigation's entry of a library removed on the server signed the user out. Jellyfin 12.2 answers 401 with a valid token
+for one resource (sources below, read 2026-10-25):
+- `GET Items` with a `parentId` the server still knows but the user cannot see: `ItemsController.GetItems` returns
+  `Unauthorized($"{user.Username} is not permitted to access Library {item.Name}.")` when `!item.IsVisible(user)` (lines 342-350).
+  `IsVisible` is false for a library not among the user's enabled folders or among the blocked ones (`Folder.IsVisible`, lines
+  252-275), a disabled library (`CollectionFolder.IsVisible`, lines 117-125), and an item the user's parental rating or tags hide
+  (`BaseItem.IsParentalAllowed`). A `parentId` the server does not know answers **400**, not 401: `LibraryManager.GetParentItem`
+  throws `ArgumentException("Invalid parent id: ...")` (lines 3276-3289), which `ExceptionMiddleware` maps to 400 (line 127). Which
+  of the two a removed library gets depends on whether the server still holds its folder item, which was not checked on a live server
+  (**not verified**).
+- `DELETE Items/{itemId}` and `DELETE Items` when the user may not delete the item (`LibraryController`, lines 388, 421, 434), and
+  `GET Items/{itemId}/Collections` without a user (line 753). Current sends none of these.
+- Quick Connect turned off (`QuickConnectController`, lines 66, 92, 118): sign-in only, already handled.
+- Not 401: a single item (`GET Items/{itemId}`, `UserLibraryController.GetItem`), `GET Items/Latest`, images (`ImageController`) and
+  streams answer 404 for an item that is gone or hidden from the user (`GetItemById(id, user)` returns null, then `NotFound()`); a
+  missing media source or live stream is `ResourceNotFoundException`, 404 (`MediaInfoHelper`, `StreamingHelpers`). Searched: every
+  controller in `Jellyfin.Api/Controllers` for `return Unauthorized` and `Status401Unauthorized`.
+
+The rule's second part, after the probe answered Jellyfin's JSON with the right identity:
+- The client asks `GET /Users/Me` with the token (`JellyfinClient::check_token`), while it still holds every other request back.
+- **The token works** (Jellyfin's `UserDto`, or a 403 without a page, which Jellyfin sends only to a valid token): the 401 was about
+  that one resource. The session and token stay, held requests go out again, and the request that got the 401 fails with
+  `AuthError::NotAvailable` (`JellyfinClient::keep`). Browse shows it as `BrowseProblem::NotAvailable`, playback as
+  `PlaybackProblem::NotFound`.
+- **The token fails** (401 without a challenge): the session ends as before (`revoke`, then the app signs out).
+- **No answer** (a network error, a 5xx, a gateway's answer, a page, or a newer token in the meantime): nothing changes (`resume`).
+- The request that got the 401 now waits for the decision (at most 60 s) and answers `SessionRevoked`, `NotAvailable` or
+  `Unconfirmed`. Requests made while the check runs still answer `Unconfirmed` without sending, so at most one probe and one token
+  check run per session.
+- A library grid whose request fails with `NotAvailable`, or with 400 or 404 (a server that has forgotten the parent), reads the
+  user's libraries again; if the library left them, the grid's state says `NotAvailable` (ADR 0018, amended 2026-10-25).
+- Tests: `crates/jellyfin/tests/sign_in.rs` (the client's three outcomes, the token check's answers), `crates/app/tests/
+  library_changes.rs` against the stand-in's `remove_library` (401 to a valid token) and `forget_library` (400): the session survives
+  and the grid shows `NotAvailable`; a revoked token still signs out; a gateway's answer still asks for the gateway sign-in; one probe
+  while the token is checked, other requests held back.
+
+Sources (read 2026-10-25): Jellyfin server `v12.2` (ca0f16eb), https://github.com/jellyfin/jellyfin:
+`Jellyfin.Api/Controllers/{ItemsController, LibraryController, UserLibraryController, ImageController, QuickConnectController,
+VideosController, MediaInfoController, DynamicHlsController, TvShowsController, UserViewsController, UserController}.cs` and the rest
+of `Jellyfin.Api/Controllers` (searched), `Jellyfin.Api/Helpers/{MediaInfoHelper, StreamingHelpers}.cs`,
+`Jellyfin.Api/Middleware/ExceptionMiddleware.cs`, `Jellyfin.Api/Auth/CustomAuthenticationHandler.cs`,
+`Emby.Server.Implementations/Library/LibraryManager.cs`, `MediaBrowser.Controller/Entities/{BaseItem, Folder, CollectionFolder}.cs`,
+`MediaBrowser.Model/Configuration/LibraryOptions.cs`.
 
 ### Header placement (amended 2026-10-24, ADR 0017)
 A per-server setting, `HeaderPlacement`: `Authorization` (default) or `X-Emby-Authorization`, which Jellyfin reads only with
