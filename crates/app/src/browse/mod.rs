@@ -12,6 +12,7 @@
 
 mod details;
 mod home;
+mod libraries;
 mod paged;
 mod present;
 mod search;
@@ -48,6 +49,7 @@ pub use present::{
 pub use search::SearchResults;
 pub use states::{BrowseNotice, ItemAction, NoticeKind};
 
+use libraries::Libraries;
 use states::ItemStates;
 
 /// How long after the last played or favourite change the lists that depend on it reload (ADR 0018, section 5).
@@ -140,8 +142,10 @@ impl Hub {
             lives: Mutex::new(Vec::new()),
             publishing: Mutex::new(()),
             dependents: Mutex::new(Dependents::default()),
+            libraries: Libraries::default(),
         });
         contexts.insert(server.clone(), Arc::downgrade(&context));
+        context.start_libraries(shared.capabilities.subscribe());
         Some(Browse { ctx: context })
     }
 
@@ -189,6 +193,7 @@ pub(crate) struct Context {
     /// Serializes publishing an item's state, so the last publish shows the newest state.
     publishing: Mutex<()>,
     dependents: Mutex<Dependents>,
+    libraries: Libraries,
 }
 
 impl Drop for Context {
@@ -241,7 +246,9 @@ impl Context {
         lock(&self.lives).iter().filter_map(Weak::upgrade).collect()
     }
 
-    fn refresh(&self) {
+    /// Reads the libraries and every live list again.
+    fn refresh(self: &Arc<Self>) {
+        self.reload_libraries();
         for live in self.lives() {
             live.refresh();
         }
@@ -359,22 +366,31 @@ impl Browse {
         &self.ctx.server
     }
 
-    /// The user's libraries, in the user's order, for the app's navigation.
+    /// The user's libraries, in the user's order, as a load that starts now reads them; the list [`Browse::library_list`] holds
+    /// takes them too.
     ///
     /// # Errors
     /// The session ended ([`AuthError::NotSignedIn`]), or the server's or the network's failure.
     pub async fn libraries(&self) -> Result<Vec<Library>, AuthError> {
-        self.ctx.client()?.libraries().await
+        self.ctx.libraries_again().await
+    }
+
+    /// The user's libraries for the app's navigation, in the user's order: `None` until first loaded, then the last list loaded.
+    /// It follows the server: read again on a refresh, on the foreground refresh, when Home reloads, after a library request the
+    /// server refused, and when the server is reached again after a failed load. A library the user can no longer open leaves it.
+    pub fn library_list(&self) -> watch::Receiver<Option<Vec<Library>>> {
+        self.ctx.libraries.subscribe()
     }
 
     /// A grid of `library`'s items: `query` with the library as its parent. Starts loading at once. [`library_query`] is what a
-    /// grid shows before the user sorts or filters it.
+    /// grid shows before the user sorts or filters it. When a request fails as it does for a library that is gone, the libraries
+    /// are read again; if the library left them, the grid's state says [`AuthError::NotAvailable`].
     pub fn open_library(&self, library: &Library, query: ItemQuery) -> PagedItems {
         let query = ItemQuery {
             parent: Some(library.item.clone()),
             ..query
         };
-        PagedItems::open(self.ctx.clone(), query)
+        PagedItems::open(self.ctx.clone(), query, Some(library.item.clone()))
     }
 
     /// Home's rows. Start loading at once.

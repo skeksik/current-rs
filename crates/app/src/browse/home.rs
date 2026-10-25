@@ -279,7 +279,8 @@ impl Home {
                         spawn_row(&mut rows, &client, spec);
                     }
                     if full {
-                        match client.libraries().await {
+                        // The navigation's list takes them too, so the navigation follows what Home shows.
+                        match ctx.libraries_joined().await {
                             Ok(libraries) => {
                                 let excludes = client.latest_excludes();
                                 let mut keys = vec![Spec::Resume.key(), Spec::NextUp.key()];

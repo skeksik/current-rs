@@ -15,6 +15,7 @@ use current_model::{ItemQuery, ItemRef, ItemSummary, UserState};
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
+use super::libraries::might_be_gone;
 use super::{Context, Live, lock};
 use crate::list::{ObservableList, VectorDiff};
 
@@ -130,6 +131,8 @@ impl Control {
 
 struct Paged {
     ctx: Arc<Context>,
+    /// The library a library grid shows: a request that fails as one does once the library is gone reads the libraries again.
+    library: Option<ItemRef>,
     slots: Arc<ObservableList<Slot>>,
     state: watch::Sender<PagedState>,
     control: Mutex<Control>,
@@ -158,9 +161,10 @@ impl std::fmt::Debug for PagedItems {
 }
 
 impl PagedItems {
-    pub(super) fn open(ctx: Arc<Context>, query: ItemQuery) -> Self {
+    pub(super) fn open(ctx: Arc<Context>, query: ItemQuery, library: Option<ItemRef>) -> Self {
         let inner = Arc::new_cyclic(|me| Paged {
             ctx,
+            library,
             slots: ObservableList::with_backlog(BACKLOG_PAGES * PAGE_SIZE),
             state: watch::Sender::new(PagedState {
                 loading: true,
@@ -332,6 +336,7 @@ impl Paged {
         let query = control.query.clone();
         let ctx = self.ctx.clone();
         let me = self.me.clone();
+        let library = self.library.clone();
         // The task's answer waits for the control lock, held here until the flight is recorded.
         let task = self.ctx.spawn(async move {
             let start = u32::try_from(page * PAGE_SIZE).unwrap_or(u32::MAX);
@@ -342,6 +347,18 @@ impl Paged {
                         .await
                 }
                 Err(error) => Err(error),
+            };
+            // The library may be gone: the libraries are read again before the failure shows, so the navigation has dropped it
+            // by then, and the grid says so in one way whatever the server answered.
+            let result = match (result, &library) {
+                (Err(error), Some(library)) if might_be_gone(&error) => {
+                    if ctx.library_gone(library).await {
+                        Err(AuthError::NotAvailable)
+                    } else {
+                        Err(error)
+                    }
+                }
+                (result, _) => result,
             };
             if let Some(me) = me.upgrade() {
                 me.finish(page, id, result);
