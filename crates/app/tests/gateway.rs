@@ -382,7 +382,9 @@ fn jellyfin(key: &str) -> ServerRef {
 
 fn open(dir: &Path, secrets: &Arc<MemorySecrets>) -> App {
     let secrets: Arc<dyn Secrets> = secrets.clone();
-    App::open(dir, secrets, "Office PC").unwrap().0
+    App::open(dir, &dir.join("cache"), secrets, "Office PC")
+        .unwrap()
+        .0
 }
 
 fn portal_cookie(value: &str) -> CookieInput {

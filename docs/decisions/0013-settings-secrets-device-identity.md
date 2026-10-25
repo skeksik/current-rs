@@ -9,19 +9,27 @@ the client's `DeviceId`. Sources were read on 2026-10-22 (below).
 
 ## Decision
 
-### The UI passes the data folder
-`App::open(data_dir, secrets)` takes the folder at start. The core never looks it up: the UI knows how it was packaged, and a
-directory-lookup crate could not cover Android or tvOS anyway.
+### The UI passes the data and cache folders
+`App::open(data_dir, cache_dir, secrets, device_name)` takes both folders at start (the cache folder added by ADR 0018, approved by
+the owner with it on 2026-10-25). The core never looks them up: the UI knows how it was packaged, and a directory-lookup crate could
+not cover Android or tvOS anyway. The cache folder holds only what can be fetched again (images, ADR 0018); losing it costs downloads,
+never settings or sign-ins.
 
-| Platform | Folder the UI passes |
-|---|---|
-| Windows, unpackaged | `%LOCALAPPDATA%\Current` (`FOLDERID_LocalAppData`, ADR 0009) |
-| Windows, MSIX (later) | The same path works: new AppData files are redirected to a per-package location and "merged at runtime to appear in the real AppData location", and removed on uninstall. `ApplicationData.Current.LocalFolder` is the explicit alternative (ADR 0009) |
-| macOS | `~/Library/Application Support/<bundle id>` from `FileManager`; in the sandbox it resolves inside the app's container (not verified against a quote) |
-| Linux (later) | `$XDG_CONFIG_HOME/<app>` (default `~/.config`); Flatpak sets it to `~/.var/app/<app-id>/config` |
-| iOS (later) | Application Support in the app's container (not verified) |
-| tvOS (later) | Open: only 500 KB of persistent local storage, through `NSUserDefaults`; anything else is purgeable. Decided by the tvOS task |
-| Android (later) | `Context.getFilesDir()` (not verified) |
+| Platform | Data folder the UI passes | Cache folder the UI passes |
+|---|---|---|
+| Windows, unpackaged | `%LOCALAPPDATA%\Current` (`FOLDERID_LocalAppData`, ADR 0009) | `%LOCALAPPDATA%\Current\Cache`: inside the per-user data tree, never next to the program (ADR 0009, ADR 0018) |
+| Windows, MSIX (later) | The same path works: new AppData files are redirected to a per-package location and "merged at runtime to appear in the real AppData location", and removed on uninstall. `ApplicationData.Current.LocalFolder` is the explicit alternative (ADR 0009) | `Cache` in the data folder, as unpackaged |
+| macOS | `~/Library/Application Support/<bundle id>` from `FileManager`; in the sandbox it resolves inside the app's container (not verified against a quote) | `~/Library/Caches/<bundle id>` from `FileManager` (not verified) |
+| Linux (later) | `$XDG_CONFIG_HOME/<app>` (default `~/.config`); Flatpak sets it to `~/.var/app/<app-id>/config` | `$XDG_CACHE_HOME/<app>` (default `~/.cache`; not verified) |
+| iOS (later) | Application Support in the app's container (not verified) | Caches in the app's container (not verified) |
+| tvOS (later) | Open: only 500 KB of persistent local storage, through `NSUserDefaults`; anything else is purgeable. Decided by the tvOS task | Caches, which the system may purge (not verified) |
+| Android (later) | `Context.getFilesDir()` (not verified) | `Context.getCacheDir()` (not verified) |
+
+**The image cache** (ADR 0018, section 4) lives in `<cache folder>/images/<server hash>/<image hash>`, names only 128-bit FNV-1a
+hashes, so the folder shows no server, address, user or title. Its index is read from the folder by `App::open`, which also deletes
+the folders of servers that are no longer saved or have no signed-in user: since signing out deletes a server's images (the owner's
+decision with ADR 0018), a folder for a signed-out server can only be one a sign-out or removal could not finish deleting. A cache
+folder that cannot be created or read leaves images in memory only; opening does not fail over it.
 
 ### The settings file
 - `settings.json` in the data folder: a JSON object with `"version"` (the format, now 1) and the settings' fields (now `device_id`;
@@ -54,7 +62,7 @@ directory-lookup crate could not cover Android or tvOS anyway.
   the newer version finds its file unchanged.
 - **One writer:** one `SettingsStore` per process (one `App`), with saves serialized by its lock. On Windows, ADR 0009's single
   instance keeps it to one process. On macOS and Linux, single instance is the shells' job.
-- Errors and `Debug` output carry no paths: the data folder's path holds the user's account name.
+- Errors and `Debug` output carry no paths: the data and cache folders' paths hold the user's account name.
 
 ### Secrets in the OS keyring
 - **ADR 0002's "keyring 4" is now keyring-core plus a store crate per platform.** keyring 4.2.0's README: "developers should take

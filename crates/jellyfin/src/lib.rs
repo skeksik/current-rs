@@ -3,7 +3,7 @@
 //! (ADR 0016). Sign-in covers the authorization header, password and Quick Connect sign-in, the current user and sign out
 //! (ADR 0015). Behind an authentication gateway, probes classify the gateway's answer and Jellyfin's header can move to
 //! `X-Emby-Authorization` (ADR 0017). Browsing lists libraries and items, the home rows, series, search and details, and sets
-//! played and favourite (ADR 0018).
+//! played and favourite; images are fetched at a box size through the same session (ADR 0018).
 //!
 //! Built on `current-net`'s [`ServerClient`](current_net::ServerClient). Wire types stay private; the public API speaks
 //! `current-model`.
@@ -15,6 +15,7 @@ mod browse_wire;
 mod client;
 mod discovery;
 mod gateway;
+mod image;
 mod probe;
 mod wire;
 
@@ -33,4 +34,5 @@ pub use discovery::{
     MAX_INTERFACES, MAX_REPLY_BYTES, MAX_SERVERS, Source, discover,
 };
 pub use gateway::{GatewayAnswer, Realm};
+pub use image::{ImageError, ImageRequest};
 pub use probe::{FoundServer, JellyfinIdentity, MINIMUM_VERSION, ProbeError, Prober, same_server};

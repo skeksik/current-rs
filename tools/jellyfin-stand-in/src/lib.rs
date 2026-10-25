@@ -1,6 +1,6 @@
 //! A hand-written Jellyfin stand-in on 127.0.0.1, for the bridge tests (Rust, C# and Swift). It answers only what server setup,
-//! sign-in, restoring a session, sign-out and browsing a small fake library (see [`library`]) ask, with the shapes `current-jellyfin`
-//! reads. Every name, id and credential in it is fake. Test code only: nothing shipped depends on it.
+//! sign-in, restoring a session, sign-out, images and browsing a small fake library (see [`library`]) ask, with the shapes
+//! `current-jellyfin` reads. Every name, id and credential in it is fake. Test code only: nothing shipped depends on it.
 
 pub mod library;
 
@@ -39,6 +39,14 @@ pub const GATE_SIGN_IN_PATH: &str = "/gate/sign-in";
 /// The header [`Gate::Header`] wants.
 pub const GATE_HEADER: &str = "x-stand-in-gate";
 pub const GATE_HEADER_VALUE: &str = "not-a-real-gate-header";
+/// What every `/Items/{id}/Images/...` request gets: a 1 by 1 PNG. Jellyfin serves images without a token, and so does this.
+pub const IMAGE: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x30, 0x48, 0x98, 0x00,
+    0x00, 0x01, 0xe4, 0x01, 0x21, 0xca, 0x6c, 0xd2, 0x32, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
 const QUICK_CONNECT_SECRET: &str =
     "57a2d1e0000000000000000000000000000000000000000000000000000000ff";
 
@@ -52,6 +60,17 @@ impl std::fmt::Debug for StandIn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StandIn").finish_non_exhaustive()
     }
+}
+
+/// An image request as the stand-in received it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageSeen {
+    /// The path and query, e.g. `/Items/{id}/Images/Primary?fillWidth=160&...`.
+    pub target: String,
+    /// The `Accept` header.
+    pub accept: String,
+    /// The [`GATE_HEADER`] header, empty without it.
+    pub gate_header: String,
 }
 
 /// An authentication gateway in front of the stand-in (ADR 0017), as a reverse proxy would answer.
@@ -86,6 +105,10 @@ struct State {
     released: Notify,
     /// The path of every request, in order.
     paths: Mutex<Vec<String>>,
+    /// Every image request that the gateway let through, in order.
+    images: Mutex<Vec<ImageSeen>>,
+    /// The path of every held request whose client closed the connection before it was released.
+    cancelled: Mutex<Vec<String>>,
     /// What the user marked played or favourite.
     marks: Mutex<library::Marks>,
 }
@@ -208,6 +231,19 @@ impl Controls {
         *lock(&self.state.gate_cookie) = Some(value.to_owned());
     }
 
+    /// The image requests that passed the gateway so far, oldest first.
+    pub fn images(&self) -> Vec<ImageSeen> {
+        lock(&self.state.images).clone()
+    }
+
+    /// How many held requests to `path` were given up by their client (the connection closed) before [`Controls::release`].
+    pub fn cancelled(&self, path: &str) -> usize {
+        lock(&self.state.cancelled)
+            .iter()
+            .filter(|seen| *seen == path)
+            .count()
+    }
+
     /// How many sessions are live.
     pub fn live_sessions(&self) -> usize {
         lock(&self.state.tokens).len()
@@ -222,6 +258,9 @@ fn revoke_all(state: &State) {
 struct Received {
     method: String,
     path: String,
+    /// The path and query, as received.
+    target: String,
+    accept: String,
     /// Query pairs, decoded.
     query: Vec<(String, String)>,
     authorization: String,
@@ -242,10 +281,35 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
         if !lock(&state.held).contains(&received.path) {
             break;
         }
-        released.await;
+        let mut probe = [0u8; 1];
+        tokio::select! {
+            () = released => {}
+            // The client sent its whole request already, so a read that ends means it closed the connection: it gave up.
+            read = socket.read(&mut probe) => {
+                if matches!(read, Ok(0) | Err(_)) {
+                    lock(&state.cancelled).push(received.path.clone());
+                    return;
+                }
+            }
+        }
     }
     let response = match gate(&state, &received) {
         Some(blocked) => blocked,
+        None if is_image(&received.path) => {
+            lock(&state.images).push(ImageSeen {
+                target: received.target.clone(),
+                accept: received.accept.clone(),
+                gate_header: received.gate_header.clone(),
+            });
+            let head = format!(
+                "HTTP/1.1 200 X\r\ncontent-type: image/png\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                IMAGE.len()
+            );
+            let _ = socket.write_all(head.as_bytes()).await;
+            let _ = socket.write_all(IMAGE).await;
+            let _ = socket.shutdown().await;
+            return;
+        }
         None => {
             let (status, body) = answer(&state, &received);
             format!(
@@ -300,6 +364,15 @@ fn gate(state: &State, received: &Received) -> Option<String> {
         }
         Gate::Header => (received.gate_header != GATE_HEADER_VALUE).then(|| reply(403, "", "")),
     }
+}
+
+/// `/Items/{id}/Images/{type}` with an optional `/{index}`.
+fn is_image(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    matches!(
+        parts.as_slice(),
+        ["", "Items", _, "Images", _] | ["", "Items", _, "Images", _, _]
+    )
 }
 
 fn answer(state: &State, received: &Received) -> (u16, String) {
@@ -434,6 +507,8 @@ async fn read_request(socket: &mut TcpStream) -> Option<Received> {
     Some(Received {
         method,
         path: path.to_owned(),
+        target: target.to_owned(),
+        accept: header("accept"),
         query: query
             .split('&')
             .filter(|pair| !pair.is_empty())

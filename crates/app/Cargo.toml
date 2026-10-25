@@ -17,6 +17,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
 
 [dev-dependencies]
+jellyfin-stand-in.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "net", "io-util", "time"] }
 
