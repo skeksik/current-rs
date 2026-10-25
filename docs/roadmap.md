@@ -235,7 +235,12 @@ Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 whe
       model. Before generating, offer the server's own subtitles: Jellyfin's remote subtitle search, and Stash's captions (external
       SRT/VTT files beside the scene; GraphQL `Scene.captions` and `paths.caption`, served as WebVTT; docs.stashapp.cc "Captions" and
       stashapp/stash `internal/api/routes_scene.go`, read 2026-10-25). Start with a spike: speed and quality of medium and large on
-      the owner's GPU with one Japanese file, ending in an ADR; the dependency and the model download need the owner's approval
+      the owner's GPU with one Japanese file, ending in an ADR; the dependency and the model download need the owner's approval.
+      Models are not shipped in the app: downloaded on first use after the user picks a size, checked against a pinned checksum,
+      kept in the data folder and deleted from Settings → Storage. whisper.cpp's files: medium 1.53 GB (539 MB as q5_0), large-v3
+      3.1 GB (1.08 GB as q5_0); the quality cost of q5_0 on Japanese is for the spike (huggingface.co/ggerganov/whisper.cpp, read
+      2026-10-25). On Apple platforms, Apple-hosted asset packs (200 GB per app record, App Store Connect Help, read 2026-10-25) are
+      an alternative; whether the App Store guidelines treat model weights as allowed downloaded data is not verified
 - [ ] Android (Compose, Media3 plus a fallback engine), iOS and iPadOS (SwiftUI from macOS), tvOS, the web (the core on WebAssembly)
 - [ ] Local files, downloads and offline playback; several servers and user switching; casting and watch-together
 - Not planned yet (ask to add): music, live TV, books, photos, other media servers.
