@@ -1512,3 +1512,7 @@ step after publishing the app; the run used the published app. CI builds the ins
 6. Narrator reads the updated navigation, keyboard only works, and the gateways still behave: **pass**.
 The smoke run also adds a library on the stand-in and removes the films library while its page shows (pane count, Home, the notice,
 still signed in): **pass**.
+
+Re-checked after the review fixes (2026-10-25, 14428e2), by the owner: case 3 (removed while shown) and case 4 (stale entry clicked)
+again **pass**, and Back from Home after each does not reopen the removed library: **pass**. The smoke run presses Back after a
+removal too.
