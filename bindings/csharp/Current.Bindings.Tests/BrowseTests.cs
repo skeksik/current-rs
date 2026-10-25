@@ -37,9 +37,10 @@ internal static class BrowseTests
 
     private static async Task Eventually(string what, Func<bool> done) => await Eventually(what, new ManualDispatcher(), done);
 
-    private static async Task<CoreHost> SignedIn(StandIn standIn)
+    private static Task<CoreHost> SignedIn(StandIn standIn) => SignIn(CoreHost.Create(), standIn);
+
+    private static async Task<CoreHost> SignIn(CoreHost core, StandIn standIn)
     {
-        var core = CoreHost.Create();
         using var add = core.AddServer();
         await add.ProbeAsync(standIn.Address);
         Check(add.State is AddServerState.Ready, $"ready, not {add.State}");
@@ -121,6 +122,49 @@ internal static class BrowseTests
         items.Retry();
         await Eventually("the retried page", ui, () => grid.Items[449] is Slot.Item);
         await Eventually("the state clears", ui, () => state.Value.Failed is null);
+    }
+
+    public static async Task ImageCacheSizeAndClear()
+    {
+        var folder = Directory.CreateTempSubdirectory("current-tests-").FullName;
+        try
+        {
+            using var standIn = StandIn.Start();
+            using var core = await SignIn(
+                await CoreHost.OpenAsync(Path.Combine(folder, "Data"), Path.Combine(folder, "Cache"), "", SecretStore.Memory),
+                standIn);
+            Check(await core.ImageCacheSizeAsync() == 0, "an empty cache");
+
+            var bytes = await core.LoadImageAsync(Poster(StandIn.FilmIds[0]));
+            // The disk write is not awaited by the load.
+            await Eventually("the image is on disk", () => core.ImageCacheSizeAsync().Result == bytes.Length);
+
+            await core.ClearImageCacheAsync();
+            Check(await core.ImageCacheSizeAsync() == 0, "cleared");
+            var path = $"/Items/{StandIn.FilmIds[0]}/Images/Primary";
+            var before = standIn.Count(path);
+            var again = await core.LoadImageAsync(Poster(StandIn.FilmIds[0]));
+            Check(again.AsSpan().SequenceEqual(bytes), "the same image after a clear");
+            Check(standIn.Count(path) == before + 1, "fetched from the server again");
+            await Eventually("stored again", () => core.ImageCacheSizeAsync().Result == bytes.Length);
+
+            await core.SignOutAsync(FirstServer);
+            Check(await core.ImageCacheSizeAsync() == 0, "a sign-out deletes the server's images");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+            catch (Exception)
+            {
+                // A file still open: the system cleans its temp folder later.
+            }
+        }
+
+        using var memoryOnly = CoreHost.Create();
+        Check(await memoryOnly.ImageCacheSizeAsync() == 0, "no disk cache without a cache folder");
     }
 
     public static async Task ImageBytesAndCancellation()

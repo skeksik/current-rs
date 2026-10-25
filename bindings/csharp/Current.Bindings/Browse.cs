@@ -39,6 +39,28 @@ public sealed partial class CoreHost
         var native = MapBrowse.ToFfi(request);
         return CoreCall.RunAsync(token => _core.LoadImage(native, token), ct);
     }
+
+    /// <summary>
+    /// The image cache's size on disk in bytes, every server's images together: what Settings → Storage shows. 0 for a core that
+    /// stores nothing (<see cref="Create"/>).
+    /// </summary>
+    /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled first.</exception>
+    public async Task<long> ImageCacheSizeAsync(CancellationToken ct = default)
+    {
+        var size = await CoreCall.RunAsync(token => _core.ImageCacheSize(token), ct).ConfigureAwait(false);
+        return (long)Math.Min(size, long.MaxValue);
+    }
+
+    /// <summary>
+    /// Deletes every cached image of every server, in memory and on disk (Settings → Storage, "Clear"); they load again from the
+    /// servers when next shown. Safe while images load. Not cancellable: it runs to its end once started.
+    /// </summary>
+    public Task ClearImageCacheAsync() =>
+        CoreCall.RunUncancellableAsync(async () =>
+        {
+            await _core.ClearImageCache().ConfigureAwait(false);
+            return true;
+        });
 }
 
 /// <summary>Browsing one session of a signed-in Jellyfin server. Dispose it when no page uses it.</summary>

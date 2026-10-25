@@ -294,6 +294,30 @@ impl ImageCache {
         flight
     }
 
+    /// The disk cache's size in bytes, every server's images together (Settings → Storage). 0 for a cache in memory only.
+    pub(crate) async fn disk_size(&self) -> u64 {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || inner.disk.as_ref().map_or(0, DiskCache::total))
+            .await
+            .unwrap_or(0)
+    }
+
+    /// Deletes every cached image, in memory and on disk, of every server (Settings → Storage, "Clear"). Images load again from
+    /// the servers afterwards. A fetch in flight is not stopped: what it brings is stored after the clear, as any later image is.
+    pub(crate) async fn clear(&self) {
+        lock(&self.inner.memory).remove_where(|_| true);
+        if self.inner.disk.is_some() {
+            let inner = self.inner.clone();
+            // Runs to the end even if the caller stops waiting.
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Some(disk) = &inner.disk {
+                    disk.clear();
+                }
+            })
+            .await;
+        }
+    }
+
     /// Deletes everything cached for `server`, in memory and on disk. A fetch for it that is in flight stores nothing.
     pub(crate) async fn forget_server(&self, server: &ServerRef) {
         {

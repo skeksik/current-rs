@@ -148,7 +148,11 @@ fn stand_in() -> StandIn {
 
 /// A core that stores nothing, signed in to the stand-in; returns it and the server.
 fn signed_in(stand_in: &StandIn) -> (Arc<Core>, ServerRef) {
-    let core = Core::new().unwrap();
+    sign_in(Core::new().unwrap(), stand_in)
+}
+
+/// `core` signed in to the stand-in; returns it and the server.
+fn sign_in(core: Arc<Core>, stand_in: &StandIn) -> (Arc<Core>, ServerRef) {
     let add = core.add_server();
     block_on(add.probe(stand_in.address().to_owned(), CancelToken::new())).unwrap();
     assert!(
@@ -419,6 +423,63 @@ fn home_rows_cross_with_one_list_each() {
     let (missing, _) = recorder::<Vec<ItemSummaryDiff>>();
     assert!(home.subscribe_row("no-such-row".into(), missing).is_none());
     eventually("Home loaded", || !home.state().loading);
+}
+
+#[test]
+fn the_image_cache_s_size_grows_and_clear_empties_it_for_every_server() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = |name: &str| temp.path().join(name).to_str().unwrap().to_owned();
+    let core = block_on(crate::open_core(
+        path("data"),
+        path("cache"),
+        String::new(),
+        crate::SecretStore::Memory,
+    ))
+    .unwrap();
+    let stand_in = stand_in();
+    let (core, server) = sign_in(core, &stand_in);
+    let size = || block_on(core.image_cache_size(CancelToken::new())).unwrap();
+    let poster = |id: &str| ImageRequest {
+        source: ImageSource::Server {
+            image: ImageRef {
+                item: item(&server, id),
+                kind: "primary".into(),
+                index: 0,
+                tag: "57a2d1e0a0000001".into(),
+            },
+        },
+        width: 320,
+        height: 480,
+    };
+    assert_eq!(size(), 0);
+
+    block_on(core.load_image(poster(FILM_IDS[0]), CancelToken::new())).unwrap();
+    // The disk write is not awaited by the load.
+    eventually("the image is on disk", || size() == IMAGE.len() as u64);
+    block_on(core.load_image(poster(FILM_IDS[1]), CancelToken::new())).unwrap();
+    eventually("both images are on disk", || {
+        size() == 2 * IMAGE.len() as u64
+    });
+
+    block_on(core.clear_image_cache()).unwrap();
+    assert_eq!(size(), 0);
+    // Cleared from memory too: the image is fetched from the server again, and stored again.
+    let path = format!("/Items/{}/Images/Primary", FILM_IDS[0]);
+    let before = stand_in.count(&path);
+    let bytes = block_on(core.load_image(poster(FILM_IDS[0]), CancelToken::new())).unwrap();
+    assert_eq!(bytes, IMAGE);
+    assert_eq!(stand_in.count(&path), before + 1);
+    eventually("the image is stored again", || size() == IMAGE.len() as u64);
+
+    // Signing out deletes the server's images.
+    block_on(core.sign_out(server.clone())).unwrap();
+    assert_eq!(size(), 0);
+
+    // A core that stores nothing has no disk cache.
+    assert_eq!(
+        block_on(Core::new().unwrap().image_cache_size(CancelToken::new())),
+        Ok(0)
+    );
 }
 
 #[test]

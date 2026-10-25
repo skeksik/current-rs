@@ -1,7 +1,7 @@
 //! Browsing across the bridge (ADR 0018, section 7): [`Core::browse`] gives a [`Browse`] for a signed-in Jellyfin server, with library
 //! grids ([`PagedItems`]), Home ([`HomeFeed`]), detail pages ([`DetailsView`]) and search ([`SearchResults`]); played and favourite
 //! changes go through it, and their notices through [`Core::subscribe_browse_notices`]. [`Core::load_image`] hands the UI an
-//! image's encoded bytes. Lists and values use the shapes of `subscribe` (ADR 0004).
+//! image's encoded bytes; [`Core::image_cache_size`] and [`Core::clear_image_cache`] serve Settings → Storage. Lists and values use the shapes of `subscribe` (ADR 0004).
 //!
 //! Each object holds its `current-app` counterpart: dropping it (every foreign reference, and every subscription it started)
 //! stops its requests.
@@ -179,6 +179,34 @@ impl Core {
                 })
         })
         .await
+    }
+
+    /// The image cache's size on disk, in bytes, every server's images together: what Settings → Storage shows. 0 for a core that
+    /// stores nothing.
+    ///
+    /// # Errors
+    /// [`CoreError::Cancelled`] if `token` is cancelled first.
+    pub async fn image_cache_size(&self, token: Arc<CancelToken>) -> Result<u64, CoreError> {
+        let app = self.app.clone();
+        cancel::run_cancellable(&self.runtime, token, async move {
+            Ok(app.image_cache_size().await)
+        })
+        .await
+    }
+
+    /// Deletes every cached image of every server, in memory and on disk (Settings → Storage, "Clear"); they load again from the
+    /// servers when next shown. Safe while images load. Not cancellable: it runs to its end once started.
+    ///
+    /// # Errors
+    /// [`CoreError::Runtime`] if the core's runtime could not run it.
+    pub async fn clear_image_cache(&self) -> Result<(), CoreError> {
+        let app = self.app.clone();
+        self.runtime
+            .spawn(async move { app.clear_image_cache().await })
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })
     }
 }
 

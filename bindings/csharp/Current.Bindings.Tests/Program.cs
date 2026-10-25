@@ -51,6 +51,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a mapped grid gets an item for every slot", BrowseTests.MappedGridGetsAnItemForEverySlot),
     ("a failed page becomes Failed and retry fills it", BrowseTests.FailedPageAndRetry),
     ("images arrive as bytes and a cancelled load stops its fetch", BrowseTests.ImageBytesAndCancellation),
+    ("the image cache's size grows, and clear and sign-out empty it", BrowseTests.ImageCacheSizeAndClear),
     ("a refused toggle rolls back with a notice that hides the name", BrowseTests.RefusedToggleRollsBack),
     ("Home rows each have their own list", BrowseTests.HomeRowsHaveTheirOwnLists),
     ("no browse without a signed-in server", BrowseTests.NoBrowseWithoutASignedInServer),

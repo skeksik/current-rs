@@ -375,6 +375,18 @@ impl App {
         self.images.load(&self.shared, load).await
     }
 
+    /// The image cache's size on disk, in bytes, every server's images together (Settings → Storage). 0 for an app that stores
+    /// nothing.
+    pub async fn image_cache_size(&self) -> u64 {
+        self.images.disk_size().await
+    }
+
+    /// Deletes every cached image of every server, in memory and on disk (Settings → Storage, "Clear"); they load again from the
+    /// servers when next shown. Safe while images load: the cache's index stays in step with its folder.
+    pub async fn clear_image_cache(&self) {
+        self.images.clear().await;
+    }
+
     /// Opens a player for a window (ADR 0019) with the panel's size in physical pixels (needed before the engine starts, ADR 0007) and
     /// the display's facts. One engine per process for now: while another player is open this waits for it to close (a few seconds),
     /// then fails with [`PlayerError::Busy`]. Call it on the tokio runtime.
