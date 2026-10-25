@@ -474,12 +474,9 @@ fn server_stream(
 }
 
 fn url_query_pairs(query: &str) -> Vec<(String, String)> {
-    current_net::Url::parse("http://127.0.0.1/")
-        .map(|mut url| {
-            url.set_query(Some(query));
-            url.query_pairs().into_owned().collect()
-        })
-        .unwrap_or_default()
+    url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
+        .collect()
 }
 
 /// Reasons that force the video to be converted.
