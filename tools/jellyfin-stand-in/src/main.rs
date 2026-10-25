@@ -8,7 +8,10 @@
 //!   `paging::page_key`), answer 500 until unfailed;
 //! - `cancelled <path or page>`: prints `cancelled <n>`, how many held requests to it their client gave up;
 //! - `gate off`, `gate basic`, `gate portal`, `gate header`: the gateway in front of it (ADR 0017; credentials in `lib.rs`);
-//! - `gate-cookie <value>`: the portal takes this cookie value from now on.
+//! - `gate-cookie <value>`: the portal takes this cookie value from now on;
+//! - `library add <id> <collection type> <name>`, `library remove <id>` (items under it answer 401, as for a library the user
+//!   cannot see), `library forget <id>` (items under it answer 400, as for an unknown parent), `library rename <id> <name>`,
+//!   `library order <id>,<id>,...`: the user's libraries.
 //!
 //! It exits when stdin closes, so a test that dies cannot leave it running.
 
@@ -64,6 +67,8 @@ fn main() -> std::io::Result<()> {
                     let mut out = std::io::stdout().lock();
                     writeln!(out, "cancelled {}", controls.cancelled(path))?;
                     out.flush()?;
+                } else if let Some(command) = line.strip_prefix("library ") {
+                    library(&controls, command);
                 } else if let Some(value) = line.strip_prefix("gate-cookie ") {
                     controls.set_gate_cookie(value);
                 } else if let Some(path) = line.strip_prefix("count ") {
@@ -77,4 +82,23 @@ fn main() -> std::io::Result<()> {
     let _ = stop.send(());
     let _ = server.join();
     Ok(())
+}
+
+/// A `library ...` command, without its first word. A malformed one does nothing.
+fn library(controls: &jellyfin_stand_in::Controls, command: &str) {
+    let mut words = command.splitn(3, ' ');
+    match (words.next(), words.next(), words.next()) {
+        (Some("add"), Some(id), Some(rest)) => {
+            if let Some((collection, name)) = rest.split_once(' ') {
+                controls.add_library(id, collection, name);
+            }
+        }
+        (Some("remove"), Some(id), None) => controls.remove_library(id),
+        (Some("forget"), Some(id), None) => controls.forget_library(id),
+        (Some("rename"), Some(id), Some(name)) => controls.rename_library(id, name),
+        (Some("order"), Some(ids), None) => {
+            controls.order_libraries(&ids.split(',').collect::<Vec<_>>());
+        }
+        _ => {}
+    }
 }
