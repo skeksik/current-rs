@@ -482,6 +482,54 @@ fn the_image_cache_s_size_grows_and_clear_empties_it_for_every_server() {
     );
 }
 
+impl crate::CapabilitiesListener for Recorder<crate::CapabilitiesSnapshot> {
+    fn on_value(&self, value: crate::CapabilitiesSnapshot) {
+        self.send(value);
+    }
+}
+
+/// The first server's status now.
+fn status(core: &Core) -> crate::ServerStatusSnapshot {
+    let (listener, rx) = recorder();
+    let _handle = core.subscribe_capabilities(listener);
+    rx.recv_timeout(WAIT).unwrap().servers.remove(0)
+}
+
+#[test]
+fn signing_in_again_as_the_same_user_names_a_new_session_and_ends_the_old_browse() {
+    let stand_in = stand_in();
+    let (core, server) = signed_in(&stand_in);
+    let first = status(&core);
+    assert!(first.session.is_some(), "a signed-in server names its session");
+    let old = core.browse(server.clone()).unwrap();
+    assert!(block_on(old.libraries(CancelToken::new())).is_ok());
+
+    let flow = core.sign_in_again(server.clone()).unwrap();
+    block_on(flow.with_password(USER_NAME.into(), PASSWORD.into(), CancelToken::new())).unwrap();
+    assert!(matches!(flow.state(), SignInState::SignedIn { .. }));
+    let second = status(&core);
+    assert_eq!(
+        second.user.as_ref().map(|user| &user.id),
+        first.user.as_ref().map(|user| &user.id),
+        "the same user"
+    );
+    assert!(second.session.is_some());
+    assert_ne!(second.session, first.session, "a new session, so a new Browse");
+
+    // The old Browse belongs to the replaced session; a new one works.
+    assert_eq!(
+        block_on(old.libraries(CancelToken::new())),
+        Err(CoreError::Browse {
+            problem: BrowseProblem::NotSignedIn
+        })
+    );
+    let new = core.browse(server.clone()).unwrap();
+    assert!(block_on(new.libraries(CancelToken::new())).is_ok());
+
+    block_on(core.sign_out(server)).unwrap();
+    assert_eq!(status(&core).session, None, "no session after a sign-out");
+}
+
 #[test]
 fn no_browse_without_a_signed_in_server() {
     let core = Core::new().unwrap();

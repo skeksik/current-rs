@@ -57,9 +57,10 @@ internal sealed class BrowseHub : IDisposable
     private void OnCapabilitiesChanged(object? sender, PropertyChangedEventArgs e) => Sync();
 
     /// <summary>
-    /// A Jellyfin server signed in gets a session, one signed out or gone loses it; a server signed in as another user, or again
-    /// after its session ended, gets a new one. A server that is unreachable keeps its session and its last libraries; they are read
-    /// again once it answers.
+    /// A Jellyfin server with a live session gets a browse session, one signed out or gone loses it, and one whose session number
+    /// changed (a new sign-in, even as the same user) gets a new one: the core names the session in the status
+    /// (<see cref="ServerStatus.Session"/>), so the hub decides nothing itself. A server that is unreachable keeps its session and its
+    /// last libraries; they are read again once it answers.
     /// </summary>
     private void Sync()
     {
@@ -69,11 +70,11 @@ internal sealed class BrowseHub : IDisposable
         }
         var changed = false;
         var live = _capabilities.Value.Servers
-            .Where(status => status.Service == "jellyfin" && status.SignedIn)
+            .Where(status => status.Service == "jellyfin" && status.SignedIn && status.Session is not null)
             .ToDictionary(status => new ServerRef(status.Service, status.Key));
         foreach (var server in _servers.Keys.ToList())
         {
-            if (!live.TryGetValue(server, out var status) || status.User?.Id != _servers[server].UserId)
+            if (!live.TryGetValue(server, out var status) || status.Session != _servers[server].SessionNumber)
             {
                 _servers[server].Dispose();
                 _servers.Remove(server);
@@ -91,10 +92,10 @@ internal sealed class BrowseHub : IDisposable
                 }
                 catch (Exception error) when (error is NotSignedInException or UnknownServerException)
                 {
-                    // Signed in, but the session is not live yet (a restore still checking it): the next status change tries again.
+                    // The session ended between the status and this call: the next status change tries again.
                     continue;
                 }
-                browse = new ServerBrowse(server, status.User?.Id, session);
+                browse = new ServerBrowse(server, status.Session, session);
                 _servers[server] = browse;
                 changed = true;
             }
@@ -172,7 +173,7 @@ internal sealed class BrowseHub : IDisposable
 }
 
 /// <summary>One signed-in server's browse session, its libraries, and the grids opened on it.</summary>
-internal sealed class ServerBrowse(ServerRef server, string? userId, Browse session) : IDisposable
+internal sealed class ServerBrowse(ServerRef server, ulong? sessionNumber, Browse session) : IDisposable
 {
     private readonly Dictionary<ItemRef, LibraryGrid> _grids = [];
 
@@ -182,7 +183,8 @@ internal sealed class ServerBrowse(ServerRef server, string? userId, Browse sess
 
     public ServerRef Server { get; } = server;
 
-    public string? UserId { get; } = userId;
+    /// <summary>The core's number for the session this browses (<see cref="ServerStatus.Session"/>).</summary>
+    public ulong? SessionNumber { get; } = sessionNumber;
 
     public Browse Session { get; } = session;
 

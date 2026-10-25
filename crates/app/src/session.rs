@@ -625,7 +625,7 @@ impl Shared {
         }));
         let check = Arc::new(AtomicU8::new(check));
         lock(&self.sessions).insert(
-            server,
+            server.clone(),
             Session {
                 id,
                 user,
@@ -634,6 +634,8 @@ impl Shared {
                 confirming: watch::Sender::new(false),
             },
         );
+        // The status names the new session, so a UI's browse objects of the one it replaced are made again.
+        self.update_status(&server, |status| status.session = Some(id));
         (id, check)
     }
 
@@ -948,6 +950,7 @@ impl Shared {
         self.update_status(server, |status| {
             status.signed_in = false;
             status.user = None;
+            status.session = None;
         });
     }
 

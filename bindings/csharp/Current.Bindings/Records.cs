@@ -33,7 +33,12 @@ public sealed record ServerStatus(
     /// The gateway in front of the address in use wants a sign-in again (ADR 0017): show "Sign in to the gateway again" and offer
     /// <see cref="CoreHost.SignInToGateway"/>. The session and its token are kept.
     /// </summary>
-    bool GatewaySignInNeeded);
+    bool GatewaySignInNeeded,
+    /// <summary>
+    /// Which live session the server has: a new number with each sign-in or restored session, null while it has none. A
+    /// <see cref="Browse"/> belongs to one session: when this changes, ask <see cref="CoreHost.Browse"/> for a new one.
+    /// </summary>
+    ulong? Session = null);
 
 /// <summary>Whether the server answered the last time Current tried.</summary>
 public enum Reachability
@@ -173,7 +178,8 @@ internal static class Map
         status.User is { } user ? From(user) : null,
         status.Version,
         status.Features,
-        status.GatewaySignInNeeded);
+        status.GatewaySignInNeeded,
+        status.Session);
 
     public static UserInfo From(Ffi.UserSnapshot user) => new(user.Id, user.Name, user.Permissions);
 
