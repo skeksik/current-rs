@@ -104,11 +104,15 @@ public sealed partial class SearchPage : Page
         args.Handled = _sections.Count > 0;
     }
 
+    private void OnSectionRowsLoaded(object sender, RoutedEventArgs e) =>
+        StableSource.Follow<SearchSection>((ItemsControl)sender, section => (section.Rows, null));
+
     private void OnRowLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is ListViewBase list)
         {
             HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+            StableSource.Follow<TileRow>(list, row => (row.Items, row.ItemTemplate));
         }
     }
 }

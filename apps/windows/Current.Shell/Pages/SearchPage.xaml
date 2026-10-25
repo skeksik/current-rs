@@ -36,7 +36,8 @@
                                 AutomationProperties.HeadingLevel="Level2"
                                 Text="{x:Bind Header}"
                                 Visibility="{x:Bind HeaderVisibility}" />
-                            <ItemsControl ItemsSource="{x:Bind Rows}" IsTabStop="False">
+                            <!-- Its rows are set from code once per section (StableSource), not by x:Bind. -->
+                            <ItemsControl IsTabStop="False" Loaded="OnSectionRowsLoaded">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="browsing:TileRow">
                                         <StackPanel>
@@ -44,10 +45,9 @@
                                                 Style="{StaticResource SectionHeaderTextBlockStyle}"
                                                 AutomationProperties.HeadingLevel="Level3"
                                                 Text="{x:Bind Title}" />
+                                            <!-- Its items and template are set from code once per row (StableSource), not by x:Bind. -->
                                             <GridView
                                                 Padding="0,0,20,0"
-                                                ItemsSource="{x:Bind Items}"
-                                                ItemTemplate="{x:Bind ItemTemplate}"
                                                 AutomationProperties.Name="{x:Bind Title}"
                                                 ScrollViewer.HorizontalScrollMode="Enabled"
                                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"

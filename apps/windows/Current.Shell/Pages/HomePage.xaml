@@ -53,7 +53,8 @@
                                     <Button Content="Retry" Tag="{x:Bind}" Click="OnRetrySection" />
                                 </InfoBar.ActionButton>
                             </InfoBar>
-                            <ItemsControl ItemsSource="{x:Bind Rows}" IsTabStop="False">
+                            <!-- Its rows are set from code once per section (StableSource), not by x:Bind. -->
+                            <ItemsControl IsTabStop="False" Loaded="OnSectionRowsLoaded">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="browsing:TileRow">
                                         <StackPanel>
@@ -63,10 +64,9 @@
                                                 Text="{x:Bind Title}" />
                                             <!-- The right padding keeps the last tile off the window's edge, less the 4 each item
                                                  has on its right by default (LibraryPage.xaml). -->
+                                            <!-- Its items and template are set from code once per row (StableSource), not by x:Bind. -->
                                             <GridView
                                                 Padding="0,0,20,0"
-                                                ItemsSource="{x:Bind Items}"
-                                                ItemTemplate="{x:Bind ItemTemplate}"
                                                 AutomationProperties.Name="{x:Bind Title}"
                                                 ScrollViewer.HorizontalScrollMode="Enabled"
                                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"

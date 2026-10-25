@@ -185,6 +185,9 @@ public sealed partial class HomePage : Page
         _sections.Clear();
     }
 
+    private void OnSectionRowsLoaded(object sender, RoutedEventArgs e) =>
+        StableSource.Follow<HomeSection>((ItemsControl)sender, section => (section.Rows, null));
+
     private void OnRowLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not ListViewBase list)
@@ -192,6 +195,7 @@ public sealed partial class HomePage : Page
             return;
         }
         HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+        StableSource.Follow<TileRow>(list, row => (row.Items, row.ItemTemplate));
         if (!_rowLists.Contains(list))
         {
             _rowLists.Add(list);
