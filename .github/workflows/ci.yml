@@ -55,6 +55,58 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - run: cargo deny --locked check
 
+  # current-mpv linked against our libmpv build (D6, docs/notes/windows-mpv-build.md; ADR 0019 task 3). The build is restored from the
+  # cache mpv-windows.yml fills, with the same key, so a cached run takes seconds; on a miss (a changed build or an evicted cache) it is
+  # rebuilt here with the same steps and pinned tools (about 29 minutes).
+  mpv-windows:
+    name: mpv (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      WORK: C:\mpvb
+      MESON_VERSION: 1.12.1
+      NINJA_VERSION: 1.13.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - name: Restore the libmpv build
+        id: cache-build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            C:\mpvb\prefix
+            C:\mpvb\tools
+          key: mpv-windows-build-${{ hashFiles('build/mpv-windows/**', '.github/workflows/mpv-windows.yml') }}
+      - name: Cache downloads (rebuild only)
+        if: steps.cache-build.outputs.cache-hit != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\mpvb\dl
+          key: mpv-windows-dl-${{ hashFiles('build/mpv-windows/sources.toml') }}
+      - name: Install meson and ninja; MSYS2 make for FFmpeg (rebuild only)
+        if: steps.cache-build.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check "meson==$env:MESON_VERSION" "ninja==$env:NINJA_VERSION"
+          C:\msys64\usr\bin\pacman.exe -Sy --noconfirm --needed make diffutils
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build libmpv (rebuild only)
+        if: steps.cache-build.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: python build/mpv-windows/build.py --work $env:WORK
+      - name: Licence check and the DLL set
+        shell: pwsh
+        run: python build/mpv-windows/check.py --work $env:WORK --out $env:WORK\out
+      # mpv.lib for the linker, the DLLs for the tests.
+      - name: Point the build at libmpv
+        shell: pwsh
+        run: |
+          "MPV_LIB_DIR=$env:WORK\out\lib" >> $env:GITHUB_ENV
+          "$env:WORK\out\bin" >> $env:GITHUB_PATH
+      - run: cargo clippy -p current-mpv --all-targets --locked --features libmpv -- -D warnings
+      # The TLS test makes its certificate with the image's OpenSSL.
+      - run: cargo test -p current-mpv --locked --features libmpv
+
   # The C# bindings and their adapters (bindings/csharp), from generated code that is not checked in (ADR 0004).
   bindings-windows:
     name: Bindings (C#, Windows)
@@ -69,6 +121,12 @@ jobs:
       - name: Build the core, generate C# and build the class library
         shell: pwsh
         run: ./bindings/csharp/build.ps1
+      # Information for the Visual C++ runtime decision (ADR 0003): which DLLs the core library imports. Not a check.
+      - name: List current_ffi.dll's DLL imports
+        shell: pwsh
+        run: |
+          & 'C:\Program Files\LLVM\bin\llvm-readobj.exe' --coff-imports target/x86_64-pc-windows-msvc/release/current_ffi.dll |
+            Select-String -Pattern '^\s*Name: ' | ForEach-Object { $_.Line.Trim() } | Sort-Object -Unique
       - name: Run the adapter tests
         shell: pwsh
         run: ./bindings/csharp/test.ps1

@@ -42,8 +42,14 @@ before merging, and its PR carries only the record.
 - [x] "Copy diagnostics" copies an empty text until a server exists: include the app version (the core's diagnostics export) in M1.
       The core side is done (`export_diagnostics`: version, platform, settings state, then the log; PR 25); the Windows app's button
       uses it since the M1 screens (feat/windows-sign-in)
-- [ ] Shipping libmpv in the app (`current-mpv`) brings the Visual C++ runtime (vcruntime140, msvcp140) under Microsoft's
-      redistributable terms: record them in ADR 0003 with the owner first
+- [x] Shipping libmpv in the app (`current-mpv`) brings the Visual C++ runtime (vcruntime140, msvcp140) under Microsoft's
+      redistributable terms: record them in ADR 0003 with the owner first. Decided 2026-10-25 (owner): Microsoft's installer
+      (`vc_redist.x64.exe`), recorded in ADR 0003
+- [ ] Installer: run `vc_redist.x64.exe` when `HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64` shows the runtime
+      missing or older than the build's toolset (ADR 0003). Check whether Inno Setup can keep the per-user install
+      (`PrivilegesRequired=lowest`) and elevate only the `vc_redist` run, so the UAC prompt appears only when the runtime is missing
+      (Inno's `ShellExec` with the `runas` verb; not verified); that would amend ADR 0009. The CI install test cannot see a missing
+      runtime (the runner has Visual Studio), so test on a clean Windows install
 - [ ] The libmpv build installs unpinned MSYS2 make/diffutils at build time (build-only; docs/notes/windows-mpv-build.md)
 - [x] A `cargo test --workspace` run in a cloud container once had 3 failures in one test binary (unidentified; 28 later runs passed).
       If it recurs, capture the test names and fix the flake. Very likely the refused-port race in `current-net`'s tests (seen again
@@ -152,6 +158,8 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
   - [x] `current-playback` (ADR 0019 task 2, feat/playback-core): the engine and server traits, planner and controller, tested with
         a fake engine, server and clock; wired to Jellyfin and libmpv in task 4
 - [ ] The libmpv engine and the Windows player UI, media keys and the media flyout
+  - [x] `current-mpv` (ADR 0019 task 3, feat/mpv-engine): the engine over hand-written client API declarations, linked against the
+        D6 build in CI's "mpv (Windows)" job, with redirect, TLS and log-redaction tests (docs/notes/mpv-engine.md)
 - [ ] Playback information (route, codecs, reasons for the choice) and remembered track choices
 - [ ] Servers behind an authentication gateway (after M1; ADR 0017): a password prompt for Basic gateways, a sign-in
       window that hands the gateway's cookies to the core, advanced extra headers, per address; the 401 rule amended so that a
@@ -169,6 +177,9 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
   - [ ] Windows installer: make sure the WebView2 Runtime is present (Windows 10); today the app links to Microsoft's download
         (owner: not now, 2026-10-24)
   - [ ] Images and the player carry gateway credentials (with the image path and the libmpv engine)
+  - [ ] Before the player bridge ships: the core checks every HLS playlist it hands to the player with gateway headers (master and
+        each variant): every URI relative or on the stream's origin, else no headers or a playback problem; `current-mpv` refuses an
+        unchecked playlist with headers (ADR 0019, "Playlists and headers", owner 2026-10-25)
 
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
@@ -176,6 +187,9 @@ Done when: a Jellyfin library is browsable and playable on Windows every day, wi
 - [ ] The M1-M2 screens in SwiftUI on the shared core; AVPlayer with our own subtitle layer (ADR 0010: libass, PGS/VobSub decoder in
       the core, External delivery from Jellyfin); Keychain; Now Playing, PiP, AirPlay
 - [ ] Local discovery from each up interface: list the IPv4 interfaces with `getifaddrs` and pass them to each search (ADR 0016)
+- [ ] A loopback relay in the core for streams with gateway credentials: the player talks to 127.0.0.1 without credentials and the
+      relay adds them only for same-origin requests. It closes AVPlayer's header gap (ADR 0017) and enforces the same-origin rule for
+      libmpv's HLS sub-requests on Windows too, replacing the playlist check (ADR 0019, "Playlists and headers", owner 2026-10-25)
 
 Done when: everything from M1-M2 works on a Mac.
 
@@ -189,6 +203,12 @@ Done when: a title can be found, requested and followed to "available", then pla
 - [ ] The M1-M4 screens in GTK4 + libadwaita; the libmpv engine from M2 through the OpenGL render API (SDR); Secret Service; MPRIS
       media controls (ADR 0011)
 - [ ] Our LGPL-2.1 libmpv and FFmpeg for Linux (the distributions' builds are GPL; ADR 0003, ADR 0011), and the Linux CI job
+- [ ] Several player windows at once: libmpv engines share FFmpeg's log through the first mpv instance only (ADR 0019, 2026-10-25), so
+      `current-mpv` runs one engine per process. For several players: one redactor for every engine's secrets, and a closed engine
+      kept alive (stopped) while another runs, so FFmpeg's log never falls back to stderr
+- [ ] The engine's redirect refusal needs FFmpeg 9.0 or later (`max_redirects` is not in FFmpeg 8.0's `http.c`); a system libmpv on an
+      older FFmpeg follows redirects with the gateway headers (seen with Ubuntu's FFmpeg 6.1, docs/notes/mpv-engine.md). Use our build or
+      check the FFmpeg version before shipping on Linux
 
 ## M6: Adult content
 - [ ] Hidden unless a server offers it and the user may see it; access rules enforced in the core. Details are kept privately while the

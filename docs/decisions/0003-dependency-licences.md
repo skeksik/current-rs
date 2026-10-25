@@ -44,6 +44,7 @@ Status: accepted (2026-10-22).
 | WebView2 SDK (`WebView2Loader.dll`, `Microsoft.Web.WebView2.Core.dll`, `Microsoft.Web.WebView2.Core.Projection.dll`, a dependency of WinUI) | BSD-3-Clause (`LICENSE.txt` in `Microsoft.Web.WebView2` 1.0.3719.77) | already allowed (BSD) | Ship `LICENSE.txt` |
 | .NET 10 runtime (self-contained) | MIT, with its third-party notices (`LICENSE.TXT`, `THIRD-PARTY-NOTICES.TXT` in `Microsoft.NETCore.App.Runtime.win-x64`) | already allowed (MIT) | Ship both files |
 | Inno Setup 7.1.0 (its uninstaller in every install; the installer itself) | Inno Setup License: "Permission is granted to anyone to use this software for any purpose, including commercial applications" if copyright notices are kept, the origin is not misrepresented and modified versions are marked (`license.txt`, tag `is-7_1_0`, byte-identical to 6.7.3's) | 2026-10-22, owner (ADR 0009) | Ship `license.txt`; unmodified. The authors *request*, not require, a purchased licence from commercial users: "A for-profit organization with annual revenue exceeding USD 5000"; "It is not strictly required"; "regardless of the version being used" (jrsoftware.org/isorder.php, read 2026-10-22). Open before first distribution (`docs/notes/windows-shell.md`) |
+| Visual C++ Redistributable, x64 (`vc_redist.x64.exe`, which installs `vcruntime140.dll`, `vcruntime140_1.dll` and `msvcp140.dll`; the libmpv DLLs need them, docs/notes/windows-mpv-build.md) | Microsoft Software License Terms of Visual Studio, "Distributable Code" section and its REDIST list | 2026-10-25, owner | Below |
 
   The Windows App SDK terms go beyond "redistributable", quoted from its `license.txt` (read 2026-10-22):
   - 3(a)(i): "Any files that are binplaced with your application by the WindowsAppSDK NuGet package are, by definition, permitted to
@@ -67,6 +68,23 @@ Status: accepted (2026-10-22).
   your valid copyright notice on your programs; and Indemnify, defend, and hold harmless Microsoft from any claims, including attorneys
   fees, related to the distribution or use of your programs." Among its restrictions: "Distribute Distributable Code to run on a
   platform other than the Microsoft operating system platform" is not allowed.
+
+  The Visual C++ runtime (owner, 2026-10-25: Microsoft's installer, not app-local copies or a static CRT) is needed already: the core's own
+  `current_ffi.dll` imports `VCRUNTIME140.dll` (Rust's MSVC target links the CRT dynamically; listed by CI's "Bindings (C#, Windows)"
+  job with `llvm-readobj --coff-imports`, run 40173566806, 2026-10-25), and so do the libmpv DLLs. The app's installer runs
+  Microsoft's `vc_redist.x64.exe` when `HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64` shows the runtime missing or
+  older than the toolset that built the DLLs ("We only support using a Redistributable package that's the same as or newer than your
+  toolset version", "Determine which DLLs to redistribute", learn.microsoft.com, updated 2023-10-26). Central deployment lets Windows
+  Update service the runtime ("Deployment in Microsoft C++", updated 2025-11-05). The REDIST list for the runner's Visual Studio
+  ("Visual Studio Redistribution", learn.microsoft.com/visualstudio/releases/2026/redistribution, updated 2025-11-11, read
+  2026-10-25), section "Visual C++ Runtime Files": "Subject to the License Terms for the software, you may copy and distribute with your
+  program any of the files within the following folder and its subfolders except as noted below. You may not modify these files.
+  [VisualStudioFolder]\VC\redist", and "Distribution of the Visual C++ Runtime Redistributable package, merge modules, and individual
+  binaries obtained from those pages is limited to licensed Visual Studio users and is subject to its license terms"; the
+  `debug_nonredist` folders may not be distributed. The Visual Studio licence's own "Distributable Code" conditions (what they require
+  of the distributor, and whether the edition the release build uses counts as licensed for this) were **not read: not verified**,
+  and are due before the first build goes to anyone else, with the conditions below. Packaging is the installer task's (roadmap). The
+  CI install test cannot notice a missing runtime: the runner image has Visual Studio, hence the runtime, installed.
 
   Accepted by the owner (2026-10-22) on these conditions, all due **before the first build goes to anyone else, testers included**:
   end-user terms that protect Microsoft per 3(b)(ii) (and the Windows SDK's equivalent), shown by the installer; the indemnities of
