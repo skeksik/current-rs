@@ -226,6 +226,8 @@ async fn a_new_query_resets_the_list() {
     let browse = app.browse(&server).unwrap();
     let grid = browse.open_library(&big_library(&server), ItemQuery::default());
     started(&grid, BIG_LIBRARY_SIZE as u32).await;
+    // The page after the first loads too; recording before it lands would put its diffs between the first batch and the resets.
+    eventually(|| is_item(grid.slots().get(100))).await;
     let diffs = record(&grid.slots());
     eventually(|| !diffs.lock().unwrap().is_empty()).await;
     stand_in.clear_pages();
