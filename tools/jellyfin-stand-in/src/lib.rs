@@ -1,9 +1,10 @@
 //! A hand-written Jellyfin stand-in on 127.0.0.1, for the bridge tests (Rust, C# and Swift). It answers only what server setup,
-//! sign-in, restoring a session, sign-out, images, browsing a small fake library (see [`library`]) and playback (PlaybackInfo,
-//! playstate reports, media segments, the session list) ask, in Jellyfin 12.2's shapes as `current-jellyfin` reads them. Every name,
-//! id and credential in it is fake. Test code only: nothing shipped depends on it.
+//! sign-in, restoring a session, sign-out, images, browsing a small fake library (see [`library`]) and a large generated one (see
+//! [`paging`]) and playback (PlaybackInfo, playstate reports, media segments, the session list) ask, in Jellyfin 12.2's shapes as
+//! `current-jellyfin` reads them. Every name, id and credential in it is fake. Test code only: nothing shipped depends on it.
 
 pub mod library;
+pub mod paging;
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -122,6 +123,8 @@ struct State {
     cancelled: Mutex<Vec<String>>,
     /// What the user marked played or favourite.
     marks: Mutex<library::Marks>,
+    /// The generated library and its controls.
+    paging: paging::Paging,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -208,7 +211,8 @@ impl Controls {
             .store(pending, Ordering::SeqCst);
     }
 
-    /// Requests to `path` (e.g. `/Users/AuthenticateByName`) wait, unanswered, until [`Controls::release`].
+    /// Requests to `path` (e.g. `/Users/AuthenticateByName`, or a [`paging::page_key`]) wait, unanswered, until
+    /// [`Controls::release`].
     pub fn hold(&self, path: &str) {
         lock(&self.state.held).insert(path.to_owned());
     }
@@ -252,7 +256,7 @@ impl Controls {
         lock(&self.state.images).clone()
     }
 
-    /// How many held requests to `path` were given up by their client (the connection closed) before [`Controls::release`].
+    /// How many held requests to `path` (or a [`paging::page_key`]) were given up by their client (the connection closed) before [`Controls::release`].
     pub fn cancelled(&self, path: &str) -> usize {
         lock(&self.state.cancelled)
             .iter()
@@ -291,10 +295,18 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
         return;
     };
     lock(&state.paths).push(received.path.clone());
+    let page = paging::key(&received.path, &received.query);
+    if page.is_some() {
+        paging::seen(&state.paging, &received.query);
+    }
     loop {
         // Registered before the check, so a release between the two is not missed.
         let released = state.released.notified();
-        if !lock(&state.held).contains(&received.path) {
+        let held = {
+            let held = lock(&state.held);
+            held.contains(&received.path) || page.as_ref().is_some_and(|page| held.contains(page))
+        };
+        if !held {
             break;
         }
         let mut probe = [0u8; 1];
@@ -303,7 +315,9 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
             // The client sent its whole request already, so a read that ends means it closed the connection: it gave up.
             read = socket.read(&mut probe) => {
                 if matches!(read, Ok(0) | Err(_)) {
-                    lock(&state.cancelled).push(received.path.clone());
+                    let mut cancelled = lock(&state.cancelled);
+                    cancelled.push(received.path.clone());
+                    cancelled.extend(page);
                     return;
                 }
             }
@@ -311,6 +325,9 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
     }
     let response = match gate(&state, &received) {
         Some(blocked) => blocked,
+        None if paging::failing(&state.paging, &received.path, page.as_deref()) => {
+            "HTTP/1.1 500 X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned()
+        }
         None if is_image(&received.path) => {
             lock(&state.images).push(ImageSeen {
                 target: received.target.clone(),
@@ -416,7 +433,7 @@ fn answer(state: &State, received: &Received) -> (u16, String) {
         "/Users/AuthenticateWithQuickConnect" if received.body.contains(QUICK_CONNECT_SECRET) => {
             (200, issue(state))
         }
-        "/Users/Me" if authorized(state, received) => (200, user()),
+        "/Users/Me" if authorized(state, received) => (200, user(state)),
         "/Sessions/Logout" if authorized(state, received) => {
             if let Some(token) = token(received) {
                 lock(&state.tokens).retain(|live| *live != token);
@@ -429,6 +446,9 @@ fn answer(state: &State, received: &Received) -> (u16, String) {
         path if is_playback_path(path) => playback(state, received, path),
         path if library::is_browse_path(path) && !authorized(state, received) => {
             (401, String::new())
+        }
+        "/Items" if paging::key(&received.path, &received.query).is_some() => {
+            paging::answer(&state.paging, &received.query)
         }
         path => {
             let request = library::Browse {
@@ -512,9 +532,14 @@ fn info() -> String {
     )
 }
 
-fn user() -> String {
+fn user(state: &State) -> String {
+    let excludes: Vec<String> = lock(&state.paging.latest_excludes)
+        .iter()
+        .map(|id| format!("\"{id}\""))
+        .collect();
+    let excludes = excludes.join(",");
     format!(
-        r#"{{"Name":"{USER_NAME}","Id":"{USER_ID}","Configuration":{{"LatestItemsExcludes":[],"AudioLanguagePreference":"eng","PlayDefaultAudioTrack":true,"SubtitleLanguagePreference":"","SubtitleMode":"Default","RememberAudioSelections":true,"RememberSubtitleSelections":true,"EnableNextEpisodeAutoPlay":true}},"Policy":{{"IsAdministrator":false,"EnableMediaPlayback":true}}}}"#
+        r#"{{"Name":"{USER_NAME}","Id":"{USER_ID}","Configuration":{{"LatestItemsExcludes":[{excludes}],"AudioLanguagePreference":"eng","PlayDefaultAudioTrack":true,"SubtitleLanguagePreference":"","SubtitleMode":"Default","RememberAudioSelections":true,"RememberSubtitleSelections":true,"EnableNextEpisodeAutoPlay":true}},"Policy":{{"IsAdministrator":false,"EnableMediaPlayback":true}}}}"#
     )
 }
 
@@ -527,7 +552,7 @@ fn issue(state: &State) -> String {
     *lock(&state.tokens) = vec![token.clone()];
     format!(
         r#"{{"User":{},"SessionInfo":{{}},"AccessToken":"{token}","ServerId":"{SERVER_ID}"}}"#,
-        user()
+        user(state)
     )
 }
 

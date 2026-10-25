@@ -164,6 +164,8 @@ Home is a **`HomeFeed`**: a list of rows, each with its own item list.
   server returned episodes, not because a TV library is present. Latest skips libraries in the user's "exclude from latest" list
   and collection kinds without a meaningful "latest" (`PLAYLISTS`, `BOX_SETS`, and the views jellyfin-web also skips).
 - Rows load in parallel; each appears as soon as it has items, in its place. A failed row is left out and one message offers Retry.
+  (Amended 2026-10-25, task 3: on a later load, a row that fails keeps the items it showed from the last load; only a row that never
+  loaded is left out. The message still offers Retry.)
 - Without a signed-in Jellyfin server, Home shows the M1 empty state (add a server); browse features read
   `Capabilities::is_available(&ServiceType::JELLYFIN)` and hide otherwise. An unreachable server keeps its rows from the last load,
   marked offline, and images from the disk cache still show.
