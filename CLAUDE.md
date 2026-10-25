@@ -42,7 +42,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo deny check                                       # licences and sources (deny.toml, ADR 0003); install: cargo install --locked cargo-deny
 cargo test -p current-mpv --features libmpv            # the engine against a real libmpv (MPV_LIB_DIR for its import library; openssl on PATH); CI's "mpv (Windows)" job runs it on the D6 build
 pwsh bindings/csharp/build.ps1; pwsh bindings/csharp/test.ps1   # Windows: build current-ffi, generate C#, build and test the adapters
-pwsh apps/windows/build.ps1; pwsh apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe -StandIn target/x86_64-pc-windows-msvc/release/jellyfin-stand-in.exe   # Windows, after the C# build: publish and smoke-run the app (with the sign-in window on the stand-in)
+pwsh apps/windows/build.ps1 -Mpv <libmpv build>; pwsh apps/windows/smoke.ps1 -Exe apps/windows/out/app/Current.exe -StandIn target/x86_64-pc-windows-msvc/release/jellyfin-stand-in.exe   # Windows, after the C# build: publish with the libmpv engine (the unpacked "libmpv-windows-x64" artifact; -Mpv defaults to the folder above MPV_LIB_DIR) and smoke-run the app (with the sign-in window on the stand-in)
 pwsh apps/windows/installer/build-installer.ps1 -Iscc <path to ISCC.exe>   # Windows: build the installer (Inno Setup 7)
 sh bindings/swift/build.sh; swift test --package-path bindings/swift   # macOS: build current-ffi, generate Swift, XCFramework, test
 ```

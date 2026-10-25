@@ -44,6 +44,10 @@ OutputDir={#OutputDir}
 OutputBaseFilename=Current-{#AppVersion}-x64-setup
 
 [Files]
+; The published app as build.ps1 leaves it, which includes the libmpv DLL set next to Current.exe (mpv-2.dll, the six FFmpeg
+; libraries, libplacebo, FriBidi, uchardet, shaderc and SPIRV-Cross) and its licence texts and components.md in licences\libmpv
+; (docs/notes/windows-mpv-build.md; build-installer.ps1 checks both are there). The Visual C++ runtime they need is not installed
+; here yet (ADR 0003; a roadmap follow-up).
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; The uninstaller (unins000.exe) is Inno Setup's: its licence asks that its notices be kept (ADR 0003).
 Source: "{#InnoLicense}"; DestDir: "{app}\licences"; DestName: "InnoSetup-license.txt"; Flags: ignoreversion
