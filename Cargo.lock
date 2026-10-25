@@ -301,6 +301,7 @@ version = "0.1.0"
 name = "current-mpv"
 version = "0.1.0"
 dependencies = [
+ "current-model",
  "rustls",
  "tempfile",
  "thiserror",

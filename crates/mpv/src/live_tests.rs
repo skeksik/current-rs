@@ -363,6 +363,41 @@ mod live {
         // Our build also lists the subtitle text formats as demuxers; matroska and mp4 under FFmpeg's combined names.
         let missing: Vec<_> = demuxers.iter().filter(|d| !caps.has_demuxer(d)).collect();
         assert!(missing.is_empty(), "demuxers missing: {missing:?}");
+
+        // In Jellyfin's names: every container ADR 0019 lists, and the video and audio codecs above.
+        let engine = caps.engine_capabilities();
+        let containers: Vec<&str> = engine.containers.iter().map(|c| c.as_str()).collect();
+        assert_eq!(
+            containers,
+            ["mkv", "webm", "mp4", "mov", "ts", "avi", "ogg", "flac"]
+        );
+        let codecs: Vec<&str> = engine
+            .video
+            .iter()
+            .chain(&engine.audio)
+            .map(|c| c.codec.as_str())
+            .collect();
+        for codec in [
+            "h264",
+            "hevc",
+            "av1",
+            "vp9",
+            "vp8",
+            "mpeg2video",
+            "vc1",
+            "aac",
+            "ac3",
+            "eac3",
+            "truehd",
+            "dts",
+            "flac",
+            "opus",
+            "vorbis",
+            "mp3",
+            "pcm_s16le",
+        ] {
+            assert!(codecs.contains(&codec), "{codec} missing: {codecs:?}");
+        }
         running.finish();
     }
 
