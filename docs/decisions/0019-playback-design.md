@@ -199,6 +199,14 @@ fake engine, a fake server and a fake clock):
 | Core to UI | `playback_info()`: route, reasons, source and output facts, the server's transcoding facts, the engine's decoder and output facts; no URL |
 | Shutdown | UI detaches the panel and releases the swap chain; dropping `Player` reports stopped and destroys the engine (ADR 0007's order) |
 
+- **Engines in builds** (2026-10-25, task 4, approved by the manager for the owner's rules): `current-app` and `current-ffi` build the
+  libmpv engine only with their `libmpv` feature; without it `open_player` fails with `EngineUnavailable`. A stand-in engine that
+  opens nothing sits behind a separate `test-engine` feature for the bridge tests (Rust, and the C# console tests through a second
+  build of `current_ffi.dll` kept aside for the test runner); the published app is built without it, which `apps/windows/build.ps1`
+  checks by the engine's marker in the library and the smoke run by `player_engine()`. Quick actions (pause, seek, volume) are queued
+  in order without waiting; the long ones (play, track and quality changes, next episode) are awaited with a `CancelToken`, and a play
+  or a stop replaces the action running.
+
 ### Threads and event rate
 - mpv can report `time-pos` once per frame (24 to 144 per second), coalesced by its event loop. The controller keeps the exact position
   internally and publishes state to listeners at most 4 times a second while playing, and at once on any state, seek, track, segment
