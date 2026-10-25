@@ -104,7 +104,8 @@ pub struct Library {
 /// A person in an item's cast or crew.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct Person {
-    pub person: ItemRef,
+    /// The person as an item (C# forbids a member named as its record, so not `person`).
+    pub item: ItemRef,
     pub name: String,
     /// The part played, for an actor.
     pub role: Option<String>,
@@ -510,7 +511,7 @@ impl From<&Library> for model::Library {
 impl From<&model::Person> for Person {
     fn from(person: &model::Person) -> Self {
         Self {
-            person: (&person.person).into(),
+            item: (&person.person).into(),
             name: person.name.clone(),
             role: person.role.clone(),
             kind: person.kind.as_str().to_owned(),
