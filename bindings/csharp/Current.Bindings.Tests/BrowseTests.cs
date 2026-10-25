@@ -69,6 +69,8 @@ internal static class BrowseTests
         var first = ItemQuery.ForLibrary(BigLibrary());
         Check(first.Kinds.SequenceEqual(["movie"]) && first.Recursive && first.Sort.SequenceEqual(["sort_name"]),
             "a film library's first query lists its films by name");
+        Check(ItemQuery.SortChoices[0] == new SortChoice("sort_name", SortOrder.Ascending), "the first sort choice is the first query's");
+        Check(ItemQuery.FilterChoices[0] is null && ItemQuery.FilterChoices.Contains("favourite"), "the filter choices");
         var ui = new ManualDispatcher();
         using var items = browse.OpenLibrary(BigLibrary());
         using var grid = items.Collect(ui);
@@ -83,6 +85,10 @@ internal static class BrowseTests
         await Eventually("the last page", ui, () => grid.Items[449] is Slot.Item);
         Check(Name(grid.Items[449]) == StandIn.BigItemName(449), "the last item's name");
         Check(grid.Subscription.Recoveries == 0, "no recovery");
+
+        // Left and shown again at once: not stale, so no refresh (the core's five-minute rule).
+        items.Hidden();
+        Check(!items.Shown(), "a grid shown again at once does not refresh");
     }
 
     /// <summary>A tile view model per slot, as a page binds; placeholders map to placeholder tiles, never null.</summary>

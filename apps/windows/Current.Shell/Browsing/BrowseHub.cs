@@ -214,8 +214,6 @@ internal sealed class ServerBrowse(ServerRef server, ulong? sessionNumber, Brows
     /// <summary>Home's rows of this server, opened on first use and kept, as the grids are, so Home shows again without reloading.</summary>
     public HomeFeed Home => _home ??= Session.Home();
 
-    /// <summary>When Home was last shown: shown again after five minutes, it refreshes.</summary>
-    public DateTime HomeLastShown { get; set; } = DateTime.UtcNow;
 
     /// <summary>
     /// The detail view kept for a history entry (<paramref name="args"/>, the page's navigation parameter), or a new one kept from
@@ -272,8 +270,6 @@ internal sealed class LibraryGrid(PagedItems items, ItemQuery query)
     /// <summary>The first item the grid showed when its page was left, to return to.</summary>
     public int FirstVisible { get; set; }
 
-    /// <summary>When its page was last shown: shown again after five minutes, it refreshes (ADR 0018, section 3).</summary>
-    public DateTime LastShown { get; set; } = DateTime.UtcNow;
 }
 
 /// <summary>A history entry's detail view, with the season chosen in it and where its page was scrolled to.</summary>

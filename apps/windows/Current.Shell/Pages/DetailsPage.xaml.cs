@@ -253,11 +253,12 @@ public sealed partial class DetailsPage : Page
     {
         var facts = new List<string>();
         var item = details.Summary;
-        if (item.Kind == "series" && details.Premiere is { } start)
+        // A series' run as the core reads it from its dates and status (ItemDetails.Run); only the formatting is here.
+        if (details.Run is { } run)
         {
-            facts.Add(details.End is { } end && end.Year != start.Year
-                ? $"{start.Year}–{end.Year}"
-                : details.Status == "Continuing" ? $"{start.Year}–" : start.Year.ToString(CultureInfo.CurrentCulture));
+            facts.Add(run.EndYear is { } endYear ? $"{run.StartYear}\u2013{endYear}"
+                : run.Continuing ? $"{run.StartYear}\u2013"
+                : run.StartYear.ToString(CultureInfo.CurrentCulture));
         }
         else if (item.Year is { } year)
         {

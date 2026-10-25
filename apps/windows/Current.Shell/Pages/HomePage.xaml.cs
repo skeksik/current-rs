@@ -21,7 +21,6 @@ namespace Current.Shell.Pages;
 public sealed partial class HomePage : Page
 {
     private static readonly TimeSpan OpeningDelay = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan RefreshAfter = TimeSpan.FromMinutes(5);
     private bool _loaded;
     private readonly ObservableCollection<HomeSection> _sections = [];
 
@@ -112,7 +111,12 @@ public sealed partial class HomePage : Page
             if (App.Browsing is { } hub)
             {
                 hub.Changed += OnBrowseChanged;
-                ShowFeed(hub, refreshStale: true);
+                ShowFeed(hub);
+                // The core decides whether Home is stale: shown again five minutes or more after it was left.
+                foreach (var server in hub.Servers)
+                {
+                    server.Home.Shown();
+                }
                 if (_toStart)
                 {
                     _toStart = false;
@@ -135,7 +139,7 @@ public sealed partial class HomePage : Page
             hub.Changed -= OnBrowseChanged;
             foreach (var server in hub.Servers)
             {
-                server.HomeLastShown = DateTime.UtcNow;
+                server.Home.Hidden();
             }
         }
         // The sections stay with the kept page, so it shows them as they were when it is shown again.
@@ -145,12 +149,12 @@ public sealed partial class HomePage : Page
     {
         if (_loaded && App.Browsing is { } hub)
         {
-            ShowFeed(hub, refreshStale: false);
+            ShowFeed(hub);
         }
     }
 
     /// <summary>One section per signed-in server, kept while its session lasts; the M1 content while there is none.</summary>
-    private void ShowFeed(BrowseHub hub, bool refreshStale)
+    private void ShowFeed(BrowseHub hub)
     {
         var servers = hub.Servers;
         Feed.Visibility = hub.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
@@ -168,11 +172,7 @@ public sealed partial class HomePage : Page
         {
             var header = servers.Count > 1 ? hub.ServerName(server.Server) : "";
             _sections.Add(new HomeSection(header, server.Home, ui));
-            if (refreshStale && DateTime.UtcNow - server.HomeLastShown > RefreshAfter)
-            {
-                server.Home.Refresh();
-            }
-            server.HomeLastShown = DateTime.UtcNow;
+
         }
     }
 

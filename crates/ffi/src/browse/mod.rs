@@ -21,8 +21,8 @@ pub use records::{
     Artwork, AspectRatio, BrowseNotice, CalendarDate, Chapter, EpisodeLinks, HomeRow, HomeRowDiff,
     HomeRowKind, HomeState, ImageRef, ImageRequest, ImageSource, ItemAction, ItemDetails,
     ItemQuery, ItemRef, ItemSummary, ItemSummaryDiff, Library, LoadState, MediaSummary, NoticeKind,
-    PagedState, Person, SearchGroup, SearchGroupDiff, Slot, SlotDiff, SortOrder, StreamSummary,
-    UserState,
+    PagedState, Person, SearchGroup, SearchGroupDiff, SeriesRun, Slot, SlotDiff, SortChoice,
+    SortOrder, StreamSummary, UserState,
 };
 
 /// Receives a grid's slots: `[Reset]` first, then batches of diffs, on a core thread. Apply each batch in order. It must only hand
@@ -210,6 +210,32 @@ impl Core {
     }
 }
 
+/// The sorts a library grid offers, in the order to list them, each with its order: names A to Z first (the grid's first sort),
+/// then the newest added, the newest released and the best rated first. The UI names each key.
+#[uniffi::export]
+pub fn library_sort_choices() -> Vec<SortChoice> {
+    current_app::library_sorts()
+        .into_iter()
+        .map(|choice| SortChoice {
+            key: choice.key.as_str().to_owned(),
+            order: match choice.order {
+                current_model::SortOrder::Ascending => SortOrder::Ascending,
+                current_model::SortOrder::Descending => SortOrder::Descending,
+            },
+        })
+        .collect()
+}
+
+/// The filters a library grid offers, in the order to list them: everything first (`None`), then `unplayed`, `played` and
+/// `favourite`. The UI names each.
+#[uniffi::export]
+pub fn library_filter_choices() -> Vec<Option<String>> {
+    current_app::library_filters()
+        .into_iter()
+        .map(|filter| filter.map(|filter| filter.as_str().to_owned()))
+        .collect()
+}
+
 /// What `library`'s grid shows before the user sorts or filters it, by name: a film library its films and a TV library its series,
 /// wherever they sit below it; any other library its top level.
 #[uniffi::export]
@@ -357,6 +383,17 @@ impl PagedItems {
         self.items.refresh();
     }
 
+    /// The page showing the grid was left.
+    pub fn hidden(&self) {
+        self.items.hidden();
+    }
+
+    /// The page showing the grid is shown again: it refreshes, without a reset, if it was left five minutes or more ago. Returns
+    /// whether it refreshed.
+    pub fn shown(&self) -> bool {
+        self.items.shown()
+    }
+
     /// Reloads every failed page (the Retry button).
     pub fn retry(&self) {
         self.items.retry();
@@ -416,6 +453,17 @@ impl HomeFeed {
     /// Loads every row again, keeping what they show until the answers arrive.
     pub fn refresh(&self) {
         self.feed.refresh();
+    }
+
+    /// Home was left.
+    pub fn hidden(&self) {
+        self.feed.hidden();
+    }
+
+    /// Home is shown again: its rows load again, keeping what they show, if it was left five minutes or more ago. Returns whether
+    /// it refreshed.
+    pub fn shown(&self) -> bool {
+        self.feed.shown()
     }
 
     /// The Retry button.

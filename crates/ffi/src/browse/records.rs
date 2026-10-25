@@ -89,6 +89,12 @@ pub struct ItemSummary {
     pub episode: Option<EpisodeLinks>,
     /// How many items a folder, series or season holds.
     pub child_count: Option<u32>,
+    /// The artwork a poster tile shows (2:3), as the core picks it from `artwork`.
+    #[uniffi(default = None)]
+    pub poster: Option<Artwork>,
+    /// The artwork a wide tile shows (16:9), as the core picks it from `artwork`.
+    #[uniffi(default = None)]
+    pub wide: Option<Artwork>,
 }
 
 /// One of the user's libraries, for the app's navigation.
@@ -168,6 +174,24 @@ pub struct ItemDetails {
     pub logo: Option<Artwork>,
     pub chapters: Vec<Chapter>,
     pub media: Option<MediaSummary>,
+    /// A series' run, from its dates and status; `None` for anything else.
+    #[uniffi(default = None)]
+    pub run: Option<SeriesRun>,
+}
+
+/// A series' run: the year it started, the year it ended if that is another year, and whether it is still running.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct SeriesRun {
+    pub start_year: i32,
+    pub end_year: Option<i32>,
+    pub continuing: bool,
+}
+
+/// One way to sort a library grid: its key (`sort_name`, `date_created`...) and the order it goes in.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct SortChoice {
+    pub key: String,
+    pub order: SortOrder,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Enum)]
@@ -470,6 +494,9 @@ impl From<&model::ItemSummary> for ItemSummary {
             user: (&summary.user).into(),
             episode: summary.episode.as_ref().map(Into::into),
             child_count: summary.child_count,
+            poster: current_app::tile_artwork(summary, current_app::TileShape::Poster)
+                .map(Into::into),
+            wide: current_app::tile_artwork(summary, current_app::TileShape::Wide).map(Into::into),
         }
     }
 }
@@ -579,6 +606,11 @@ impl From<&model::ItemDetails> for ItemDetails {
                 })
                 .collect(),
             media: details.media.as_ref().map(Into::into),
+            run: current_app::series_run(details).map(|run| SeriesRun {
+                start_year: run.start_year,
+                end_year: run.end_year,
+                continuing: run.continuing,
+            }),
         }
     }
 }

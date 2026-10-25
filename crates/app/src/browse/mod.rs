@@ -13,6 +13,7 @@
 mod details;
 mod home;
 mod paged;
+mod present;
 mod search;
 mod states;
 
@@ -39,6 +40,11 @@ pub use home::{
     HomeFeed, HomeRow, HomeRowKind, HomeState, LATEST_LIMIT, NEXT_UP_LIMIT, RESUME_LIMIT,
 };
 pub use paged::{BACKLOG_PAGES, MAX_PAGE_REQUESTS, PAGE_SIZE, PagedItems, PagedState, Slot};
+pub(crate) use present::ShownAgain;
+pub use present::{
+    REFRESH_WHEN_SHOWN_AFTER, SeriesRun, SortChoice, TileShape, library_filters, library_sorts,
+    series_run, tile_artwork,
+};
 pub use search::SearchResults;
 pub use states::{BrowseNotice, ItemAction, NoticeKind};
 
@@ -501,7 +507,7 @@ mod tests {
         let library = |collection: Option<CollectionKind>| Library {
             item: ItemRef::new(
                 ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
-                ItemId::new("f137a2dd21bbc1b99aa5c0f6bf02a805"),
+                ItemId::new("57a2d1e0000000000000000000001001"),
             ),
             name: "Example Library".into(),
             collection,

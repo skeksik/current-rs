@@ -150,19 +150,8 @@ public sealed partial class ItemTile : UserControl
         Progress.Value = progress ?? 0;
     }
 
-    /// <summary>The artwork that fits the tile's shape: the item's own primary image for a poster; for a wide tile the first wide one.</summary>
-    internal static Artwork? Pick(ItemSummary item, TileShape shape)
-    {
-        if (shape == TileShape.Poster)
-        {
-            return item.Artwork.FirstOrDefault(art => art.Kind == "primary");
-        }
-        static bool Wide(Artwork art) => art.AspectRatio is { } ratio && ratio.Width > ratio.Height;
-        return item.Artwork.FirstOrDefault(art => art.Kind == "thumb")
-            ?? item.Artwork.FirstOrDefault(art => art.Kind == "primary" && Wide(art))
-            ?? item.Artwork.FirstOrDefault(art => art.Kind == "backdrop")
-            ?? item.Artwork.FirstOrDefault(art => art.Kind == "primary");
-    }
+    /// <summary>The artwork for the tile's shape, as the core picks it (ItemSummary.Poster and Wide).</summary>
+    internal static Artwork? Pick(ItemSummary item, TileShape shape) => shape == TileShape.Poster ? item.Poster : item.Wide;
 
     private void ShowPicture(ItemSummary? item)
     {

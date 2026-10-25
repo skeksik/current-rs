@@ -23,18 +23,9 @@
              3). Refresh re-reads the grid in place. F5 and Ctrl+R for it are what File Explorer and Edge use; no Microsoft guideline read so
              far states it (not verified). -->
         <StackPanel Grid.Row="1" Margin="24,12,24,0" Orientation="Horizontal" Spacing="8">
-            <ComboBox x:Name="SortBox" Header="Sort by" SelectionChanged="OnQueryChanged">
-                <ComboBoxItem Content="Name" />
-                <ComboBoxItem Content="Date added" />
-                <ComboBoxItem Content="Release date" />
-                <ComboBoxItem Content="Rating" />
-            </ComboBox>
-            <ComboBox x:Name="FilterBox" Header="Show" SelectionChanged="OnQueryChanged">
-                <ComboBoxItem Content="All" />
-                <ComboBoxItem Content="Unplayed" />
-                <ComboBoxItem Content="Played" />
-                <ComboBoxItem Content="Favourites" />
-            </ComboBox>
+            <!-- Their items are the core's choices, named in LibraryPage.xaml.cs. -->
+            <ComboBox x:Name="SortBox" Header="Sort by" SelectionChanged="OnQueryChanged" />
+            <ComboBox x:Name="FilterBox" Header="Show" SelectionChanged="OnQueryChanged" />
             <Button
                 VerticalAlignment="Bottom"
                 AutomationProperties.Name="Refresh"

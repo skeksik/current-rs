@@ -15,20 +15,29 @@ namespace Current.Shell.Pages;
 /// </summary>
 public sealed partial class LibraryPage : Page
 {
-    /// <summary>"The page is shown again after five minutes" refreshes (ADR 0018, section 3).</summary>
-    private static readonly TimeSpan RefreshAfter = TimeSpan.FromMinutes(5);
+    /// <summary>The sorts and filters the core offers, in its order (ItemQuery.SortChoices and FilterChoices); the boxes list them.</summary>
+    private static readonly IReadOnlyList<SortChoice> Sorts = ItemQuery.SortChoices;
 
-    /// <summary>The sort choices in SortBox's order: the key and its order (names A to Z, the newest and best first).</summary>
-    private static readonly (string Key, SortOrder Order)[] Sorts =
-    [
-        ("sort_name", SortOrder.Ascending),
-        ("date_created", SortOrder.Descending),
-        ("premiere_date", SortOrder.Descending),
-        ("community_rating", SortOrder.Descending),
-    ];
+    private static readonly IReadOnlyList<string?> Filters = ItemQuery.FilterChoices;
 
-    /// <summary>The filter choices in FilterBox's order.</summary>
-    private static readonly string?[] Filters = [null, "unplayed", "played", "favourite"];
+    /// <summary>A sort's name in the box; a key Current has no name for shows as the core gave it.</summary>
+    private static string SortName(string key) => key switch
+    {
+        "sort_name" => "Name",
+        "date_created" => "Date added",
+        "premiere_date" => "Release date",
+        "community_rating" => "Rating",
+        _ => key,
+    };
+
+    private static string FilterName(string? filter) => filter switch
+    {
+        null => "All",
+        "unplayed" => "Unplayed",
+        "played" => "Played",
+        "favourite" => "Favourites",
+        _ => filter,
+    };
 
     private LibraryGrid? _grid;
     private SlotCollection? _slots;
@@ -38,6 +47,14 @@ public sealed partial class LibraryPage : Page
     public LibraryPage()
     {
         InitializeComponent();
+        foreach (var sort in Sorts)
+        {
+            SortBox.Items.Add(SortName(sort.Key));
+        }
+        foreach (var filter in Filters)
+        {
+            FilterBox.Items.Add(FilterName(filter));
+        }
         ItemActions.Attach(Items, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
         Unloaded += (_, _) => Release();
     }
@@ -68,11 +85,8 @@ public sealed partial class LibraryPage : Page
         _slots.CollectionChanged += OnFirstSlots;
         Items.ItemsSource = _slots;
         ShowState();
-        if (DateTime.UtcNow - _grid.LastShown > RefreshAfter)
-        {
-            _grid.Items.Refresh();
-        }
-        _grid.LastShown = DateTime.UtcNow;
+        // The core decides whether the grid is stale: shown again five minutes or more after it was left (ADR 0018, section 3).
+        _grid.Items.Shown();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -81,7 +95,7 @@ public sealed partial class LibraryPage : Page
         if (_grid is not null)
         {
             _grid.FirstVisible = (Items.ItemsPanelRoot as ItemsWrapGrid)?.FirstVisibleIndex ?? 0;
-            _grid.LastShown = DateTime.UtcNow;
+            _grid.Items.Hidden();
         }
     }
 
@@ -163,8 +177,8 @@ public sealed partial class LibraryPage : Page
     private void ShowQuery(ItemQuery query)
     {
         _showingQuery = true;
-        SortBox.SelectedIndex = Math.Max(0, Array.FindIndex(Sorts, sort => query.Sort.FirstOrDefault() == sort.Key));
-        FilterBox.SelectedIndex = Math.Max(0, Array.IndexOf(Filters, query.Filters.FirstOrDefault()));
+        SortBox.SelectedIndex = Math.Max(0, Sorts.ToList().FindIndex(sort => query.Sort.FirstOrDefault() == sort.Key));
+        FilterBox.SelectedIndex = Math.Max(0, Filters.ToList().IndexOf(query.Filters.FirstOrDefault()));
         _showingQuery = false;
     }
 
@@ -175,9 +189,9 @@ public sealed partial class LibraryPage : Page
         {
             return;
         }
-        var (key, order) = Sorts[SortBox.SelectedIndex];
+        var sort = Sorts[SortBox.SelectedIndex];
         var filter = Filters[FilterBox.SelectedIndex];
-        var query = _grid.Query with { Sort = [key], Order = order, Filters = filter is null ? [] : [filter] };
+        var query = _grid.Query with { Sort = [sort.Key], Order = sort.Order, Filters = filter is null ? [] : [filter] };
         if (query.Sort.SequenceEqual(_grid.Query.Sort) && query.Order == _grid.Query.Order
             && query.Filters.SequenceEqual(_grid.Query.Filters))
         {

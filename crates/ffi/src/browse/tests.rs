@@ -496,11 +496,56 @@ fn status(core: &Core) -> crate::ServerStatusSnapshot {
 }
 
 #[test]
+fn the_core_picks_tile_artwork_and_lists_a_library_s_choices() {
+    let sorts = library_sort_choices();
+    assert_eq!(
+        sorts[0],
+        SortChoice {
+            key: "sort_name".into(),
+            order: SortOrder::Ascending
+        }
+    );
+    assert_eq!(library_filter_choices()[0], None);
+    assert!(library_filter_choices().contains(&Some("unplayed".into())));
+
+    // A poster tile's artwork is the item's primary image, picked in the core.
+    let stand_in = stand_in();
+    let (core, server) = signed_in(&stand_in);
+    let browse = core.browse(server.clone()).unwrap();
+    let libraries = block_on(browse.libraries(CancelToken::new())).unwrap();
+    let films = libraries
+        .into_iter()
+        .find(|library| library.item.id == FILMS_LIBRARY_ID)
+        .unwrap();
+    let grid = browse.open_library(films, ItemQuery::default());
+    let (listener, rx) = recorder();
+    let _slots = grid.subscribe_slots(listener);
+    let mut mirror = Mirror::new();
+    follow_slots(&mut mirror, &rx, "the films", |slots| {
+        slots.iter().any(|slot| matches!(slot, Slot::Item { .. }))
+    });
+    let Some(Slot::Item { summary }) = mirror
+        .values
+        .iter()
+        .find(|slot| matches!(slot, Slot::Item { summary } if summary.artwork.iter().any(|art| art.kind == "primary")))
+    else {
+        panic!("a film with a primary image");
+    };
+    assert_eq!(
+        summary.poster.as_ref(),
+        summary.artwork.iter().find(|art| art.kind == "primary")
+    );
+}
+
+#[test]
 fn signing_in_again_as_the_same_user_names_a_new_session_and_ends_the_old_browse() {
     let stand_in = stand_in();
     let (core, server) = signed_in(&stand_in);
     let first = status(&core);
-    assert!(first.session.is_some(), "a signed-in server names its session");
+    assert!(
+        first.session.is_some(),
+        "a signed-in server names its session"
+    );
     let old = core.browse(server.clone()).unwrap();
     assert!(block_on(old.libraries(CancelToken::new())).is_ok());
 
@@ -514,7 +559,10 @@ fn signing_in_again_as_the_same_user_names_a_new_session_and_ends_the_old_browse
         "the same user"
     );
     assert!(second.session.is_some());
-    assert_ne!(second.session, first.session, "a new session, so a new Browse");
+    assert_ne!(
+        second.session, first.session,
+        "a new session, so a new Browse"
+    );
 
     // The old Browse belongs to the replaced session; a new one works.
     assert_eq!(

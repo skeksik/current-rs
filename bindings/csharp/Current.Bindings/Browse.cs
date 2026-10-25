@@ -167,6 +167,15 @@ public sealed class PagedItems : IDisposable
     /// <summary>Reads the list again without resetting it: the scroll position stays.</summary>
     public void Refresh() => _items.Refresh();
 
+    /// <summary>The page showing the grid was left.</summary>
+    public void Hidden() => _items.Hidden();
+
+    /// <summary>
+    /// The page showing the grid is shown again: it refreshes, without a reset, if it was left five minutes or more ago (the core
+    /// decides). Returns whether it refreshed.
+    /// </summary>
+    public bool Shown() => _items.Shown();
+
     /// <summary>Reloads every failed page (the Retry button).</summary>
     public void Retry() => _items.Retry();
 
@@ -260,6 +269,12 @@ public sealed class HomeFeed : IDisposable
 
     /// <summary>Loads every row again, keeping what they show until the answers arrive.</summary>
     public void Refresh() => _feed.Refresh();
+
+    /// <summary>Home was left.</summary>
+    public void Hidden() => _feed.Hidden();
+
+    /// <summary>Home is shown again: its rows load again if it was left five minutes or more ago (the core decides).</summary>
+    public bool Shown() => _feed.Shown();
 
     /// <summary>The Retry button.</summary>
     public void Retry() => _feed.Retry();
