@@ -8,7 +8,7 @@ use current_model::{
 };
 
 use crate::clock::Clock;
-use crate::controller::{Controller, PROGRESS_INTERVAL};
+use crate::controller::{Controller, PROGRESS_INTERVAL, STALL_TIMEOUT};
 use crate::engine::{EndReason, EngineEvent, EngineTrack};
 use crate::planner::PlanNote;
 use crate::quality::{Quality, QualityMemory};
@@ -1066,4 +1066,159 @@ fn a_playlist_that_points_elsewhere_fails_without_loading() {
         }
     );
     assert!(player.commands().is_empty());
+}
+
+/// The stall ends playback: the engine stopped, the play session reported stopped with `Failed = true` at `position`, the app told
+/// once, and nothing due afterwards.
+fn assert_stalled(player: &mut Harness, position: Duration) {
+    assert_eq!(
+        player.state(),
+        PlayerState::Failed {
+            problem: PlaybackProblem::Network
+        }
+    );
+    assert_eq!(player.commands(), vec![Command::Stop]);
+    let reports = player.reports();
+    let [(_, Report::Stopped(report))] = reports.as_slice() else {
+        panic!("one stop report: {reports:?}");
+    };
+    assert!(report.failed);
+    assert_eq!(report.position, position);
+    let stops: Vec<_> = player
+        .events()
+        .into_iter()
+        .filter(|event| matches!(event, PlayerEvent::Stopped { .. }))
+        .collect();
+    assert_eq!(
+        stops,
+        vec![PlayerEvent::Stopped {
+            item: item("e1"),
+            position,
+            failed: true,
+        }]
+    );
+    assert_eq!(player.player.next_deadline(), None);
+    player.wait(secs(600));
+    assert!(player.reports().is_empty());
+    assert!(player.commands().is_empty());
+}
+
+#[test]
+fn a_load_with_no_progress_fails_as_a_network_problem_after_the_stall_timeout() {
+    let mut player = Harness::new(AutoSkip::off());
+    player.play(MediaKind::MOVIE, secs(600));
+    player.commands();
+    player.reports();
+    player.events();
+    assert_eq!(
+        player.player.next_deadline(),
+        Some(player.now() + STALL_TIMEOUT)
+    );
+
+    player.wait(STALL_TIMEOUT - Duration::from_millis(1));
+    assert_eq!(player.state(), PlayerState::Loading);
+    assert!(player.commands().is_empty());
+    player.wait(Duration::from_millis(1));
+    assert_stalled(&mut player, secs(600));
+}
+
+#[test]
+fn buffering_with_no_progress_fails_and_data_arriving_holds_it_off() {
+    let mut player = Harness::playing(AutoSkip::off());
+    player.at(100);
+    player.event(EngineEvent::Buffering(true));
+    assert_eq!(player.state(), PlayerState::Buffering);
+    // Data trickling in, slower than playback: still buffering, not stalled.
+    for ahead in 1..=5 {
+        player.wait(secs(50));
+        player.event(EngineEvent::Buffered(secs(ahead)));
+    }
+    assert_eq!(player.state(), PlayerState::Buffering);
+    player.reports();
+    player.events();
+
+    player.wait(STALL_TIMEOUT - secs(1));
+    assert_eq!(player.state(), PlayerState::Buffering);
+    // The progress reports go on meanwhile.
+    assert!(!player.reports().is_empty());
+    player.wait(secs(1));
+    assert_stalled(&mut player, secs(100));
+}
+
+#[test]
+fn a_seek_that_never_finishes_fails() {
+    let mut player = Harness::playing(AutoSkip::off());
+    player.at(100);
+    player.wait(secs(5));
+    block_on(player.player.seek_to(secs(1200)));
+    assert_eq!(player.commands(), vec![Command::Seek(secs(1200))]);
+    player.reports();
+    player.events();
+
+    player.wait(STALL_TIMEOUT - secs(1));
+    assert_eq!(player.state(), PlayerState::Seeking);
+    player.reports();
+    player.wait(secs(1));
+    assert_stalled(&mut player, secs(1200));
+}
+
+#[test]
+fn a_paused_player_never_stalls_and_the_wait_starts_again_on_resume() {
+    let mut player = Harness::playing(AutoSkip::off());
+    player.at(100);
+    block_on(player.player.pause());
+    player.wait(secs(600));
+    assert_eq!(player.state(), PlayerState::Paused);
+    // Waiting for data while the user has it paused is not a stall either.
+    player.event(EngineEvent::Buffering(true));
+    player.wait(secs(600));
+    assert_eq!(player.state(), PlayerState::Buffering);
+    player.commands();
+    player.reports();
+    player.events();
+
+    // From the resume, still waiting for data: the full timeout, not the time since the last event.
+    block_on(player.player.resume());
+    assert_eq!(player.commands(), vec![Command::Paused(false)]);
+    player.wait(STALL_TIMEOUT - secs(1));
+    assert_eq!(player.state(), PlayerState::Buffering);
+    player.reports();
+    player.wait(secs(1));
+    assert_stalled(&mut player, secs(100));
+}
+
+#[test]
+fn progress_resets_the_stall_timer_and_a_repeated_value_does_not() {
+    let mut player = Harness::new(AutoSkip::off());
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    // A slow load: the file opens late, then positions and buffer come in, each well inside the timeout.
+    player.wait(secs(50));
+    player.event(EngineEvent::Loaded);
+    for second in 1..=10 {
+        player.wait(secs(50));
+        if second % 2 == 0 {
+            player.at(second);
+        } else {
+            player.event(EngineEvent::Buffered(secs(second)));
+        }
+    }
+    assert_eq!(player.state(), PlayerState::Loading);
+    player.event(EngineEvent::Restarted);
+    assert_eq!(player.state(), PlayerState::Playing);
+    // Playing with no events at all is no stall: the rule watches only a player waiting on the engine.
+    player.wait(secs(600));
+    assert_eq!(player.state(), PlayerState::Playing);
+
+    // The same position and buffer again are no progress.
+    player.event(EngineEvent::Buffering(true));
+    player.wait(secs(30));
+    player.at(10);
+    player.event(EngineEvent::Buffered(secs(9)));
+    player.wait(secs(29));
+    assert_eq!(player.state(), PlayerState::Buffering);
+    player.commands();
+    player.reports();
+    player.events();
+    player.wait(secs(1));
+    assert_stalled(&mut player, secs(10));
 }

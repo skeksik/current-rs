@@ -118,6 +118,11 @@ fake engine, a fake server and a fake clock):
 - **Errors** (`PlaybackProblem`, flat, no server text or URL): `NotPlayable { reasons }`, `Engine { kind }`, `Network`,
   `GatewaySignInNeeded`, `SignedOut`, `Server { status }`, `NotFound`. A redirect, a 401, 403 or an HTML answer on a stream runs ADR
   0017's 401 rule through `current-net`'s probe before choosing between `GatewaySignInNeeded` and `SignedOut`.
+- **Stall** (added after the Windows run, 2026-10-25, case 7 in docs/notes/windows-shell.md): while `Loading`, `Seeking`, or
+  `Buffering` and not paused, 60 s with no change of position or buffer (`STALL_TIMEOUT`, twice mpv's `network-timeout` and
+  `current-net`'s request timeout) stops the engine, reports `/Stopped` with `Failed = true` and ends in `Failed { Network }`. Not
+  retried by itself when the network returns (the controller does not see the network observer, and playback starting on its own after
+  minutes would surprise); playing the item again resumes at the reported position.
 - **Stopping:** stop reports, unloads (`stop` command), and keeps the engine for the next item; closing the player window destroys it.
 - **Next episode start** (owner, 2026-10-25): autoplay and "Next episode" start the next episode from the beginning, not from its
   resume point.
