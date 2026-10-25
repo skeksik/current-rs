@@ -72,11 +72,18 @@ public sealed partial class LibraryPage : Page
         var library = App.Browsing.FindLibrary(args.Library.Item) ?? args.Library;
         TitleText.Text = library.Name;
         _grid = server.Grid(library);
-        // Back and Forward return to where the grid was left; opening the library anew (its navigation item) starts at the top
-        // (the owner, 2026-10-25).
+        // Back and Forward return to where the grid was left, its sort and filter too; opening the library anew (its navigation
+        // item) starts at the top with the first sort and filter (the owner, 2026-10-25). A changed query is a new query, which
+        // resets the grid, as choosing a sort does.
         if (e.NavigationMode is not (NavigationMode.Back or NavigationMode.Forward))
         {
             _grid.FirstVisible = 0;
+            var first = ItemQuery.ForLibrary(library);
+            if (!SameChoices(_grid.Query, first))
+            {
+                _grid.Query = first;
+                _grid.Items.SetQuery(first);
+            }
         }
         ShowQuery(_grid.Query);
         var ui = new DispatcherQueueUi(DispatcherQueue);
@@ -191,6 +198,10 @@ public sealed partial class LibraryPage : Page
         _showingQuery = false;
     }
 
+    /// <summary>Whether two queries sort and filter alike (the records compare their lists by reference).</summary>
+    private static bool SameChoices(ItemQuery a, ItemQuery b) =>
+        a.Sort.SequenceEqual(b.Sort) && a.Order == b.Order && a.Filters.SequenceEqual(b.Filters);
+
     /// <summary>A new sort or filter: a new query, which resets the grid to the top.</summary>
     private void OnQueryChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -201,8 +212,7 @@ public sealed partial class LibraryPage : Page
         var sort = Sorts[SortBox.SelectedIndex];
         var filter = Filters[FilterBox.SelectedIndex];
         var query = _grid.Query with { Sort = [sort.Key], Order = sort.Order, Filters = filter is null ? [] : [filter] };
-        if (query.Sort.SequenceEqual(_grid.Query.Sort) && query.Order == _grid.Query.Order
-            && query.Filters.SequenceEqual(_grid.Query.Filters))
+        if (SameChoices(query, _grid.Query))
         {
             return;
         }

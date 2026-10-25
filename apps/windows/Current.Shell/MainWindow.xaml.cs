@@ -55,6 +55,8 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // The search box joins the navigation view once a Jellyfin server is signed in (ShowBrowsing).
+        NavView.AutoSuggestBox = null;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         // Caption buttons as tall as the 48 px title bar (owner's finding, 2026-10-24; Photos' are 48 × 48, measured on the owner's PC,
@@ -357,7 +359,10 @@ public sealed partial class MainWindow : Window
 
     private void ShowBrowsing(BrowseHub hub)
     {
+        // Taken out of the navigation view, not only hidden: a hidden box still kept its place in the pane, a gap above Home (the
+        // owner's run, 2026-10-25).
         SearchBox.Visibility = hub.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
+        NavView.AutoSuggestBox = hub.IsAvailable ? SearchBox : null;
         foreach (var item in _libraryItems)
         {
             NavView.MenuItems.Remove(item);
