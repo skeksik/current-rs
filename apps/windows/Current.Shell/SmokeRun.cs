@@ -315,8 +315,14 @@ internal static class SmokeRun
                 server.Session.Refresh();
                 var home = await WaitUntilAsync(() => window.ShownPage is HomePage && window.LibraryItemCount == 2);
                 check(home, $"a removed library's page goes back to Home ({window.ShownPage?.GetType().Name}, {window.LibraryItemCount})");
-                check(window.NoticeTitles.Contains(BrowseText.LibraryGoneTitle), "a notice says the library is no longer available");
+                check(window.NoticeTitles.Count(title => title == BrowseText.LibraryGoneTitle) == 1,
+                    "one notice says the library is no longer available");
                 check(hub.Find(server.Server) is not null, "still signed in");
+                // Back from Home never reopens the gone library: the big library's page, opened before it, shows instead.
+                window.GoBack();
+                var back = await WaitUntilAsync(() => window.ShownPage is LibraryPage);
+                check(back && window.ShownParameter is LibraryArgs { Library.Item.Id: BigLibraryId },
+                    $"Back from Home skips the gone library ({window.ShownPage?.GetType().Name})");
             }
             else
             {

@@ -154,6 +154,12 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>The page shown now (the smoke run).</summary>
     internal Page? ShownPage => ContentFrame.Content as Page;
 
+    /// <summary>The parameter of the page shown now (the smoke run).</summary>
+    internal object? ShownParameter => _shownParameter;
+
+    /// <summary>Goes back, as the title bar's Back button does (the smoke run).</summary>
+    internal bool GoBack() => TryGoBack();
+
     /// <summary>The titles of the notices above the pages now (the smoke run).</summary>
     internal IReadOnlyList<string> NoticeTitles => [.. Notices.Children.OfType<InfoBar>().Select(notice => notice.Title)];
 
@@ -491,8 +497,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         SearchBox.Visibility = hub.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
         NavView.AutoSuggestBox = hub.IsAvailable ? SearchBox : null;
         ShowLibraries(hub);
-        DropHistoryOfGoneServers(hub);
-        DropHistoryOfGoneLibraries(hub);
+        DropGoneHistory(hub);
         SelectShownPage();
     }
 
@@ -612,52 +617,61 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         hub.PruneSearches(live);
     }
 
-    /// <summary>Pages of a server whose session ended leave the back and forward stacks; the page shown now goes to Home.</summary>
-    private void DropHistoryOfGoneServers(BrowseHub hub)
+    /// <summary>
+    /// Whether a history entry shows what is gone: a page of a server whose session ended, search results while no server is signed in,
+    /// or a library that left its server's list (the core no longer lists it: removed on the server, or hidden from the user).
+    /// </summary>
+    private static bool IsGone(BrowseHub hub, Type? page, object? parameter) =>
+        (ServerOf(parameter) is { } server && hub.Find(server) is null)
+        || (page == typeof(SearchPage) && !hub.IsAvailable)
+        || (parameter is LibraryArgs args && hub.IsGone(args.Library.Item));
+
+    /// <summary>Drops the back and forward entries that show what is gone (<see cref="IsGone"/>).</summary>
+    private void PruneGoneHistory(BrowseHub hub)
     {
-        bool Gone(Type? page, object? parameter) =>
-            (ServerOf(parameter) is { } server && hub.Find(server) is null) || (page == typeof(SearchPage) && !hub.IsAvailable);
         foreach (var stack in new[] { ContentFrame.BackStack, ContentFrame.ForwardStack })
         {
             for (var i = stack.Count - 1; i >= 0; i--)
             {
-                if (Gone(stack[i].SourcePageType, stack[i].Parameter))
+                if (IsGone(hub, stack[i].SourcePageType, stack[i].Parameter))
                 {
                     stack.RemoveAt(i);
                 }
             }
         }
-        if (Gone(ContentFrame.SourcePageType, _shownParameter))
+    }
+
+    /// <summary>
+    /// Pages of what is gone leave the back and forward stacks, and the page shown now, if it is one, goes back to Home: for a gone
+    /// library with a short notice, which is also how opening a stale entry ends once the core has found the library gone. Navigating
+    /// to Home pushes the page it leaves onto the back stack ("Whenever a page is loaded into the frame, that page is added as a
+    /// PageStackEntry to the BackStack or ForwardStack", "Navigate between two pages", learn.microsoft.com, read 2026-10-25), so the
+    /// stacks are pruned again after it, and on every navigation (OnNavigated): Back from Home never reopens it (review, 2026-10-25).
+    /// </summary>
+    private void DropGoneHistory(BrowseHub hub)
+    {
+        PruneGoneHistory(hub);
+        if (IsGone(hub, ContentFrame.SourcePageType, _shownParameter))
         {
+            var library = _shownParameter is LibraryArgs args && hub.IsGone(args.Library.Item);
             ContentFrame.Navigate(typeof(HomePage), null, new SuppressNavigationTransitionInfo());
+            PruneGoneHistory(hub);
+            if (library)
+            {
+                ShowLibraryGoneNotice();
+            }
         }
         UpdateBackButton();
     }
 
-    /// <summary>
-    /// Pages of a library that left its server's list (the core no longer lists it: removed on the server, or hidden from the user)
-    /// leave the back and forward stacks, as a gone server's do. The page shown now goes back to Home with a short notice; that is
-    /// also how opening a stale entry ends, once the core has found the library gone.
-    /// </summary>
-    private void DropHistoryOfGoneLibraries(BrowseHub hub)
+    /// <summary>One "no longer available" notice at a time: a newer one replaces one still open, however many libraries went.</summary>
+    private void ShowLibraryGoneNotice()
     {
-        bool Gone(object? parameter) => parameter is LibraryArgs args && hub.IsGone(args.Library.Item);
-        foreach (var stack in new[] { ContentFrame.BackStack, ContentFrame.ForwardStack })
+        foreach (var open in Notices.Children.OfType<InfoBar>().Where(notice => notice.Title == BrowseText.LibraryGoneTitle).ToList())
         {
-            for (var i = stack.Count - 1; i >= 0; i--)
-            {
-                if (Gone(stack[i].Parameter))
-                {
-                    stack.RemoveAt(i);
-                }
-            }
+            Notices.Children.Remove(open);
         }
-        if (ContentFrame.SourcePageType == typeof(LibraryPage) && Gone(_shownParameter))
-        {
-            ContentFrame.Navigate(typeof(HomePage), null, new SuppressNavigationTransitionInfo());
-            ShowNotice(InfoBarSeverity.Informational, BrowseText.LibraryGoneTitle, BrowseText.LibraryGoneMessage);
-        }
-        UpdateBackButton();
+        ShowNotice(InfoBarSeverity.Informational, BrowseText.LibraryGoneTitle, BrowseText.LibraryGoneMessage);
     }
 
     private void OnSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
@@ -712,6 +726,10 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         _shownParameter = e.Parameter;
         PruneKeptDetails();
         DropSignInHistory();
+        if (App.Browsing is { } hub)
+        {
+            PruneGoneHistory(hub);
+        }
         UpdateBackButton();
         SelectShownPage();
     }

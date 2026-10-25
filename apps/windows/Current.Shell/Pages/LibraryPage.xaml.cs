@@ -75,6 +75,7 @@ public sealed partial class LibraryPage : Page
         _hub = App.Browsing;
         _hub.Changed += OnLibrariesChanged;
         _grid = server.Grid(library);
+        _grid.Bind();
         // Back and Forward return to where the grid was left, its sort and filter too; opening the library anew (its navigation
         // item) starts at the top with the first sort and filter (the owner, 2026-10-25). A changed query is a new query, which
         // resets the grid, as choosing a sort does.
@@ -152,6 +153,9 @@ public sealed partial class LibraryPage : Page
         Items.ItemsSource = null;
         _slots?.Dispose();
         _slots = null;
+        // Last: a grid whose library went meanwhile is freed once nothing here uses it.
+        _grid?.Unbind();
+        _grid = null;
     }
 
     /// <summary>Once the slots first arrive (one Reset, with every loaded page), back to the item the user left the grid at.</summary>

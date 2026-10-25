@@ -170,7 +170,7 @@ public sealed class PagedItems : IDisposable
     /// <param name="items">The collection to fill, empty: a subclass with a platform interface (the Windows app adds
     /// IItemsRangeInfo). A new one when null.</param>
     public PagedCollection<T> Collect<T>(IUiDispatcher ui, Func<Slot, T> map, DiffObservableCollection<T>? items = null) =>
-        new(_items, ui, map, items);
+        new(this, _items, ui, map, items);
 
     /// <summary>The UI shows slots <paramref name="first"/> to <paramref name="last"/> (inclusive): the pages around them load.</summary>
     public void SetVisibleRange(int first, int last)
@@ -198,7 +198,18 @@ public sealed class PagedItems : IDisposable
     /// <summary>A new sort or filter: a new query, which resets the list and starts at the top.</summary>
     public void SetQuery(ItemQuery query) => _items.SetQuery(MapBrowse.ToFfi(query));
 
-    public void Dispose() => _items.Dispose();
+    /// <summary>Whether <see cref="Dispose"/> ran: a collection of it then sends nothing more.</summary>
+    public bool IsDisposed { get; private set; }
+
+    public void Dispose()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+        IsDisposed = true;
+        _items.Dispose();
+    }
 }
 
 /// <summary>
@@ -207,13 +218,16 @@ public sealed class PagedItems : IDisposable
 /// </summary>
 public sealed class PagedCollection<T> : IDisposable
 {
+    private readonly PagedItems _owner;
     private readonly Ffi.PagedItems _items;
     private readonly ListSubscription<T> _slots;
     private (int First, int Last)? _range;
 
-    internal PagedCollection(Ffi.PagedItems items, IUiDispatcher ui, Func<Slot, T> map, DiffObservableCollection<T>? collection)
+    internal PagedCollection(
+        PagedItems owner, Ffi.PagedItems items, IUiDispatcher ui, Func<Slot, T> map, DiffObservableCollection<T>? collection)
     {
         ArgumentNullException.ThrowIfNull(map);
+        _owner = owner;
         _items = items;
         _slots = new ListSubscription<T>(
             (subscription, generation) => items.SubscribeSlots(new SlotsForwarder<T>(subscription, ui, generation, map)),
@@ -229,11 +243,11 @@ public sealed class PagedCollection<T> : IDisposable
     /// <summary>
     /// The grid shows items <paramref name="first"/> to <paramref name="last"/> (inclusive, either order). Call it from the UI thread
     /// whenever the view changes (IItemsRangeInfo.RangesChanged's visible range); a range that did not change, or one with a negative
-    /// end (an empty view), is not sent.
+    /// end (an empty view), is not sent, nor anything once this or its <see cref="PagedItems"/> is disposed.
     /// </summary>
     public void SetVisibleRange(int first, int last)
     {
-        if (_slots.IsDisposed || first < 0 || last < 0 || _range == (first, last))
+        if (_slots.IsDisposed || _owner.IsDisposed || first < 0 || last < 0 || _range == (first, last))
         {
             return;
         }

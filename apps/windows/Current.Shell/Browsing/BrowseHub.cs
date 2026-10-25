@@ -247,8 +247,8 @@ internal sealed class ServerBrowse : IDisposable
     public bool IsGone(ItemRef library) => _gone.Contains(library);
 
     /// <summary>
-    /// The core's list changed. A library that left a loaded list is gone: its grid is let go of once the window has heard of it, so
-    /// the page showing it has gone back to Home first.
+    /// The core's list changed. A library that left a loaded list is gone: the window hears of it first (the page showing it goes
+    /// back to Home), then its grid is retired, which frees it once no page binds to it any more.
     /// </summary>
     private void OnLibrariesChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -266,7 +266,7 @@ internal sealed class ServerBrowse : IDisposable
         {
             if (_grids.Remove(item, out var grid))
             {
-                grid.Items.Dispose();
+                grid.Retire();
             }
         }
     }
@@ -359,7 +359,7 @@ internal sealed class ServerBrowse : IDisposable
         _home = null;
         foreach (var grid in _grids.Values)
         {
-            grid.Items.Dispose();
+            grid.Retire();
         }
         _grids.Clear();
         Session.Dispose();
@@ -369,7 +369,41 @@ internal sealed class ServerBrowse : IDisposable
 /// <summary>A library's paged items, with the query it shows and where the user left it.</summary>
 internal sealed class LibraryGrid(PagedItems items, ItemQuery query)
 {
+    /// <summary>How many pages bind to it now: a new page can bind before the one it replaced has unloaded.</summary>
+    private int _bindings;
+    private bool _retired;
+    private bool _freed;
+
     public PagedItems Items { get; } = items;
+
+    /// <summary>A page binds its slots to the grid (LibraryPage, on navigation to it).</summary>
+    public void Bind() => _bindings++;
+
+    /// <summary>The page let go of the grid's slots (on Unloaded): a retired grid is freed now.</summary>
+    public void Unbind()
+    {
+        _bindings = Math.Max(0, _bindings - 1);
+        FreeIfUnused();
+    }
+
+    /// <summary>
+    /// Its library is gone or its session ended: freed now, or once the page still bound to it lets go, so the page's grid never
+    /// calls into freed native items (review, 2026-10-25).
+    /// </summary>
+    public void Retire()
+    {
+        _retired = true;
+        FreeIfUnused();
+    }
+
+    private void FreeIfUnused()
+    {
+        if (_retired && _bindings == 0 && !_freed)
+        {
+            _freed = true;
+            Items.Dispose();
+        }
+    }
 
     public ItemQuery Query { get; set; } = query;
 

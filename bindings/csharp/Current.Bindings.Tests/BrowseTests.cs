@@ -402,5 +402,11 @@ internal static class BrowseTests
             () => Ids(libraries.Value).SequenceEqual([added, StandIn.ShowsLibraryId]));
         // A Browse is only given for a server signed in with a live session.
         using var again = core.Browse(FirstServer);
+
+        // A grid freed while its page still holds its collection (the library went): the collection sends nothing more.
+        using var collection = items.Collect(ui);
+        items.Dispose();
+        collection.SetVisibleRange(0, 10);
+        items.Dispose();
     }
 }
