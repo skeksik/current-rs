@@ -59,11 +59,12 @@ before merging, and its PR carries only the record.
       fail on the same lines, 10 of 10 runs, the binary taking 6.5 s. That the real hook took over 5 s is not measured, and why
       (first symbolization in a large debug test binary on a loaded host) is not verified: 70 unforced runs passed. The tests now
       unwind with `resume_unwind`, which skips the hook (test/ffi-list-subscription-timeouts)
-- [ ] A foreign exception from a C# or Swift listener becomes a panic in UniFFI's generated code (`uniffi_core` 0.31.0,
+- [x] A foreign exception from a C# or Swift listener becomes a panic in UniFFI's generated code (`uniffi_core` 0.31.0,
       `ffi_converter_traits.rs`), so the panic hook runs on one of the core's two worker threads. With `RUST_BACKTRACE` set, or a
-      costly custom hook added later, that could stall the core for every subscription (not verified in production). Possible
-      fixes: deliver listener callbacks off the core workers, or keep the panic hook cheap. Decide when the playback work raises
-      the worker count
+      costly custom hook added later, that could stall the core for every subscription (not verified in production). Fixed by
+      delivering every listener callback on the runtime's blocking pool, one at a time per subscription, so a slow, blocked or
+      panicking listener (and its hook) holds a pool thread, never a worker; the core installs no hook (PR #50, 2026-10-25;
+      docs/architecture.md, "Listener delivery")
 - [ ] Windows, not measured in the owner's M1 runs: the caption buttons' pressed colour against Windows' own apps (high contrast
       and Narrator passed on PR 39's run, 2026-10-24; docs/notes/windows-shell.md)
 - [ ] Linux: choose how to ship (Flatpak, per-distro packages, AppImage or tarball; ADR 0011) before M5's release work
