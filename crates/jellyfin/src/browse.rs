@@ -162,6 +162,31 @@ impl JellyfinClient {
         Ok(self.summaries(result.items))
     }
 
+    /// The episode a series' Play button starts (`GET Shows/NextUp?seriesId=`): its next unplayed episode, or the one in progress,
+    /// since `enableResumable` stays at its default, true ("when [resumable episodes are not allowed and] the next episode has saved
+    /// playback progress, no next-up item is returned", `TVSeriesManager.DetermineNextEpisode`, v12.2 at ca0f16eb, read 2026-10-25).
+    /// No date cutoff: a series watched long ago still has its next episode. `None` when the server names none (a series never
+    /// started or watched to its end: not verified which the server answers for a series never started).
+    pub async fn series_next_up(&self, series: &ItemRef) -> Result<Option<ItemSummary>, AuthError> {
+        let request = summary(Request::get("/Shows/NextUp"))
+            .query("seriesId", series.id.as_str())
+            .query("limit", "1")
+            .query("enableTotalRecordCount", "false");
+        let result: ItemsResult = self.get_json(request).await?;
+        Ok(self.summaries(result.items).into_iter().next())
+    }
+
+    /// A series' first episode in order (`GET Shows/{id}/Episodes?limit=1`), for its Play button when it has no next episode.
+    pub async fn first_episode(&self, series: &ItemRef) -> Result<Option<ItemSummary>, AuthError> {
+        let request = summary(Request::get(format!(
+            "/Shows/{}/Episodes",
+            series.id.as_str()
+        )))
+        .query("limit", "1");
+        let result: ItemsResult = self.get_json(request).await?;
+        Ok(self.summaries(result.items).into_iter().next())
+    }
+
     /// A series' seasons (`GET Shows/{id}/Seasons`), in order.
     pub async fn seasons(&self, series: &ItemRef) -> Result<Vec<ItemSummary>, AuthError> {
         let request = summary(Request::get(format!(

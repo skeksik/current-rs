@@ -389,6 +389,31 @@ async fn resume_and_next_up_ask_for_their_rows() {
 }
 
 #[tokio::test]
+async fn a_series_play_asks_for_its_next_and_first_episode() {
+    let stand_in = StandIn::answering(ITEMS_PAGE).await;
+    let client = client(&stand_in);
+    let next = client.series_next_up(&item(SERIES)).await.unwrap();
+    let first = client.first_episode(&item(SERIES)).await.unwrap();
+    // The first item of the answer, either way.
+    assert!(next.is_some() && next == first);
+
+    let received = stand_in.received();
+    let next_up = &received[0];
+    assert_eq!(next_up.path, "/Shows/NextUp");
+    assert_summary_fields(next_up);
+    assert_eq!(next_up.query["seriesId"], SERIES);
+    assert_eq!(next_up.query["limit"], "1");
+    // An episode in progress is the series' next one: the server's default for enableResumable (true) stays, and no cutoff.
+    assert!(!next_up.query.contains_key("enableResumable"));
+    assert!(!next_up.query.contains_key("nextUpDateCutoff"));
+    let episodes = &received[1];
+    assert_eq!(episodes.path, format!("/Shows/{SERIES}/Episodes"));
+    assert_summary_fields(episodes);
+    assert_eq!(episodes.query["limit"], "1");
+    assert!(!episodes.query.contains_key("seasonId"));
+}
+
+#[tokio::test]
 async fn seasons_episodes_and_similar() {
     let stand_in = StandIn::answering(ITEMS_PAGE).await;
     let client = client(&stand_in);

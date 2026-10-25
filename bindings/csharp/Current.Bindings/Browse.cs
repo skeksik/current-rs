@@ -309,6 +309,15 @@ public sealed class DetailsView : IDisposable
         return subscription;
     }
 
+    /// <summary>What the page's Play button starts: the item from its resume point, or a series' next episode (else its first); null until
+    /// loaded and for an item that does not play.</summary>
+    public ValueSubscription<PlayTarget?> ObservePlay(IUiDispatcher ui)
+    {
+        var subscription = new ValueSubscription<PlayTarget?>(null);
+        subscription.Attach(_view.SubscribePlay(new PlayTargetForwarder(subscription, ui)));
+        return subscription;
+    }
+
     /// <summary>A series' seasons; empty for other kinds.</summary>
     public ListSubscription<ItemSummary> ObserveSeasons(IUiDispatcher ui) =>
         new((subscription, generation) => _view.SubscribeSeasons(new ItemsForwarder(subscription, ui, generation)));
@@ -462,6 +471,13 @@ internal sealed class LoadStateForwarder(ValueSubscription<LoadState> target, IU
     : ValueForwarder<Ffi.LoadState, LoadState>(target, ui, MapBrowse.From), Ffi.LoadStateListener
 {
     public void OnValue(Ffi.LoadState value) => Forward(value);
+}
+
+internal sealed class PlayTargetForwarder(ValueSubscription<PlayTarget?> target, IUiDispatcher ui)
+    : ValueForwarder<Ffi.PlayTarget?, PlayTarget?>(target, ui, play => play is null ? null : MapBrowse.From(play)),
+      Ffi.PlayTargetListener
+{
+    public void OnValue(Ffi.PlayTarget? value) => Forward(value);
 }
 
 internal sealed class ItemDetailsForwarder(ValueSubscription<ItemDetails?> target, IUiDispatcher ui)

@@ -59,6 +59,23 @@ public sealed record ItemSummary(
     Artwork? Poster = null,
     Artwork? Wide = null);
 
+/// <summary>
+/// What a Play button starts (ADR 0019): <c>Item</c> (on a series' page, its next episode) from <c>Start</c>. When <c>Resumes</c>, the
+/// button says "Resume" and "Play from the beginning" goes with it.
+/// </summary>
+public sealed record PlayTarget(ItemSummary Item, TimeSpan Start, bool Resumes)
+{
+    /// <summary>
+    /// Play on a tile's item (the core decides): the item from its resume point unless played; null for a kind that does not play by
+    /// itself (a series plays its next episode from its page). Pass the item with the marks every list shows now.
+    /// </summary>
+    public static PlayTarget? ForItem(ItemSummary item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return Ffi.CurrentFfiMethods.PlayTarget(MapBrowse.ToFfi(item)) is { } target ? MapBrowse.From(target) : null;
+    }
+}
+
 /// <summary>One of the user's libraries, for the app's navigation. <c>Collection</c> is null for a mixed library.</summary>
 public sealed record Library(ItemRef Item, string Name, string? Collection, IReadOnlyList<Artwork> Artwork);
 
@@ -335,6 +352,43 @@ internal static class MapBrowse
         Count(summary.ChildCount),
         summary.Poster is { } poster ? From(poster) : null,
         summary.Wide is { } wide ? From(wide) : null);
+
+    private static ulong? ToMillis(TimeSpan? time) => time is { } value ? (ulong)Math.Max(0, value.TotalMilliseconds) : null;
+
+    private static uint? Size(int? value, string name) => value is { } count ? Size(count, name) : null;
+
+    public static Ffi.UserState ToFfi(UserState state) => new(
+        state.Played,
+        ToMillis(state.Position),
+        state.Progress,
+        state.Favourite,
+        Size(state.UnplayedCount, nameof(state.UnplayedCount)),
+        Size(state.PlayCount, nameof(state.PlayCount)));
+
+    public static Ffi.EpisodeLinks ToFfi(EpisodeLinks links) => new(
+        links.Series is { } series ? ToFfi(series) : null,
+        links.SeriesName,
+        links.Season is { } season ? ToFfi(season) : null,
+        links.SeasonName,
+        Size(links.Number, nameof(links.Number)),
+        Size(links.NumberEnd, nameof(links.NumberEnd)),
+        Size(links.SeasonNumber, nameof(links.SeasonNumber)));
+
+    public static Ffi.ItemSummary ToFfi(ItemSummary summary) => new(
+        ToFfi(summary.Item),
+        summary.Kind,
+        summary.Name,
+        summary.Year,
+        ToMillis(summary.Runtime),
+        Array.ConvertAll(summary.Artwork.ToArray(), piece => ToFfi(piece)),
+        ToFfi(summary.User),
+        summary.Episode is { } episode ? ToFfi(episode) : null,
+        Size(summary.ChildCount, nameof(summary.ChildCount)),
+        summary.Poster is { } poster ? ToFfi(poster) : null,
+        summary.Wide is { } wide ? ToFfi(wide) : null);
+
+    public static PlayTarget From(Ffi.PlayTarget target) =>
+        new(From(target.Item), Millis(target.StartMs) ?? TimeSpan.Zero, target.Resumes);
 
     public static Library From(Ffi.Library library) =>
         new(From(library.Item), library.Name, library.Collection, From(library.Artwork));
