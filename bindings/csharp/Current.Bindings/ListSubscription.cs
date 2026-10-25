@@ -125,7 +125,7 @@ public sealed class ListSubscription<T> : INotifyPropertyChanged, IDisposable
 
 /// <summary>
 /// The listener the core holds for a list. Like <see cref="ValueForwarder{TRaw, T}"/>: a weak reference to its subscription, no core,
-/// maps on the core worker thread, hops to the UI thread, and catches every exception. A batch it could not deliver makes the next
+/// maps on the core thread, hops to the UI thread, and catches every exception. A batch it could not deliver makes the next
 /// delivery a recovery instead (<see cref="ListSubscription{T}.Recover"/>).
 /// </summary>
 internal class ListForwarder<TRaw, T>(

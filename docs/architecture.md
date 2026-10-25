@@ -63,6 +63,17 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
   `Core`, `TaskHandle` (cancel and abort on drop), `CancelToken` and one error enum, `CoreError`. Values are pumped from `watch`
   channels to listeners, lists as diff batches (`list_diff!` declares the per-item diff enum). `Core::live_listeners` counts the
   listeners the core holds, for leak checks.
+  - **Listener delivery.** Each subscription is one task on the runtime, but the task never calls the listener itself: each
+    callback runs on the runtime's blocking pool (`spawn_blocking`), and the task awaits it before taking the next value or batch.
+    So a subscription's callbacks are ordered and never overlap, while callbacks of different subscriptions can run at the same
+    time on different threads (up to tokio's blocking-pool limit, 512 by default), not only on the two workers. A slow, blocked or
+    throwing listener holds one pool thread and delays only its own subscription, never the workers every core task shares: UniFFI
+    turns a foreign exception into a Rust panic (`uniffi_core` 0.31.0, `LiftReturn::handle_callback_unexpected_error`), and the
+    panic hook, however costly, runs on that pool thread. The core installs no panic hook. A failing callback costs that delivery
+    only; a list's next batch is then a Reset. A value listener still busy skips intermediate values. Cancelling lets a callback
+    already running finish and sends nothing more. The runtime is a process-wide static that is never dropped, so a listener that
+    never returns does not hold up exit (`a_stuck_listener_does_not_hold_up_exit`). Every runtime thread, pool included, is named
+    `core-worker`. The C# and Swift adapters hop to the UI thread (`IUiDispatcher`, the main actor) before touching UI state.
   - `open_core(data_dir, device_name, secrets)` is async: the core opens the settings and the keyring on its own blocking pool, so a
     UI awaits it from its UI thread. `SecretStore::Keyring` in the apps, `Memory` for tests only. `Core::load_report` says what the
     store found. `Core::new` is the core that stores nothing (tests, the smoke run).
