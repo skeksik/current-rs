@@ -389,14 +389,31 @@ fn a_failing_list_listener_gets_a_reset_next() {
     );
 
     list.append(vec![String::from("lost")]);
-    // Whether "next" shares the lost batch or comes after it, what arrives next is the whole list.
     list.append(vec![String::from("next")]);
-    assert_eq!(
-        rx.recv_timeout(WAIT).unwrap(),
-        vec![TextDiff::Reset {
-            values: vec!["lost".into(), "next".into()]
-        }]
+    recovers_with_a_reset(&rx, &["lost", "next"]);
+}
+
+/// Checks what follows a lost batch: a batch starting with a Reset, then batches that bring a mirror to `expected`. The Reset holds
+/// the list as it was when the subscription resynced, which may be before the test's last change: that change then follows as a
+/// diff. Whether it does depends on when the failed delivery ends, on a pool thread, against the test thread's next change.
+fn recovers_with_a_reset(rx: &Receiver<Vec<TextDiff>>, expected: &[&str]) {
+    let first = rx.recv_timeout(WAIT).unwrap();
+    assert!(
+        matches!(first.first(), Some(TextDiff::Reset { .. })),
+        "a Reset first: {first:?}"
     );
+    let mut mirror = Vec::new();
+    for diff in first {
+        apply(&mut mirror, diff);
+    }
+    while mirror != expected {
+        let batch = rx
+            .recv_timeout(WAIT)
+            .unwrap_or_else(|_| panic!("timed out with the mirror at {mirror:?}"));
+        for diff in batch {
+            apply(&mut mirror, diff);
+        }
+    }
 }
 
 /// How long a delivery to a well-behaved listener, or a short core task, may take while other listeners misbehave. Well below the
@@ -508,12 +525,7 @@ fn a_panicking_list_listener_with_a_slow_hook_gets_a_reset_next() {
 
     list.append(vec![String::from("lost")]);
     list.append(vec![String::from("next")]);
-    assert_eq!(
-        rx.recv_timeout(WAIT).unwrap(),
-        vec![TextDiff::Reset {
-            values: vec!["lost".into(), "next".into()]
-        }]
-    );
+    recovers_with_a_reset(&rx, &["lost", "next"]);
 }
 
 #[test]
