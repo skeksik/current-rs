@@ -1,5 +1,6 @@
 //! Artwork: an image of an item or user, with what is needed to lay it out before it loads.
 
+use crate::identity::ItemRef;
 use crate::open::open_value;
 
 open_value! {
@@ -58,12 +59,24 @@ fn gcd(mut a: u32, mut b: u32) -> u32 {
     a
 }
 
+/// Which image, in a form that outlives the address it was read from (ADR 0018): the service crate builds the URL when it fetches,
+/// from the address that serves at that moment.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ImageRef {
+    /// Whose image it is: an episode's row may show its series' poster.
+    pub item: ItemRef,
+    pub kind: ImageType,
+    /// The image's position among the item's images of `kind`: non-zero only for backdrops after the first.
+    pub index: u32,
+    /// The server's version of the image. A new image gets a new tag, so an image with the same tag never changes.
+    pub tag: String,
+}
+
 /// One image.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Artwork {
     pub kind: ImageType,
-    /// Where to load it from, as built by the service crate. Kept as a string: the model does no I/O and does not parse URLs.
-    pub url: String,
+    pub image: ImageRef,
     pub aspect_ratio: Option<AspectRatio>,
     /// A BlurHash placeholder, if the server provides one.
     pub blurhash: Option<String>,

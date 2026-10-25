@@ -7,19 +7,28 @@ mod appearance;
 mod artwork;
 mod capabilities;
 mod identity;
+mod item;
+mod media;
 mod network;
 mod open;
+mod query;
 mod saved;
 mod server;
 mod user;
 
 pub use appearance::AppTheme;
-pub use artwork::{Artwork, AspectRatio, ImageType};
+pub use artwork::{Artwork, AspectRatio, ImageRef, ImageType};
 pub use capabilities::{Capabilities, Feature, Reachability, ServerStatus};
 pub use identity::{
     ItemId, ItemRef, MediaKind, ServerId, ServerKey, ServerRef, ServiceType, UserId,
 };
+pub use item::{
+    CalendarDate, Chapter, CollectionKind, EpisodeLinks, ItemDetails, ItemSummary, Library, Person,
+    PersonKind, UserState,
+};
+pub use media::{MediaSummary, StreamSummary};
 pub use network::{Connectivity, InterfaceKind, LocalInterface, NetworkFacts, NetworkKey};
+pub use query::{ItemFilter, ItemQuery, SortKey, SortOrder};
 pub use saved::{AuthHeader, SavedServer, SavedUser};
 pub use server::{AddressId, GatewayKind, PublicServerInfo, ServerAddress};
 pub use user::{Permission, User};
