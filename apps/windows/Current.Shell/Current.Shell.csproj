@@ -25,7 +25,6 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1603</WarningsNotAsErrors>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Program.cs has its own Main: single instance and the AppUserModelID come before any window (docs/notes/windows-shell.md). -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
@@ -34,19 +33,22 @@
   <ItemGroup>
     <!--
       Windows App SDK 2.5.1 as component packages, not the Microsoft.WindowsAppSDK metapackage, so the app ships no AI, ML, Widgets or
-      Search runtime it does not use (docs/notes/windows-shell.md). These are the versions the 2.5.1 metapackage pins. WinUI brings
-      Foundation (AppLifecycle) and Base. It asks for InteractiveExperiences 2.1.8, which nuget.org does not have, so 2.1.9 is named
-      here, and NuGet's NU1603 notice about it stays a warning.
+      Search runtime it does not use (docs/notes/windows-shell.md). Each is pinned exactly to the version the 2.5.1 metapackage pins,
+      Foundation (AppLifecycle) and Base too, although WinUI brings them, so a restore can never pick another version. WinUI and
+      Foundation ask for InteractiveExperiences 2.1.8, which nuget.org does not have; the direct 2.1.9 reference is the one restored,
+      and NuGet reports no NU1603 (warnings are errors here).
     -->
-    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
-    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="[2.3.9]" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="[2.1.9]" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="[2.3.12]" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Base" Version="[2.0.4]" />
     <!--
       The Windows Community Toolkit's SettingsCard and SettingsExpander, which Microsoft's settings guidelines recommend (owner,
       2026-10-23). 8.3.260402-preview2 is a preview: the stable 8.2.251219 depends on the whole Microsoft.WindowsAppSDK package, this one
       only on Microsoft.WindowsAppSDK.WinUI (>= 1.8.260204000), which the 2.3.9 above satisfies. It brings Triggers, Helpers and
       Extensions at the same version and CommunityToolkit.Common 8.2.1, all MIT (docs/notes/windows-shell.md). Move to 8.3 stable when
       it ships (docs/roadmap.md). Each is pinned exactly with NuGet's bracket form, the transitive ones too, so a restore can never pick
-      another version. (The WinUI references above remain minimums, with NU1603 as a warning: a follow-up, docs/roadmap.md.)
+      another version.
     -->
     <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="[8.3.260402-preview2]" />
     <PackageReference Include="CommunityToolkit.WinUI.Triggers" Version="[8.3.260402-preview2]" />
