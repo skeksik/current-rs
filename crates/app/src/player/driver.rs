@@ -17,7 +17,7 @@ use super::backend::{Backend, CompositionSize, DisplayFacts, Signal, SwapChain};
 use super::now_playing::{NowPlaying, TIMELINE_INTERVAL, now_playing};
 use super::prefs::PlaybackPrefs;
 use super::relay::RelaySlot;
-use super::server::{JellyfinMedia, relay_problem};
+use super::server::{JellyfinMedia, refusal_problem, relay_problem};
 use super::{Command, PlaybackInfo, Player, PlayerAction as Action, PlayerError, auto_skip};
 use crate::browse::Hub;
 use crate::images::{ImageCache, ImageLoad, ImageSource};
@@ -123,7 +123,7 @@ fn spawn<B: Backend>(context: Context, backend: B, raw: mpsc::UnboundedReceiver<
     let (relay_events, relay_rx) = mpsc::unbounded_channel();
     let controller = Controller::new(
         backend,
-        JellyfinMedia::new(context.relay.clone(), relay_events),
+        JellyfinMedia::new(context.shared.clone(), context.relay.clone(), relay_events),
         clock,
         context.prefs.quality(),
         initial_skip,
@@ -268,13 +268,15 @@ impl<B: Backend> Driver<B> {
         let raw = &mut self.raw;
         let relay = &mut self.relay;
         let skip = &mut self.auto_skip;
+        // In this order: a relay refusal reaches the controller before the engine's error about the same refused request.
         tokio::select! {
+            biased;
             command = commands.recv() => command.map_or(Wake::HandleGone, Wake::Command),
-            raw = async { raw.as_mut()?.recv().await }, if raw.is_some() => {
-                raw.map_or(Wake::EngineThreadEnded, Wake::Raw)
-            }
             event = async { relay.as_mut()?.recv().await }, if relay.is_some() => {
                 event.map_or(Wake::RelayGone, |(route, event)| Wake::Relay(route, event))
+            }
+            raw = async { raw.as_mut()?.recv().await }, if raw.is_some() => {
+                raw.map_or(Wake::EngineThreadEnded, Wake::Raw)
             }
             changed = async { skip.as_mut()?.changed().await.ok() }, if skip.is_some() => {
                 changed.map_or(Wake::AutoSkipGone, |()| Wake::AutoSkip)
@@ -399,7 +401,7 @@ impl<B: Backend> Driver<B> {
     }
 
     async fn play(&mut self, item: ItemRef, start: Duration) -> Result<(), PlayerError> {
-        let (id, client) = self
+        let (_, client) = self
             .context
             .shared
             .current_session(&item.server)
@@ -412,7 +414,7 @@ impl<B: Backend> Driver<B> {
         if !same {
             // The item playing is reported stopped to its own server first.
             self.controller.stop().await;
-            self.controller.server().set_client(id, client.clone());
+            self.controller.server().set_client(client.clone());
         }
         if let Some(task) = self.artwork_task.take() {
             task.abort();
@@ -456,7 +458,8 @@ impl<B: Backend> Driver<B> {
 
     /// An event of relay route `route`: dropped unless the route is the stream playing. A refusal goes to the 401 rule in the
     /// background (a probe and a token check, which must not hold the user's actions), and its answer comes back as
-    /// [`Command::StreamProblem`].
+    /// [`Command::StreamProblem`]; meanwhile the controller holds what the engine reports about the refused stream (its error, end
+    /// or stall), so the rule's answer is what the user sees.
     async fn relay_event(&mut self, route: u64, event: RelayEvent) {
         if !self.controller.server().is_current_route(route) {
             return;
@@ -468,16 +471,14 @@ impl<B: Backend> Driver<B> {
             }
             Err(refusal) => refusal,
         };
-        let Some((id, client)) = self.controller.server().session_with_id() else {
+        let Some(client) = self.controller.server().client() else {
             return;
         };
-        let shared = self.context.shared.clone();
+        self.controller.stream_refused();
         let commands = self.commands.clone();
         tokio::spawn(async move {
-            let server = client.server().clone();
-            let problem = shared
-                .stream_refused(&server, id, &client, status, &shape)
-                .await;
+            let error = client.stream_refused(status, &shape).await;
+            let problem = refusal_problem(status, &error);
             // Weak until here, so a closed player's channel closes meanwhile.
             if let Some(commands) = commands.upgrade() {
                 let _ = commands.send(Command::StreamProblem { route, problem });

@@ -357,10 +357,19 @@ fn an_expired_gateway_cookie_mid_play_asks_for_the_gateway_and_keeps_the_session
     let url = loaded_url();
     assert_eq!(fetch(&url, Some("bytes=0-99")).unwrap().status, 206);
 
-    // The portal's session ends: its sign-in page comes back where media was expected.
+    // The portal's session ends: its sign-in page comes back where media was expected. The engine fails on the 502 at once, as
+    // libmpv would; the 401 rule's answer is still what the user sees, with no fallback to another route.
     stand_in.set_gate_cookie("renewed-gate-cookie");
+    let plans = stand_in.count(&format!("/Items/{DIRECT_PLAY_ITEM}/PlaybackInfo"));
     assert_eq!(fetch(&url, Some("bytes=100-199")).unwrap().status, 502);
+    let control = test_engine::last_control().unwrap();
+    control.report_error();
+    control.report_eof();
     failed_with(&player, PlaybackProblem::GatewaySignInNeeded);
+    assert_eq!(
+        stand_in.count(&format!("/Items/{DIRECT_PLAY_ITEM}/PlaybackInfo")),
+        plans
+    );
     let status = core.app.capabilities().borrow().servers[0].clone();
     assert!(status.signed_in, "{status:?}");
     assert!(status.gateway_sign_in_needed, "{status:?}");
@@ -385,23 +394,31 @@ fn a_jellyfin_401_mid_play_ends_the_session_only_after_the_token_check() {
     assert!(stand_in.count("/Users/Me") > checks, "no token check");
     assert!(core.app.capabilities().borrow().servers[0].signed_in);
 
-    // The session revoked: the 401 waits for the token check, and only its failure ends the session.
+    // The session revoked. A progress report gets a 401 first and starts the session's check; the stream's 401 joins it: one probe
+    // and one token check per session, and only the check's failure ends the session.
     play(&player, EPISODE_IDS[0]);
     let url = loaded_url();
+    let checks = stand_in.count("/Users/Me");
     stand_in.hold("/Users/Me");
     stand_in.revoke_all();
-    assert_eq!(fetch(&url, Some("bytes=0-9")).unwrap().status, 502);
+    player.pause().unwrap();
     eventually("the token check", || {
-        stand_in.count("/Users/Me") > checks + 1
+        stand_in.count("/Users/Me") == checks + 1
     });
+    assert_eq!(fetch(&url, Some("bytes=0-9")).unwrap().status, 502);
     std::thread::sleep(Duration::from_millis(300));
-    assert_eq!(player.state().state, PlayerStateKind::Playing);
+    assert_eq!(player.state().state, PlayerStateKind::Paused);
     assert!(core.app.capabilities().borrow().servers[0].signed_in);
     stand_in.release("/Users/Me");
     failed_with(&player, PlaybackProblem::SignedOut);
     eventually("signed out", || {
         !core.app.capabilities().borrow().servers[0].signed_in
     });
+    assert_eq!(
+        stand_in.count("/Users/Me"),
+        checks + 1,
+        "a second token check"
+    );
     block_on(player.close());
 }
 
@@ -442,12 +459,22 @@ fn an_address_switch_mid_play_goes_on_with_the_new_addresses_credentials_only() 
     let other = seen.last().unwrap().address;
     assert_ne!(other, first);
     for seen in &seen {
-        let own = if seen.address == 0 {
-            GATE_HEADER_VALUE
+        let (own, other) = if seen.address == 0 {
+            (GATE_HEADER_VALUE, OTHER_GATE_HEADER_VALUE)
         } else {
-            OTHER_GATE_HEADER_VALUE
+            (OTHER_GATE_HEADER_VALUE, GATE_HEADER_VALUE)
         };
         assert_carried(seen, Gate::Header, own);
+        // The other address's credential is nowhere in the request.
+        for field in [
+            &seen.target,
+            &seen.authorization,
+            &seen.emby_authorization,
+            &seen.cookie,
+            &seen.gate_header,
+        ] {
+            assert!(!field.contains(other), "{seen:?}");
+        }
     }
     assert!(seen.iter().any(|seen| seen.address == first));
     // Nothing failed meanwhile.

@@ -124,9 +124,11 @@ async fn a_stream_without_a_gateway_needs_only_the_token_redacted() {
     let secrets = client.stream_secrets();
     assert_eq!(secrets.len(), 1);
     assert!(stream.url.expose().contains(&secrets[0]));
-    assert!(!client.address_has_gateway());
-    // For the loopback relay: the path on the address, without the token.
-    let path = client.stream_path(stream.url.expose()).unwrap();
+    // For the loopback relay: the address in use and the path on it, without the token.
+    let target = client.stream_target(stream.url.expose()).unwrap();
+    assert!(!target.address.has_gateway());
+    assert!(!format!("{target:?}").contains("Videos"));
+    let path = target.path;
     assert!(
         path.starts_with(&format!("/Videos/{DIRECT_PLAY_ITEM}/stream?")),
         "{path}"
@@ -136,4 +138,10 @@ async fn a_stream_without_a_gateway_needs_only_the_token_redacted() {
         !path.contains(&secrets[0]) && !path.contains("ApiKey"),
         "{path}"
     );
+    // A URL on another address (the server moved since the URL was made) has no target.
+    let elsewhere = stream
+        .url
+        .expose()
+        .replace(stand_in.address(), "http://192.168.1.10:8096");
+    assert!(client.stream_target(&elsewhere).is_none());
 }

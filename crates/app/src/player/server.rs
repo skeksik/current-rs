@@ -28,11 +28,13 @@ use current_relay::{RelayEvent, Route, RouteConfig};
 use tokio::sync::mpsc;
 
 use super::relay::{RelaySlot, RouteEvents, SessionUpstream};
+use crate::session::Shared;
 
 /// The session of the item playing, as a media server for one player.
 pub(crate) struct JellyfinMedia {
-    /// The session's id in the app and its client.
-    session: Mutex<Option<(u64, Arc<JellyfinClient>)>>,
+    client: Mutex<Option<Arc<JellyfinClient>>>,
+    /// The saved servers, for whether an address has a gateway configured.
+    shared: Arc<Shared>,
     relay: Arc<RelaySlot>,
     /// The relay route of the stream given last, by its number.
     route: Mutex<Option<(u64, Route)>>,
@@ -47,11 +49,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl JellyfinMedia {
     /// A media server whose relay routes report to `events`.
     pub(crate) fn new(
+        shared: Arc<Shared>,
         relay: Arc<RelaySlot>,
         events: mpsc::UnboundedSender<(u64, RelayEvent)>,
     ) -> Self {
         Self {
-            session: Mutex::new(None),
+            client: Mutex::new(None),
+            shared,
             relay,
             route: Mutex::new(None),
             last_route: AtomicU64::new(0),
@@ -61,18 +65,11 @@ impl JellyfinMedia {
 
     /// The session in use, if any.
     pub(crate) fn client(&self) -> Option<Arc<JellyfinClient>> {
-        lock(&self.session)
-            .as_ref()
-            .map(|(_, client)| client.clone())
+        lock(&self.client).clone()
     }
 
-    /// The session in use with its id in the app.
-    pub(crate) fn session_with_id(&self) -> Option<(u64, Arc<JellyfinClient>)> {
-        lock(&self.session).clone()
-    }
-
-    pub(crate) fn set_client(&self, id: u64, client: Arc<JellyfinClient>) {
-        *lock(&self.session) = Some((id, client));
+    pub(crate) fn set_client(&self, client: Arc<JellyfinClient>) {
+        *lock(&self.client) = Some(client);
     }
 
     fn session(&self) -> Result<Arc<JellyfinClient>, PlaybackProblem> {
@@ -123,6 +120,30 @@ impl JellyfinMedia {
         };
         *lock(&self.route) = Some((number, route));
         Ok(stream)
+    }
+}
+
+/// Whether a stream on `address` goes through the relay. Fail-closed: only an address known to have no gateway gets the direct
+/// URL, with `ApiKey` in it (ADR 0020 choice 4 B). `configured` is whether the saved address at the selected one's position has gateway
+/// credentials configured: `None` for an address without a position (a single fixed address, whose credentials tell), `Some(None)`
+/// for a position the saved list does not have.
+fn relays(has_credentials: bool, configured: Option<Option<bool>>) -> bool {
+    has_credentials
+        || match configured {
+            Some(configured) => configured.unwrap_or(true),
+            None => false,
+        }
+}
+
+/// What a refusal of a relayed stream means after the 401 rule ([`JellyfinClient::stream_refused`]). Nothing decided after a 401:
+/// the probe found no answer, so `Network`; after another refusal (a 403, a page, a redirect, which Jellyfin never sends) the
+/// server's status, or the 502 the player got.
+pub(crate) fn refusal_problem(status: u16, error: &AuthError) -> PlaybackProblem {
+    match error {
+        AuthError::Unconfirmed if status == 401 => PlaybackProblem::Network,
+        AuthError::Unconfirmed if status >= 400 => PlaybackProblem::Server { status },
+        AuthError::Unconfirmed => PlaybackProblem::Server { status: 502 },
+        error => problem(error),
     }
 }
 
@@ -312,7 +333,16 @@ impl MediaServer for JellyfinMedia {
     fn stream_url(&self, item: &ItemRef, url: &StreamUrl) -> Result<EngineStream, PlaybackProblem> {
         self.remove_route();
         let client = self.session()?;
-        if !client.address_has_gateway() {
+        // One snapshot of the address: the URL must be on it, and the choice is for it. The server moved since the plan: a new plan
+        // gets a URL on the new address.
+        let target = client
+            .stream_target(url.expose())
+            .ok_or(PlaybackProblem::Network)?;
+        let configured = target
+            .address
+            .position()
+            .map(|position| self.shared.gateway_configured(client.server(), position));
+        if !relays(target.address.has_gateway(), configured) {
             return Ok(EngineStream {
                 url: url.clone(),
                 auth: StreamAuth {
@@ -321,11 +351,7 @@ impl MediaServer for JellyfinMedia {
                 relayed: false,
             });
         }
-        // The server moved to another address since the plan: a new plan gets a URL on the new one.
-        let path = client
-            .stream_path(url.expose())
-            .ok_or(PlaybackProblem::Network)?;
-        self.relay(client, item, &path)
+        self.relay(client, item, &target.path)
     }
 
     fn end_stream(&self) {
@@ -341,6 +367,50 @@ impl MediaServer for JellyfinMedia {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_address_known_to_have_no_gateway_gets_the_direct_url() {
+        // Credentials now, or configured on the saved address (a portal whose cookie just expired): relayed.
+        assert!(relays(true, Some(Some(false))));
+        assert!(relays(false, Some(Some(true))));
+        assert!(relays(true, None));
+        // A position the saved list does not have: relayed, never the token to an address that may have a gateway.
+        assert!(relays(false, Some(None)));
+        // Known to have none: direct.
+        assert!(!relays(false, Some(Some(false))));
+        assert!(!relays(false, None));
+    }
+
+    #[test]
+    fn a_refusal_nothing_decided_is_the_servers_status_or_the_network() {
+        assert_eq!(
+            refusal_problem(401, &AuthError::Unconfirmed),
+            PlaybackProblem::Network
+        );
+        assert_eq!(
+            refusal_problem(403, &AuthError::Unconfirmed),
+            PlaybackProblem::Server { status: 403 }
+        );
+        assert_eq!(
+            refusal_problem(302, &AuthError::Unconfirmed),
+            PlaybackProblem::Server { status: 502 }
+        );
+        assert_eq!(
+            refusal_problem(401, &AuthError::SessionRevoked),
+            PlaybackProblem::SignedOut
+        );
+        assert_eq!(
+            refusal_problem(
+                200,
+                &AuthError::Gateway(current_jellyfin::GatewayAnswer::SignIn)
+            ),
+            PlaybackProblem::GatewaySignInNeeded
+        );
+        assert_eq!(
+            refusal_problem(401, &AuthError::NotAvailable),
+            PlaybackProblem::NotFound
+        );
+    }
 
     #[test]
     fn an_item_refused_to_a_session_that_goes_on_is_not_found() {

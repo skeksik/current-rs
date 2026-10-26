@@ -63,8 +63,11 @@ struct Session {
     /// When the engine last moved (an event that changed something, or a command); the stall rule counts from here.
     last_progress: Duration,
     /// The stream's connection failed while the engine was playing from its buffer ([`Controller::stream_failed`]): an engine
-    /// error or a stall that follows is that failure, not the file's.
+    /// error, a stall or an end short of the duration that follows is that failure, not the file's. Cleared once data arrives again.
     stream_lost: bool,
+    /// A refusal of the stream is with the 401 rule ([`Controller::stream_refused`]): what the engine reports about the refused
+    /// stream (an error or an end) waits for its answer.
+    refusal_pending: bool,
     /// Whether the server was told this play session started, and that it stopped.
     started: bool,
     stop_reported: bool,
@@ -101,6 +104,7 @@ impl Session {
             seeking: false,
             last_progress: now,
             stream_lost: false,
+            refusal_pending: false,
             started: false,
             stop_reported: false,
             item_stopped: false,
@@ -155,6 +159,12 @@ impl Session {
             && self.subtitle_stream(choice).is_some_and(|stream| {
                 stream.subtitle_delivery.as_ref() == Some(&SubtitleDelivery::ENCODE)
             })
+    }
+
+    /// Whether the position is at the end of the file (within a second), as a real end of the file leaves it.
+    fn at_end(&self) -> bool {
+        self.duration
+            .is_some_and(|duration| self.position + Duration::from_secs(1) >= duration)
     }
 
     /// Where the "Next episode" card starts: the first outro segment, else the last 30 s.
@@ -310,7 +320,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     /// Plays `item` from `start` (a resume position or zero: the details screen decides, ADR 0018), on the engine already open. An
     /// item playing is stopped first.
     pub async fn play(&mut self, item: ItemRef, kind: MediaKind, start: Duration) {
-        self.end_item(false).await;
+        if self.session.is_some() {
+            self.end_item(false).await;
+            // Unloaded now, as a stop does: an end the old file reports while the new one is planned would read as the new one's.
+            self.engine.stop();
+        }
         self.session = Some(Session::new(item.clone(), start, self.clock.now()));
         let permissions = self.server.permissions().await.unwrap_or_default();
         if let Some(session) = &mut self.session {
@@ -639,6 +653,8 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             }
             EngineEvent::Restarted => {
                 session.last_progress = now;
+                // The engine read the stream again.
+                session.stream_lost = false;
                 if self.phase == Phase::Loading {
                     self.phase = Phase::Active;
                     session.seeking = false;
@@ -676,6 +692,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 if session.buffered != Some(buffered) {
                     session.last_progress = now;
                 }
+                // More data ahead than before: the stream reads again.
+                if session.buffered.is_some_and(|before| buffered > before) {
+                    session.stream_lost = false;
+                }
                 session.buffered = Some(buffered);
                 self.publish(false);
             }
@@ -688,15 +708,27 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 }
             }
             EngineEvent::Buffering(buffering) => {
+                if session.buffering && !buffering {
+                    session.stream_lost = false;
+                }
                 if session.buffering != buffering {
                     session.buffering = buffering;
                     session.last_progress = now;
                     self.publish(true);
                 }
             }
+            // While a refusal is with the 401 rule, its answer decides ([`Controller::stream_failed`]).
+            EngineEvent::Ended(EndReason::Eof | EndReason::Error(_)) if session.refusal_pending => {
+            }
             EngineEvent::Ended(EndReason::Eof) => {
                 if matches!(self.phase, Phase::Active | Phase::Loading) {
-                    self.end_of_file().await;
+                    if session.stream_lost && !session.at_end() {
+                        // The connection's failure, not the end of the file: not marked played, no autoplay.
+                        self.engine.stop();
+                        self.fail(PlaybackProblem::Network).await;
+                    } else {
+                        self.end_of_file().await;
+                    }
                 }
             }
             EngineEvent::Ended(EndReason::Error(kind)) => {
@@ -706,6 +738,21 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             }
             // Stops and replaced files are the controller's own commands.
             EngineEvent::Ended(EndReason::Stopped) => {}
+        }
+    }
+
+    /// The relay saw the server or a gateway refuse the stream, and the composition root took the refusal to the 401 rule, whose
+    /// answer comes with [`Controller::stream_failed`]. Until then the engine's error or end about the refused request is held, and
+    /// the stall rule counts from now, so the user sees the rule's answer ("Sign in to the gateway again"), not an engine error, an
+    /// end, or a fallback. Only while a file is loading or playing; a new plan clears it.
+    pub fn stream_refused(&mut self) {
+        if !matches!(self.phase, Phase::Active | Phase::Loading) {
+            return;
+        }
+        let now = self.clock.now();
+        if let Some(session) = &mut self.session {
+            session.refusal_pending = true;
+            session.last_progress = now;
         }
     }
 
@@ -725,7 +772,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             return;
         };
         let waiting = self.phase == Phase::Loading || session.seeking || session.buffering;
-        if problem == PlaybackProblem::Network && !waiting {
+        if problem == PlaybackProblem::Network && !waiting && !session.refusal_pending {
             session.stream_lost = true;
             return;
         }
@@ -898,6 +945,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         session.position = start;
         session.last_progress = self.clock.now();
         session.stream_lost = false;
+        session.refusal_pending = false;
         session.started = false;
         session.stop_reported = false;
         session.paused = false;

@@ -349,9 +349,10 @@ fn another_item_stops_the_first_and_loads_on_the_same_engine() {
         position: secs(100),
         failed: false,
     }));
+    // The old file is unloaded first, so an end it reports cannot read as the new one's.
     let commands = player.commands();
     assert!(
-        matches!(commands.as_slice(), [Command::Load(_)]),
+        matches!(commands.as_slice(), [Command::Stop, Command::Load(_)]),
         "{commands:?}"
     );
     assert_eq!(player.requests()[1].0, item("m2"));
@@ -844,7 +845,7 @@ fn at_the_end_the_next_episode_starts_after_a_10_second_countdown_on_the_same_en
     assert_eq!(requests[1].1.start, Duration::ZERO);
     let commands = player.commands();
     assert!(
-        matches!(commands.as_slice(), [Command::Load(_)]),
+        matches!(commands.as_slice(), [Command::Stop, Command::Load(_)]),
         "{commands:?}"
     );
     assert_eq!(player.state(), PlayerState::Loading);
@@ -1096,6 +1097,118 @@ fn a_connection_lost_while_playing_from_the_buffer_fails_only_with_the_engine() 
         }
     );
     assert_eq!(player.requests().len(), 1);
+}
+
+#[test]
+fn an_engine_error_or_end_after_a_refusal_waits_for_the_401_rule() {
+    for end in [
+        EndReason::Error(EngineErrorKind::LOADING_FAILED),
+        EndReason::Eof,
+    ] {
+        // Direct play: an engine error would otherwise fall back to a server stream, an end mark the item played.
+        let mut player = Harness::playing(AutoSkip::off());
+        player.at(120);
+        player.player.stream_refused();
+        player.event(EngineEvent::Ended(end.clone()));
+        assert_eq!(player.state(), PlayerState::Playing, "{end:?}");
+        assert_eq!(player.requests().len(), 1, "no fallback");
+        assert!(player.reports().is_empty());
+        // The rule's answer is what the user sees.
+        block_on(
+            player
+                .player
+                .stream_failed(PlaybackProblem::GatewaySignInNeeded),
+        );
+        assert_eq!(
+            player.state(),
+            PlayerState::Failed {
+                problem: PlaybackProblem::GatewaySignInNeeded
+            }
+        );
+        assert!(
+            player
+                .events()
+                .iter()
+                .any(|event| matches!(event, PlayerEvent::Stopped { failed: true, .. }))
+        );
+    }
+    // A Network answer while playing from the buffer still ends playback: the rule found nothing, and the stream was refused.
+    let mut player = Harness::playing(AutoSkip::off());
+    player.player.stream_refused();
+    block_on(player.player.stream_failed(PlaybackProblem::Network));
+    assert_eq!(
+        player.state(),
+        PlayerState::Failed {
+            problem: PlaybackProblem::Network
+        }
+    );
+}
+
+#[test]
+fn a_new_plan_clears_a_pending_refusal() {
+    let mut player = Harness::playing(AutoSkip::off());
+    player.player.stream_refused();
+    block_on(player.player.set_quality(Quality::Bitrate(4_000_000)));
+    player.start();
+    assert_eq!(player.requests().len(), 2);
+    // The new stream's engine error is its own: no refusal waits, and direct play falls back.
+    player.event(EngineEvent::Ended(EndReason::Error(
+        EngineErrorKind::DECODER_FAILED,
+    )));
+    assert_eq!(player.requests().len(), 3);
+    assert_eq!(player.state(), PlayerState::Loading);
+}
+
+#[test]
+fn an_end_short_of_the_duration_after_a_lost_connection_fails_with_network() {
+    let mut player = Harness::playing(AutoSkip::off());
+    player.server.state().next = Some(summary("e2"));
+    player.at(600);
+    block_on(player.player.stream_failed(PlaybackProblem::Network));
+    assert_eq!(player.state(), PlayerState::Playing);
+    player.event(EngineEvent::Ended(EndReason::Eof));
+    assert_eq!(
+        player.state(),
+        PlayerState::Failed {
+            problem: PlaybackProblem::Network
+        }
+    );
+    let reports = player.reports();
+    assert!(reports.iter().all(|(_, report)| match report {
+        Report::Stopped(report) => report.failed && report.position == secs(600),
+        _ => true,
+    }));
+    assert!(player.player.status().next.is_none(), "no autoplay");
+
+    // At the real end it is the end.
+    let mut player = Harness::playing(AutoSkip::off());
+    player.at(3600);
+    block_on(player.player.stream_failed(PlaybackProblem::Network));
+    player.event(EngineEvent::Ended(EndReason::Eof));
+    assert_eq!(player.state(), PlayerState::Ended);
+}
+
+#[test]
+fn a_lost_connection_is_forgotten_once_data_arrives_again() {
+    for arrives in [
+        vec![
+            EngineEvent::Buffered(secs(2)),
+            EngineEvent::Buffered(secs(5)),
+        ],
+        vec![EngineEvent::Buffering(true), EngineEvent::Buffering(false)],
+    ] {
+        let mut player = Harness::playing(AutoSkip::off());
+        block_on(player.player.stream_failed(PlaybackProblem::Network));
+        for event in arrives {
+            player.event(event);
+        }
+        // A real decode error after the reconnect falls back as any other.
+        player.event(EngineEvent::Ended(EndReason::Error(
+            EngineErrorKind::DECODER_FAILED,
+        )));
+        assert_eq!(player.requests().len(), 2, "the fallback re-plans");
+        assert_eq!(player.state(), PlayerState::Loading);
+    }
 }
 
 #[test]

@@ -13,12 +13,9 @@ use std::time::Duration;
 use current_jellyfin::{
     AccessToken, HeaderPlacement, JellyfinClient, ProbeError, Prober, SessionEvent, TokenCheck,
 };
-use current_model::{
-    AddressId, PlaybackProblem, Reachability, SavedServer, ServerAddress, ServerRef,
-};
+use current_model::{AddressId, Reachability, SavedServer, ServerAddress, ServerRef};
 use current_net::{
-    AddressProvider, ClientConfig, Gateway, GatewayCredentials, GatewayShape, RoamingAddresses,
-    RuntimeHandle, ServerClient, Url,
+    AddressProvider, ClientConfig, Gateway, GatewayCredentials, RuntimeHandle, ServerClient, Url,
 };
 use current_store::{
     GatewayKey, GatewaySecret, StoreError, delete_gateway_secret, get_gateway_secret,
@@ -55,19 +52,6 @@ pub(super) struct NewGateway {
     credentials: GatewayCredentials,
     count: u64,
     remembered: bool,
-}
-
-/// What the 401 rule's second part decided.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Confirmed {
-    /// The gateway answered the probe: "Sign in to the gateway again", session and token kept.
-    Gateway,
-    /// Jellyfin's 401, and its token check failed: the session ended.
-    Revoked,
-    /// Jellyfin's 401 to a token that works: this one resource is refused to the user, the session goes on.
-    Kept,
-    /// Nothing changed: no answer, or not a gateway's after a page or a redirect.
-    Nothing,
 }
 
 /// Whether a probe's answer is a gateway's: a gateway shape, or a redirect off the address (a portal, ADR 0017).
@@ -349,13 +333,13 @@ impl Shared {
         token: AccessToken,
         unauthorized: bool,
         client: &JellyfinClient,
-    ) -> Confirmed {
+    ) {
         let link = lock(&self.links)
             .get(server)
             .map(|link| (link.provider.clone(), link.identity.clone()));
         let Some((provider, identity)) = link else {
             client.resume();
-            return Confirmed::Nothing;
+            return;
         };
         let answer = match ServerClient::new(
             server.clone(),
@@ -371,81 +355,23 @@ impl Shared {
             // Jellyfin's 401, which it also answers with a valid token for one resource the user cannot reach (a hidden library):
             // ask it who the token belongs to (ADR 0015 as amended 2026-10-25).
             Some(Ok(_)) if unauthorized => match client.check_token(&token).await {
-                TokenCheck::Works => {
-                    client.keep(&token);
-                    Confirmed::Kept
-                }
+                TokenCheck::Works => client.keep(&token),
                 TokenCheck::Fails => {
                     if client.revoke(&token) {
                         self.revoked(server, id);
-                        Confirmed::Revoked
-                    } else {
-                        // A newer sign-in replaced the token meanwhile: its session goes on.
-                        Confirmed::Nothing
                     }
                 }
-                TokenCheck::Unknown => {
-                    client.resume();
-                    Confirmed::Nothing
-                }
+                TokenCheck::Unknown => client.resume(),
             },
             Some(Err(error)) if gateway_answered(&error) => {
-                self.needs_gateway_sign_in(server, id, self.address_in_use(server, &provider));
-                client.resume();
-                Confirmed::Gateway
+                let address = provider
+                    .current()
+                    .and_then(|selected| selected.position())
+                    .and_then(|position| self.address_at(server, position));
+                self.needs_gateway_sign_in(server, id, address);
+                client.gateway_answered();
             }
-            _ => {
-                client.resume();
-                Confirmed::Nothing
-            }
-        }
-    }
-
-    /// The saved address the provider has selected now.
-    fn address_in_use(&self, server: &ServerRef, provider: &RoamingAddresses) -> Option<AddressId> {
-        provider
-            .current()
-            .and_then(|selected| selected.position())
-            .and_then(|position| self.address_at(server, position))
-    }
-
-    /// The 401 rule for a stream's refusal, which the loopback relay saw and the session's client did not (ADR 0020, "Lifecycle"):
-    /// what playback fails with. A gateway's challenge (Basic, or another scheme) is the gateway's at once: "Sign in to the gateway
-    /// again", session kept. Any other refusal (a 401 or 403 without one, a redirect, a sign-in page) is checked as the client's own
-    /// would be (ADR 0017's 401 rule): the identity probe with the address's gateway credentials, then, when Jellyfin answers it
-    /// after a 401, Jellyfin's token check (ADR 0015 as amended 2026-10-25). The session ends only when that check fails.
-    pub(crate) async fn stream_refused(
-        self: &Arc<Self>,
-        server: &ServerRef,
-        id: u64,
-        client: &JellyfinClient,
-        status: u16,
-        shape: &GatewayShape,
-    ) -> PlaybackProblem {
-        if matches!(
-            shape,
-            GatewayShape::Password { .. } | GatewayShape::Unsupported
-        ) {
-            let provider = lock(&self.links)
-                .get(server)
-                .map(|link| link.provider.clone());
-            let address = provider.and_then(|provider| self.address_in_use(server, &provider));
-            self.needs_gateway_sign_in(server, id, address);
-            return PlaybackProblem::GatewaySignInNeeded;
-        }
-        let Some(token) = client.current_token() else {
-            return PlaybackProblem::SignedOut;
-        };
-        match self.confirm(server, id, token, status == 401, client).await {
-            Confirmed::Gateway => PlaybackProblem::GatewaySignInNeeded,
-            Confirmed::Revoked => PlaybackProblem::SignedOut,
-            // As for any request the server refused this way while the session goes on (`player::server::problem`).
-            Confirmed::Kept => PlaybackProblem::NotFound,
-            // The probe could not decide: no answer.
-            Confirmed::Nothing if status == 401 => PlaybackProblem::Network,
-            // The server's own refusal; a page or a redirect, which Jellyfin never sends, as the 502 the player got.
-            Confirmed::Nothing if status >= 400 => PlaybackProblem::Server { status },
-            Confirmed::Nothing => PlaybackProblem::Server { status: 502 },
+            _ => client.resume(),
         }
     }
 
@@ -465,6 +391,15 @@ impl Shared {
             // A dropped session closes the channel: nothing to wait for then.
             let _ = receiver.wait_for(|running| !*running).await;
         }
+    }
+
+    /// Whether the saved address at 1-based `position` has gateway credentials configured (its settings list a kind), whatever the
+    /// credentials hold now: a portal's cookie that just expired leaves the gateway configured. `None` when no such address is
+    /// saved.
+    pub(crate) fn gateway_configured(&self, server: &ServerRef, position: u8) -> Option<bool> {
+        let saved = self.saved(server)?;
+        let address = saved.addresses.get(usize::from(position).checked_sub(1)?)?;
+        Some(!address.gateway.is_empty())
     }
 
     /// The saved address at 1-based `position`.

@@ -12,11 +12,28 @@
 //!   `ForceRemoteSourceTranscoding` (default false), and `RemoteClientBitrateLimit` in bits per second.
 
 use current_model::{Codec, ItemId};
-use current_net::{HostScope, Request, StreamError, StreamResponse, Url, host_scope};
+use current_net::{HostScope, Request, Selected, StreamError, StreamResponse, Url, host_scope};
 use serde::Deserialize;
 
 use crate::auth;
 use crate::client::{AuthError, JellyfinClient};
+
+/// Where a stream is: [`JellyfinClient::stream_target`]. Debug shows the address's position only, never a URL or a path.
+#[derive(Clone)]
+pub struct StreamTarget {
+    /// The address in use, with whether it carries gateway credentials ([`Selected::has_gateway`]) and its position.
+    pub address: Selected,
+    /// The path and query relative to the address, without the token.
+    pub path: String,
+}
+
+impl std::fmt::Debug for StreamTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamTarget")
+            .field("address", &self.address)
+            .finish_non_exhaustive()
+    }
+}
 
 /// What the user's policy says about transcoding. The server enforces it; the player reads it only to explain an outcome (ADR 0019,
 /// "Permissions").
@@ -54,21 +71,15 @@ impl JellyfinClient {
             .unwrap_or_default()
     }
 
-    /// Whether requests to the address in use carry gateway credentials (ADR 0017): its streams then go through the loopback relay
-    /// (ADR 0020). False while no address is selected.
-    pub fn address_has_gateway(&self) -> bool {
-        self.http
-            .current_address()
-            .is_some_and(|selected| selected.has_gateway())
-    }
-
-    /// `url` (a stream URL this client made, exposed)'s path and query relative to the address in use (`/Videos/{id}/stream?static=true&...`), without `ApiKey` and `api_key`:
-    /// what the loopback relay's URL carries after its route (ADR 0020 choice 4), percent-encoded as in `url`. `None` when `url` is
-    /// not on the address in use (the server moved to another address since the URL was made) or is not a URL.
-    pub fn stream_path(&self, url: &str) -> Option<String> {
+    /// Where a stream URL this client made (`url`, exposed) is now: the address in use and the URL's path and query relative to it
+    /// (`/Videos/{id}/stream?static=true&...`), without `ApiKey` and `api_key` and percent-encoded as in `url`, which the loopback
+    /// relay's URL carries after its route (ADR 0020 choice 4). One snapshot of the address, so the caller decides between the
+    /// direct URL and the relay for the address the path belongs to. `None` when no address is selected, `url` is not on the one in
+    /// use (the server moved since the URL was made), or `url` is not a URL.
+    pub fn stream_target(&self, url: &str) -> Option<StreamTarget> {
         let url = Url::parse(url).ok()?;
-        let selected = self.http.current_address()?;
-        let base = selected.url();
+        let address = self.http.current_address()?;
+        let base = address.url();
         if url.origin() != base.origin() {
             return None;
         }
@@ -83,11 +94,12 @@ impl JellyfinClient {
             .split('&')
             .filter(|pair| !pair.is_empty() && !is_token_pair(pair))
             .collect();
-        Some(if query.is_empty() {
+        let path = if query.is_empty() {
             path.to_owned()
         } else {
             format!("{path}?{}", query.join("&"))
-        })
+        };
+        Some(StreamTarget { address, path })
     }
 
     /// Sends a stream request through this session (`current-net`'s `send_stream`, for the loopback relay, ADR 0020): to the address

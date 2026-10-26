@@ -23,7 +23,7 @@ pub use client::{ClientConfig, Request, RequestAuth, Response, ServerClient};
 pub use error::{Location, NetError};
 pub use gateway::{
     AuthorizationUse, BasicCredentials, ExtraHeader, Gateway, GatewayCookie, GatewayCredentials,
-    GatewayError, StreamCookie, StreamCredentials,
+    GatewayError,
 };
 pub use log::{DEFAULT_CAPACITY, LogEntry, Outcome, REDACTED, RequestLog, redact_query};
 pub use reqwest::Method;

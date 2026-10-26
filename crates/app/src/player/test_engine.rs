@@ -101,6 +101,19 @@ impl TestEngineControl {
         let _ = self.events.send(TestRaw::Event(event));
     }
 
+    /// Reports that the file failed to load or play, as libmpv's end with an error: for tests that cannot name
+    /// `current-playback`'s events (the bridge's).
+    pub fn report_error(&self) {
+        self.send(EngineEvent::Ended(EndReason::Error(
+            EngineErrorKind::LOADING_FAILED,
+        )));
+    }
+
+    /// Reports the end of the file, as libmpv's `eof-reached`.
+    pub fn report_eof(&self) {
+        self.send(EngineEvent::Ended(EndReason::Eof));
+    }
+
     /// How many times the swap chain was released.
     pub fn swap_chain_releases(&self) -> u64 {
         self.releases.load(Ordering::SeqCst)

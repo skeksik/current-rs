@@ -33,7 +33,8 @@ pub use auth::{
 pub use browse::{NEXT_UP_CUTOFF, Page, SEARCH_GROUPS, SEARCH_LIMIT, SearchGroup};
 pub use client::{
     AuthError, JellyfinClient, QUICK_CONNECT_INTERVAL, QUICK_CONNECT_LIFETIME, QuickConnectCode,
-    RuntimeClock, SessionEvent, SessionHook, SignedIn, TOKEN_CHECK_TIMEOUT, TokenCheck, WaitClock,
+    RuntimeClock, STREAM_REFUSAL_WAIT, SessionEvent, SessionHook, SignedIn, TOKEN_CHECK_TIMEOUT,
+    TokenCheck, WaitClock,
 };
 pub use discovery::{
     Candidate, DISCOVERY_PORT, DiscoveryConfig, DiscoveryError, MAX_ADDRESSES_PER_SERVER,
@@ -45,5 +46,5 @@ pub use playback::{
     MAXIMUM_STREAMING_BITRATE, PlayableStream, PlaybackAnswer, PlaybackError, PlaybackRequest,
     ProgressReport, STOP_REPORT_TIMEOUT, SourceAnswer, StopReport, StreamUrl,
 };
-pub use player::TranscodePolicy;
+pub use player::{StreamTarget, TranscodePolicy};
 pub use probe::{FoundServer, JellyfinIdentity, MINIMUM_VERSION, ProbeError, Prober, same_server};
