@@ -197,7 +197,8 @@ address without a gateway, which has none to pass.
   `user-agent=Current/<version>`, `network-timeout=30`. `load-scripts`, `osc` and `ytdl` exist only in builds with Lua, JavaScript
   or C plugins (`options/options.c`, `#if HAVE_LUA`), which ours is not; the engine turns them off only where mpv knows them (a
   system libmpv on Linux, ADR 0011). Per file through `loadfile`'s option map: `start`, `aid`, `sid`, `stream-lavf-o`
-  (`max_redirects`, `cookies`, `headers`).
+  (`max_redirects`, `cookies`, `headers`). Amended 2026-10-26 (owner): HLS loads also get `demuxer=lavf` (ADR 0020, choice 5's
+  amendment).
 - **Display facts to options:** ADR 0007's mapping, unchanged, plus `display-fps-override` from the refresh rate. `video-sync` stays
   mpv's default until `display-resample` is checked on a device (ADR 0007 item 5).
 - **Swap chain:** on each `display-swapchain` change the engine `AddRef`s the pointer through `IUnknown`'s vtable (no Windows crate
