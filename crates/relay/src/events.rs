@@ -20,9 +20,11 @@ pub enum RelayEvent {
     Network,
     /// A playlist named a URI off the server's address or outside the route's prefixes (ADR 0020 choice 5). The player got a 502.
     PlaylistElsewhere,
-    /// A playlist was not an HLS playlist, held a URI the relay cannot judge, or was larger than [`crate::MAX_PLAYLIST_BYTES`]. The
-    /// player got a 502.
+    /// A playlist was not an HLS playlist, held a URI the relay cannot judge, was larger than [`crate::MAX_PLAYLIST_BYTES`] (or
+    /// [`crate::MAX_REWRITTEN_BYTES`] once rewritten), or came as part of itself (a 206 for a range). The player got a 502.
     PlaylistUnreadable,
+    /// The upstream could not build the request for the address in use: a bug, not a server problem. The player got a 502.
+    InvalidRequest,
 }
 
 impl RelayEvent {
@@ -34,6 +36,7 @@ impl RelayEvent {
             Self::Network => 1 << 3,
             Self::PlaylistElsewhere => 1 << 4,
             Self::PlaylistUnreadable => 1 << 5,
+            Self::InvalidRequest => 1 << 6,
         }
     }
 }

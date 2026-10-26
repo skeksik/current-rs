@@ -24,8 +24,8 @@ mod upstream;
 
 pub use events::{RelayEvent, RelayEvents};
 pub use hyper::body::Bytes;
-pub use playlist::MAX_PLAYLIST_BYTES;
-pub use relay::{MAX_CONNECTIONS, Relay, Route, RouteConfig};
+pub use playlist::{MAX_PLAYLIST_BYTES, MAX_REWRITTEN_BYTES};
+pub use relay::{FIRST_REQUEST_TIMEOUT, MAX_CONNECTIONS, Relay, Route, RouteConfig};
 pub use upstream::{
     REQUEST_HEADERS, RESPONSE_HEADERS, StreamMethod, Upstream, UpstreamBody, UpstreamError,
     UpstreamFuture, UpstreamRequest, UpstreamResponse,

@@ -36,8 +36,8 @@ impl Prefixes {
     }
 }
 
-/// No `.` or `..` segment (also percent-encoded, which WHATWG URL parsers treat the same), no encoded `/` or `\`, no `\`, no
-/// control character or space.
+/// No `.` or `..` segment (also percent-encoded, which WHATWG URL parsers treat the same, or with `;` parameters, which some
+/// servers strip), no encoded `/`, `\` or control character, no `\`, no control character or space.
 fn is_clean(path: &str) -> bool {
     if path
         .bytes()
@@ -46,11 +46,16 @@ fn is_clean(path: &str) -> bool {
         return false;
     }
     let lower = path.to_ascii_lowercase();
-    if lower.contains("%2f") || lower.contains("%5c") {
+    let encoded_control = lower.match_indices('%').any(|(at, _)| {
+        let digits = lower.get(at + 1..at + 3).unwrap_or("");
+        digits.starts_with(['0', '1']) || digits == "7f"
+    });
+    if encoded_control || lower.contains("%2f") || lower.contains("%5c") {
         return false;
     }
     lower.split('/').all(|segment| {
         let segment = segment.replace("%2e", ".");
+        let segment = segment.split(';').next().unwrap_or("");
         segment != "." && segment != ".."
     })
 }
@@ -93,6 +98,12 @@ mod tests {
             "/Videos/abc/..%5cx",
             "/Videos/abc/a\\b",
             "/Videos/abc/a b",
+            "/Videos/abc/a%00b",
+            "/Videos/abc/a%1fb",
+            "/Videos/abc/a%7Fb",
+            "/Videos/abc/..;/..;/Users",
+            "/Videos/abc/.;x/y",
+            "/Videos/abc%2F..%2F..%2FUsers",
             "Videos/abc/x",
         ] {
             assert!(!prefixes.allow(path), "{path}");

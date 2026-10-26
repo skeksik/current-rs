@@ -3,6 +3,7 @@
 
 use std::convert::Infallible;
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
@@ -25,8 +26,12 @@ use crate::upstream::Upstream;
 /// 0020, "Concurrency and time").
 pub const MAX_CONNECTIONS: usize = 16;
 
-/// How long a client has to send a request's headers, the first or the next on a kept-alive connection.
+/// How long a client has to send a request's headers on a kept-alive connection (ADR 0020, "Concurrency and time").
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a new connection may stay without a request. A player asks at once; a connection that does not holds one of the
+/// [`MAX_CONNECTIONS`] slots for nothing.
+pub const FIRST_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A connection's read and write buffer limit. The smallest hyper allows is 8 KiB; a player's request head is far smaller.
 const MAX_BUF_SIZE: usize = 64 * 1024;
@@ -102,6 +107,17 @@ pub(crate) struct Conn {
     cancel: watch::Sender<bool>,
     /// The route its first admitted request was for: a connection serves one route only.
     bound: Mutex<Option<u64>>,
+    /// Whether any request has arrived.
+    seen: AtomicBool,
+}
+
+/// What [`Conn::bind`] found.
+pub(crate) enum Bind {
+    Bound,
+    /// The connection serves another route.
+    Other,
+    /// The route was removed meanwhile.
+    Removed,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -225,17 +241,27 @@ impl Conn {
         self.port
     }
 
-    /// Binds the connection to `route` on its first request; false when it serves another route or `route` was removed.
-    pub(crate) fn bind(&self, route: &RouteEntry) -> bool {
+    /// Binds the connection to `route` on its first admitted request.
+    pub(crate) fn bind(&self, route: &RouteEntry) -> Bind {
         let mut bound = lock(&self.bound);
         match *bound {
-            Some(id) => id == route.id,
+            Some(id) if id == route.id => Bind::Bound,
+            Some(_) => Bind::Other,
             None if route.attach(&self.cancel) => {
                 *bound = Some(route.id);
-                true
+                Bind::Bound
             }
-            None => false,
+            None => Bind::Removed,
         }
+    }
+
+    /// Aborts the connection.
+    pub(crate) fn close(&self) {
+        self.cancel.send_replace(true);
+    }
+
+    pub(crate) fn saw_request(&self) {
+        self.seen.store(true, Ordering::Relaxed);
     }
 }
 
@@ -355,7 +381,15 @@ async fn connection(
         port,
         cancel,
         bound: Mutex::new(None),
+        seen: AtomicBool::new(false),
     });
+    let first = conn.clone();
+    let first_request = async move {
+        tokio::time::sleep(FIRST_REQUEST_TIMEOUT).await;
+        if first.seen.load(Ordering::Relaxed) {
+            std::future::pending::<()>().await;
+        }
+    };
     let service = service_fn(move |request| {
         let conn = conn.clone();
         async move { Ok::<_, Infallible>(serve::handle(request, &conn).await) }
@@ -373,5 +407,6 @@ async fn connection(
         _ = serving => {}
         _ = stopped.wait_for(|stop| *stop) => {}
         _ = cancelled.wait_for(|cancel| *cancel) => {}
+        () = first_request => {}
     }
 }

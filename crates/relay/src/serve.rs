@@ -3,26 +3,30 @@
 
 use std::sync::Arc;
 
+use current_net::GatewayShape;
 use current_net::header::{
-    CONTENT_LENGTH, CONTENT_TYPE, ETAG, HOST, HeaderMap, HeaderValue, ORIGIN, TRANSFER_ENCODING,
+    ACCEPT_RANGES, CONNECTION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, HOST, HeaderMap,
+    HeaderValue, ORIGIN, TRANSFER_ENCODING,
 };
-use current_net::{GatewayShape, NetError, classify};
 use hyper::body::{Body, Bytes, Incoming};
 use hyper::{Method, Request, Response, StatusCode};
 
 use crate::body::RelayBody;
 use crate::events::RelayEvent;
-use crate::playlist::{MAX_PLAYLIST_BYTES, PlaylistError, Rewriter, is_api_key, is_playlist};
-use crate::relay::{Conn, RouteEntry};
+use crate::playlist::{
+    MAX_PLAYLIST_BYTES, PlaylistError, Rewriter, is_api_key, is_playlist, starts_like_playlist,
+};
+use crate::relay::{Bind, Conn, RouteEntry};
 use crate::upstream::{
     REQUEST_HEADERS, RESPONSE_HEADERS, StreamMethod, UpstreamBody, UpstreamError, UpstreamRequest,
     UpstreamResponse,
 };
 
 pub(crate) async fn handle(request: Request<Incoming>, conn: &Conn) -> Response<RelayBody> {
+    conn.saw_request();
     match admit(&request, conn) {
         Ok((route, upstream)) => forward(route, upstream).await,
-        Err(status) => empty(status),
+        Err(status) => refused(status),
     }
 }
 
@@ -70,18 +74,22 @@ fn admit(
         }
     }
     let route = found.ok_or(StatusCode::NOT_FOUND)?;
-    if !route.prefixes.allow(rest) || !conn.bind(&route) {
+    if !route.prefixes.allow(rest) {
         return Err(StatusCode::NOT_FOUND);
     }
-    let query = uri
-        .query()
-        .map(|query| {
-            url::form_urlencoded::parse(query.as_bytes())
-                .filter(|(key, _)| !is_api_key(key))
-                .map(|(key, value)| (key.into_owned(), value.into_owned()))
-                .collect()
-        })
-        .unwrap_or_default();
+    match conn.bind(&route) {
+        Bind::Bound => {}
+        Bind::Removed => return Err(StatusCode::NOT_FOUND),
+        // A connection serves one route: one that asks for another is not a player's, and is closed rather than answered.
+        Bind::Other => {
+            conn.close();
+            return Err(StatusCode::NOT_FOUND);
+        }
+    }
+    let query = match uri.query() {
+        Some(query) => decode_query(query).ok_or(StatusCode::BAD_REQUEST)?,
+        None => Vec::new(),
+    };
     let mut headers = HeaderMap::new();
     for name in &REQUEST_HEADERS {
         for value in request.headers().get_all(name) {
@@ -97,6 +105,38 @@ fn admit(
     Ok((route, upstream))
 }
 
+/// A query's pairs, decoded (`application/x-www-form-urlencoded`), without `ApiKey` and `api_key`. `None` for a `%` not followed
+/// by two hex digits or a value that does not decode to UTF-8: refused rather than passed on altered.
+fn decode_query(query: &str) -> Option<Vec<(String, String)>> {
+    let mut pairs = Vec::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let (key, value) = (decode_component(key)?, decode_component(value)?);
+        if !is_api_key(&key) {
+            pairs.push((key, value));
+        }
+    }
+    Some(pairs)
+}
+
+fn decode_component(text: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut input = text.bytes();
+    while let Some(byte) = input.next() {
+        match byte {
+            b'+' => bytes.push(b' '),
+            b'%' => {
+                let high = char::from(input.next()?).to_digit(16)?;
+                let low = char::from(input.next()?).to_digit(16)?;
+                // Two hex digits make a byte: the cast cannot truncate.
+                bytes.push((high * 16 + low) as u8);
+            }
+            byte => bytes.push(byte),
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
 async fn forward(route: Arc<RouteEntry>, request: UpstreamRequest) -> Response<RelayBody> {
     let method = request.method;
     let path = request.path.clone();
@@ -105,106 +145,173 @@ async fn forward(route: Arc<RouteEntry>, request: UpstreamRequest) -> Response<R
         Err(error) => return failed(&route, &error),
     };
     let status = response.status;
-    if !(200..300).contains(&status) && status != 304 {
-        return failed(&route, &error_for(status, &response.headers));
+    let success = (200..300).contains(&status);
+    // An upstream outside its contract ([`crate::Upstream`]): nothing of its answer is passed on.
+    if !success && status != 304 && status != 416 {
+        route.events.report(RelayEvent::Server { status });
+        return empty(StatusCode::BAD_GATEWAY);
     }
-    let has_body = status != 304 && method == StreamMethod::Get;
-    if status != 304 && is_html(&response.headers) {
+    if success && is_html(&response.headers) {
         route.events.report(RelayEvent::Refused {
             shape: GatewayShape::SignIn,
         });
         return empty(StatusCode::BAD_GATEWAY);
     }
-    if status != 304 && is_playlist(&response.headers, &path) {
-        return playlist(&route, &path, response, has_body).await;
+    let declared = success && is_playlist(&response.headers, &path);
+    if method == StreamMethod::Head || !success {
+        // A HEAD of a playlist gets no length: the rewritten one is not known without the body. A 304 and a 416 have none to give.
+        let mut answer = Response::new(RelayBody::Empty);
+        *answer.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+        copy_headers(&response.headers, answer.headers_mut(), declared);
+        if !success {
+            answer.headers_mut().remove(CONTENT_LENGTH);
+        }
+        return answer;
     }
-    let mut answer = Response::new(if has_body {
-        RelayBody::stream(response.body, route.events.clone())
-    } else {
-        RelayBody::Empty
-    });
-    *answer.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
-    copy_headers(&response.headers, answer.headers_mut(), false);
-    answer
-}
-
-/// A playlist, read whole and rewritten. A HEAD gets the headers without a length, since the rewritten length is not known.
-async fn playlist(
-    route: &RouteEntry,
-    path: &str,
-    response: UpstreamResponse,
-    has_body: bool,
-) -> Response<RelayBody> {
     let UpstreamResponse {
-        status,
         headers,
         base,
-        body,
+        mut body,
+        ..
     } = response;
-    let body = if has_body {
-        let text = match read_playlist(body).await {
-            Ok(text) => text,
-            Err(event) => {
-                route.events.report(event);
-                return empty(StatusCode::BAD_GATEWAY);
+    // A player may take any body that starts like a playlist for one, whatever its type or path: those are rewritten too.
+    let mut head: Vec<Bytes> = Vec::new();
+    let mut sniffed = Vec::new();
+    let mut done = false;
+    let playlist = declared
+        || loop {
+            if let Some(playlist) = starts_like_playlist(&sniffed, done) {
+                break playlist;
+            }
+            match body.chunk().await {
+                Ok(Some(chunk)) => {
+                    sniffed.extend_from_slice(&chunk);
+                    head.push(chunk);
+                }
+                Ok(None) => done = true,
+                Err(_) => {
+                    route.events.report(RelayEvent::Network);
+                    return empty(StatusCode::BAD_GATEWAY);
+                }
             }
         };
-        let mut location = base.clone();
-        location.set_path(&format!("{}{path}", base.path().trim_end_matches('/')));
-        location.set_query(None);
-        let rewriter = Rewriter {
-            playlist: &location,
-            base: &base,
-            prefixes: &route.prefixes,
-            token: route.token.as_str(),
-        };
-        match rewriter.rewrite(&text) {
-            Ok(rewritten) => RelayBody::Full(Some(Bytes::from(rewritten))),
-            Err(error) => {
-                route.events.report(match error {
-                    PlaylistError::Elsewhere => RelayEvent::PlaylistElsewhere,
-                    PlaylistError::Malformed => RelayEvent::PlaylistUnreadable,
-                });
-                return empty(StatusCode::BAD_GATEWAY);
-            }
-        }
-    } else {
-        RelayBody::Empty
-    };
-    let length = match &body {
-        RelayBody::Full(Some(bytes)) => Some(bytes.len()),
-        _ => None,
-    };
-    let mut answer = Response::new(body);
-    *answer.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
-    // The upstream length and entity tag name the playlist before rewriting.
-    copy_headers(&headers, answer.headers_mut(), true);
-    if let Some(length) = length {
-        answer
-            .headers_mut()
-            .insert(CONTENT_LENGTH, HeaderValue::from(length));
+    drop(sniffed);
+    if playlist {
+        let rest = (!done).then_some(body);
+        return rewrite_playlist(&route, &path, status, &headers, &base, head, rest).await;
     }
+    let mut answer = Response::new(RelayBody::stream(
+        head,
+        (!done).then_some(body),
+        route.events.clone(),
+    ));
+    *answer.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    copy_headers(&headers, answer.headers_mut(), false);
     answer
 }
 
-async fn read_playlist(mut body: Box<dyn UpstreamBody>) -> Result<String, RelayEvent> {
-    let mut text = Vec::new();
-    loop {
-        match body.chunk().await {
-            Ok(Some(chunk)) => {
-                if text.len() + chunk.len() > MAX_PLAYLIST_BYTES {
-                    return Err(RelayEvent::PlaylistUnreadable);
+/// A playlist, read whole and rewritten. A 206 is passed on only when it holds the whole playlist (FFmpeg asks for `bytes=0-`), as
+/// a 200; a part of one cannot be rewritten.
+async fn rewrite_playlist(
+    route: &RouteEntry,
+    path: &str,
+    status: u16,
+    headers: &HeaderMap,
+    base: &current_net::Url,
+    head: Vec<Bytes>,
+    rest: Option<Box<dyn UpstreamBody>>,
+) -> Response<RelayBody> {
+    let text = match read_playlist(head, rest).await {
+        Ok(text) => text,
+        Err(event) => {
+            route.events.report(event);
+            return empty(StatusCode::BAD_GATEWAY);
+        }
+    };
+    if status == 206 && !is_whole(headers, text.len()) {
+        route.events.report(RelayEvent::PlaylistUnreadable);
+        return empty(StatusCode::BAD_GATEWAY);
+    }
+    let mut location = base.clone();
+    location.set_path(&format!("{}{path}", base.path().trim_end_matches('/')));
+    location.set_query(None);
+    let rewriter = Rewriter {
+        playlist: &location,
+        base,
+        prefixes: &route.prefixes,
+        token: route.token.as_str(),
+    };
+    let rewritten = match rewriter.rewrite(&text) {
+        Ok(rewritten) => rewritten,
+        Err(error) => {
+            route.events.report(match error {
+                PlaylistError::Elsewhere => RelayEvent::PlaylistElsewhere,
+                PlaylistError::Malformed | PlaylistError::TooLarge => {
+                    RelayEvent::PlaylistUnreadable
                 }
-                text.extend_from_slice(&chunk);
+            });
+            return empty(StatusCode::BAD_GATEWAY);
+        }
+    };
+    let length = rewritten.len();
+    let mut answer = Response::new(RelayBody::Full(Some(Bytes::from(rewritten))));
+    *answer.status_mut() = if status == 206 {
+        StatusCode::OK
+    } else {
+        StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY)
+    };
+    copy_headers(headers, answer.headers_mut(), true);
+    answer
+        .headers_mut()
+        .insert(CONTENT_LENGTH, HeaderValue::from(length));
+    answer
+}
+
+/// Whether a 206's `Content-Range` (`bytes 0-<end>/<total>`) covers the whole resource, `length` bytes long.
+fn is_whole(headers: &HeaderMap, length: usize) -> bool {
+    let Some(range) = headers
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let whole = range
+        .strip_prefix("bytes 0-")
+        .and_then(|rest| rest.split_once('/'))
+        .and_then(|(end, total)| Some((end.parse::<usize>().ok()?, total.parse::<usize>().ok()?)));
+    whole.is_some_and(|(end, total)| end + 1 == total && total == length)
+}
+
+async fn read_playlist(
+    head: Vec<Bytes>,
+    rest: Option<Box<dyn UpstreamBody>>,
+) -> Result<String, RelayEvent> {
+    let mut text = Vec::new();
+    for chunk in head {
+        text.extend_from_slice(&chunk);
+    }
+    if text.len() > MAX_PLAYLIST_BYTES {
+        return Err(RelayEvent::PlaylistUnreadable);
+    }
+    if let Some(mut body) = rest {
+        loop {
+            match body.chunk().await {
+                Ok(Some(chunk)) => {
+                    if text.len() + chunk.len() > MAX_PLAYLIST_BYTES {
+                        return Err(RelayEvent::PlaylistUnreadable);
+                    }
+                    text.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(_) => return Err(RelayEvent::Network),
             }
-            Ok(None) => break,
-            Err(_) => return Err(RelayEvent::Network),
         }
     }
     String::from_utf8(text).map_err(|_| RelayEvent::PlaylistUnreadable)
 }
 
-/// The answer to a failed upstream request, after reporting it.
+/// The answer to a failed upstream request, after reporting it. The player sees the server's status only where it means something
+/// to a player (404, 416 and 5xx); every other failure is a 502.
 fn failed(route: &RouteEntry, error: &UpstreamError) -> Response<RelayBody> {
     let status = match error {
         UpstreamError::Refused { shape, .. } => {
@@ -217,14 +324,13 @@ fn failed(route: &RouteEntry, error: &UpstreamError) -> Response<RelayBody> {
             route.events.report(RelayEvent::NotFound);
             StatusCode::NOT_FOUND
         }
-        // A range past the end: the player's own business (it probes the end of a file), not a failure of the stream. The upstream
-        // error carries no headers, so the player gets no `Content-Range` with it.
+        // A range past the end: the player's own business (it probes the end of a file), not a failure of the stream.
         UpstreamError::Status { status: 416 } => StatusCode::RANGE_NOT_SATISFIABLE,
         UpstreamError::Status { status } => {
             route.events.report(RelayEvent::Server { status: *status });
             StatusCode::from_u16(*status)
                 .ok()
-                .filter(|status| status.is_client_error() || status.is_server_error())
+                .filter(StatusCode::is_server_error)
                 .unwrap_or(StatusCode::BAD_GATEWAY)
         }
         UpstreamError::Unreachable | UpstreamError::Tls => {
@@ -235,36 +341,16 @@ fn failed(route: &RouteEntry, error: &UpstreamError) -> Response<RelayBody> {
             route.events.report(RelayEvent::Network);
             StatusCode::GATEWAY_TIMEOUT
         }
-        // Not a server's answer: a request the upstream could not build for the address in use.
-        UpstreamError::InvalidRequest => StatusCode::BAD_GATEWAY,
+        UpstreamError::InvalidRequest => {
+            route.events.report(RelayEvent::InvalidRequest);
+            StatusCode::BAD_GATEWAY
+        }
     };
     empty(status)
 }
 
-/// The error an `Ok` answer with this status should have been (the [`crate::Upstream`] contract), so it is handled the same. Its
-/// shape comes from `current-net`'s classifier, without the challenges the upstream did not pass on.
-fn error_for(status: u16, headers: &HeaderMap) -> UpstreamError {
-    let refused = |error: NetError| UpstreamError::Refused {
-        status,
-        shape: classify(&Err(error)),
-    };
-    match status {
-        300..=399 => refused(NetError::Redirected {
-            status,
-            location: None,
-        }),
-        401 | 403 => refused(NetError::Auth {
-            status,
-            message: None,
-            challenges: Vec::new(),
-            page: is_html(headers),
-        }),
-        _ => UpstreamError::Status { status },
-    }
-}
-
 /// Whether an answer says it is an HTML page: a gateway's sign-in where media was expected. Only the declared type: media bodies
-/// are not sniffed.
+/// are not sniffed for it.
 fn is_html(headers: &HeaderMap) -> bool {
     headers
         .get(CONTENT_TYPE)
@@ -276,9 +362,15 @@ fn is_html(headers: &HeaderMap) -> bool {
         })
 }
 
+/// Copies [`RESPONSE_HEADERS`]. For a playlist, without the length, entity tag and ranges of the text before rewriting.
 fn copy_headers(from: &HeaderMap, to: &mut HeaderMap, playlist: bool) {
     for name in &RESPONSE_HEADERS {
-        if playlist && (name == CONTENT_LENGTH || name == ETAG) {
+        if playlist
+            && (name == CONTENT_LENGTH
+                || name == ETAG
+                || name == CONTENT_RANGE
+                || name == ACCEPT_RANGES)
+        {
             continue;
         }
         for value in from.get_all(name) {
@@ -290,5 +382,14 @@ fn copy_headers(from: &HeaderMap, to: &mut HeaderMap, playlist: bool) {
 fn empty(status: StatusCode) -> Response<RelayBody> {
     let mut response = Response::new(RelayBody::Empty);
     *response.status_mut() = status;
+    response
+}
+
+/// A refusal, which also closes the connection: a client that sends one is not a player, and must not keep a connection slot.
+fn refused(status: StatusCode) -> Response<RelayBody> {
+    let mut response = empty(status);
+    response
+        .headers_mut()
+        .insert(CONNECTION, HeaderValue::from_static("close"));
     response
 }

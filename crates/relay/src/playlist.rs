@@ -25,11 +25,18 @@ use crate::path::Prefixes;
 /// segments is about 1,800 segment lines.
 pub const MAX_PLAYLIST_BYTES: usize = 4 * 1024 * 1024;
 
-/// The content types of an HLS playlist (RFC 8216 §4 names the first two; Jellyfin and others also send `audio/mpegurl`).
-const PLAYLIST_TYPES: [&str; 3] = [
+/// The largest playlist the relay writes. Rewriting makes a URI longer (the token, the prefix's path), so a playlist of very short
+/// URI lines could grow many times over; one past this limit fails like one too large to read.
+pub const MAX_REWRITTEN_BYTES: usize = 16 * 1024 * 1024;
+
+/// The content types of an HLS playlist (RFC 8216 §4 names the first two; Jellyfin and others also send `audio/mpegurl`, and FFmpeg
+/// 6.1.1 also took `audio/x-mpegurl` as HLS, in the manager's review of this crate on 2026-10-26). A body is also sniffed
+/// ([`starts_like_playlist`]), whatever its type.
+const PLAYLIST_TYPES: [&str; 4] = [
     "application/vnd.apple.mpegurl",
     "application/x-mpegurl",
     "audio/mpegurl",
+    "audio/x-mpegurl",
 ];
 
 /// Why a playlist was not passed on. No variant holds a URI or the playlist's text.
@@ -39,9 +46,11 @@ pub(crate) enum PlaylistError {
     Elsewhere,
     /// Not an HLS playlist, or a URI the relay cannot judge.
     Malformed,
+    /// Larger than [`MAX_REWRITTEN_BYTES`] once rewritten.
+    TooLarge,
 }
 
-/// Whether an answer is a playlist: an HLS content type, or a request path ending in `.m3u8`.
+/// Whether an answer is declared a playlist: an HLS content type, or a request path ending in `.m3u8` or `.m3u`.
 pub(crate) fn is_playlist(headers: &HeaderMap, path: &str) -> bool {
     let typed = headers
         .get(CONTENT_TYPE)
@@ -52,11 +61,35 @@ pub(crate) fn is_playlist(headers: &HeaderMap, path: &str) -> bool {
                 .iter()
                 .any(|known| essence.eq_ignore_ascii_case(known))
         });
-    typed
-        || path
-            .to_ascii_lowercase()
-            .trim_end_matches('/')
-            .ends_with(".m3u8")
+    let path = path.to_ascii_lowercase();
+    let path = path.trim_end_matches('/');
+    typed || path.ends_with(".m3u8") || path.ends_with(".m3u")
+}
+
+/// How much of a body's start [`starts_like_playlist`] may need: a byte order mark and whitespace before `#EXTM3U` are skipped.
+pub(crate) const SNIFF_LIMIT: usize = 4096;
+
+/// Whether a body's first bytes say playlist: `#EXTM3U` (in any case) after an optional byte order mark and whitespace, which a
+/// player may accept whatever the content type. `None` while `head` is too short to tell (and shorter than [`SNIFF_LIMIT`]).
+pub(crate) fn starts_like_playlist(head: &[u8], complete: bool) -> Option<bool> {
+    const MAGIC: &[u8] = b"#EXTM3U";
+    let rest = head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(head);
+    let rest = rest.trim_ascii_start();
+    if rest.len() >= MAGIC.len() {
+        return Some(rest[..MAGIC.len()].eq_ignore_ascii_case(MAGIC));
+    }
+    if !MAGIC[..rest.len()].eq_ignore_ascii_case(rest) {
+        return Some(false);
+    }
+    // So far only whitespace and the start of `#EXTM3U`. A body that ends here is a playlist if it began the magic (and then fails
+    // to rewrite); one that is still only whitespace after the limit is refused as a playlist rather than passed on unread.
+    if complete {
+        Some(!rest.is_empty())
+    } else if head.len() >= SNIFF_LIMIT {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 /// Where a playlist came from and where its URIs may go.
@@ -88,7 +121,7 @@ impl Rewriter<'_> {
                 Some(line) => (line, "\r"),
                 None => (raw, ""),
             };
-            // Some players end a line at a lone CR, this parser would not.
+            // FFmpeg ends a line at a lone CR; this parser would not.
             if line.contains('\r') {
                 return Err(malformed);
             }
@@ -114,35 +147,38 @@ impl Rewriter<'_> {
                 out.push_str(&self.uri(trimmed)?);
             }
             out.push_str(end);
+            if out.len() > MAX_REWRITTEN_BYTES {
+                return Err(PlaylistError::TooLarge);
+            }
         }
         Ok(out)
     }
 
-    /// A tag (without its `#`) with every `URI` and `*-URI` attribute rewritten. Values that are not attribute lists (EXTINF's
-    /// duration and title) are split too and rewritten only where a piece happens to look like a URI attribute, which then has to
-    /// pass like any other: stricter, never looser.
+    /// A tag (without its `#`) with every `URI` and `*-URI` attribute rewritten. A value that is a strict attribute list (RFC 8216
+    /// §4.2) is written out again attribute by attribute, so the player reads exactly what was checked. A value that is not one
+    /// (EXTINF's duration and title, a byte range, a date) passes unchanged only if nothing in it could be read as an attribute or a
+    /// quote by a laxer parser: FFmpeg's (`ff_parse_key_value`) ends an unquoted value at whitespace, opens a quote only at a value's
+    /// start and honours `\` escapes inside quotes, so `IV=0x1 URI="..."` or `X=a"b,URI="..."` would hide a URI from a loose split.
     fn tag(&self, tag: &str) -> Result<String, PlaylistError> {
         let Some((name, value)) = tag.split_once(':') else {
             return Ok(tag.to_owned());
         };
-        let mut pieces = Vec::new();
-        for piece in split_attributes(value) {
-            let attribute = piece.trim().split_once('=').filter(|(name, _)| {
-                !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-            });
-            let Some((attribute, quoted)) = attribute else {
-                pieces.push(piece.to_owned());
-                continue;
-            };
-            let upper = attribute.to_ascii_uppercase();
-            if upper != "URI" && !upper.ends_with("-URI") {
-                pieces.push(piece.to_owned());
+        let Some(attributes) = attribute_list(value) else {
+            let upper = value.to_ascii_uppercase();
+            if value.contains(['"', '\\']) || upper.contains("URI=") {
+                return Err(PlaylistError::Malformed);
+            }
+            return Ok(tag.to_owned());
+        };
+        let mut pieces = Vec::with_capacity(attributes.len());
+        for (attribute, value) in attributes {
+            if attribute != "URI" && !attribute.ends_with("-URI") {
+                pieces.push(format!("{attribute}={value}"));
                 continue;
             }
-            let uri = quoted
+            let uri = value
                 .strip_prefix('"')
                 .and_then(|value| value.strip_suffix('"'))
-                .filter(|uri| !uri.contains('"'))
                 .ok_or(PlaylistError::Malformed)?;
             pieces.push(format!("{attribute}=\"{}\"", self.uri(uri)?));
         }
@@ -213,23 +249,45 @@ pub(crate) fn is_api_key(key: &str) -> bool {
     key.eq_ignore_ascii_case("ApiKey") || key.eq_ignore_ascii_case("api_key")
 }
 
-/// A tag's value split at commas outside quotes.
-fn split_attributes(value: &str) -> Vec<&str> {
-    let mut pieces = Vec::new();
-    let mut start = 0;
-    let mut quoted = false;
-    for (at, c) in value.char_indices() {
-        match c {
-            '"' => quoted = !quoted,
-            ',' if !quoted => {
-                pieces.push(&value[start..at]);
-                start = at + 1;
-            }
-            _ => {}
+/// `value` as an attribute list, strictly by RFC 8216 §4.2, or `None` if it is not one: names are `[A-Z0-9-]+`, a quoted value
+/// starts with `"` and holds no `"`, CR, LF (§4.2) or backslash (which FFmpeg would read as an escape), an unquoted value is not
+/// empty and holds no `"`, whitespace or backslash, and pairs are separated by single commas with nothing in between.
+fn attribute_list(value: &str) -> Option<Vec<(&str, &str)>> {
+    let mut attributes = Vec::new();
+    let mut rest = value;
+    loop {
+        let (name, after) = rest.split_once('=')?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-')
+        {
+            return None;
         }
+        let (value, after) = if let Some(inner) = after.strip_prefix('"') {
+            let close = inner.find('"')?;
+            if inner[..close].contains(['\r', '\n', '\\']) {
+                return None;
+            }
+            (&after[..close + 2], &inner[close + 1..])
+        } else {
+            let end = after.find(',').unwrap_or(after.len());
+            let value = &after[..end];
+            if value.is_empty()
+                || value
+                    .bytes()
+                    .any(|b| b == b'"' || b == b'\\' || b.is_ascii_whitespace())
+            {
+                return None;
+            }
+            (value, &after[end..])
+        };
+        attributes.push((name, value));
+        if after.is_empty() {
+            return Some(attributes);
+        }
+        rest = after.strip_prefix(',')?;
     }
-    pieces.push(&value[start..]);
-    pieces
 }
 
 /// Whether `uri` starts with a scheme (RFC 3986 §3.1: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"`).
@@ -291,7 +349,7 @@ mod tests {
             #EXT-X-STREAM-INF:BANDWIDTH=1000,CODECS=\"avc1.640028,mp4a.40.2\",AUDIO=\"a\"\r\n\
             \r\n\
             main.m3u8?DeviceId=d&ApiKey=secret&api_key=secret&APIKEY=secret&PlaySessionId=p\r\n\
-            #EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=100,uri=\"/jf/Videos/abc/iframe.m3u8\"\r\n\
+            #EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=100,URI=\"/jf/Videos/abc/iframe.m3u8\"\r\n\
             #EXT-X-SOMETHING-NEW:FOO=1,ASSET-URI=\"https://media.example.com:443/jf/videos/abc/asset.json\"\r\n";
         let expected = format!(
             "#EXTM3U\r\n\
@@ -302,7 +360,7 @@ mod tests {
             #EXT-X-STREAM-INF:BANDWIDTH=1000,CODECS=\"avc1.640028,mp4a.40.2\",AUDIO=\"a\"\r\n\
             \r\n\
             /{TOKEN}/videos/abc/main.m3u8?DeviceId=d&PlaySessionId=p\r\n\
-            #EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=100,uri=\"/{TOKEN}/Videos/abc/iframe.m3u8\"\r\n\
+            #EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=100,URI=\"/{TOKEN}/Videos/abc/iframe.m3u8\"\r\n\
             #EXT-X-SOMETHING-NEW:FOO=1,ASSET-URI=\"/{TOKEN}/videos/abc/asset.json\"\r\n"
         );
         assert_eq!(rewrite(text).unwrap(), expected);
@@ -372,9 +430,65 @@ mod tests {
             "#EXTM3U\na b\n",
             "#EXTM3U\n\\\\192.168.1.10\\x\n",
             "#EXTM3U\n#EXT-X-MAP:URI=\"\"\n",
+            // Read differently by FFmpeg's attribute parser (manager's review, FFmpeg 6.1.1, 2026-10-26): an unquoted value ends at
+            // whitespace, a quote opens only at a value's start, a backslash escapes inside quotes.
+            "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,IV=0x1 URI=\"http://192.168.1.10/k\"\n",
+            "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,X=a\"b,URI=\"http://192.168.1.10/k\"\n",
+            "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,X=\"a\\\",Y=\",URI=\"http://192.168.1.10/k\"\n",
+            "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\" ,BYTERANGE=\"1@0\"\n",
+            "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,uri=\"http://192.168.1.10/a.m3u8\"\n",
+            "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,,URI=\"a.m3u8\"\n",
+            "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"k\r.key\"\n",
+            "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=k.key\n",
+            "#EXTM3U\n#EXTINF:6,a \"title\"\n0.ts\n",
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\r0.m3u8\n",
         ] {
             assert_eq!(rewrite(text), Err(PlaylistError::Malformed), "{text:?}");
         }
+    }
+
+    #[test]
+    fn tags_that_are_not_attribute_lists_pass_unchanged() {
+        let text = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-PROGRAM-DATE-TIME:2026-10-26T10:00:00.000Z\n\
+            #EXTINF:6.0,a title, with a comma\n#EXT-X-BYTERANGE:1000@720\n#EXT-X-ENDLIST\n";
+        assert_eq!(rewrite(text).unwrap(), text);
+    }
+
+    #[test]
+    fn a_rewritten_playlist_past_its_limit_fails() {
+        let mut text = String::from("#EXTM3U\n");
+        while text.len() < MAX_PLAYLIST_BYTES - 2 {
+            text.push_str("a\n");
+        }
+        assert_eq!(rewrite(&text), Err(PlaylistError::TooLarge));
+    }
+
+    #[test]
+    fn a_body_that_starts_with_the_magic_is_a_playlist() {
+        for head in [
+            &b"#EXTM3U\n"[..],
+            b"\xef\xbb\xbf#EXTM3U",
+            b"  \r\n#extm3u\n",
+            b"#EXT",
+        ] {
+            assert_eq!(starts_like_playlist(head, true), Some(true), "{head:?}");
+        }
+        for head in [
+            &b""[..],
+            b"  ",
+            b"\x00\x00\x00\x18ftypmp42",
+            b"G@\x11",
+            b"#EXTX",
+            b"WEBVTT",
+        ] {
+            assert_eq!(starts_like_playlist(head, true), Some(false), "{head:?}");
+        }
+        assert_eq!(starts_like_playlist(b"  #EX", false), None);
+        assert_eq!(starts_like_playlist(b"\x47", false), Some(false));
+        assert_eq!(
+            starts_like_playlist(&[b' '; SNIFF_LIMIT], false),
+            Some(true)
+        );
     }
 
     #[test]
@@ -398,11 +512,13 @@ mod tests {
     fn playlists_are_known_by_type_or_path() {
         let mut headers = HeaderMap::new();
         assert!(is_playlist(&headers, "/Videos/abc/master.M3U8"));
+        assert!(is_playlist(&headers, "/Audio/abc/list.m3u"));
         assert!(!is_playlist(&headers, "/Videos/abc/stream.mp4"));
         for value in [
             "application/vnd.apple.mpegurl",
             "application/x-mpegURL; charset=utf-8",
             "audio/mpegurl",
+            "audio/x-mpegurl",
         ] {
             headers.insert(CONTENT_TYPE, HeaderValue::from_static(value));
             assert!(is_playlist(&headers, "/Videos/abc/x"), "{value}");

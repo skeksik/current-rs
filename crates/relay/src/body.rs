@@ -1,5 +1,6 @@
 //! The body the relay sends a player: empty, a rewritten playlist, or the upstream body passed on one chunk at a time.
 
+use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -26,17 +27,24 @@ pub(crate) enum RelayBody {
 }
 
 /// An upstream body being passed on. hyper polls it only when the connection can write more, and it asks upstream for one chunk
-/// per poll, so at most one chunk is held here.
+/// per poll, so at most one chunk is held here (plus the few read to tell a playlist from media).
 pub(crate) struct Streaming {
+    queued: VecDeque<Bytes>,
     idle: Option<Box<dyn UpstreamBody>>,
     next: Option<Next>,
     events: Arc<RouteEvents>,
 }
 
 impl RelayBody {
-    pub(crate) fn stream(body: Box<dyn UpstreamBody>, events: Arc<RouteEvents>) -> Self {
+    /// `queued` (chunks already read), then the rest of `body` if it has not ended.
+    pub(crate) fn stream(
+        queued: Vec<Bytes>,
+        body: Option<Box<dyn UpstreamBody>>,
+        events: Arc<RouteEvents>,
+    ) -> Self {
         Self::Stream(Streaming {
-            idle: Some(body),
+            queued: queued.into(),
+            idle: body,
             next: None,
             events,
         })
@@ -62,13 +70,20 @@ impl Body for RelayBody {
         match self {
             Self::Empty => true,
             Self::Full(bytes) => bytes.is_none(),
-            Self::Stream(streaming) => streaming.idle.is_none() && streaming.next.is_none(),
+            Self::Stream(streaming) => {
+                streaming.queued.is_empty() && streaming.idle.is_none() && streaming.next.is_none()
+            }
         }
     }
 }
 
 impl Streaming {
     fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, BodyError>>> {
+        while let Some(bytes) = self.queued.pop_front() {
+            if !bytes.is_empty() {
+                return Poll::Ready(Some(Ok(Frame::data(bytes))));
+            }
+        }
         loop {
             if self.next.is_none() {
                 let Some(mut body) = self.idle.take() else {

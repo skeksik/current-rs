@@ -360,6 +360,30 @@ async fn every_refusal_comes_before_anything_goes_upstream() {
         ("CONNECT", request("CONNECT", "192.168.1.10:443", port, ""), &[400, 405]),
         ("a body", request("GET", &good, port, "Content-Length: 5\r\n\r\nhello"), &[400]),
         (
+            "an encoded slash",
+            request("GET", &path_on(&setup.route, "/Videos/abc%2F..%2F..%2FUsers"), port, ""),
+            &[404],
+        ),
+        ("an encoded NUL", request("GET", &path_on(&setup.route, "/Videos/abc/a%00b"), port, ""), &[404]),
+        ("a parameter climbing out", request("GET", &path_on(&setup.route, "/Videos/abc/..;/..;/Users"), port, ""), &[404]),
+        (
+            "a host without the port",
+            format!("GET {good} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").into_bytes(),
+            &[400],
+        ),
+        ("a query that is not UTF-8", request("GET", &format!("{good}?x=%ff"), port, ""), &[400]),
+        ("a broken escape", request("GET", &format!("{good}?x=%zz"), port, ""), &[400]),
+        (
+            "a length and a chunked body",
+            request(
+                "GET",
+                &good,
+                port,
+                "Content-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n",
+            ),
+            &[400],
+        ),
+        (
             "a chunked body",
             request("GET", &good, port, "Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n"),
             &[400],
@@ -510,6 +534,12 @@ async fn refusals_and_failures_upstream_are_reported_once_per_route() {
                 shape: GatewayShape::SignIn,
             }),
             "ok-redirect" => Ok(answer(302, &[("location", "https://192.168.1.10/")], "")),
+            "proxy" => Err(UpstreamError::Status { status: 407 }),
+            "unsatisfiable" => Ok(answer(
+                416,
+                &[("content-range", "bytes */10"), ("content-length", "0")],
+                "",
+            )),
             "page" => Ok(answer(
                 200,
                 &[("content-type", "text/html; charset=utf-8")],
@@ -537,15 +567,19 @@ async fn refusals_and_failures_upstream_are_reported_once_per_route() {
         ("basic", 502, None),
         ("forbidden", 502, None),
         ("redirect", 502, None),
-        ("ok-redirect", 502, None),
         ("page", 502, None),
         ("missing", 404, Some(RelayEvent::NotFound)),
         ("missing", 404, None),
         ("past-the-end", 416, None),
+        ("unsatisfiable", 416, None),
         ("broken", 500, Some(RelayEvent::Server { status: 500 })),
+        // An upstream that answers a redirect as a response breaks its contract: nothing of it goes on.
+        ("ok-redirect", 502, None),
+        // Only 404, 416 and 5xx reach the player as they are.
+        ("proxy", 502, None),
         ("offline", 502, Some(RelayEvent::Network)),
         ("slow", 504, None),
-        ("unbuildable", 502, None),
+        ("unbuildable", 502, Some(RelayEvent::InvalidRequest)),
     ];
     for (kind, status, event) in expect {
         let reply = get(&setup, &format!("/Videos/abc/{kind}"), "").await;
@@ -553,6 +587,8 @@ async fn refusals_and_failures_upstream_are_reported_once_per_route() {
         assert!(reply.header("location").is_none(), "{kind}");
         assert_eq!(drain(&mut setup.events), Vec::from_iter(event), "{kind}");
     }
+    let reply = get(&setup, "/Videos/abc/unsatisfiable", "Range: bytes=20-\r\n").await;
+    assert_eq!(reply.header("content-range"), Some("bytes */10"));
     // Another route has its own once.
     let (other, mut events) = route_on(&setup.relay, upstream);
     let port = other.port();
@@ -679,7 +715,8 @@ async fn playlists_are_rewritten_onto_the_route_without_api_key() {
     )
     .await;
     assert_eq!(head.status, 200);
-    assert!(head.header("content-length").is_none() || head.header("content-length") == Some("0"));
+    assert_eq!(head.header("content-length"), None);
+    assert_eq!(head.header("etag"), None);
 
     for path in [
         "/videos/abc/elsewhere.m3u8",
@@ -943,7 +980,12 @@ async fn removing_a_route_aborts_its_connections_only() {
         .split("\r\n")
         .filter(|line| line.starts_with("HTTP/1.1 "))
         .collect();
-    assert_eq!(statuses, ["HTTP/1.1 200 OK", "HTTP/1.1 404 Not Found"]);
+    // The second request is refused and the connection closed; whether the 404 gets out first is a race the test does not need.
+    assert!(
+        statuses == ["HTTP/1.1 200 OK"]
+            || statuses == ["HTTP/1.1 200 OK", "HTTP/1.1 404 Not Found"],
+        "{statuses:?}"
+    );
     // A fresh connection serves the third route.
     let reply = exchange(
         port,
@@ -1048,4 +1090,248 @@ async fn bad_prefixes_are_refused() {
         .unwrap_err();
     assert_eq!(error, current_relay::RelayError::InvalidPrefix);
     assert_eq!(relay.port(), None);
+}
+
+#[tokio::test]
+async fn a_tag_the_player_reads_differently_fails_the_playlist() {
+    // Each was read by FFmpeg 6.1.1 as naming the off-origin key (manager's review, 2026-10-26).
+    for line in [
+        "#EXT-X-KEY:METHOD=AES-128,IV=0x1 URI=\"http://192.168.1.10/k\"",
+        "#EXT-X-KEY:METHOD=AES-128,X=a\"b,URI=\"http://192.168.1.10/k\"",
+        "#EXT-X-KEY:METHOD=AES-128,X=\"a\\\",Y=\",URI=\"http://192.168.1.10/k\"",
+        "#EXT-X-MAP:URI=\"init.mp4\" ,BYTERANGE=\"720@0\"",
+        "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"A\",AUTOSELECT=YES URI=\"http://192.168.1.10/a.m3u8\"",
+        "#EXTINF:6,\rhttp://192.168.1.10/0.ts",
+    ] {
+        let text = format!("#EXTM3U\n{line}\n#EXTINF:6,\n0.ts\n");
+        let upstream = Fake::new(move |_| {
+            Ok(answer(
+                200,
+                &[("content-type", "application/vnd.apple.mpegurl")],
+                text.clone(),
+            ))
+        });
+        let mut setup = setup(upstream);
+        let reply = get(&setup, "/videos/abc/main.m3u8", "").await;
+        assert_eq!(reply.status, 502, "{line:?}");
+        assert_eq!(
+            drain(&mut setup.events),
+            [RelayEvent::PlaylistUnreadable],
+            "{line:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_body_that_starts_like_a_playlist_is_rewritten_whatever_its_type() {
+    let upstream = Fake::new(|request| {
+        let (kind, body) = match request.path.as_str() {
+            "/videos/abc/stream" => ("video/mp4", "#EXTM3U\n0.ts?ApiKey=secret\n"),
+            "/videos/abc/untyped" => ("", "  \r\n#EXTM3U\n0.ts\n"),
+            "/videos/abc/x-type" => ("audio/x-mpegurl", "#EXTM3U\n0.ts\n"),
+            "/videos/abc/list.m3u" => ("text/plain", "#EXTM3U\n0.ts\n"),
+            "/videos/abc/hostile" => (
+                "video/mp2t",
+                "#EXTM3U\n#EXTINF:6,\nhttp://192.168.1.10/0.ts\n",
+            ),
+            "/videos/abc/bom" => ("video/mp4", "\u{feff}#EXTM3U\nhttp://192.168.1.10/0.ts\n"),
+            _ => ("video/mp4", "media, not a playlist"),
+        };
+        let mut response = answer(200, &[], body);
+        if !kind.is_empty() {
+            response.headers = headers(&[("content-type", kind)]);
+        }
+        // Three bytes at a time, so the magic arrives over several chunks.
+        response.body = Box::new(Chunks {
+            data: Bytes::from(body),
+            size: 3,
+        });
+        Ok(response)
+    });
+    let mut setup = setup(upstream);
+    let token = setup.route.token().to_owned();
+    for (path, expected) in [
+        (
+            "/videos/abc/stream",
+            format!("#EXTM3U\n/{token}/videos/abc/0.ts\n"),
+        ),
+        (
+            "/videos/abc/untyped",
+            format!("  \r\n#EXTM3U\n/{token}/videos/abc/0.ts\n"),
+        ),
+        (
+            "/videos/abc/x-type",
+            format!("#EXTM3U\n/{token}/videos/abc/0.ts\n"),
+        ),
+        (
+            "/videos/abc/list.m3u",
+            format!("#EXTM3U\n/{token}/videos/abc/0.ts\n"),
+        ),
+        ("/videos/abc/media.mp4", "media, not a playlist".to_owned()),
+    ] {
+        let reply = get(&setup, path, "").await;
+        if path == "/videos/abc/untyped" {
+            // Blank lines before the magic: not a playlist this parser reads, so refused rather than passed on.
+            assert_eq!(reply.status, 502, "{path}");
+            continue;
+        }
+        assert_eq!(reply.status, 200, "{path}");
+        assert_eq!(String::from_utf8(reply.body).unwrap(), expected, "{path}");
+    }
+    assert_eq!(drain(&mut setup.events), [RelayEvent::PlaylistUnreadable]);
+    let reply = get(&setup, "/videos/abc/hostile", "").await;
+    assert_eq!(reply.status, 502);
+    assert_eq!(drain(&mut setup.events), [RelayEvent::PlaylistElsewhere]);
+    let reply = get(&setup, "/videos/abc/bom", "").await;
+    assert_eq!(reply.status, 502);
+    assert!(reply.body.is_empty());
+}
+
+#[tokio::test]
+async fn a_playlist_in_a_206_is_passed_on_whole_or_not_at_all() {
+    const TEXT: &str = "#EXTM3U\n0.ts\n";
+    let upstream = Fake::new(|request| {
+        let range = request.headers["range"].to_str().unwrap().to_owned();
+        let total = TEXT.len();
+        let (content_range, body) = if range == "bytes=0-" {
+            (format!("bytes 0-{}/{total}", total - 1), TEXT)
+        } else {
+            (format!("bytes 3-{}/{total}", total - 1), &TEXT[3..])
+        };
+        Ok(answer(
+            206,
+            &[
+                ("content-type", "application/vnd.apple.mpegurl"),
+                ("content-range", &content_range),
+                ("accept-ranges", "bytes"),
+            ],
+            body,
+        ))
+    });
+    let mut setup = setup(upstream);
+    let token = setup.route.token().to_owned();
+    let reply = get(&setup, "/videos/abc/main.m3u8", "Range: bytes=0-\r\n").await;
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.header("content-range"), None);
+    assert_eq!(reply.header("accept-ranges"), None);
+    let text = format!("#EXTM3U\n/{token}/videos/abc/0.ts\n");
+    assert_eq!(
+        reply.header("content-length"),
+        Some(text.len().to_string().as_str())
+    );
+    assert_eq!(String::from_utf8(reply.body).unwrap(), text);
+    let reply = get(&setup, "/videos/abc/main.m3u8", "Range: bytes=3-\r\n").await;
+    assert_eq!(reply.status, 502);
+    assert_eq!(drain(&mut setup.events), [RelayEvent::PlaylistUnreadable]);
+}
+
+#[tokio::test]
+async fn a_refusal_closes_the_connection() {
+    let setup = setup(ok_media());
+    let port = setup.route.port();
+    let other_token = "B".repeat(setup.route.token().len());
+    // No `Connection: close` from the client: the relay closes.
+    let raw =
+        format!("GET /{other_token}/Videos/abc/stream HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+    let reply = exchange(port, raw.as_bytes()).await;
+    assert_eq!(reply.status, 404);
+    assert_eq!(reply.header("connection"), Some("close"));
+}
+
+#[tokio::test]
+async fn idle_connections_give_their_slots_back() {
+    let setup = setup(ok_media());
+    let port = setup.route.port();
+    let mut idle = Vec::new();
+    for _ in 0..current_relay::MAX_CONNECTIONS {
+        idle.push(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+    }
+    // Every slot is held by a connection that never asks; after the first-request timeout they are closed and a player gets in.
+    let started = tokio::time::Instant::now();
+    let reply = timeout(
+        current_relay::FIRST_REQUEST_TIMEOUT + WAIT,
+        exchange(
+            port,
+            &request("GET", &path_on(&setup.route, "/Videos/abc/x"), port, ""),
+        ),
+    )
+    .await
+    .expect("a player is served once idle connections time out");
+    assert_eq!(reply.status, 200);
+    assert!(started.elapsed() >= current_relay::FIRST_REQUEST_TIMEOUT - Duration::from_millis(500));
+    for mut stream in idle {
+        closed(&mut stream).await;
+    }
+}
+
+/// An upstream that never answers, noting when the request it was given is dropped.
+struct Never {
+    sent: Arc<AtomicUsize>,
+    dropped: Arc<AtomicBool>,
+}
+
+struct DropFlag(Arc<AtomicBool>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Upstream for Never {
+    fn send(&self, _request: UpstreamRequest) -> UpstreamFuture<'_, UpstreamResponse> {
+        self.sent.fetch_add(1, Ordering::SeqCst);
+        let flag = DropFlag(self.dropped.clone());
+        Box::pin(async move {
+            let _flag = flag;
+            std::future::pending().await
+        })
+    }
+}
+
+#[tokio::test]
+async fn removing_a_route_while_its_request_waits_upstream_ends_both() {
+    let relay = Relay::new(&tokio::runtime::Handle::current());
+    let (sent, dropped) = (
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let (sink, _events) = mpsc::unbounded_channel();
+    let route = relay
+        .add_route(RouteConfig {
+            upstream: Arc::new(Never {
+                sent: sent.clone(),
+                dropped: dropped.clone(),
+            }),
+            prefixes: vec!["/Videos/abc/".into()],
+            events: Arc::new(sink),
+        })
+        .unwrap();
+    let port = route.port();
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    stream
+        .write_all(&request(
+            "GET",
+            &path_on(&route, "/Videos/abc/stream"),
+            port,
+            "",
+        ))
+        .await
+        .unwrap();
+    timeout(WAIT, async {
+        while sent.load(Ordering::SeqCst) == 0 {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    drop(route);
+    closed(&mut stream).await;
+    timeout(WAIT, async {
+        while !dropped.load(Ordering::SeqCst) {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the pending upstream request is dropped");
 }
