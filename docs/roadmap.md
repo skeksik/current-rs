@@ -191,21 +191,27 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
 
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
-## M3: macOS
-- [ ] The M1-M2 screens in SwiftUI on the shared core; AVPlayer with our own subtitle layer (ADR 0010: libass, PGS/VobSub decoder in
-      the core, External delivery from Jellyfin); Keychain; Now Playing, PiP, AirPlay
-- [ ] Local discovery from each up interface: list the IPv4 interfaces with `getifaddrs` and pass them to each search (ADR 0016)
+## Next: the loopback relay (before M4 and M3; owner, 2026-10-26)
 - [ ] A loopback relay in the core for streams with gateway credentials: the player talks to 127.0.0.1 without credentials and the
       relay adds them only for same-origin requests. It closes AVPlayer's header gap (ADR 0017) and enforces the same-origin rule for
       libmpv's HLS sub-requests on Windows too, replacing the playlist check (ADR 0019, "Playlists and headers", owner 2026-10-25)
+- [ ] Spike first (spike/loopback-relay): research and design, ending in an ADR with the choices for the owner; then the
+      implementation tasks it lists
 
-Done when: everything from M1-M2 works on a Mac.
-
-## M4: Seerr: discover and request (Windows, macOS)
+## M4: Seerr: discover and request (Windows first, before M3; macOS with M3) (order changed by the owner, 2026-10-26)
+- [ ] Spike first: Seerr's API, sign-in through the Jellyfin session, permissions for users and managers; an ADR with the
+      owner's choices
 - [ ] Seerr sign-in through the app's Jellyfin session; discover rows, browse, search merged with library results; title pages joined
       with Jellyfin; requests, my requests, approvals for managers; watchlist, issues
 
 Done when: a title can be found, requested and followed to "available", then played, without leaving the app.
+
+## M3: macOS (after M4)
+- [ ] The M1, M2 and M4 screens in SwiftUI on the shared core; AVPlayer with our own subtitle layer (ADR 0010: libass, PGS/VobSub decoder in
+      the core, External delivery from Jellyfin); Keychain; Now Playing, PiP, AirPlay
+- [ ] Local discovery from each up interface: list the IPv4 interfaces with `getifaddrs` and pass them to each search (ADR 0016)
+
+Done when: everything from M1, M2 and M4 works on a Mac.
 
 ## M5: Linux
 - [ ] The M1-M4 screens in GTK4 + libadwaita; the libmpv engine from M2 through the OpenGL render API (SDR); Secret Service; MPRIS
