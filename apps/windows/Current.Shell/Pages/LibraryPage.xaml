@@ -11,9 +11,12 @@
         </Grid.RowDefinitions>
         <!-- F5 and Ctrl+R re-read the grid in place, as File Explorer and Edge do; no Microsoft guideline read so far states it (not
              verified). The Refresh button is gone (owner, 2026-10-26); the keys stay. -->
+        <!-- Ctrl+F goes to the library's search box: "Find content in a focused control or Window | Ctrl + F" (Keyboard
+             accelerators page, learn.microsoft.com, ms.date 2026-08-28, read 2026-10-26). -->
         <Grid.KeyboardAccelerators>
             <KeyboardAccelerator Key="F5" Invoked="OnRefresh" />
             <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="OnRefresh" />
+            <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="OnFindAccelerator" />
         </Grid.KeyboardAccelerators>
 
         <!-- The title with Sort and Filter on its right, as Photos lays out its gallery's title and commands (owner, 2026-10-26). -->
@@ -35,6 +38,15 @@
                  "GridView", E7C3 "Page", EF6B "LandscapeOrientation" and E8BA "Caption" ("Segoe Fluent Icons font",
                  learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26). -->
             <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                <!-- The library's own search, beside its commands; the title bar's box searches everything (owner, 2026-10-26). It
+                     searches as the user types, a moment after the last key, or at once on Enter; the server finds the items (the
+                     core's library_search). 240 wide is not from a guideline (not verified). -->
+                <AutoSuggestBox
+                    x:Name="LibrarySearch"
+                    Width="240"
+                    QueryIcon="Find"
+                    TextChanged="OnSearchTextChanged"
+                    QuerySubmitted="OnSearchSubmitted" />
                 <DropDownButton x:Name="SortButton" AutomationProperties.Name="Sort" ToolTipService.ToolTip="Sort">
                     <FontIcon Glyph="&#xE8CB;" FontSize="16" />
                     <DropDownButton.Flyout>

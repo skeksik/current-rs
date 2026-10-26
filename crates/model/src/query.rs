@@ -54,6 +54,8 @@ pub struct ItemQuery {
     pub years: Vec<i32>,
     /// Only items whose name starts with this.
     pub name_starts_with: Option<String>,
+    /// Only items the server finds for this, as its search does (a library's own search box).
+    pub search_term: Option<String>,
 }
 
 #[cfg(test)]

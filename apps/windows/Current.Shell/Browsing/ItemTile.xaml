@@ -50,9 +50,15 @@
                 <Border x:Name="PlayedBadge" Visibility="Collapsed" Style="{StaticResource TileBadgeStyle}">
                     <FontIcon Glyph="&#xE73E;" FontSize="12" Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
                 </Border>
+                <!-- The count in the middle of its badge: a TextBlock sits at the top left of a Border by default, and its line's
+                     space above the digits left them low and off-centre (owner's run, 2026-10-26). Tight line bounds keep only the
+                     digits' height (cap height to baseline), so centring them centres what shows. -->
                 <Border x:Name="UnplayedBadge" Visibility="Collapsed" Style="{StaticResource TileBadgeStyle}">
                     <TextBlock
                         x:Name="UnplayedCount"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        TextLineBounds="Tight"
                         Style="{StaticResource CaptionTextBlockStyle}"
                         Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
                 </Border>

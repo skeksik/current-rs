@@ -171,6 +171,7 @@ async fn items_send_the_query_and_page() {
         genres: vec!["Drama".into(), "Action, Adventure".into()],
         years: vec![2009, 2010],
         name_starts_with: Some("E".into()),
+        search_term: Some("Example".into()),
     };
     let page = client.items(&query, 100, 100, true).await.unwrap();
 
@@ -188,6 +189,7 @@ async fn items_send_the_query_and_page() {
     assert_eq!(q["genres"], "Drama|Action, Adventure");
     assert_eq!(q["years"], "2009,2010");
     assert_eq!(q["nameStartsWith"], "E");
+    assert_eq!(q["searchTerm"], "Example");
     assert_eq!(q["startIndex"], "100");
     assert_eq!(q["limit"], "100");
     assert_eq!(q["enableTotalRecordCount"], "true");

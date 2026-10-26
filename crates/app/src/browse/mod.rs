@@ -540,9 +540,32 @@ pub fn recently_added_query(library: &Library) -> ItemQuery {
     }
 }
 
+/// `query` searching for what the user typed in a library's own search box (owner, 2026-10-26): the text without the spaces round it,
+/// and no search at all when nothing is left.
+pub fn library_search(query: &ItemQuery, term: &str) -> ItemQuery {
+    let term = term.trim();
+    ItemQuery {
+        search_term: (!term.is_empty()).then(|| term.to_owned()),
+        ..query.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_library_search_takes_the_typed_text_trimmed_and_nothing_when_blank() {
+        let sorted = ItemQuery {
+            sort: vec![SortKey::DATE_CREATED],
+            ..ItemQuery::default()
+        };
+        let searching = library_search(&sorted, "  Example  ");
+        assert_eq!(searching.search_term.as_deref(), Some("Example"));
+        assert_eq!(searching.sort, sorted.sort);
+        assert_eq!(library_search(&searching, "   "), sorted);
+        assert_eq!(library_search(&searching, ""), sorted);
+    }
 
     #[test]
     fn a_library_s_first_query_follows_what_it_holds() {

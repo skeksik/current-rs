@@ -221,6 +221,9 @@ pub struct ItemQuery {
     pub genres: Vec<String>,
     pub years: Vec<i32>,
     pub name_starts_with: Option<String>,
+    /// Only items the server finds for this, as its search does.
+    #[uniffi(default = None)]
+    pub search_term: Option<String>,
 }
 
 /// One place in a grid. Never null across the bridge: WinUI 3 does not take null placeholders.
@@ -713,6 +716,7 @@ impl From<&model::ItemQuery> for ItemQuery {
             genres: query.genres.clone(),
             years: query.years.clone(),
             name_starts_with: query.name_starts_with.clone(),
+            search_term: query.search_term.clone(),
         }
     }
 }
@@ -744,6 +748,7 @@ impl From<&ItemQuery> for model::ItemQuery {
             genres: query.genres.clone(),
             years: query.years.clone(),
             name_starts_with: query.name_starts_with.clone(),
+            search_term: query.search_term.clone(),
         }
     }
 }

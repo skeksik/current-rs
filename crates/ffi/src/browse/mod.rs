@@ -259,6 +259,12 @@ pub fn library_query(library: Library) -> ItemQuery {
     (&current_app::library_query(&(&library).into())).into()
 }
 
+/// `query` searching for what the user typed in a library's search box: the text trimmed, no search when it is blank.
+#[uniffi::export]
+pub fn library_search(query: ItemQuery, term: String) -> ItemQuery {
+    (&current_app::library_search(&(&query).into(), &term)).into()
+}
+
 /// What a Home row of `library`'s latest items opens when its header is chosen: the library's grid, the newest added first.
 #[uniffi::export]
 pub fn recently_added_query(library: Library) -> ItemQuery {

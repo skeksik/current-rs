@@ -155,6 +155,16 @@ public sealed record ItemQuery
 
     public string? NameStartsWith { get; init; }
 
+    /// <summary>Only items the server finds for this, as its search does: a library's own search box (<see cref="Searching"/>).</summary>
+    public string? SearchTerm { get; init; }
+
+    /// <summary>This query searching for what the user typed (the core decides): the text trimmed, no search when it is blank.</summary>
+    public ItemQuery Searching(string term)
+    {
+        ArgumentNullException.ThrowIfNull(term);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.LibrarySearch(MapBrowse.ToFfi(this), term));
+    }
+
     /// <summary>
     /// What <paramref name="library"/>'s grid shows before the user sorts or filters it, by name (the core decides): a film library
     /// its films and a TV library its series, wherever they sit below it; any other library its top level.
@@ -469,7 +479,8 @@ internal static class MapBrowse
         query.Filters.ToArray(),
         query.Genres.ToArray(),
         query.Years.ToArray(),
-        query.NameStartsWith);
+        query.NameStartsWith,
+        query.SearchTerm);
 
     public static ItemQuery From(Ffi.ItemQuery query) => new()
     {
@@ -481,6 +492,7 @@ internal static class MapBrowse
         Genres = query.Genres,
         Years = query.Years,
         NameStartsWith = query.NameStartsWith,
+        SearchTerm = query.SearchTerm,
     };
 
     public static Slot From(Ffi.Slot slot) => slot switch

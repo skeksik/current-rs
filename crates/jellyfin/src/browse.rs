@@ -110,6 +110,9 @@ impl JellyfinClient {
         if let Some(prefix) = &query.name_starts_with {
             request = request.query("nameStartsWith", prefix.as_str());
         }
+        if let Some(term) = &query.search_term {
+            request = request.query("searchTerm", term.as_str());
+        }
         let result: ItemsResult = self.get_json(request).await?;
         let total = with_total
             .then(|| result.total_record_count.and_then(to_u32))

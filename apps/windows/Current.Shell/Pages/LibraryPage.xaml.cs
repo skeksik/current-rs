@@ -2,7 +2,9 @@ using System.ComponentModel;
 using System.Diagnostics;
 using Current.Bindings;
 using Current.Shell.Browsing;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
@@ -125,6 +127,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
         }
         var library = App.Browsing.FindLibrary(args.Library.Item) ?? args.Library;
         TitleText.Text = library.Name;
+        ShowSearchName(library.Name);
         _library = library.Item;
         _hub = App.Browsing;
         _hub.Changed += OnLibrariesChanged;
@@ -202,6 +205,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
         if (_library is { } shown && _hub?.FindLibrary(shown) is { } library && TitleText.Text != library.Name)
         {
             TitleText.Text = library.Name;
+            ShowSearchName(library.Name);
         }
     }
 
@@ -284,9 +288,20 @@ public sealed partial class LibraryPage : Page, IRefreshable
         }
     }
 
-    /// <summary>Checks the menus' items for the query's field, order and filter.</summary>
+    /// <summary>The search box names the library it searches.</summary>
+    private void ShowSearchName(string name)
+    {
+        LibrarySearch.PlaceholderText = $"Search {name}";
+        AutomationProperties.SetName(LibrarySearch, $"Search {name}");
+    }
+
+    /// <summary>Checks the menus' items for the query's field, order and filter, and shows its search.</summary>
     private void ShowQuery(ItemQuery query)
     {
+        if (LibrarySearch.Text != (query.SearchTerm ?? "") && FocusManager.GetFocusedElement(XamlRoot) is not TextBox)
+        {
+            LibrarySearch.Text = query.SearchTerm ?? "";
+        }
         var sort = Math.Max(0, Sorts.ToList().FindIndex(sort => query.Sort.FirstOrDefault() == sort.Key));
         var filter = Math.Max(0, Filters.ToList().IndexOf(query.Filters.FirstOrDefault()));
         for (var i = 0; i < _sortItems.Count; i++)
@@ -303,7 +318,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
 
     /// <summary>Whether two queries sort and filter alike (the records compare their lists by reference).</summary>
     private static bool SameChoices(ItemQuery a, ItemQuery b) =>
-        a.Sort.SequenceEqual(b.Sort) && a.Order == b.Order && a.Filters.SequenceEqual(b.Filters);
+        a.Sort.SequenceEqual(b.Sort) && a.Order == b.Order && a.Filters.SequenceEqual(b.Filters) && a.SearchTerm == b.SearchTerm;
 
     /// <summary>A new field, order or filter: a new query, which resets the grid to the top.</summary>
     private void Choose(Func<ItemQuery, ItemQuery> change)
@@ -325,6 +340,54 @@ public sealed partial class LibraryPage : Page, IRefreshable
             Sort: query.Sort.FirstOrDefault() is { } key ? new SortChoice(key, query.Order) : null,
             Filters: query.Filters));
     }
+
+    /// <summary>Waits for a pause in typing before searching, so each key does not start a query.</summary>
+    private DispatcherQueueTimer? _searchTimer;
+
+    /// <summary>How long after the last key the box searches; not from a guideline (not verified).</summary>
+    private static readonly TimeSpan SearchPause = TimeSpan.FromMilliseconds(400);
+
+    private void OnSearchTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+    {
+        if (args.Reason != AutoSuggestionBoxTextChangeReason.UserInput)
+        {
+            return;
+        }
+        if (_searchTimer is null)
+        {
+            _searchTimer = DispatcherQueue.CreateTimer();
+            _searchTimer.IsRepeating = false;
+            _searchTimer.Tick += (_, _) => Search(LibrarySearch.Text);
+        }
+        _searchTimer.Interval = SearchPause;
+        _searchTimer.Start();
+    }
+
+    private void OnSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
+    {
+        _searchTimer?.Stop();
+        Search(args.QueryText);
+    }
+
+    /// <summary>The grid searching for <paramref name="text"/> (the core's rule: trimmed, none when blank), from the top.</summary>
+    private void Search(string text)
+    {
+        if (_grid is null)
+        {
+            return;
+        }
+        var query = _grid.Query.Searching(text);
+        if (SameChoices(query, _grid.Query))
+        {
+            return;
+        }
+        _grid.Query = query;
+        _grid.FirstVisible = 0;
+        _grid.Items.SetQuery(query);
+    }
+
+    private void OnFindAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs e) =>
+        e.Handled = LibrarySearch.Focus(FocusState.Keyboard);
 
     /// <summary>
     /// Tells the core what the user chose here; it keeps each part only while Settings remembers it. A failed save loses nothing the
