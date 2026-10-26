@@ -736,7 +736,10 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         }
         UpdateBackButton();
         SelectShownPage();
+        RefreshButton.IsEnabled = ContentFrame.Content is IRefreshable;
     }
+
+    private void OnRefreshClick(object sender, RoutedEventArgs e) => (ContentFrame.Content as IRefreshable)?.Refresh();
 
     /// <summary>
     /// The navigation's selection follows the page shown: its item, Home for Home's steps, none for search results; a detail page

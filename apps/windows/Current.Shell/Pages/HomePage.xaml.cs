@@ -18,7 +18,7 @@ namespace Current.Shell.Pages;
 /// Required, HomePage.xaml): Back and Forward show it as it was left, scroll offsets included; opened from the navigation it scrolls
 /// to the top and its rows to their start, as a library does.
 /// </summary>
-public sealed partial class HomePage : Page
+public sealed partial class HomePage : Page, IRefreshable
 {
     private static readonly TimeSpan OpeningDelay = TimeSpan.FromMilliseconds(500);
     private bool _loaded;
@@ -265,11 +265,17 @@ public sealed partial class HomePage : Page
     private void OnRefreshAccelerator(Microsoft.UI.Xaml.Input.KeyboardAccelerator sender,
         Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
     {
+        Refresh();
+        args.Handled = _sections.Count > 0;
+    }
+
+    /// <summary>Every signed-in server's rows again.</summary>
+    public void Refresh()
+    {
         foreach (var section in _sections)
         {
             section.Feed.Refresh();
         }
-        args.Handled = _sections.Count > 0;
     }
 
     /// <summary>A Latest row's header: its library's grid, the newest added first (the core's query).</summary>

@@ -75,8 +75,79 @@
                     <Style x:Key="TitleBarPaneToggleButtonStyle" TargetType="Button" BasedOn="{StaticResource TitleBarPaneToggleButtonStyle}">
                         <Setter Property="Margin" Value="2,6" />
                     </Style>
+                    <!-- Refresh beside them, looking and sized as they do: the back button's colours, width and states
+                         (TitleBarBackButtonStyle, TitleBar_themeresources.xaml, microsoft-ui-xaml, tag winui3/release/2.5.1, as in
+                         generic.xaml of Microsoft.WindowsAppSDK.WinUI 2.3.9), with a glyph in place of its animated arrow. -->
+                    <Style x:Key="TitleBarCommandButtonStyle" TargetType="Button">
+                        <Setter Property="Background" Value="{ThemeResource TitleBarBackButtonBackground}" />
+                        <Setter Property="Foreground" Value="{ThemeResource TitleBarBackButtonForeground}" />
+                        <Setter Property="Width" Value="{ThemeResource TitleBarBackButtonWidth}" />
+                        <!-- 36, as tall as the back and pane buttons (the bar's 48 less 6 above and below): the title bar centres its
+                             left header (TitleBarLeftHeaderVerticalAlignment), so Stretch left it as tall as its glyph and its hover
+                             backplate smaller than theirs (owner's run, 2026-10-26). -->
+                        <Setter Property="Height" Value="36" />
+                        <Setter Property="UseSystemFocusVisuals" Value="{StaticResource UseSystemFocusVisuals}" />
+                        <Setter Property="Margin" Value="2,0" />
+                        <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="Button">
+                                    <Grid x:Name="RootGrid" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}">
+                                        <VisualStateManager.VisualStateGroups>
+                                            <VisualStateGroup x:Name="CommonStates">
+                                                <VisualState x:Name="Normal" />
+                                                <VisualState x:Name="PointerOver">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RootGrid.Background" Value="{ThemeResource TitleBarBackButtonBackgroundPointerOver}" />
+                                                        <Setter Target="Content.Foreground" Value="{ThemeResource TitleBarBackButtonForegroundPointerOver}" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                                <VisualState x:Name="Pressed">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RootGrid.Background" Value="{ThemeResource TitleBarBackButtonBackgroundPressed}" />
+                                                        <Setter Target="Content.Foreground" Value="{ThemeResource TitleBarBackButtonForegroundPressed}" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                                <VisualState x:Name="Disabled">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RootGrid.Background" Value="{ThemeResource TitleBarBackButtonBackgroundDisabled}" />
+                                                        <Setter Target="Content.Foreground" Value="{ThemeResource TitleBarBackButtonForegroundDisabled}" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                            </VisualStateGroup>
+                                        </VisualStateManager.VisualStateGroups>
+                                        <ContentPresenter
+                                            x:Name="Content"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            Foreground="{TemplateBinding Foreground}"
+                                            Content="{TemplateBinding Content}" />
+                                    </Grid>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
                 </ResourceDictionary>
             </TitleBar.Resources>
+            <!-- Refresh for the page shown, after the back and pane buttons, where File Explorer and Edge have it: refresh must not
+                 need the keyboard, "we recommend that you also have a refresh button available for users who don't have a touch
+                 interface" (Pull-to-refresh page, learn.microsoft.com, ms.date 2025-02-26, read 2026-10-26; title bar placement:
+                 owner, 2026-10-26). Enabled on pages that refresh (IRefreshable). F5 and Ctrl+R are the pages' own keys ("Refresh |
+                 F5 or Ctrl + R", Keyboard accelerators page, learn.microsoft.com, ms.date 2026-08-28, read 2026-10-26), named in the
+                 tooltip as the Tooltips page asks. Glyph: Segoe Fluent Icons E72C "Refresh" ("Segoe Fluent Icons font",
+                 learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26), at 14: at the buttons' 16 it drew larger than their
+                 animated arrow and lines (owner's run and a capture of the window, 2026-10-26). -->
+            <TitleBar.LeftHeader>
+                <Button
+                    x:Name="RefreshButton"
+                    Style="{StaticResource TitleBarCommandButtonStyle}"
+                    IsEnabled="False"
+                    AutomationProperties.Name="Refresh"
+                    ToolTipService.ToolTip="Refresh (F5)"
+                    Click="OnRefreshClick">
+                    <FontIcon Glyph="&#xE72C;" FontSize="14" />
+                </Button>
+            </TitleBar.LeftHeader>
         </TitleBar>
 
         <!-- The navigation view's "Compact" adaptive pattern, so the pane is never hidden (owner, 2026-10-24): "an expanded left pane

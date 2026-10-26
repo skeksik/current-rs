@@ -14,7 +14,7 @@ namespace Current.Shell.Pages;
 /// coming back to the page binds to the slots already loaded: Back and Forward scroll to where the user left, opened from the
 /// navigation it starts at the top. A refresh only replaces slots, so the scroll position stays.
 /// </summary>
-public sealed partial class LibraryPage : Page
+public sealed partial class LibraryPage : Page, IRefreshable
 {
     /// <summary>The sorts and filters the core offers, in its order (ItemQuery.SortChoices and FilterChoices); the menus list them.</summary>
     private static readonly IReadOnlyList<SortChoice> Sorts = ItemQuery.SortChoices;
@@ -361,8 +361,11 @@ public sealed partial class LibraryPage : Page
     private void OnRefresh(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs e)
     {
         e.Handled = true;
-        _grid?.Items.Refresh();
+        Refresh();
     }
+
+    /// <summary>The grid's items again, in place.</summary>
+    public void Refresh() => _grid?.Items.Refresh();
 
     private void OnRetry(object sender, RoutedEventArgs e) => _grid?.Items.Retry();
 }
