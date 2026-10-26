@@ -129,6 +129,8 @@
                  ("You can also add items in code", same page); a header names each server when there is more than one. -->
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
+                <!-- Between Home and the libraries (owner, 2026-10-26); shown only while there are libraries (ShowLibraries). -->
+                <NavigationViewItemSeparator x:Name="LibrariesSeparator" Visibility="Collapsed" />
             </NavigationView.MenuItems>
             <Grid>
                 <Grid.RowDefinitions>

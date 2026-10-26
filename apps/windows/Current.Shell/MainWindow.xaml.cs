@@ -568,6 +568,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         }
         _libraryItems.Clear();
         _libraryItems.AddRange(wanted);
+        LibrariesSeparator.Visibility = wanted.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>
