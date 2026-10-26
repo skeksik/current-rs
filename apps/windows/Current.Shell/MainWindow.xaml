@@ -202,6 +202,22 @@
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
                 <!-- Between Home and the libraries (owner, 2026-10-26); shown only while there are libraries (ShowLibraries). -->
                 <NavigationViewItemSeparator x:Name="LibrariesSeparator" Visibility="Collapsed" />
+                <!-- Libraries: one item that expands to every library, and with more than one server to each server's, below an
+                 item per server (owner, 2026-10-26). Hierarchical items as the NavigationView page describes them: "Nested items
+                 are shown when the parent is expanded", and in the icon rail its children open in a flyout (NavigationView page,
+                 learn.microsoft.com, ms.date 2026-10-02, not re-read for this; the flyout seen on the owner's run). Open at start.
+                 Choosing it only opens or closes it (SelectsOnInvoked). Glyph: Segoe Fluent Icons E8F1 "Library" ("Segoe Fluent
+                 Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26). -->
+                <NavigationViewItem
+                    x:Name="LibrariesItem"
+                    Content="Libraries"
+                    Visibility="Collapsed"
+                    IsExpanded="True"
+                    SelectsOnInvoked="False">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8F1;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
             </NavigationView.MenuItems>
             <Grid>
                 <Grid.RowDefinitions>

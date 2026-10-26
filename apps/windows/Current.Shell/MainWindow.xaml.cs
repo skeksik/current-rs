@@ -163,8 +163,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>The titles of the notices above the pages now (the smoke run).</summary>
     internal IReadOnlyList<string> NoticeTitles => [.. Notices.Children.OfType<InfoBar>().Select(notice => notice.Title)];
 
-    /// <summary>The navigation's library items now, headers left out (the smoke run).</summary>
-    internal int LibraryItemCount => _libraryItems.OfType<NavigationViewItem>().Count();
+    /// <summary>The navigation's library items now, servers' items left out (the smoke run).</summary>
+    internal int LibraryItemCount => _libraryItems.OfType<NavigationViewItem>().Count(item => item.Tag is LibraryArgs);
 
     /// <summary>Opens Settings, as its item in the pane does (the smoke run).</summary>
     internal void ShowSettings() => Navigate(typeof(SettingsPage), new SuppressNavigationTransitionInfo());
@@ -507,24 +507,35 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>
     /// The library items follow the core's lists in place: an item for a library still listed is kept (and renamed), a new library's
     /// item is inserted where the user's order puts it, a gone library's item is removed, and the rest stay as they are, so the
-    /// selection and keyboard focus stay on what they were on. The library items always end the pane's list, after Home.
+    /// selection and keyboard focus stay on what they were on. They sit inside the Libraries item, inside an item per server when
+    /// more than one is signed in.
     /// </summary>
     private void ShowLibraries(BrowseHub hub)
     {
-        var wanted = new List<object>();
         var servers = hub.Servers;
+        var grouped = servers.Count > 1;
+        // Each container's items as they should be, the Libraries item's first; an item that moves (one server more or less) is taken
+        // out of every container before any is filled, as an item can have one parent only.
+        var wanted = new List<(IList<object> Items, List<object> Want)>();
+        var top = new List<object>();
+        wanted.Add((LibrariesItem.MenuItems, top));
+        var all = new List<object>();
         foreach (var server in servers)
         {
-            if (servers.Count > 1)
+            var into = top;
+            if (grouped)
             {
-                var header = _libraryItems.OfType<NavigationViewItemHeader>().FirstOrDefault(known => Equals(known.Tag, server.Server))
-                    ?? new NavigationViewItemHeader { Tag = server.Server };
+                var group = _libraryItems.OfType<NavigationViewItem>().FirstOrDefault(known => Equals(known.Tag, server.Server))
+                    ?? new NavigationViewItem { Tag = server.Server, SelectsOnInvoked = false, IsExpanded = true };
                 var name = hub.ServerName(server.Server);
-                if (!Equals(header.Content, name))
+                if (!Equals(group.Content, name))
                 {
-                    header.Content = name;
+                    group.Content = name;
                 }
-                wanted.Add(header);
+                top.Add(group);
+                all.Add(group);
+                into = [];
+                wanted.Add((group.MenuItems, into));
             }
             foreach (var library in server.Libraries)
             {
@@ -547,28 +558,43 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
                     }
                 }
                 item.Tag = new LibraryArgs(library);
-                wanted.Add(item);
+                into.Add(item);
+                all.Add(item);
             }
         }
-        var start = NavView.MenuItems.Count - _libraryItems.Count;
-        for (var i = 0; i < wanted.Count; i++)
+        // A server's item no longer shown lets go of its libraries too.
+        foreach (var gone in _libraryItems.OfType<NavigationViewItem>().Where(item => item.Tag is not LibraryArgs && !all.Contains(item)))
         {
-            var at = start + i;
-            if (at < NavView.MenuItems.Count && ReferenceEquals(NavView.MenuItems[at], wanted[i]))
+            gone.MenuItems.Clear();
+        }
+        foreach (var (items, want) in wanted)
+        {
+            for (var i = items.Count - 1; i >= 0; i--)
             {
-                continue;
+                if (!want.Contains(items[i]))
+                {
+                    items.RemoveAt(i);
+                }
             }
-            // Moved (the user's order changed) or new: every item before it is already in place.
-            NavView.MenuItems.Remove(wanted[i]);
-            NavView.MenuItems.Insert(at, wanted[i]);
         }
-        while (NavView.MenuItems.Count > start + wanted.Count)
+        foreach (var (items, want) in wanted)
         {
-            NavView.MenuItems.RemoveAt(NavView.MenuItems.Count - 1);
+            for (var i = 0; i < want.Count; i++)
+            {
+                if (i < items.Count && ReferenceEquals(items[i], want[i]))
+                {
+                    continue;
+                }
+                // Moved (the user's order changed) or new: every item before it is already in place.
+                items.Remove(want[i]);
+                items.Insert(i, want[i]);
+            }
         }
         _libraryItems.Clear();
-        _libraryItems.AddRange(wanted);
-        LibrariesSeparator.Visibility = wanted.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _libraryItems.AddRange(all);
+        var any = top.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        LibrariesSeparator.Visibility = any;
+        LibrariesItem.Visibility = any;
     }
 
     /// <summary>
