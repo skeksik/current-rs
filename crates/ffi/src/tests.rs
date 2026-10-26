@@ -285,11 +285,17 @@ fn a_list_subscription_starts_with_a_reset_and_mirrors_the_core() {
 }
 
 /// Stands in for a foreign callback that threw: UniFFI turns the exception into a panic, which the bridge catches. A real `panic!`,
-/// so the process's panic hook runs as it would for a foreign exception (with a backtrace where `RUST_BACKTRACE` is set): on a
-/// blocking-pool thread, where it delays that one subscription only.
+/// so a panic hook runs on the blocking-pool thread as it would for a foreign exception, but the test hook makes it return at once.
+/// The process's own hook would print a backtrace where `RUST_BACKTRACE` is set, which in this debug binary took a median 11 s
+/// under parallel load (2026-10-26), past [`WAIT`]. That cost delays only the failed delivery; the tests with a slow hook check that
+/// with a bounded one ([`SLOW_HOOK`]).
 fn foreign_exception() -> ! {
-    panic!("the foreign callback threw")
+    install_test_panic_hook();
+    panic!("{FOREIGN_EXCEPTION_PANIC}")
 }
+
+/// The payload of a [`foreign_exception`], whose panic hook the test hook skips.
+const FOREIGN_EXCEPTION_PANIC: &str = "the foreign callback threw";
 
 /// The payload of a panic the test hook makes slow.
 const SLOW_HOOK_PANIC: &str = "a foreign exception with a slow panic hook";
@@ -297,9 +303,10 @@ const SLOW_HOOK_PANIC: &str = "a foreign exception with a slow panic hook";
 /// How long the test hook takes for a [`SLOW_HOOK_PANIC`].
 const SLOW_HOOK: Duration = Duration::from_secs(2);
 
-/// Installs, once for the whole test binary, a panic hook that takes [`SLOW_HOOK`] for a [`SLOW_HOOK_PANIC`] and hands every other
-/// panic to the hook that was there before. Installed once and never restored: tests run in parallel and would race on `set_hook`.
-fn install_slow_panic_hook() {
+/// Installs, once for the whole test binary, a panic hook that returns at once for a [`FOREIGN_EXCEPTION_PANIC`], takes
+/// [`SLOW_HOOK`] for a [`SLOW_HOOK_PANIC`] and hands every other panic to the hook that was there before. Installed once and never
+/// restored: tests run in parallel and would race on `set_hook`.
+fn install_test_panic_hook() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
         let previous = std::panic::take_hook();
@@ -309,10 +316,10 @@ fn install_slow_panic_hook() {
                 .downcast_ref::<&str>()
                 .copied()
                 .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
-            if message == Some(SLOW_HOOK_PANIC) {
-                thread::sleep(SLOW_HOOK);
-            } else {
-                previous(info);
+            match message {
+                Some(FOREIGN_EXCEPTION_PANIC) => {}
+                Some(SLOW_HOOK_PANIC) => thread::sleep(SLOW_HOOK),
+                _ => previous(info),
             }
         }));
     });
@@ -477,7 +484,7 @@ fn a_blocking_listener_does_not_delay_other_subscriptions_or_tasks() {
 
 #[test]
 fn a_panicking_listener_with_a_slow_hook_does_not_delay_other_subscriptions_or_tasks() {
-    install_slow_panic_hook();
+    install_test_panic_hook();
     // Panics on every call, as a listener whose foreign code always throws, and reports each call first.
     struct Panics(Mutex<Sender<()>>);
     impl CapabilitiesListener for Panics {
@@ -502,7 +509,7 @@ fn a_panicking_listener_with_a_slow_hook_does_not_delay_other_subscriptions_or_t
 
 #[test]
 fn a_panicking_list_listener_with_a_slow_hook_gets_a_reset_next() {
-    install_slow_panic_hook();
+    install_test_panic_hook();
     let runtime = runtime::handle().unwrap();
     let list = ObservableList::new();
     let (tx, rx) = mpsc::channel();
