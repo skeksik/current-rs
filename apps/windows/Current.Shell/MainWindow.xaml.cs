@@ -55,10 +55,10 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     public MainWindow()
     {
         InitializeComponent();
-        // The search box joins the navigation view once a Jellyfin server is signed in (ShowBrowsing).
-        NavView.AutoSuggestBox = null;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+        // After the title bar's own layout passes, which set its click-through areas: ours again (QueueTitleBarRegions).
+        AppTitleBar.LayoutUpdated += (_, _) => QueueTitleBarRegions();
         // Caption buttons as tall as the 48 px title bar (owner's finding, 2026-10-24; Photos' are 48 × 48, measured on the owner's PC,
         // 2026-10-24): "Set PreferredHeightOption to Tall so the caption buttons are the same height as the title bar" ("Title bar
         // customization", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-24), as the WinUI Gallery does after
@@ -262,7 +262,17 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// (owner's recording, 2026-10-24), not once its animation has ended.</summary>
     private void OnPaneOpenedOrClosed(NavigationView sender, object args) => QueuePaneStateUpdate();
 
-    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) => QueuePaneStateUpdate();
+    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args)
+    {
+        QueuePaneStateUpdate();
+        // The title bar's box gives way to its Search button when the pane does to the icon rail (owner, 2026-10-26).
+        var narrow = args.DisplayMode != NavigationViewDisplayMode.Expanded;
+        if (narrow != _narrow)
+        {
+            _narrow = narrow;
+            PlaceSearch();
+        }
+    }
 
     /// <summary>
     /// Updates the pane button's name and Back once the navigation view has finished the change. Crossing 1008 px, it raises
@@ -283,8 +293,11 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     /// <summary>The title bar's Back button is enabled while there is a page to go back to, the pane overlays the page, or the player is
     /// open (Back closes it).</summary>
-    private void UpdateBackButton() =>
+    private void UpdateBackButton()
+    {
         AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack || PaneOverlaysPage || Player.IsOpen;
+        QueueTitleBarRegions();
+    }
 
     // The player ----------------------------------------------------------------------------------------------------------------------
 
@@ -495,10 +508,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     private void ShowBrowsing(BrowseHub hub)
     {
-        // Taken out of the navigation view, not only hidden: a hidden box still kept its place in the pane, a gap above Home (the
-        // owner's run, 2026-10-25).
-        SearchBox.Visibility = hub.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
-        NavView.AutoSuggestBox = hub.IsAvailable ? SearchBox : null;
+        _searchAvailable = hub.IsAvailable;
+        PlaceSearch();
         ShowLibraries(hub);
         DropGoneHistory(hub);
         SelectShownPage();
@@ -717,9 +728,217 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     {
         if (SearchBox.Visibility == Visibility.Visible)
         {
-            // In the icon rail the box shows as a search button; whether focusing it there opens the pane is not verified.
             args.Handled = SearchBox.Focus(FocusState.Keyboard);
         }
+        else if (SearchButton.Visibility == Visibility.Visible || NarrowSearchPlate.Visibility == Visibility.Visible)
+        {
+            OpenNarrowSearch(FocusState.Keyboard);
+            args.Handled = true;
+        }
+    }
+
+    /// <summary>Whether a Jellyfin server is signed in, so search has something to search.</summary>
+    private bool _searchAvailable;
+
+    /// <summary>Whether the pane is not expanded, so the title bar's box gives way to the Search button (OnDisplayModeChanged).</summary>
+    private bool _narrow;
+
+    // Windows Settings' title bar search, measured on the owner's PC at 150 % (2026-10-26): 500 wide at most, centred on the window,
+    // narrowing with the window while keeping the room on its left mirrored on its right.
+    private const double SearchMaxWidth = 500;
+
+    private void OnSearchHostSizeChanged(object sender, SizeChangedEventArgs e) => LayoutSearch();
+
+    private bool _titleBarRegionsQueued;
+
+    /// <summary>
+    /// Sets the title bar's click-through areas (the non-client "passthrough" regions) to its buttons and search as they show,
+    /// once the title bar has laid out and set its own. Everything else there is caption: a double-click on it maximizes the window.
+    /// The title bar's own list (UpdateInteractableElementsList and GetBounds in TitleBar.cpp, microsoft-ui-xaml, tag
+    /// winui3/release/2.5.1, read 2026-10-26) leaves out a disabled Back button and takes the search box where layout put it, not
+    /// where its render transform moves it (LayoutSearch); a double-click on either maximized the window (owner's run, 2026-10-26).
+    /// The title bar only sets its regions again when its own list's rects change, so these stay until then, and are set again after
+    /// its layout passes.
+    /// </summary>
+    private void QueueTitleBarRegions()
+    {
+        if (_titleBarRegionsQueued)
+        {
+            return;
+        }
+        _titleBarRegionsQueued = true;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _titleBarRegionsQueued = false;
+            SetTitleBarRegions();
+        });
+    }
+
+    private void SetTitleBarRegions()
+    {
+        if (AppTitleBar.XamlRoot is not { } root)
+        {
+            return;
+        }
+        var scale = root.RasterizationScale;
+        var rects = new List<Windows.Graphics.RectInt32>();
+        void Add(FrameworkElement? element)
+        {
+            if (element is null || element.Visibility != Visibility.Visible || element.ActualWidth <= 0 || !IsShown(element))
+            {
+                return;
+            }
+            var bounds = element.TransformToVisual(null).TransformBounds(
+                new Windows.Foundation.Rect(0, 0, element.ActualWidth, element.ActualHeight));
+            rects.Add(new Windows.Graphics.RectInt32(
+                (int)Math.Round(bounds.X * scale), (int)Math.Round(bounds.Y * scale),
+                (int)Math.Round(bounds.Width * scale), (int)Math.Round(bounds.Height * scale)));
+        }
+        Add(FindNamed(AppTitleBar, "PART_BackButton"));
+        Add(FindNamed(AppTitleBar, "PART_PaneToggleButton"));
+        Add(RefreshButton);
+        Add(SearchBox);
+        Add(SearchButton);
+        // Only when they changed: setting them again, as each layout pass did (pressing the search box lays it out again), turned the
+        // text cursor over it into the arrow while the button was held (owner's run, 2026-10-26).
+        if (rects.SequenceEqual(_titleBarRegions))
+        {
+            return;
+        }
+        _titleBarRegions = rects;
+        Microsoft.UI.Input.InputNonClientPointerSource.GetForWindowId(AppWindow.Id)
+            .SetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Passthrough, [.. rects]);
+    }
+
+    /// <summary>The click-through areas last set, so they are set only when they change.</summary>
+    private List<Windows.Graphics.RectInt32> _titleBarRegions = [];
+
+    /// <summary>Whether every element from <paramref name="element"/> up is visible: a collapsed parent hides it too.</summary>
+    private static bool IsShown(FrameworkElement element)
+    {
+        for (DependencyObject? at = element; at is not null; at = VisualTreeHelper.GetParent(at))
+        {
+            if (at is UIElement { Visibility: Visibility.Collapsed })
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>A named part of a control's template, found by walking its visual tree.</summary>
+    private static FrameworkElement? FindNamed(DependencyObject parent, string name)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is FrameworkElement element && element.Name == name)
+            {
+                return element;
+            }
+            if (FindNamed(child, name) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The title bar's box, as Settings sizes and places it: at most <see cref="SearchMaxWidth"/> wide and centred on the window, with
+    /// the room the back, pane and Refresh buttons and the title take on its left (where the title bar's content column, SearchHost,
+    /// starts) kept on its right too. It also stays inside that column, which ends well before the caption buttons: the title bar
+    /// keeps a 48 wide drag region (TitleBarMinDragRegionWidth) and pads for the caption buttons (RightPaddingColumn); at 150 % that
+    /// padding measured 216, the caption buttons' inset in physical pixels, where the buttons take 144 (owner's PC, 2026-10-26). So a
+    /// box that would cross into it moves left, or narrows.
+    /// </summary>
+    private void LayoutSearch()
+    {
+        var window = Root.ActualWidth;
+        var host = SearchHost.ActualWidth;
+        if (host <= 0 || window <= 0)
+        {
+            return;
+        }
+        var left = SearchHost.TransformToVisual(Root).TransformPoint(new Windows.Foundation.Point(0, 0)).X;
+        var width = Math.Max(0, Math.Min(Math.Min(SearchMaxWidth, window - 2 * left), host));
+        // Moved by a render transform, not a margin: a margin adds to what the content asks of the title bar, which then hid its title
+        // to make room (owner's run, 2026-10-26).
+        SearchBox.Width = width;
+        SearchBox.RenderTransform = new TranslateTransform { X = Math.Min((window - width) / 2 - left, host - width) };
+        QueueTitleBarRegions();
+    }
+
+    /// <summary>The title bar's box in a wider window, its Search button in a small one, nothing without a server.</summary>
+    private void PlaceSearch()
+    {
+        _narrow = NavView.DisplayMode != NavigationViewDisplayMode.Expanded;
+        SearchBox.Visibility = _searchAvailable && !_narrow ? Visibility.Visible : Visibility.Collapsed;
+        SearchButton.Visibility = _searchAvailable && _narrow ? Visibility.Visible : Visibility.Collapsed;
+        QueueTitleBarRegions();
+        if (!_searchAvailable || !_narrow)
+        {
+            CloseNarrowSearch();
+        }
+    }
+
+    private void OnSearchButtonClick(object sender, RoutedEventArgs e) => OpenNarrowSearch(FocusState.Programmatic);
+
+    private void OpenNarrowSearch(FocusState focus)
+    {
+        NarrowSearchBox.Text = SearchBox.Text;
+        SearchDismissLayer.Visibility = Visibility.Visible;
+        NarrowSearchPlate.Visibility = Visibility.Visible;
+        // Once it has been laid out: focused in the same pass as it is shown, it did not take the focus (owner's run, 2026-10-26).
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => NarrowSearchBox.Focus(focus));
+    }
+
+    private void CloseNarrowSearch()
+    {
+        if (NarrowSearchPlate.Visibility == Visibility.Visible)
+        {
+            SearchBox.Text = NarrowSearchBox.Text;
+            NarrowSearchPlate.Visibility = Visibility.Collapsed;
+            SearchDismissLayer.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>A click outside the open small-window search box only closes it.</summary>
+    private void OnSearchDismissPressed(object sender, PointerRoutedEventArgs e)
+    {
+        CloseNarrowSearch();
+        e.Handled = true;
+    }
+
+    private void OnNarrowSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
+    {
+        OnSearchSubmitted(sender, args);
+        CloseNarrowSearch();
+    }
+
+    /// <summary>Esc closes the box. Seen before the box's text field, which takes Esc itself (KeyDown never came; owner's run, 2026-10-26).</summary>
+    private void OnNarrowSearchKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Escape)
+        {
+            CloseNarrowSearch();
+            SearchButton.Focus(FocusState.Keyboard);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>Focus went elsewhere in the window: the box closes, as Settings' does. Inside it (its text box) it stays.</summary>
+    private void OnNarrowSearchLostFocus(object sender, RoutedEventArgs e)
+    {
+        var focused = FocusManager.GetFocusedElement(Root.XamlRoot) as DependencyObject;
+        for (var element = focused; element is not null; element = VisualTreeHelper.GetParent(element))
+        {
+            if (ReferenceEquals(element, NarrowSearchBox))
+            {
+                return;
+            }
+        }
+        CloseNarrowSearch();
     }
 
     /// <summary>Announces from the navigation view, which every page is shown in, so a page that was just left can still be heard.</summary>
