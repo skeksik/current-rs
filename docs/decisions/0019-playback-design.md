@@ -128,6 +128,9 @@ fake engine, a fake server and a fake clock):
   retried by itself when the network returns (the controller does not see the network observer, and playback starting on its own after
   minutes would surprise); playing the item again resumes at the reported position.
 - **Stopping:** stop reports, unloads (`stop` command), and keeps the engine for the next item; closing the player window destroys it.
+  Amended 2026-10-26 (owner): stop unloads first, then reports, and so does playing another item over one that plays. Reason: the
+  stop report's answer took 1 to 2 s through a gateway on a remux, and the sound went on meanwhile (docs/notes/relay-windows-check.md).
+  The reported position is the one saved before the unload, so the report is unchanged.
 - **Next episode start** (owner, 2026-10-25): autoplay and "Next episode" start the next episode from the beginning, not from its
   resume point.
 

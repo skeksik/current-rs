@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
@@ -76,6 +77,8 @@ pub enum Command {
 pub struct FakeEngine {
     pub commands: Vec<Command>,
     pub refuse_loads: bool,
+    /// Set by `stop`, cleared by `load`: whether nothing is loaded (shared with [`ServerState::engine_unloaded`]).
+    pub unloaded: Arc<AtomicBool>,
 }
 
 impl FakeEngine {
@@ -100,6 +103,7 @@ impl Engine for FakeEngine {
             return Err(EngineErrorKind::LOADING_FAILED);
         }
         self.commands.push(Command::Load(file));
+        self.unloaded.store(false, Ordering::SeqCst);
         Ok(())
     }
 
@@ -133,6 +137,7 @@ impl Engine for FakeEngine {
 
     fn stop(&mut self) {
         self.commands.push(Command::Stop);
+        self.unloaded.store(true, Ordering::SeqCst);
     }
 }
 
@@ -171,6 +176,10 @@ pub struct ServerState {
     pub stream_live: bool,
     /// How many times `end_stream` was called.
     pub stream_ends: u32,
+    /// The engine's [`FakeEngine::unloaded`], when the test shares it.
+    pub engine_unloaded: Option<Arc<AtomicBool>>,
+    /// For each stop report, whether the engine had nothing loaded when it was sent.
+    pub unloaded_at_stop: Vec<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -209,6 +218,8 @@ impl FakeServer {
                 stream_problem: None,
                 stream_live: false,
                 stream_ends: 0,
+                engine_unloaded: None,
+                unloaded_at_stop: Vec::new(),
             })),
             clock,
         }
@@ -261,6 +272,14 @@ impl MediaServer for FakeServer {
     }
 
     async fn report_stopped(&self, report: &StopReport) -> Result<(), PlaybackProblem> {
+        {
+            let mut state = self.state();
+            let unloaded = state
+                .engine_unloaded
+                .as_ref()
+                .is_some_and(|unloaded| unloaded.load(Ordering::SeqCst));
+            state.unloaded_at_stop.push(unloaded);
+        }
         self.record(Report::Stopped(report.clone()));
         Ok(())
     }

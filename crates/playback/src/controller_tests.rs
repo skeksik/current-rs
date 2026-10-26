@@ -35,8 +35,10 @@ impl Harness {
         // An arbitrary start, so no timing passes only because the clock starts at zero.
         clock.advance(secs(1000));
         let server = FakeServer::new(clock.clone());
+        let engine = FakeEngine::default();
+        server.state().engine_unloaded = Some(engine.unloaded.clone());
         let player = Controller::new(
-            FakeEngine::default(),
+            engine,
             server.clone(),
             clock.clone(),
             QualityMemory::default(),
@@ -299,6 +301,25 @@ fn stop_reports_the_position_unloads_and_tells_the_app_once() {
     block_on(player.player.stop());
     assert!(player.reports().is_empty());
     assert!(player.events().is_empty());
+}
+
+/// The sound stops when the user stops or plays another item, not after the stop report, whose answer took 1 to 2 s through a
+/// gateway on a remux (Windows relay check, 2026-10-26).
+#[test]
+fn stop_and_another_item_unload_the_engine_before_the_stop_report() {
+    let mut player = Harness::playing(AutoSkip::off());
+    player.at(100);
+    block_on(player.player.stop());
+    assert_eq!(player.server.state().unloaded_at_stop, vec![true]);
+
+    let mut player = Harness::playing(AutoSkip::off());
+    player.at(100);
+    block_on(
+        player
+            .player
+            .play(item("m2"), MediaKind::MOVIE, Duration::ZERO),
+    );
+    assert_eq!(player.server.state().unloaded_at_stop, vec![true]);
 }
 
 #[test]
