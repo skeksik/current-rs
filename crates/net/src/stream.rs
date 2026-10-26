@@ -10,7 +10,7 @@ use reqwest::header::{self, HeaderMap, HeaderName};
 use tokio::time::Instant;
 use url::Url;
 
-use crate::address::{AddressOutcome, AddressProvider, Selected};
+use crate::address::{AddressOutcome, Selected};
 use crate::client::{Request, Response, ServerClient, gateway_for, join};
 use crate::error::{Location, NetError, is_html};
 use crate::log::{LogEntry, Outcome, RequestLog, redact_query};
@@ -51,7 +51,7 @@ pub enum StreamError {
     /// means.
     #[error("the server refused the stream ({status})")]
     Refused { status: u16, shape: GatewayShape },
-    /// Any other status of 400 and up. The body is not read.
+    /// Any other status of 400 and up but 416, which comes back as a [`StreamResponse`]. The body is not read.
     #[error("the server answered with status {status}")]
     Status { status: u16 },
     /// No connection, or the connection was lost.
@@ -63,7 +63,8 @@ pub enum StreamError {
     /// The secure connection failed.
     #[error("the secure connection to the server failed")]
     Tls,
-    /// A method other than GET or HEAD, a body, or a path that does not fit the server's address.
+    /// A method other than GET or HEAD, a body, a path that does not fit the server's address, or an HTTP client that could not
+    /// be built (the TLS backend did not start).
     #[error("the request could not be built")]
     InvalidRequest,
 }
@@ -105,7 +106,8 @@ impl StreamError {
     }
 }
 
-/// A stream whose headers have arrived: status 2xx or 304. Read its body with [`StreamResponse::next_chunk`]; dropping it closes
+/// A stream whose headers have arrived: status 2xx, 304, or 416 (a range outside the resource, passed on with its
+/// `Content-Range` so the player can correct it). Read its body with [`StreamResponse::next_chunk`]; dropping it closes
 /// the connection to the server if the body was not read to its end. Its `Debug` output shows no header values.
 pub struct StreamResponse {
     status: u16,
@@ -119,13 +121,11 @@ pub struct StreamResponse {
     report: BodyReport,
 }
 
-/// What a stream needs to log and report a failure after its headers: the entry as `send_stream` would have built it.
+/// What a stream needs to log a failure after its headers: the entry as `send_stream` would have built it.
 struct BodyReport {
     log: Arc<RequestLog>,
     entry: LogEntry,
     started: Instant,
-    address: Arc<dyn AddressProvider>,
-    selected: Selected,
 }
 
 impl std::fmt::Debug for StreamResponse {
@@ -160,7 +160,9 @@ impl StreamResponse {
     /// timeout for it; the time only runs while this is awaited, so a caller that stops reading (a paused player) does not time out,
     /// and the server is slowed by TCP flow control instead. After an error, every later call returns the same error.
     ///
-    /// A failure is logged (ADR 0006) and, if it says something about the address, reported to the address provider.
+    /// A failure is logged (ADR 0006) but not reported to the address provider: the address answered, and a connection that drops
+    /// or stalls mid-body (a paused player's idle connection closed by the server or a proxy) is no reason to re-race the server's
+    /// addresses and hold its other requests. The caller's next request finds out whether the address still works.
     pub async fn next_chunk(&mut self) -> Result<Option<Bytes>, StreamError> {
         if let Some(error) = &self.failed {
             return Err(error.clone());
@@ -175,11 +177,6 @@ impl StreamResponse {
         report.entry.outcome = error.outcome();
         report.entry.duration = report.started.elapsed();
         push(&report.log, report.entry.clone());
-        if error.address_outcome() != AddressOutcome::Ok {
-            report
-                .address
-                .report(&report.selected, error.address_outcome());
-        }
         self.failed = Some(error.clone());
         Err(error)
     }
@@ -194,6 +191,7 @@ impl ServerClient {
     /// - no redirect is followed: one is [`StreamError::Refused`];
     /// - the request's time ([`ServerClient::budget`]) covers waiting for an address and for the answer's headers, and the body
     ///   has no deadline, only a read timeout per chunk ([`DEFAULT_READ_TIMEOUT`] or [`Request::read_timeout`]);
+    /// - a 416 comes back as a [`StreamResponse`] with its `Content-Range`, like a 206;
     /// - the request log gets an entry only for a failure: a status of 300 and up (304 aside), an HTML page, or a network error,
     ///   before or during the body. A success is not logged, so a long HLS stream does not push everything else out of the log.
     ///
@@ -206,6 +204,11 @@ impl ServerClient {
             self.log_failure(&request, None, &StreamError::InvalidRequest, started);
             return Err(StreamError::InvalidRequest);
         }
+        // A client that cannot be built says nothing about the address: not reported.
+        let Ok(http) = self.stream_http().await else {
+            self.log_failure(&request, None, &StreamError::InvalidRequest, started);
+            return Err(StreamError::InvalidRequest);
+        };
         let deadline = started + self.budget(&request);
         let selected = match self.address.current() {
             Some(selected) => Some(selected),
@@ -216,7 +219,7 @@ impl ServerClient {
             return Err(StreamError::Unreachable);
         };
         let first = self
-            .stream_attempt(&request, &selected, deadline, false)
+            .stream_attempt(http, &request, &selected, deadline, false)
             .await;
         let Err(error) = &first else {
             return first;
@@ -227,7 +230,8 @@ impl ServerClient {
         // GET and HEAD may be repeated even if they reached the server (ADR 0014).
         match self.address.wait(deadline).await {
             Some(next) if next.url() != selected.url() && Instant::now() < deadline => {
-                self.stream_attempt(&request, &next, deadline, true).await
+                self.stream_attempt(http, &request, &next, deadline, true)
+                    .await
             }
             _ => first,
         }
@@ -236,6 +240,7 @@ impl ServerClient {
     /// One attempt at `selected`, logged if it fails, with its outcome reported to the provider as `send`'s attempts are.
     async fn stream_attempt(
         &self,
+        http: &reqwest::Client,
         request: &Request,
         selected: &Selected,
         deadline: Instant,
@@ -251,7 +256,7 @@ impl ServerClient {
             return Err(StreamError::Timeout);
         };
         let result = self
-            .open_stream(request, selected, remaining, started)
+            .open_stream(http, request, selected, remaining, started)
             .await;
         let reported = match &result {
             Ok(_) => AddressOutcome::Ok,
@@ -270,6 +275,7 @@ impl ServerClient {
     /// Sends `request` to `selected` and waits up to `remaining` for the answer's headers.
     async fn open_stream(
         &self,
+        http: &reqwest::Client,
         request: &Request,
         selected: &Selected,
         remaining: Duration,
@@ -284,7 +290,6 @@ impl ServerClient {
             }
         }
         let (authorized_url, authorized_headers) = self.authorize(&url, &forwarded, selected);
-        let http = self.stream_http().await.map_err(|_| StreamError::Tls)?;
         let send = http
             .request(request.method.clone(), authorized_url)
             .headers(authorized_headers)
@@ -314,10 +319,10 @@ impl ServerClient {
                 shape: classify(&Err(error)),
             });
         }
-        if status >= 400 {
+        if status >= 400 && status != 416 {
             return Err(StreamError::Status { status });
         }
-        if is_html(response.headers(), b"") {
+        if (200..300).contains(&status) && is_html(response.headers(), b"") {
             // Classified as `send`'s answers are: an HTML page where something else was expected.
             let page = Ok(Response {
                 status,
@@ -330,6 +335,15 @@ impl ServerClient {
                 status,
                 shape: classify(&page),
             });
+        }
+        if status == 416 {
+            // An answer, but still a failure for the log.
+            self.log_failure(
+                request,
+                selected.position(),
+                &StreamError::Status { status },
+                started,
+            );
         }
         let mut headers = HeaderMap::new();
         for name in &STREAM_RESPONSE_HEADERS {
@@ -353,8 +367,6 @@ impl ServerClient {
                     started,
                 ),
                 started,
-                address: self.address.clone(),
-                selected: selected.clone(),
             },
         })
     }

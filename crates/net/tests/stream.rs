@@ -4,6 +4,7 @@
 //! Real time, with short timings and wide margins.
 
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -11,16 +12,14 @@ use std::time::Duration;
 use current_model::{ServerKey, ServerRef, ServiceType};
 use current_net::header::{self, HeaderMap, HeaderName, HeaderValue};
 use current_net::{
-    AuthorizationUse, BasicCredentials, ClientConfig, ExtraHeader, FixedAddress, Gateway,
-    GatewayAddress, GatewayCookie, GatewayCredentials, GatewayShape, Request, RequestAuth,
-    RequestLog, ServerClient, StreamError, StreamResponse, Url,
+    AddressOutcome, AddressProvider, AuthorizationUse, BasicCredentials, ClientConfig, ExtraHeader,
+    FixedAddress, Gateway, GatewayAddress, GatewayCookie, GatewayCredentials, GatewayShape,
+    Request, RequestAuth, RequestLog, ServerClient, StreamError, StreamResponse, Url,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Notify, oneshot};
 
-// No test here frees a port, so only `ports::bind` is used.
-#[allow(dead_code)]
 mod ports;
 
 const TOKEN: &str = "s3cret-token-value";
@@ -282,7 +281,7 @@ async fn a_large_body_streams_with_bounded_memory() {
     );
     // Socket buffers on both ends and hyper's read buffer hold the difference; Linux allows a few MiB per socket by default.
     assert!(
-        stalled < (LENGTH / 2) as u64,
+        stalled < (16 * MIB) as u64,
         "{stalled} bytes written while the client read {read}"
     );
 
@@ -328,21 +327,32 @@ async fn a_pause_of_the_server_holds_the_reader_without_an_error() {
 
 #[tokio::test]
 async fn a_caller_that_stops_reading_does_not_time_out() {
-    let stand_in = StandIn::start(|_, mut socket| async move {
-        let written = AtomicU64::new(0);
-        let _ = socket.write_all(head(200, 4 * MIB, &[]).as_bytes()).await;
-        write_pattern(&mut socket, 4 * MIB, &written).await;
-        let _ = socket.shutdown().await;
+    // Small enough to sit whole in the socket buffers, so the reads after the pause need nothing more from the stand-in.
+    const LENGTH: usize = 256 * 1024;
+    let written = Arc::new(AtomicU64::new(0));
+    let counter = written.clone();
+    let stand_in = StandIn::start(move |_, mut socket| {
+        let counter = counter.clone();
+        async move {
+            let _ = socket.write_all(head(200, LENGTH, &[]).as_bytes()).await;
+            write_pattern(&mut socket, LENGTH, &counter).await;
+            // Kept open: the client sees the end from the length.
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
     })
     .await;
     let log = Arc::new(RequestLog::default());
     let client = plain_client(&stand_in, &log);
-    let request = Request::get("/Videos/1/stream").read_timeout(Duration::from_millis(300));
+    let request = Request::get("/Videos/1/stream").read_timeout(Duration::from_secs(1));
     let mut stream = ok(client.send_stream(request).await);
     let first = ok(stream.next_chunk().await).map_or(0, |chunk| chunk.len());
+    while written.load(Ordering::SeqCst) < LENGTH as u64 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     // A paused player: three read timeouts without reading. The time only runs while a read waits.
-    tokio::time::sleep(Duration::from_millis(900)).await;
-    assert_eq!(first + read_pattern(&mut stream, first).await, 4 * MIB);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(first + read_pattern(&mut stream, first).await, LENGTH);
+    assert_eq!(log.to_text(), "");
 }
 
 #[tokio::test]
@@ -402,6 +412,11 @@ async fn range_and_if_range_are_forwarded_and_206_comes_back() {
         assert_eq!(header(sent, dropped), None, "{dropped} in {sent}");
     }
     assert!(!sent.contains("player-agent"), "{sent}");
+    // current-net's own User-Agent instead.
+    assert_eq!(
+        header(sent, "user-agent"),
+        Some(concat!("Current/", env!("CARGO_PKG_VERSION")))
+    );
 
     assert_eq!(stream.status(), 206);
     assert_eq!(stream.base(), &stand_in.url());
@@ -792,4 +807,188 @@ async fn no_log_line_or_debug_output_holds_a_credential_or_header_value() {
         assert!(!text.contains(secret), "{secret} in {text}");
         assert!(!shown.contains(secret), "{secret} in {shown}");
     }
+}
+
+/// Hands out `first` until asked to wait, then `second`, and records the outcomes reported to it.
+struct Switching<A, B> {
+    first: A,
+    second: B,
+    reports: Mutex<Vec<(Option<u8>, AddressOutcome)>>,
+}
+
+impl<A: AddressProvider, B: AddressProvider> Switching<A, B> {
+    fn new(first: A, second: B) -> Self {
+        Self {
+            first,
+            second,
+            reports: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn reports(&self) -> Vec<AddressOutcome> {
+        self.reports
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, outcome)| *outcome)
+            .collect()
+    }
+}
+
+impl<A: AddressProvider, B: AddressProvider> AddressProvider for Switching<A, B> {
+    fn current(&self) -> Option<current_net::Selected> {
+        self.first.current()
+    }
+
+    fn wait(
+        &self,
+        _deadline: tokio::time::Instant,
+    ) -> Pin<Box<dyn Future<Output = Option<current_net::Selected>> + Send + '_>> {
+        Box::pin(std::future::ready(self.second.current()))
+    }
+
+    fn report(&self, selected: &current_net::Selected, outcome: AddressOutcome) {
+        self.reports
+            .lock()
+            .unwrap()
+            .push((selected.position(), outcome));
+    }
+}
+
+#[tokio::test]
+async fn a_failure_mid_body_is_logged_but_not_blamed_on_the_address() {
+    let stand_in = StandIn::start(|_, mut socket| async move {
+        // A connection closed mid-body, as a server or proxy closing a paused player's idle connection would.
+        let _ = socket.write_all(head(200, MIB, &[]).as_bytes()).await;
+        let _ = socket.write_all(&pattern_bytes(0, 1024)).await;
+        let _ = socket.shutdown().await;
+    })
+    .await;
+    let provider = Arc::new(Switching::new(
+        FixedAddress(stand_in.url()),
+        FixedAddress(stand_in.url()),
+    ));
+    let log = Arc::new(RequestLog::default());
+    let client = ok(ServerClient::new(
+        server(),
+        provider.clone(),
+        None,
+        log.clone(),
+        &config(),
+    ));
+    let mut stream = ok(client.send_stream(Request::get("/Videos/1/stream")).await);
+    let mut result = stream.next_chunk().await;
+    while let Ok(Some(_)) = result {
+        result = stream.next_chunk().await;
+    }
+    assert_eq!(result, Err(StreamError::Unreachable));
+    // Only the request's own outcome reached the provider.
+    assert_eq!(provider.reports(), [AddressOutcome::Ok]);
+    assert!(
+        log.to_text()
+            .contains("GET /Videos/1/stream -> unreachable"),
+        "{}",
+        log.to_text()
+    );
+}
+
+#[tokio::test]
+async fn a_416_comes_back_with_its_content_range() {
+    let stand_in = StandIn::start(|_, socket| async move {
+        answer(
+            socket,
+            416,
+            &["content-range: bytes */1000", "set-cookie: a=b"],
+            "",
+        )
+        .await;
+    })
+    .await;
+    let log = Arc::new(RequestLog::default());
+    let client = plain_client(&stand_in, &log);
+    let request = Request::get("/Videos/1/stream")
+        .header(header::RANGE, HeaderValue::from_static("bytes=5000-"));
+    let mut stream = ok(client.send_stream(request).await);
+    assert_eq!(stream.status(), 416);
+    assert_eq!(stream.headers()[header::CONTENT_RANGE], "bytes */1000");
+    assert!(!stream.headers().contains_key(header::SET_COOKIE));
+    assert_eq!(ok(stream.next_chunk().await), None);
+    // Still a failure for the log.
+    assert!(
+        log.to_text().contains("GET /Videos/1/stream -> 416"),
+        "{}",
+        log.to_text()
+    );
+}
+
+#[tokio::test]
+async fn a_head_comes_back_with_headers_and_no_body() {
+    let stand_in = StandIn::start(|_, mut socket| async move {
+        // A HEAD answer: the length of the body a GET would get, and no body.
+        let text = head(
+            200,
+            5000,
+            &["content-type: video/mp4", "accept-ranges: bytes"],
+        );
+        let _ = socket.write_all(text.as_bytes()).await;
+        let _ = socket.shutdown().await;
+    })
+    .await;
+    let log = Arc::new(RequestLog::default());
+    let client = plain_client(&stand_in, &log);
+    let request = Request::new(current_net::Method::HEAD, "/Videos/1/stream");
+    let mut stream = ok(client.send_stream(request).await);
+    assert_eq!(stream.status(), 200);
+    assert_eq!(stream.headers()[header::CONTENT_LENGTH], "5000");
+    assert_eq!(stream.headers()[header::ACCEPT_RANGES], "bytes");
+    assert_eq!(ok(stream.next_chunk().await), None);
+    assert!(stand_in.received()[0].starts_with("HEAD /Videos/1/stream "));
+}
+
+#[tokio::test]
+async fn a_retry_carries_the_new_addresses_gateway_credentials_only() {
+    let stand_in = StandIn::start(|_, socket| async move {
+        answer(socket, 200, &["content-type: video/mp4"], "media").await;
+    })
+    .await;
+    let ports = ports::Ports::hold().await;
+    let refused = ok(Url::parse(&format!(
+        "http://127.0.0.1:{}/",
+        ports.refused().await
+    )));
+    let gateway = Arc::new(Gateway::new(everything()));
+    let provider = Arc::new(Switching::new(
+        FixedAddress(refused),
+        GatewayAddress::new(stand_in.url(), gateway.clone(), false),
+    ));
+    let log = Arc::new(RequestLog::default());
+    let client = ok(ServerClient::new(
+        server(),
+        provider.clone(),
+        Some(Arc::new(TokenAuth)),
+        log.clone(),
+        &config(),
+    ));
+    let mut stream = ok(client.send_stream(Request::get("/Videos/1/stream")).await);
+    assert_eq!(stream.base(), &stand_in.url());
+    assert_eq!(
+        ok(stream.next_chunk().await).as_deref(),
+        Some(&b"media"[..])
+    );
+    drop(ports);
+    let sent = &stand_in.received()[0];
+    assert_eq!(
+        header(sent, "authorization"),
+        Some(format!("Basic {BASIC}").as_str())
+    );
+    assert_eq!(header(sent, HEADER_NAME), Some(HEADER_VALUE));
+    assert_eq!(
+        header(sent, "cookie"),
+        Some(format!("{COOKIE_NAME}={COOKIE_VALUE}").as_str())
+    );
+    assert_eq!(header(sent, "x-test-token"), Some(TOKEN));
+    assert_eq!(
+        provider.reports(),
+        [AddressOutcome::Unreachable, AddressOutcome::Ok]
+    );
 }

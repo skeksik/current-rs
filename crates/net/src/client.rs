@@ -241,6 +241,11 @@ impl ServerClient {
                     .connect_timeout(self.connect_timeout)
                     // Streams follow no redirect (ADR 0020).
                     .redirect(redirect::Policy::none())
+                    // One connection per stream: on HTTP/2, paused streams sharing a connection hold its flow-control window and
+                    // can starve another stream into a timeout, and the relay keeps no more than a chunk per connection (ADR 0020).
+                    .http1_only()
+                    // As mpv's requests do (`current_mpv::user_agent`); the workspace shares one version.
+                    .user_agent(concat!("Current/", env!("CARGO_PKG_VERSION")))
                     .build()
                     // Building fails only when the TLS backend cannot start.
                     .map_err(|_| NetError::Tls)
