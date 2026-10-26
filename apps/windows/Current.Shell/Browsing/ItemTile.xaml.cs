@@ -87,6 +87,13 @@ public sealed partial class ItemTile : UserControl
     private double PictureHeight(double width) =>
         double.IsNaN(width) ? double.NaN : Math.Round(_shape == TileShape.Poster ? width * 3 / 2 : width * 9 / 16);
 
+    /// <summary>False for the picture only, without the title and year under it (a library's View menu).</summary>
+    public bool ShowsText
+    {
+        get => TextPart.Visibility == Visibility.Visible;
+        set => TextPart.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     /// <summary>False on a series' own page: an episode's tile names the episode, not its series again.</summary>
     public bool ShowsSeries { get; set; } = true;
 

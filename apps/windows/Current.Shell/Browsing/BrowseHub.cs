@@ -407,6 +407,11 @@ internal sealed class LibraryGrid(PagedItems items, ItemQuery query)
 
     public ItemQuery Query { get; set; } = query;
 
+    /// <summary>The View menu's choices: wide tiles instead of posters, and the title and year under each picture.</summary>
+    public bool Wide { get; set; }
+
+    public bool ShowsTitles { get; set; } = true;
+
     /// <summary>The first item the grid showed when its page was left, to return to.</summary>
     public int FirstVisible { get; set; }
 

@@ -61,7 +61,7 @@
         </Grid>
         <!-- The text 8 in from the item's highlight on the left, right and below; the picture stays flush with it (owner,
              2026-10-26). -->
-        <StackPanel Margin="8,0,8,8" Spacing="4">
+        <StackPanel x:Name="TextPart" Margin="8,0,8,8" Spacing="4">
             <TextBlock
                 x:Name="TitleText"
                 Style="{StaticResource BodyTextBlockStyle}"

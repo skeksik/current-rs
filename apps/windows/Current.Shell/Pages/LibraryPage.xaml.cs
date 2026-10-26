@@ -135,6 +135,8 @@ public sealed partial class LibraryPage : Page
         if (e.NavigationMode is not (NavigationMode.Back or NavigationMode.Forward))
         {
             _grid.FirstVisible = 0;
+            _grid.Wide = false;
+            _grid.ShowsTitles = true;
             var first = ItemQuery.ForLibrary(library);
             if (!SameChoices(_grid.Query, first))
             {
@@ -143,6 +145,7 @@ public sealed partial class LibraryPage : Page
             }
         }
         ShowQuery(_grid.Query);
+        ShowView();
         var ui = new DispatcherQueueUi(DispatcherQueue);
         _state = _grid.Items.ObserveState(ui);
         _state.PropertyChanged += OnStateChanged;
@@ -306,6 +309,41 @@ public sealed partial class LibraryPage : Page
         _grid.Query = query;
         _grid.FirstVisible = 0;
         _grid.Items.SetQuery(query);
+    }
+
+    /// <summary>The tiles' template and the View menu's checks for the grid's view.</summary>
+    private void ShowView()
+    {
+        if (_grid is null)
+        {
+            return;
+        }
+        PosterItem.IsChecked = !_grid.Wide;
+        WideItem.IsChecked = _grid.Wide;
+        TitlesItem.IsChecked = _grid.ShowsTitles;
+        var key = (_grid.Wide, _grid.ShowsTitles) switch
+        {
+            (false, true) => "PosterTileTemplate",
+            (true, true) => "WideTileTemplate",
+            (false, false) => "PosterPictureTemplate",
+            (true, false) => "WidePictureTemplate",
+        };
+        var template = (DataTemplate)Application.Current.Resources[key];
+        if (!ReferenceEquals(Items.ItemTemplate, template))
+        {
+            Items.ItemTemplate = template;
+        }
+    }
+
+    private void OnViewChosen(object sender, RoutedEventArgs e)
+    {
+        if (_grid is null)
+        {
+            return;
+        }
+        _grid.Wide = WideItem.IsChecked;
+        _grid.ShowsTitles = TitlesItem.IsChecked;
+        ShowView();
     }
 
     /// <summary>The grid's slots now (the smoke run).</summary>

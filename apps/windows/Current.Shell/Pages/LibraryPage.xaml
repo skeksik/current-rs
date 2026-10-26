@@ -27,10 +27,12 @@
                 Margin="0"
                 Style="{StaticResource WidePageTitleTextBlockStyle}"
                 AutomationProperties.HeadingLevel="Level1" />
-            <!-- Sort and Filter as File Explorer's command bar has them (owner, 2026-10-26): an icon button with a menu of radio
+            <!-- Sort, Filter and View as File Explorer's command bar has them (owner, 2026-10-26): an icon button with a menu of radio
                  items, the sort's fields and its order in two groups. The core's ItemQuery takes both; a new choice is a new query,
                  which starts at the top (ADR 0018, section 3). The items are the core's choices, named and given icons in
-                 LibraryPage.xaml.cs. Glyphs: Segoe Fluent Icons E8CB "Sort" and E71C "Filter" ("Segoe Fluent Icons font",
+                 LibraryPage.xaml.cs. View switches the tiles between posters and wide pictures, with or without their titles (owner,
+                 2026-10-26), as Photos' View menu switches its layout. Glyphs: Segoe Fluent Icons E8CB "Sort", E71C "Filter", F0E2
+                 "GridView", E7C3 "Page", EF6B "LandscapeOrientation" and E8BA "Caption" ("Segoe Fluent Icons font",
                  learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26). -->
             <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
                 <DropDownButton x:Name="SortButton" AutomationProperties.Name="Sort" ToolTipService.ToolTip="Sort">
@@ -43,6 +45,29 @@
                     <FontIcon Glyph="&#xE71C;" FontSize="16" />
                     <DropDownButton.Flyout>
                         <MenuFlyout x:Name="FilterMenu" Placement="BottomEdgeAlignedRight" />
+                    </DropDownButton.Flyout>
+                </DropDownButton>
+                <DropDownButton x:Name="ViewButton" AutomationProperties.Name="View" ToolTipService.ToolTip="View">
+                    <FontIcon Glyph="&#xF0E2;" FontSize="16" />
+                    <DropDownButton.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedRight">
+                            <RadioMenuFlyoutItem x:Name="PosterItem" Text="Posters" GroupName="shape" Click="OnViewChosen">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE7C3;" />
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <RadioMenuFlyoutItem x:Name="WideItem" Text="Wide" GroupName="shape" Click="OnViewChosen">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xEF6B;" />
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <MenuFlyoutSeparator />
+                            <ToggleMenuFlyoutItem x:Name="TitlesItem" Text="Show titles" Click="OnViewChosen">
+                                <ToggleMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE8BA;" />
+                                </ToggleMenuFlyoutItem.Icon>
+                            </ToggleMenuFlyoutItem>
+                        </MenuFlyout>
                     </DropDownButton.Flyout>
                 </DropDownButton>
             </StackPanel>

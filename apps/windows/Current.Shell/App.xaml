@@ -65,6 +65,13 @@
             <DataTemplate x:Key="WideTileTemplate">
                 <browsing:ItemTile Shape="Wide" TileWidth="{StaticResource WideTileWidth}" />
             </DataTemplate>
+            <!-- The picture only: a library's View menu with Show titles off. -->
+            <DataTemplate x:Key="PosterPictureTemplate">
+                <browsing:ItemTile Shape="Poster" ShowsText="False" TileWidth="{StaticResource PosterTileWidth}" />
+            </DataTemplate>
+            <DataTemplate x:Key="WidePictureTemplate">
+                <browsing:ItemTile Shape="Wide" ShowsText="False" TileWidth="{StaticResource WideTileWidth}" />
+            </DataTemplate>
             <DataTemplate x:Key="EpisodeTileTemplate">
                 <browsing:ItemTile Shape="Wide" ShowsSeries="False" TileWidth="{StaticResource WideTileWidth}" />
             </DataTemplate>
