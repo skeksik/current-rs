@@ -1,6 +1,6 @@
-//! What a player needs from Jellyfin besides PlaybackInfo and the reports (ADR 0019): the gateway credentials and secrets for a stream
-//! URL, the user's transcoding policy (read only to explain an outcome), and external subtitle files, which the core fetches itself so
-//! the engine never does.
+//! What a player needs from Jellyfin besides PlaybackInfo and the reports (ADR 0019): the secrets a stream URL holds, the stream's
+//! path for the loopback relay and its streaming send (ADR 0020), the user's transcoding policy (read only to explain an outcome),
+//! and external subtitle files, which the core fetches itself so the engine never does.
 //!
 //! Server behaviour relied on, from Jellyfin `v12.2` (commit ca0f16eb, read 2026-10-22 and 2026-10-25; quotes in
 //! `docs/notes/playback.md` and `docs/notes/macos-subtitles.md`):
@@ -12,37 +12,26 @@
 //!   `ForceRemoteSourceTranscoding` (default false), and `RemoteClientBitrateLimit` in bits per second.
 
 use current_model::{Codec, ItemId};
-use current_net::{HostScope, Request, StreamCookie, Url, host_scope};
+use current_net::{HostScope, Request, Selected, StreamError, StreamResponse, Url, host_scope};
 use serde::Deserialize;
 
 use crate::auth;
 use crate::client::{AuthError, JellyfinClient};
-use crate::playback::StreamUrl;
 
-/// What the engine needs besides the URL to open a stream: the address's gateway credentials for it, and the values the URL holds
-/// (the session token) so the engine can redact them from its log. Debug shows names and counts only.
-#[derive(Clone, Default, PartialEq, Eq)]
-pub struct StreamAccess {
-    /// Header name and value: the gateway's Basic `Authorization` header and its extra headers.
-    pub headers: Vec<(String, String)>,
-    pub cookies: Vec<StreamCookie>,
-    pub secrets: Vec<String>,
+/// Where a stream is: [`JellyfinClient::stream_target`]. Debug shows the address's position only, never a URL or a path.
+#[derive(Clone)]
+pub struct StreamTarget {
+    /// The address in use, with whether it carries gateway credentials ([`Selected::has_gateway`]) and its position.
+    pub address: Selected,
+    /// The path and query relative to the address, without the token.
+    pub path: String,
 }
 
-impl std::fmt::Debug for StreamAccess {
+impl std::fmt::Debug for StreamTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamAccess")
-            .field(
-                "headers",
-                &self
-                    .headers
-                    .iter()
-                    .map(|(name, _)| name.as_str())
-                    .collect::<Vec<_>>(),
-            )
-            .field("cookies", &self.cookies)
-            .field("secrets", &self.secrets.len())
-            .finish()
+        f.debug_struct("StreamTarget")
+            .field("address", &self.address)
+            .finish_non_exhaustive()
     }
 }
 
@@ -74,19 +63,50 @@ struct PolicyDto {
 }
 
 impl JellyfinClient {
-    /// The gateway credentials and secrets for `url`, a stream URL this client made: those of the address in use, when `url` is on it
-    /// (`current-net`'s rule, ADR 0017), and the session token, which the URL carries as `ApiKey`.
-    pub fn stream_access(&self, url: &StreamUrl) -> StreamAccess {
-        let credentials = Url::parse(url.expose())
-            .map(|parsed| self.http.stream_credentials(&parsed))
-            .unwrap_or_default();
-        StreamAccess {
-            headers: credentials.headers,
-            cookies: credentials.cookies,
-            secrets: auth::read(&self.token)
-                .map(|token| vec![token.expose().to_owned()])
-                .unwrap_or_default(),
+    /// The secrets a stream URL this client made holds, for the engine to redact from its log: the session token, which the URL
+    /// carries as `ApiKey`.
+    pub fn stream_secrets(&self) -> Vec<String> {
+        auth::read(&self.token)
+            .map(|token| vec![token.expose().to_owned()])
+            .unwrap_or_default()
+    }
+
+    /// Where a stream URL this client made (`url`, exposed) is now: the address in use and the URL's path and query relative to it
+    /// (`/Videos/{id}/stream?static=true&...`), without `ApiKey` and `api_key` and percent-encoded as in `url`, which the loopback
+    /// relay's URL carries after its route (ADR 0020 choice 4). One snapshot of the address, so the caller decides between the
+    /// direct URL and the relay for the address the path belongs to. `None` when no address is selected, `url` is not on the one in
+    /// use (the server moved since the URL was made), or `url` is not a URL.
+    pub fn stream_target(&self, url: &str) -> Option<StreamTarget> {
+        let url = Url::parse(url).ok()?;
+        let address = self.http.current_address()?;
+        let base = address.url();
+        if url.origin() != base.origin() {
+            return None;
         }
+        let prefix = base.path().trim_end_matches('/');
+        let path = url.path().strip_prefix(prefix)?;
+        if !path.starts_with('/') {
+            return None;
+        }
+        let query: Vec<&str> = url
+            .query()
+            .unwrap_or_default()
+            .split('&')
+            .filter(|pair| !pair.is_empty() && !is_token_pair(pair))
+            .collect();
+        let path = if query.is_empty() {
+            path.to_owned()
+        } else {
+            format!("{path}?{}", query.join("&"))
+        };
+        Some(StreamTarget { address, path })
+    }
+
+    /// Sends a stream request through this session (`current-net`'s `send_stream`, for the loopback relay, ADR 0020): to the address
+    /// selected now, with that address's gateway credentials and the session token in Jellyfin's header, never `ApiKey`. A refusal
+    /// starts no check here: the caller takes it to the 401 rule.
+    pub async fn send_stream(&self, request: Request) -> Result<StreamResponse, StreamError> {
+        self.http.send_stream(request).await
     }
 
     /// Whether the address in use is on this device or the local network, for the quality remembered per kind of address (ADR 0019,
@@ -144,6 +164,16 @@ impl JellyfinClient {
     }
 }
 
+/// Whether a raw query pair (`name=value`) is the session token: `ApiKey` or `api_key`, in any case and however encoded.
+fn is_token_pair(pair: &str) -> bool {
+    let name = pair.split('=').next().unwrap_or_default();
+    url::form_urlencoded::parse(name.as_bytes())
+        .next()
+        .is_some_and(|(name, _)| {
+            name.eq_ignore_ascii_case("apikey") || name.eq_ignore_ascii_case("api_key")
+        })
+}
+
 /// `text` as one path segment: unreserved characters (RFC 3986 section 2.3) as they are, every other byte percent-encoded.
 fn path_segment(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -195,20 +225,19 @@ mod tests {
     }
 
     #[test]
-    fn stream_access_debug_shows_no_value() {
-        let access = StreamAccess {
-            headers: vec![("Authorization".into(), "Basic header-secret".into())],
-            cookies: vec![StreamCookie {
-                name: "gateway".into(),
-                value: "cookie-secret".into(),
-                path: "/".into(),
-                secure: true,
-            }],
-            secrets: vec!["token-secret".into()],
-        };
-        let shown = format!("{access:?} {access:#?}");
-        for secret in ["header-secret", "cookie-secret", "token-secret"] {
-            assert!(!shown.contains(secret), "{shown}");
+    fn the_token_is_found_in_any_case_and_encoding() {
+        for pair in [
+            "ApiKey=t",
+            "apikey=t",
+            "API_KEY=t",
+            "api%5Fkey=t",
+            "Api%4Bey=t",
+            "ApiKey",
+        ] {
+            assert!(is_token_pair(pair), "{pair}");
+        }
+        for pair in ["static=true", "ApiKeys=t", "x=ApiKey", "PlaySessionId=1"] {
+            assert!(!is_token_pair(pair), "{pair}");
         }
     }
 }

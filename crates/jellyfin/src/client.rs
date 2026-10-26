@@ -17,7 +17,7 @@ use crate::auth::{
     self, AccessToken, ClientIdentity, HeaderPlacement, JellyfinAuth, PlacementSlot,
     QuickConnectSecret, TokenSlot,
 };
-use crate::gateway::GatewayAnswer;
+use crate::gateway::{GatewayAnswer, Realm};
 use crate::probe::{self, Answer};
 use crate::wire;
 
@@ -70,6 +70,9 @@ const SIGN_OUT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The token check after a 401 waits at most this long: the identity probe's request timeout, so that the check's two requests
 /// together stay within a default request's deadline.
 pub const TOKEN_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long [`JellyfinClient::stream_refused`] waits for the check: the identity probe's and the token check's time, and some to
+/// spare. Under the player's stall rule (60 s).
+pub const STREAM_REFUSAL_WAIT: Duration = Duration::from_secs(30);
 
 /// Why a sign-in or an authenticated request failed. Neither Display nor Debug holds an address, a password or a token.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -189,6 +192,8 @@ enum Outcome {
     Kept,
     /// Nothing was decided ([`JellyfinClient::resume`], a new token).
     Resumed,
+    /// The gateway answered the identity probe ([`JellyfinClient::gateway_answered`]): the token is kept.
+    Gateway,
 }
 
 /// The checks of unconfirmed answers: the one running, if any, and how the last one ended. Checks are numbered from 1.
@@ -353,6 +358,12 @@ impl JellyfinClient {
     /// go out again, and a request that got the 401 answers [`AuthError::Unconfirmed`].
     pub fn resume(&self) {
         self.end_check(None, Outcome::Resumed);
+    }
+
+    /// Ends a check because the identity probe found the gateway's answer (ADR 0017): as [`JellyfinClient::resume`], and a stream
+    /// refusal waiting on the check ([`JellyfinClient::stream_refused`]) answers [`AuthError::Gateway`].
+    pub fn gateway_answered(&self) {
+        self.end_check(None, Outcome::Gateway);
     }
 
     /// Ends the check of `token`'s 401 once [`JellyfinClient::check_token`] found that the token works (ADR 0015 as amended
@@ -616,7 +627,11 @@ impl JellyfinClient {
             }
             if unauthorized {
                 return Err(match check {
-                    Some((number, _)) if wait => self.check_ended(number, deadline).await,
+                    Some((number, _)) if wait => match self.check_ended(number, deadline).await {
+                        Some(Outcome::Revoked) => AuthError::SessionRevoked,
+                        Some(Outcome::Kept) => AuthError::NotAvailable,
+                        Some(Outcome::Resumed | Outcome::Gateway) | None => AuthError::Unconfirmed,
+                    },
                     _ => AuthError::Unconfirmed,
                 });
             }
@@ -653,17 +668,65 @@ impl JellyfinClient {
         begun
     }
 
-    /// Waits until check `number` ended, at most until the request's `deadline`, and says what a request that got the 401 answers:
-    /// the session ended, the resource is not available to the user, or nothing was decided (in time).
-    async fn check_ended(&self, number: u64, deadline: Instant) -> AuthError {
+    /// Waits until check `number` ended, at most until `deadline`, and says how; `None` when it did not end in time. A later check
+    /// may have ended meanwhile: its outcome is the newer one and stands for this one too.
+    async fn check_ended(&self, number: u64, deadline: Instant) -> Option<Outcome> {
         let mut checks = self.checks.subscribe();
         let ended =
             tokio::time::timeout_at(deadline, checks.wait_for(|checks| checks.ended >= number))
                 .await;
-        match ended.ok().and_then(Result::ok).map(|checks| checks.outcome) {
-            // A later check may have ended meanwhile: its outcome is the newer one and stands for this one too.
+        ended.ok().and_then(Result::ok).map(|checks| checks.outcome)
+    }
+
+    /// The 401 rule for a refusal of a request this client did not send itself: a stream through the loopback relay, which reports
+    /// the answer's status and shape (ADR 0020, "Lifecycle"). It goes through the same check as the client's own answers, so at most
+    /// one probe and one token check run per session: a gateway's challenge (Basic or another scheme) is the gateway's at once and
+    /// the hook hears it; any other refusal starts the check (the hook confirms it with the identity probe, then, after a 401,
+    /// Jellyfin's token check), or joins the one running, and waits for it up to [`STREAM_REFUSAL_WAIT`]. Answers
+    /// [`AuthError::Gateway`], [`AuthError::SessionRevoked`], [`AuthError::NotAvailable`] (the token works), or
+    /// [`AuthError::Unconfirmed`] when nothing was decided. Without a hook, a 401 forgets the token, as for the client's own.
+    pub async fn stream_refused(&self, status: u16, shape: &GatewayShape) -> AuthError {
+        let challenged = match shape {
+            GatewayShape::Password { realm } => Some(GatewayAnswer::Password {
+                realm: realm.as_deref().and_then(Realm::new),
+            }),
+            GatewayShape::Unsupported => Some(GatewayAnswer::UnsupportedChallenge),
+            _ => None,
+        };
+        if let Some(answer) = challenged {
+            if let Some(hook) = self.hook() {
+                hook(SessionEvent::Gateway(answer.clone()));
+            }
+            return AuthError::Gateway(answer);
+        }
+        let Some(token) = auth::read(&self.token) else {
+            return AuthError::NotSignedIn;
+        };
+        let unauthorized = status == 401;
+        let Some(hook) = self.hook() else {
+            if unauthorized {
+                self.forget(&token);
+                return AuthError::SessionRevoked;
+            }
+            return AuthError::Unconfirmed;
+        };
+        let Some((number, started)) = self.begin_check(&token) else {
+            // A newer sign-in replaced the token: nothing to check.
+            return AuthError::Unconfirmed;
+        };
+        if started {
+            hook(SessionEvent::Unconfirmed {
+                token,
+                unauthorized,
+            });
+        }
+        match self
+            .check_ended(number, Instant::now() + STREAM_REFUSAL_WAIT)
+            .await
+        {
             Some(Outcome::Revoked) => AuthError::SessionRevoked,
             Some(Outcome::Kept) => AuthError::NotAvailable,
+            Some(Outcome::Gateway) => AuthError::Gateway(GatewayAnswer::SignIn),
             Some(Outcome::Resumed) | None => AuthError::Unconfirmed,
         }
     }

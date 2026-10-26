@@ -4,8 +4,8 @@
 //! (ADR 0015). Behind an authentication gateway, probes classify the gateway's answer and Jellyfin's header can move to
 //! `X-Emby-Authorization` (ADR 0017). Browsing lists libraries and items, the home rows, series, search and details, and sets
 //! played and favourite; images are fetched at a box size through the same session (ADR 0018). Playback asks PlaybackInfo with a
-//! device profile generated from the engine's capabilities, builds the stream URL for the engine, reports playstate, and reads media
-//! segments, the session's transcoding information and the user's playback preferences (ADR 0019).
+//! device profile generated from the engine's capabilities, builds the stream URL, streams it for the loopback relay (ADR 0020),
+//! reports playstate, and reads media segments, the session's transcoding information and the user's playback preferences (ADR 0019).
 //!
 //! Built on `current-net`'s [`ServerClient`](current_net::ServerClient). Wire types stay private; the public API speaks
 //! `current-model`.
@@ -17,7 +17,6 @@ mod browse_wire;
 mod client;
 mod discovery;
 mod gateway;
-mod hls;
 mod image;
 mod playback;
 mod playback_wire;
@@ -34,18 +33,18 @@ pub use auth::{
 pub use browse::{NEXT_UP_CUTOFF, Page, SEARCH_GROUPS, SEARCH_LIMIT, SearchGroup};
 pub use client::{
     AuthError, JellyfinClient, QUICK_CONNECT_INTERVAL, QUICK_CONNECT_LIFETIME, QuickConnectCode,
-    RuntimeClock, SessionEvent, SessionHook, SignedIn, TOKEN_CHECK_TIMEOUT, TokenCheck, WaitClock,
+    RuntimeClock, STREAM_REFUSAL_WAIT, SessionEvent, SessionHook, SignedIn, TOKEN_CHECK_TIMEOUT,
+    TokenCheck, WaitClock,
 };
 pub use discovery::{
     Candidate, DISCOVERY_PORT, DiscoveryConfig, DiscoveryError, MAX_ADDRESSES_PER_SERVER,
     MAX_INTERFACES, MAX_REPLY_BYTES, MAX_SERVERS, Source, discover,
 };
 pub use gateway::{GatewayAnswer, Realm};
-pub use hls::{MAX_MEDIA_PLAYLISTS, MAX_PLAYLIST_BYTES, PlaylistCheckError};
 pub use image::{ImageError, ImageRequest};
 pub use playback::{
     MAXIMUM_STREAMING_BITRATE, PlayableStream, PlaybackAnswer, PlaybackError, PlaybackRequest,
     ProgressReport, STOP_REPORT_TIMEOUT, SourceAnswer, StopReport, StreamUrl,
 };
-pub use player::{StreamAccess, TranscodePolicy};
+pub use player::{StreamTarget, TranscodePolicy};
 pub use probe::{FoundServer, JellyfinIdentity, MINIMUM_VERSION, ProbeError, Prober, same_server};

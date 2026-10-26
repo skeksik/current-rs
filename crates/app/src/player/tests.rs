@@ -6,9 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use current_model::{
-    EngineErrorKind, ItemId, ItemRef, PlaybackProblem, PlayerState, RouteLabel, ServerRef,
-};
+use current_model::{ItemId, ItemRef, PlaybackProblem, PlayerState, RouteLabel, ServerRef};
 use current_playback::{EngineEvent, PlayerStatus, Quality};
 use current_store::{MemorySecrets, Secrets, StreamQuality};
 use jellyfin_stand_in::library::EPISODE_IDS;
@@ -135,7 +133,8 @@ async fn a_direct_play_starts_reports_and_closes_in_order() {
     assert!(commands.iter().any(|command| matches!(
         command,
         TestCommand::Load {
-            credentials: false,
+            secrets: 1,
+            references: true,
             start: Duration::ZERO,
             audio: current_playback::EngineTrack::Stream(1),
             ..
@@ -508,26 +507,37 @@ fn the_engine_of_this_build_is_the_test_engine() {
     assert_eq!(&test_engine::MARKER[..19], b"current-test-engine");
 }
 
-/// For a test outside a player: the test engine refuses what libmpv's mapping refuses.
+/// For a test outside a player: the test engine records what libmpv's mapping is given.
 #[test]
-fn the_test_engine_refuses_an_unchecked_playlist_with_headers() {
+fn the_test_engine_records_a_load_without_its_url() {
     use current_playback::{Engine, EngineFile, EngineTrack, StreamAuth, StreamUrl};
     let (events, _raw) = tokio::sync::mpsc::unbounded_channel();
     // Not through `open`: no player, so the process's slot is taken only briefly.
     let guard = ENGINE.blocking_lock();
     let mut engine = test_engine::TestBackend::start(events).unwrap();
-    let refused = engine.load(EngineFile {
-        url: StreamUrl::new("https://media.example.com/videos/1/master.m3u8?ApiKey=t0ken"),
-        auth: StreamAuth {
-            headers: vec![("Authorization".into(), "Basic header-value".into())],
-            ..StreamAuth::default()
-        },
-        start: Duration::ZERO,
-        audio: EngineTrack::Auto,
-        subtitle: EngineTrack::Auto,
-        playlist_checked: false,
-    });
-    assert_eq!(refused, Err(EngineErrorKind::GATEWAY_PLAYLIST_UNCHECKED));
+    let control = last_control().unwrap();
+    engine
+        .load(EngineFile {
+            url: StreamUrl::new("http://127.0.0.1:50123/route/Videos/1/stream?static=true"),
+            auth: StreamAuth {
+                secrets: vec!["route".into()],
+            },
+            start: Duration::ZERO,
+            audio: EngineTrack::Auto,
+            subtitle: EngineTrack::Auto,
+            references: false,
+        })
+        .unwrap();
+    assert_eq!(
+        control.commands(),
+        [TestCommand::Load {
+            secrets: 1,
+            references: false,
+            start: Duration::ZERO,
+            audio: EngineTrack::Auto,
+            subtitle: EngineTrack::Auto,
+        }]
+    );
     drop(engine);
     drop(guard);
 }

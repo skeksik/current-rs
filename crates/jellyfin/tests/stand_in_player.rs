@@ -1,5 +1,5 @@
 //! What the player asks besides PlaybackInfo and the reports, against `tools/jellyfin-stand-in`: the next episode, the transcoding
-//! policy, a subtitle file and the stream's access (gateway credentials and secrets).
+//! policy, a subtitle file, and the stream's secrets and path for the loopback relay.
 
 use std::sync::Arc;
 
@@ -121,8 +121,27 @@ async fn a_stream_without_a_gateway_needs_only_the_token_redacted() {
         .await
         .unwrap();
     let (_, stream) = answer.playable(None).unwrap();
-    let access = client.stream_access(&stream.url);
-    assert!(access.headers.is_empty() && access.cookies.is_empty());
-    assert_eq!(access.secrets.len(), 1);
-    assert!(stream.url.expose().contains(&access.secrets[0]));
+    let secrets = client.stream_secrets();
+    assert_eq!(secrets.len(), 1);
+    assert!(stream.url.expose().contains(&secrets[0]));
+    // For the loopback relay: the address in use and the path on it, without the token.
+    let target = client.stream_target(stream.url.expose()).unwrap();
+    assert!(!target.address.has_gateway());
+    assert!(!format!("{target:?}").contains("Videos"));
+    let path = target.path;
+    assert!(
+        path.starts_with(&format!("/Videos/{DIRECT_PLAY_ITEM}/stream?")),
+        "{path}"
+    );
+    assert!(path.contains("static=true"), "{path}");
+    assert!(
+        !path.contains(&secrets[0]) && !path.contains("ApiKey"),
+        "{path}"
+    );
+    // A URL on another address (the server moved since the URL was made) has no target.
+    let elsewhere = stream
+        .url
+        .expose()
+        .replace(stand_in.address(), "http://192.168.1.10:8096");
+    assert!(client.stream_target(&elsewhere).is_none());
 }

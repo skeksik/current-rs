@@ -27,7 +27,7 @@ pub use server::{
     MediaServer, PlanRequest, ProgressReport, ServerAnswer, StopReport, TranscodePermissions,
 };
 pub use status::{AutoSkip, NextEpisode, PlaybackDetails, PlayerEvent, PlayerStatus, Track};
-pub use stream::{StreamAuth, StreamCookie, StreamUrl};
+pub use stream::{EngineStream, StreamAuth, StreamUrl};
 
 /// The playback types of `current-model` this crate's API uses, so callers need not name both crates.
 pub use current_model::{

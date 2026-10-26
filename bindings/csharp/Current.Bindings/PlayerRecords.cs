@@ -57,8 +57,11 @@ public abstract record PlaybackProblem
     public sealed record SignedOut : PlaybackProblem;
     public sealed record Server(ushort Status) : PlaybackProblem;
     public sealed record NotFound : PlaybackProblem;
-    /// <summary>The server's HLS playlist names another address, so it cannot play with the address's gateway headers.</summary>
+    /// <summary>The server's HLS playlist names another address or another item, or could not be read, so Current's local stream
+    /// connection refused it (ADR 0020).</summary>
     public sealed record PlaylistElsewhere : PlaybackProblem;
+    /// <summary>Current could not start its local stream connection (the loopback relay, ADR 0020).</summary>
+    public sealed record LocalRelay : PlaybackProblem;
 }
 
 public enum PlayerStateKind
@@ -259,6 +262,7 @@ internal static class PlayerMap
         Ffi.PlaybackProblem.SignedOut => new PlaybackProblem.SignedOut(),
         Ffi.PlaybackProblem.Server server => new PlaybackProblem.Server(server.Status),
         Ffi.PlaybackProblem.PlaylistElsewhere => new PlaybackProblem.PlaylistElsewhere(),
+        Ffi.PlaybackProblem.LocalRelay => new PlaybackProblem.LocalRelay(),
         _ => new PlaybackProblem.NotFound(),
     };
 

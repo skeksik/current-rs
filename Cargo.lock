@@ -256,6 +256,7 @@ dependencies = [
  "current-mpv",
  "current-net",
  "current-playback",
+ "current-relay",
  "current-store",
  "jellyfin-stand-in",
  "serde",

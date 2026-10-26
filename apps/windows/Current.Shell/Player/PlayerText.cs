@@ -156,6 +156,7 @@ internal static class PlayerText
         PlaybackProblem.Engine { Kind: "engine_gone" } => "The player stopped working. Go back and play the item again.",
         PlaybackProblem.Engine { Kind: "gateway_playlist_unchecked" } or PlaybackProblem.PlaylistElsewhere =>
             "The server's stream points to another address, so Current won't send it your gateway sign-in.",
+        PlaybackProblem.LocalRelay => "Current could not start its local stream connection.",
         PlaybackProblem.Engine => "The player couldn't open the stream.",
         PlaybackProblem.Network => "The server can't be reached. Check your connection and try again.",
         PlaybackProblem.GatewaySignInNeeded => "Sign in to your server's gateway again in Settings, then play again.",

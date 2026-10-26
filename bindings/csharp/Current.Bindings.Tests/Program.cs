@@ -62,7 +62,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a player plays, reports and releases its swap chain", PlayerTests.PlaysReportsAndReleases),
     ("a second player waits, then is busy", PlayerTests.SecondPlayerIsBusy),
     ("a cancelled play leaves nothing started", PlayerTests.CancelledPlayLeavesNothingStarted),
-    ("an HLS stream behind a header gateway is checked, and no URL crosses", PlayerTests.HlsBehindAHeaderGatewayIsChecked),
+    ("an HLS stream behind a header gateway is relayed, and no URL crosses", PlayerTests.HlsBehindAHeaderGatewayIsRelayed),
     ("the skip switch is saved", PlayerTests.SkipSwitchIsSaved),
 };
 

@@ -369,7 +369,7 @@ impl Shared {
                     .and_then(|selected| selected.position())
                     .and_then(|position| self.address_at(server, position));
                 self.needs_gateway_sign_in(server, id, address);
-                client.resume();
+                client.gateway_answered();
             }
             _ => client.resume(),
         }
@@ -391,6 +391,15 @@ impl Shared {
             // A dropped session closes the channel: nothing to wait for then.
             let _ = receiver.wait_for(|running| !*running).await;
         }
+    }
+
+    /// Whether the saved address at 1-based `position` has gateway credentials configured (its settings list a kind), whatever the
+    /// credentials hold now: a portal's cookie that just expired leaves the gateway configured. `None` when no such address is
+    /// saved.
+    pub(crate) fn gateway_configured(&self, server: &ServerRef, position: u8) -> Option<bool> {
+        let saved = self.saved(server)?;
+        let address = saved.addresses.get(usize::from(position).checked_sub(1)?)?;
+        Some(!address.gateway.is_empty())
     }
 
     /// The saved address at 1-based `position`.

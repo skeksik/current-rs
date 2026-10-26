@@ -559,6 +559,7 @@ async fn refusals_and_failures_upstream_are_reported_once_per_route() {
             "basic",
             502,
             Some(RelayEvent::Refused {
+                status: 401,
                 shape: GatewayShape::Password {
                     realm: Some("a gateway".into()),
                 },
@@ -601,6 +602,7 @@ async fn refusals_and_failures_upstream_are_reported_once_per_route() {
     assert_eq!(
         drain(&mut events),
         [RelayEvent::Refused {
+            status: 200,
             shape: GatewayShape::SignIn
         }]
     );

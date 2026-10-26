@@ -20,10 +20,11 @@ use crate::engine::{Engine, EngineFile, EngineTrack, ExternalSubtitle};
 use crate::server::{
     MediaServer, PlanRequest, ProgressReport, ServerAnswer, StopReport, TranscodePermissions,
 };
-use crate::stream::{StreamAuth, StreamCookie, StreamUrl};
+use crate::stream::{EngineStream, StreamAuth, StreamUrl};
 
 /// The token, cookie and header values the fake server hands out; no Debug output may show them.
-pub const SECRETS: [&str; 3] = ["test-token-1234", "test-cookie-5678", "test-header-9012"];
+/// The session token in the server's URLs and the route token in relayed ones.
+pub const SECRETS: [&str; 2] = ["test-token-1234", "test-route-5678"];
 
 /// Runs a future that never waits.
 pub fn block_on<F: Future>(future: F) -> F::Output {
@@ -158,10 +159,16 @@ pub struct ServerState {
     pub facts: Option<TranscodingFacts>,
     pub subtitle_fetches: Vec<u32>,
     pub local: bool,
-    /// The URLs given to `check_playlist`, exposed.
-    pub playlist_checks: Vec<String>,
-    /// What `check_playlist` answers; `None` passes.
-    pub playlist_problem: Option<PlaybackProblem>,
+    /// The server URLs given to `stream_url`, exposed.
+    pub streams: Vec<String>,
+    /// Whether `stream_url` relays (an address with gateway credentials).
+    pub relay: bool,
+    /// What `stream_url` fails with; `None` gives a URL.
+    pub stream_problem: Option<PlaybackProblem>,
+    /// Whether a stream from `stream_url` is live: not yet ended or replaced.
+    pub stream_live: bool,
+    /// How many times `end_stream` was called.
+    pub stream_ends: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -194,8 +201,11 @@ impl FakeServer {
                 facts: None,
                 subtitle_fetches: Vec::new(),
                 local: true,
-                playlist_checks: Vec::new(),
-                playlist_problem: None,
+                streams: Vec::new(),
+                relay: false,
+                stream_problem: None,
+                stream_live: false,
+                stream_ends: 0,
             })),
             clock,
         }
@@ -286,10 +296,44 @@ impl MediaServer for FakeServer {
         Ok(b"1\n00:00:01,000 --> 00:00:02,000\nHello\n".to_vec())
     }
 
-    async fn check_playlist(&self, url: &StreamUrl) -> Result<(), PlaybackProblem> {
+    fn stream_url(
+        &self,
+        _item: &ItemRef,
+        url: &StreamUrl,
+    ) -> Result<EngineStream, PlaybackProblem> {
         let mut state = self.state();
-        state.playlist_checks.push(url.expose().to_owned());
-        state.playlist_problem.clone().map_or(Ok(()), Err)
+        state.streams.push(url.expose().to_owned());
+        state.stream_live = false;
+        if let Some(problem) = state.stream_problem.clone() {
+            return Err(problem);
+        }
+        state.stream_live = true;
+        Ok(if state.relay {
+            EngineStream {
+                url: StreamUrl::new(format!(
+                    "http://127.0.0.1:50123/{}/Videos/e1/stream?static=true",
+                    SECRETS[1]
+                )),
+                auth: StreamAuth {
+                    secrets: vec![SECRETS[1].into()],
+                },
+                relayed: true,
+            }
+        } else {
+            EngineStream {
+                url: url.clone(),
+                auth: StreamAuth {
+                    secrets: vec![SECRETS[0].into()],
+                },
+                relayed: false,
+            }
+        })
+    }
+
+    fn end_stream(&self) {
+        let mut state = self.state();
+        state.stream_live = false;
+        state.stream_ends += 1;
     }
 
     fn is_local_address(&self) -> bool {
@@ -391,15 +435,5 @@ pub fn answer(route: Route, reasons: Vec<RouteReason>) -> ServerAnswer {
             "https://media.example.com/Videos/e1/stream?static=true&ApiKey={}",
             SECRETS[0]
         )),
-        auth: StreamAuth {
-            cookies: vec![StreamCookie {
-                name: "gateway".into(),
-                value: SECRETS[1].into(),
-                path: "/".into(),
-                secure: true,
-            }],
-            headers: vec![("X-Gateway".into(), SECRETS[2].into())],
-            secrets: vec![SECRETS[0].into()],
-        },
     }
 }

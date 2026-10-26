@@ -20,6 +20,7 @@ current-model.workspace = true
 current-mpv.workspace = true
 current-net.workspace = true
 current-playback.workspace = true
+current-relay.workspace = true
 current-store.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

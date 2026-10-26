@@ -2,8 +2,9 @@
 //! upstream URL and either becomes an absolute path on the relay (`/<route>/...`, without `ApiKey`/`api_key`) or fails the playlist.
 //! The player therefore never learns another address, and every fetch is rewritten, so a playlist that changes is enforced each time.
 //!
-//! The parser is the one of `current-jellyfin`'s playlist check (`crates/jellyfin/src/hls.rs`), moved here and turned from finding
-//! URIs into replacing them. It is line based, from RFC 8216 (read 2026-10-25, as quoted in `hls.rs`):
+//! The parser is the one of `current-jellyfin`'s playlist check (`crates/jellyfin/src/hls.rs`, removed with the check, ADR 0020
+//! choice 8), moved here and turned from finding URIs into replacing them. It is line based, from RFC 8216 (read 2026-10-25, as
+//! quoted in that file):
 //! - §4.1: "Each line is a URI, is blank, or starts with the character '#'. Blank lines are ignored." "Lines that start with the
 //!   character '#' are either comments or tags. Tags begin with #EXT." "A URI in a Playlist, whether it is a URI line or part of a
 //!   tag, MAY be relative. Any relative URI is considered to be relative to the URI of the Playlist that contains it."

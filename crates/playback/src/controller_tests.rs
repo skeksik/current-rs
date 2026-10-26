@@ -170,8 +170,10 @@ fn a_resume_goes_into_the_request_and_the_file_and_starts_reporting_at_the_first
     // The server's default audio; no subtitle, as the server picked none.
     assert_eq!(file.audio, EngineTrack::Stream(1));
     assert_eq!(file.subtitle, EngineTrack::Off);
+    // An address without a gateway: the server's own URL, with references (ADR 0020).
     assert!(file.url.expose().contains(SECRETS[0]));
-    assert_eq!(file.auth.cookies[0].value, SECRETS[1]);
+    assert_eq!(file.auth.secrets, [SECRETS[0]]);
+    assert!(file.references);
 
     let states: Vec<_> = player.states().into_iter().map(|s| s.state).collect();
     assert_eq!(states.first(), Some(&PlayerState::Preparing));
@@ -347,9 +349,10 @@ fn another_item_stops_the_first_and_loads_on_the_same_engine() {
         position: secs(100),
         failed: false,
     }));
+    // The old file is unloaded first, so an end it reports cannot read as the new one's.
     let commands = player.commands();
     assert!(
-        matches!(commands.as_slice(), [Command::Load(_)]),
+        matches!(commands.as_slice(), [Command::Stop, Command::Load(_)]),
         "{commands:?}"
     );
     assert_eq!(player.requests()[1].0, item("m2"));
@@ -842,7 +845,7 @@ fn at_the_end_the_next_episode_starts_after_a_10_second_countdown_on_the_same_en
     assert_eq!(requests[1].1.start, Duration::ZERO);
     let commands = player.commands();
     assert!(
-        matches!(commands.as_slice(), [Command::Load(_)]),
+        matches!(commands.as_slice(), [Command::Stop, Command::Load(_)]),
         "{commands:?}"
     );
     assert_eq!(player.state(), PlayerState::Loading);
@@ -986,86 +989,259 @@ fn nothing_published_or_loaded_shows_a_secret() {
 }
 
 #[test]
-fn an_hls_stream_with_headers_is_checked_before_it_loads_and_marked_checked() {
-    let mut player = Harness::new(AutoSkip::off());
-    player.server.answer(Ok(answer(
-        hls(StreamAction::Transcode, StreamAction::Copy),
-        vec![RouteReason::VIDEO_CODEC_NOT_SUPPORTED],
-    )));
-    player.play(MediaKind::MOVIE, Duration::ZERO);
-    let checks = player.server.state().playlist_checks.clone();
-    assert_eq!(checks.len(), 1);
-    assert!(checks[0].contains(SECRETS[0]), "the stream's own URL");
-    let commands = player.commands();
-    let [Command::Load(file)] = commands.as_slice() else {
-        panic!("one load: {commands:?}");
-    };
-    assert!(file.playlist_checked);
-}
-
-#[test]
-fn an_hls_stream_with_only_gateway_cookies_is_checked_too() {
-    let mut cookie_only = answer(
-        hls(StreamAction::Copy, StreamAction::Copy),
-        vec![RouteReason::CONTAINER_NOT_SUPPORTED],
-    );
-    cookie_only.auth.headers.clear();
-    assert!(!cookie_only.auth.cookies.is_empty());
-    let mut player = Harness::new(AutoSkip::off());
-    player.server.answer(Ok(cookie_only));
-    player.play(MediaKind::MOVIE, Duration::ZERO);
-    assert_eq!(player.server.state().playlist_checks.len(), 1);
-    let commands = player.commands();
-    let [Command::Load(file)] = commands.as_slice() else {
-        panic!("one load: {commands:?}");
-    };
-    assert!(file.playlist_checked);
-}
-
-#[test]
-fn direct_play_progressive_streams_and_hls_without_credentials_are_not_checked() {
+fn a_relayed_stream_loads_the_relay_url_and_opens_references_only_for_hls() {
     let progressive = Route::ServerStream {
         protocol: current_model::StreamProtocol::Progressive,
         container: Some("mkv".into()),
         video: StreamAction::Copy,
         audio: StreamAction::Transcode,
     };
-    let mut no_headers = answer(hls(StreamAction::Copy, StreamAction::Copy), vec![]);
-    no_headers.auth.headers.clear();
-    no_headers.auth.cookies.clear();
-    for answer in [
-        answer(Route::DirectPlay, vec![]),
-        answer(progressive, vec![RouteReason::AUDIO_CODEC_NOT_SUPPORTED]),
-        no_headers,
+    for (route, references) in [
+        (Route::DirectPlay, false),
+        (progressive, false),
+        (hls(StreamAction::Copy, StreamAction::Copy), true),
     ] {
         let mut player = Harness::new(AutoSkip::off());
-        player.server.answer(Ok(answer));
+        player.server.state().relay = true;
+        player.server.answer(Ok(answer(route.clone(), vec![])));
         player.play(MediaKind::MOVIE, Duration::ZERO);
-        assert!(player.server.state().playlist_checks.is_empty());
+        // The server's URL went to `stream_url`; the engine got the relay's, with its token to redact and no session token.
+        assert!(player.server.state().streams[0].contains(SECRETS[0]));
         let commands = player.commands();
         let [Command::Load(file)] = commands.as_slice() else {
             panic!("one load: {commands:?}");
         };
-        assert!(!file.playlist_checked);
+        assert!(!file.url.expose().contains(SECRETS[0]), "{route:?}");
+        assert!(file.url.expose().contains(SECRETS[1]));
+        assert_eq!(file.auth.secrets, [SECRETS[1]]);
+        assert_eq!(file.references, references, "{route:?}");
     }
 }
 
 #[test]
-fn a_playlist_that_points_elsewhere_fails_without_loading() {
+fn a_relay_that_cannot_start_fails_without_loading() {
     let mut player = Harness::new(AutoSkip::off());
-    player.server.answer(Ok(answer(
-        hls(StreamAction::Copy, StreamAction::Copy),
-        vec![RouteReason::CONTAINER_NOT_SUPPORTED],
-    )));
-    player.server.state().playlist_problem = Some(PlaybackProblem::PlaylistElsewhere);
+    player.server.state().stream_problem = Some(PlaybackProblem::LocalRelay);
     player.play(MediaKind::MOVIE, Duration::ZERO);
     assert_eq!(
         player.state(),
         PlayerState::Failed {
-            problem: PlaybackProblem::PlaylistElsewhere
+            problem: PlaybackProblem::LocalRelay
         }
     );
     assert!(player.commands().is_empty());
+}
+
+#[test]
+fn a_stream_failure_stops_the_engine_and_fails_once() {
+    for problem in [
+        PlaybackProblem::GatewaySignInNeeded,
+        PlaybackProblem::SignedOut,
+        PlaybackProblem::NotFound,
+        PlaybackProblem::Server { status: 500 },
+        PlaybackProblem::PlaylistElsewhere,
+    ] {
+        let mut player = Harness::playing(AutoSkip::off());
+        player.at(120);
+        block_on(player.player.stream_failed(problem.clone()));
+        assert_eq!(
+            player.state(),
+            PlayerState::Failed {
+                problem: problem.clone()
+            }
+        );
+        assert_eq!(player.commands(), vec![Command::Stop]);
+        let reports = player.reports();
+        let [(_, report)] = reports.as_slice() else {
+            panic!("one stop report: {reports:?}");
+        };
+        assert!(stopped(report).failed);
+        assert_eq!(stopped(report).position, secs(120));
+        assert!(!player.server.state().stream_live);
+        // No fallback: the same server would refuse another route too.
+        assert_eq!(player.requests().len(), 1);
+        // A second event of the stream changes nothing.
+        block_on(player.player.stream_failed(PlaybackProblem::Network));
+        assert_eq!(player.state(), PlayerState::Failed { problem });
+        assert!(player.commands().is_empty());
+        assert!(player.reports().is_empty());
+    }
+}
+
+#[test]
+fn a_connection_lost_while_playing_from_the_buffer_fails_only_with_the_engine() {
+    // While loading the engine waits on the stream: it fails at once.
+    let mut player = Harness::new(AutoSkip::off());
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    block_on(player.player.stream_failed(PlaybackProblem::Network));
+    assert_eq!(
+        player.state(),
+        PlayerState::Failed {
+            problem: PlaybackProblem::Network
+        }
+    );
+
+    // Playing (or paused) from the buffer: the next read opens the connection again.
+    let mut player = Harness::playing(AutoSkip::off());
+    block_on(player.player.pause());
+    block_on(player.player.stream_failed(PlaybackProblem::Network));
+    assert_eq!(player.state(), PlayerState::Paused);
+    // If the engine then fails, it is the connection's failure: no fallback to a server stream.
+    player.event(EngineEvent::Ended(EndReason::Error(
+        EngineErrorKind::LOADING_FAILED,
+    )));
+    assert_eq!(
+        player.state(),
+        PlayerState::Failed {
+            problem: PlaybackProblem::Network
+        }
+    );
+    assert_eq!(player.requests().len(), 1);
+}
+
+#[test]
+fn an_engine_error_or_end_after_a_refusal_waits_for_the_401_rule() {
+    for end in [
+        EndReason::Error(EngineErrorKind::LOADING_FAILED),
+        EndReason::Eof,
+    ] {
+        // Direct play: an engine error would otherwise fall back to a server stream, an end mark the item played.
+        let mut player = Harness::playing(AutoSkip::off());
+        player.at(120);
+        player.player.stream_refused();
+        player.event(EngineEvent::Ended(end.clone()));
+        assert_eq!(player.state(), PlayerState::Playing, "{end:?}");
+        assert_eq!(player.requests().len(), 1, "no fallback");
+        assert!(player.reports().is_empty());
+        // The rule's answer is what the user sees.
+        block_on(
+            player
+                .player
+                .stream_failed(PlaybackProblem::GatewaySignInNeeded),
+        );
+        assert_eq!(
+            player.state(),
+            PlayerState::Failed {
+                problem: PlaybackProblem::GatewaySignInNeeded
+            }
+        );
+        assert!(
+            player
+                .events()
+                .iter()
+                .any(|event| matches!(event, PlayerEvent::Stopped { failed: true, .. }))
+        );
+    }
+    // A Network answer while playing from the buffer still ends playback: the rule found nothing, and the stream was refused.
+    let mut player = Harness::playing(AutoSkip::off());
+    player.player.stream_refused();
+    block_on(player.player.stream_failed(PlaybackProblem::Network));
+    assert_eq!(
+        player.state(),
+        PlayerState::Failed {
+            problem: PlaybackProblem::Network
+        }
+    );
+}
+
+#[test]
+fn a_new_plan_clears_a_pending_refusal() {
+    let mut player = Harness::playing(AutoSkip::off());
+    player.player.stream_refused();
+    block_on(player.player.set_quality(Quality::Bitrate(4_000_000)));
+    player.start();
+    assert_eq!(player.requests().len(), 2);
+    // The new stream's engine error is its own: no refusal waits, and direct play falls back.
+    player.event(EngineEvent::Ended(EndReason::Error(
+        EngineErrorKind::DECODER_FAILED,
+    )));
+    assert_eq!(player.requests().len(), 3);
+    assert_eq!(player.state(), PlayerState::Loading);
+}
+
+#[test]
+fn an_end_short_of_the_duration_after_a_lost_connection_fails_with_network() {
+    let mut player = Harness::playing(AutoSkip::off());
+    player.server.state().next = Some(summary("e2"));
+    player.at(600);
+    block_on(player.player.stream_failed(PlaybackProblem::Network));
+    assert_eq!(player.state(), PlayerState::Playing);
+    player.event(EngineEvent::Ended(EndReason::Eof));
+    assert_eq!(
+        player.state(),
+        PlayerState::Failed {
+            problem: PlaybackProblem::Network
+        }
+    );
+    let reports = player.reports();
+    assert!(reports.iter().all(|(_, report)| match report {
+        Report::Stopped(report) => report.failed && report.position == secs(600),
+        _ => true,
+    }));
+    assert!(player.player.status().next.is_none(), "no autoplay");
+
+    // At the real end it is the end.
+    let mut player = Harness::playing(AutoSkip::off());
+    player.at(3600);
+    block_on(player.player.stream_failed(PlaybackProblem::Network));
+    player.event(EngineEvent::Ended(EndReason::Eof));
+    assert_eq!(player.state(), PlayerState::Ended);
+}
+
+#[test]
+fn a_lost_connection_is_forgotten_once_data_arrives_again() {
+    for arrives in [
+        vec![
+            EngineEvent::Buffered(secs(2)),
+            EngineEvent::Buffered(secs(5)),
+        ],
+        vec![EngineEvent::Buffering(true), EngineEvent::Buffering(false)],
+    ] {
+        let mut player = Harness::playing(AutoSkip::off());
+        block_on(player.player.stream_failed(PlaybackProblem::Network));
+        for event in arrives {
+            player.event(event);
+        }
+        // A real decode error after the reconnect falls back as any other.
+        player.event(EngineEvent::Ended(EndReason::Error(
+            EngineErrorKind::DECODER_FAILED,
+        )));
+        assert_eq!(player.requests().len(), 2, "the fallback re-plans");
+        assert_eq!(player.state(), PlayerState::Loading);
+    }
+}
+
+#[test]
+fn stop_another_item_and_a_re_plan_end_the_stream() {
+    let mut player = Harness::playing(AutoSkip::off());
+    let server = player.server.clone();
+    let ends = || player_ends(&server);
+    let before = ends();
+    assert!(player.server.state().stream_live);
+    block_on(player.player.stop());
+    assert!(!player.server.state().stream_live);
+    assert_eq!(ends(), before + 1);
+
+    // Another item ends the first one's stream before its own is made.
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    player.start();
+    let before = ends();
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    assert_eq!(ends(), before + 1);
+    assert_eq!(player.server.state().streams.len(), 3);
+    // A re-plan makes a new stream, which replaces the old one.
+    player.start();
+    block_on(player.player.set_quality(Quality::Bitrate(4_000_000)));
+    assert_eq!(player.server.state().streams.len(), 4);
+    assert!(player.server.state().stream_live);
+    // A stream event while nothing plays changes nothing.
+    block_on(player.player.stop());
+    block_on(player.player.stream_failed(PlaybackProblem::NotFound));
+    assert_eq!(player.state(), PlayerState::Idle);
+}
+
+fn player_ends(server: &FakeServer) -> u32 {
+    server.state().stream_ends
 }
 
 /// The stall ends playback: the engine stopped, the play session reported stopped with `Failed = true` at `position`, the app told

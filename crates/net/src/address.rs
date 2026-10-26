@@ -68,9 +68,12 @@ impl Selected {
         self.plain_http_confirmed
     }
 
-    /// Whether requests to this address carry gateway credentials.
+    /// Whether this address has gateway credentials: a gateway that holds none (the app gives every saved address one, ADR 0017)
+    /// does not count.
     pub fn has_gateway(&self) -> bool {
-        self.gateway.is_some()
+        self.gateway
+            .as_ref()
+            .is_some_and(|gateway| !gateway.snapshot().0.is_empty())
     }
 
     /// The server's base address, including any path prefix it is served under.

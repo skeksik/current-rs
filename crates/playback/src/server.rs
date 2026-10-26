@@ -11,7 +11,7 @@ use current_model::{
 };
 
 use crate::quality::Quality;
-use crate::stream::{StreamAuth, StreamUrl};
+use crate::stream::{EngineStream, StreamUrl};
 
 /// What a plan asks the server for (for Jellyfin, one `POST /Items/{id}/PlaybackInfo`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,7 +26,7 @@ pub struct PlanRequest {
     pub direct_play: bool,
 }
 
-/// The server's answer for the chosen source: the source, the route it offers and why, and how the engine reaches it.
+/// The server's answer for the chosen source: the source, the route it offers and why, and the stream's URL on the server.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ServerAnswer {
     pub play_session_id: String,
@@ -35,8 +35,8 @@ pub struct ServerAnswer {
     pub route: Route,
     /// The server's reasons; empty for direct play.
     pub reasons: Vec<RouteReason>,
+    /// On the server's address, with the session token; the engine gets [`MediaServer::stream_url`]'s.
     pub url: StreamUrl,
-    pub auth: StreamAuth,
 }
 
 /// What the server lets the user do, read only to explain an outcome: the server enforces it (ADR 0019, "Permissions").
@@ -153,14 +153,16 @@ pub trait MediaServer {
         stream: &MediaStream,
     ) -> impl Future<Output = Result<Vec<u8>, PlaybackProblem>> + Send;
 
-    /// Checks the HLS playlist at `url` before the engine opens it with gateway headers: the master playlist and every playlist it
-    /// names are fetched with the address's credentials, and every URI in them must be relative or on the URL's own scheme, host and
-    /// port, because the engine sends the headers to whatever host a playlist names (ADR 0019, "Playlists and headers").
-    /// [`PlaybackProblem::PlaylistElsewhere`] when one is not; a check, not enforcement, since the engine fetches the playlists again.
-    fn check_playlist(
-        &self,
-        url: &StreamUrl,
-    ) -> impl Future<Output = Result<(), PlaybackProblem>> + Send;
+    /// The URL the engine opens for `url`, the stream of a plan for `item` (ADR 0020): `url` itself on an address without gateway
+    /// credentials, else a URL on the loopback relay that reaches only `item`'s streams and holds no credential (the relay adds the
+    /// address's credentials and the session token upstream). Replaces the stream given before, whose relay route is removed.
+    /// [`PlaybackProblem::LocalRelay`] when the relay cannot start (there is no fallback that hands the engine credentials),
+    /// [`PlaybackProblem::Network`] when `url` is not on the address in use any more.
+    fn stream_url(&self, item: &ItemRef, url: &StreamUrl) -> Result<EngineStream, PlaybackProblem>;
+
+    /// The stream [`MediaServer::stream_url`] gave is no longer played (a stop, another item, a failure, the end): its relay route,
+    /// if any, is removed, which closes the engine's open connections to it.
+    fn end_stream(&self);
 
     /// Whether the address in use is a local one, for the remembered quality.
     fn is_local_address(&self) -> bool;
