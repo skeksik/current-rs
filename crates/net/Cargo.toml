@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+bytes.workspace = true
 current-model.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

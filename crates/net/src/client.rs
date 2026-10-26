@@ -45,13 +45,14 @@ impl Default for ClientConfig {
 /// request log shows, since bodies, headers and queries can carry passwords and tokens.
 #[derive(Clone)]
 pub struct Request {
-    method: Method,
-    path: String,
-    query: Vec<(String, String)>,
-    headers: HeaderMap,
-    body: Option<Vec<u8>>,
+    pub(crate) method: Method,
+    pub(crate) path: String,
+    pub(crate) query: Vec<(String, String)>,
+    pub(crate) headers: HeaderMap,
+    pub(crate) body: Option<Vec<u8>>,
     timeout: Option<Duration>,
     max_body: Option<usize>,
+    pub(crate) read_timeout: Option<Duration>,
 }
 
 impl Request {
@@ -65,6 +66,7 @@ impl Request {
             body: None,
             timeout: None,
             max_body: None,
+            read_timeout: None,
         }
     }
 
@@ -115,6 +117,13 @@ impl Request {
         self.max_body = Some(bytes);
         self
     }
+
+    /// For [`ServerClient::send_stream`] only: the longest wait for the next chunk of the body, instead of
+    /// [`DEFAULT_READ_TIMEOUT`](crate::DEFAULT_READ_TIMEOUT). [`ServerClient::send`] ignores it.
+    pub fn read_timeout(mut self, timeout: Duration) -> Self {
+        self.read_timeout = Some(timeout);
+        self
+    }
 }
 
 /// A successful (2xx) response. Its `Debug` output shows no body and no header values: a sign-in's body holds a token.
@@ -139,6 +148,7 @@ impl std::fmt::Debug for Request {
             .field("headers", &HeaderNames(&self.headers))
             .field("body_bytes", &self.body.as_ref().map(Vec::len))
             .field("timeout", &self.timeout)
+            .field("read_timeout", &self.read_timeout)
             .finish()
     }
 }
@@ -172,12 +182,15 @@ impl Response {
 
 /// The HTTP client for one server.
 pub struct ServerClient {
-    server: ServerRef,
-    address: Arc<dyn AddressProvider>,
+    pub(crate) server: ServerRef,
+    pub(crate) address: Arc<dyn AddressProvider>,
     auth: Option<Arc<dyn RequestAuth>>,
-    log: Arc<RequestLog>,
+    pub(crate) log: Arc<RequestLog>,
     timeout: Duration,
+    connect_timeout: Duration,
     http: reqwest::Client,
+    /// For [`ServerClient::send_stream`]: no total timeout. Built on the first stream, since most clients never stream.
+    stream_http: tokio::sync::OnceCell<reqwest::Client>,
 }
 
 impl std::fmt::Debug for ServerClient {
@@ -213,8 +226,31 @@ impl ServerClient {
             auth,
             log,
             timeout: config.timeout,
+            connect_timeout: config.connect_timeout,
             http,
+            stream_http: tokio::sync::OnceCell::new(),
         })
+    }
+
+    /// The client for streams: like [`ServerClient::new`]'s, without the timeout for the whole request (a stream's body has none;
+    /// `send_stream` times its headers and each chunk itself).
+    pub(crate) async fn stream_http(&self) -> Result<&reqwest::Client, NetError> {
+        self.stream_http
+            .get_or_try_init(|| async {
+                reqwest::Client::builder()
+                    .connect_timeout(self.connect_timeout)
+                    // Streams follow no redirect (ADR 0020).
+                    .redirect(redirect::Policy::none())
+                    // One connection per stream: on HTTP/2, paused streams sharing a connection hold its flow-control window and
+                    // can starve another stream into a timeout, and the relay keeps no more than a chunk per connection (ADR 0020).
+                    .http1_only()
+                    // As mpv's requests do (`current_mpv::user_agent`); the workspace shares one version.
+                    .user_agent(concat!("Current/", env!("CARGO_PKG_VERSION")))
+                    .build()
+                    // Building fails only when the TLS backend cannot start.
+                    .map_err(|_| NetError::Tls)
+            })
+            .await
     }
 
     pub fn server(&self) -> &ServerRef {
@@ -345,7 +381,12 @@ impl ServerClient {
     /// credentials (ADR 0017). Runs on every hop, so a followed redirect keeps them, and cookies are matched against each hop's URL.
     /// Gateway credentials follow the token's transport rule: https, plain HTTP to the local network, or plain HTTP the user
     /// confirmed for the address (ADR 0012, ADR 0014).
-    fn authorize(&self, url: &Url, headers: &HeaderMap, selected: &Selected) -> (Url, HeaderMap) {
+    pub(crate) fn authorize(
+        &self,
+        url: &Url,
+        headers: &HeaderMap,
+        selected: &Selected,
+    ) -> (Url, HeaderMap) {
         let (mut url, mut headers) = (url.clone(), headers.clone());
         if let Some(auth) = &self.auth {
             let mut query: Vec<(String, String)> = url.query_pairs().into_owned().collect();
@@ -377,6 +418,7 @@ impl ServerClient {
             mut body,
             timeout: _,
             max_body,
+            read_timeout: _,
         } = request;
         let original = join(selected.url(), &path, &query).map_err(Failure::unsent)?;
         let mut url = original.clone();
@@ -495,7 +537,7 @@ async fn read_body(
 
 /// The selected address's gateway, if its credentials may go to `url` (a hop on that address): https, plain HTTP to the local
 /// network, or plain HTTP the user confirmed for the address. The same rule decides whether an answer from `url` may update them.
-fn gateway_for<'a>(selected: &'a Selected, url: &Url) -> Option<&'a Arc<Gateway>> {
+pub(crate) fn gateway_for<'a>(selected: &'a Selected, url: &Url) -> Option<&'a Arc<Gateway>> {
     selected
         .gateway()
         .filter(|_| !transport(url).needs_confirmation() || selected.plain_http_confirmed())
@@ -569,7 +611,7 @@ fn may_follow(from: &Url, to: &Url) -> bool {
 }
 
 /// The base address with `path` appended to its own path and `query` as its query.
-fn join(base: &Url, path: &str, query: &[(String, String)]) -> Result<Url, NetError> {
+pub(crate) fn join(base: &Url, path: &str, query: &[(String, String)]) -> Result<Url, NetError> {
     if base.cannot_be_a_base() || !matches!(base.scheme(), "http" | "https") {
         return Err(NetError::InvalidRequest);
     }

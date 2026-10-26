@@ -22,6 +22,7 @@ current-store = { path = "crates/store" }
 jellyfin-stand-in = { path = "tools/jellyfin-stand-in" }
 
 apple-native-keyring-store = { version = "=1.0.2", features = ["keychain"] }
+bytes = "=1.12.1"
 getrandom = "=0.4.3"
 hyper = { version = "=1.12.0", default-features = false, features = ["server", "http1"] }
 hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio"] }

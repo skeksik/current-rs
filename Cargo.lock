@@ -313,6 +313,7 @@ dependencies = [
 name = "current-net"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "current-model",
  "reqwest",
  "rustls",
