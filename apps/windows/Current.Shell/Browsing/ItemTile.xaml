@@ -57,7 +57,34 @@
                         Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
                 </Border>
             </StackPanel>
-            <ProgressBar x:Name="Progress" Visibility="Collapsed" Margin="8" VerticalAlignment="Bottom" Maximum="1" />
+            <!-- An item in progress: a play mark, how far it was watched, and the time left as the core counts it (owner,
+                 2026-10-26), on a shade along the picture's bottom (TileScrimBrush, App.xaml). In the dark theme whatever the app's,
+                 so the text is light on the shade; high contrast keeps its own colours. Decorative for Narrator: the tile's name says
+                 it (BrowseText.TileName). Glyph: Segoe Fluent Icons E768 "Play" ("Segoe Fluent Icons font", learn.microsoft.com,
+                 ms.date 2026-10-13, read 2026-10-26). -->
+            <Grid
+                x:Name="ProgressPart"
+                Visibility="Collapsed"
+                VerticalAlignment="Bottom"
+                Padding="8,16,8,8"
+                ColumnSpacing="8"
+                RequestedTheme="Dark"
+                Background="{ThemeResource TileScrimBrush}"
+                AutomationProperties.AccessibilityView="Raw">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <FontIcon Glyph="&#xE768;" FontSize="12" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                <ProgressBar x:Name="Progress" Grid.Column="1" VerticalAlignment="Center" Maximum="1" />
+                <TextBlock
+                    x:Name="TimeLeftText"
+                    Grid.Column="2"
+                    VerticalAlignment="Center"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+            </Grid>
         </Grid>
         <!-- The text 8 in from the item's highlight on the left, right and below; the picture stays flush with it (owner,
              2026-10-26). -->

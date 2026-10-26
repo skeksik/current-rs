@@ -69,6 +69,20 @@ pub struct ItemSummary {
     pub child_count: Option<u32>,
 }
 
+impl ItemSummary {
+    /// How much is left to watch from the resume point: the running time less the position, for an item not marked played whose
+    /// position is inside its running time. `None` when there is nothing to resume or the server gave no running time.
+    pub fn time_left(&self) -> Option<Duration> {
+        if self.user.played {
+            return None;
+        }
+        let position = self.user.position.filter(|position| !position.is_zero())?;
+        self.runtime?
+            .checked_sub(position)
+            .filter(|left| !left.is_zero())
+    }
+}
+
 open_value! {
     /// What a library holds. Open: each service crate maps its server's library types to these where the meaning matches and passes
     /// any other type through unchanged.
@@ -283,6 +297,33 @@ mod tests {
 
         let fresh = PlayTarget::for_item(&summary(MediaKind::VIDEO, UserState::default())).unwrap();
         assert!(!fresh.resumes());
+    }
+
+    #[test]
+    fn time_left_is_the_runtime_less_the_resume_point() {
+        let at = |position: Option<u64>, runtime: Option<u64>, played: bool| ItemSummary {
+            runtime: runtime.map(Duration::from_secs),
+            ..summary(
+                MediaKind::MOVIE,
+                UserState {
+                    played,
+                    position: position.map(Duration::from_secs),
+                    ..UserState::default()
+                },
+            )
+        };
+        assert_eq!(
+            at(Some(600), Some(5_400), false).time_left(),
+            Some(Duration::from_secs(4_800))
+        );
+        // Nothing to resume: not started, marked played, or no running time to count from.
+        assert_eq!(at(None, Some(5_400), false).time_left(), None);
+        assert_eq!(at(Some(0), Some(5_400), false).time_left(), None);
+        assert_eq!(at(Some(600), Some(5_400), true).time_left(), None);
+        assert_eq!(at(Some(600), None, false).time_left(), None);
+        // A position at or past the end (a runtime the server got wrong) leaves nothing to show.
+        assert_eq!(at(Some(5_400), Some(5_400), false).time_left(), None);
+        assert_eq!(at(Some(6_000), Some(5_400), false).time_left(), None);
     }
 
     #[test]

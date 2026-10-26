@@ -137,19 +137,19 @@ public sealed partial class ItemTile : UserControl
         {
             TitleText.Text = "";
             SubtitleText.Text = "";
-            ShowMarks(null);
+            ShowMarks(null, null);
             ShowPicture(null);
             AutomationProperties.SetName(this, slot is Slot.Failed ? BrowseText.FailedTileName : BrowseText.LoadingTileName);
             return;
         }
         TitleText.Text = BrowseText.Title(item, ShowsSeries);
         SubtitleText.Text = BrowseText.Subtitle(item, ShowsSeries);
-        ShowMarks(item.User);
+        ShowMarks(item.User, item.TimeLeft);
         ShowPicture(item);
         AutomationProperties.SetName(this, BrowseText.TileName(item, ShowsSeries));
     }
 
-    private void ShowMarks(UserState? user)
+    private void ShowMarks(UserState? user, TimeSpan? timeLeft)
     {
         FavouriteBadge.Visibility = user?.Favourite == true ? Visibility.Visible : Visibility.Collapsed;
         PlayedBadge.Visibility = user?.Played == true ? Visibility.Visible : Visibility.Collapsed;
@@ -157,8 +157,9 @@ public sealed partial class ItemTile : UserControl
         UnplayedBadge.Visibility = unplayed is null ? Visibility.Collapsed : Visibility.Visible;
         UnplayedCount.Text = unplayed?.ToString(System.Globalization.CultureInfo.CurrentCulture) ?? "";
         var progress = user is { Played: false, Progress: > 0 and < 1 } ? user.Progress : null;
-        Progress.Visibility = progress is null ? Visibility.Collapsed : Visibility.Visible;
+        ProgressPart.Visibility = progress is null ? Visibility.Collapsed : Visibility.Visible;
         Progress.Value = progress ?? 0;
+        TimeLeftText.Text = timeLeft is { } left ? BrowseText.ShortTime(left) : "";
     }
 
     /// <summary>The artwork for the tile's shape, as the core picks it (ItemSummary.Poster and Wide).</summary>

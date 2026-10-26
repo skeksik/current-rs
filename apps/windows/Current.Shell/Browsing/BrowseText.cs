@@ -50,6 +50,10 @@ internal static class BrowseText
         {
             parts.Add("played");
         }
+        else if (item.TimeLeft is { } left)
+        {
+            parts.Add($"in progress, {TimeLeft(left)}");
+        }
         else if (item.User.Progress is > 0)
         {
             parts.Add("in progress");
@@ -112,6 +116,16 @@ internal static class BrowseText
         var minutes = (int)Math.Round(runtime.TotalMinutes);
         return minutes >= 60 ? $"{minutes / 60} h {minutes % 60} min" : $"{minutes} min";
     }
+
+    /// <summary>"1h 12m", "45m": the time left on a tile; under a minute counts as one.</summary>
+    public static string ShortTime(TimeSpan time)
+    {
+        var minutes = Math.Max(1, (int)Math.Round(time.TotalMinutes));
+        return minutes >= 60 ? $"{minutes / 60}h {minutes % 60}m" : $"{minutes}m";
+    }
+
+    /// <summary>"1 h 12 min left", "45 min left", as Narrator reads it; under a minute counts as one.</summary>
+    public static string TimeLeft(TimeSpan left) => $"{Runtime(left < TimeSpan.FromMinutes(1) ? TimeSpan.FromMinutes(1) : left)} left";
 
     public static string ActionFailedTitle(BrowseNotice.ActionFailed failed)
     {

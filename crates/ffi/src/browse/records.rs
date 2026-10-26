@@ -97,6 +97,9 @@ pub struct ItemSummary {
     /// The artwork a wide tile shows (16:9), as the core picks it from `artwork`.
     #[uniffi(default = None)]
     pub wide: Option<Artwork>,
+    /// What is left to watch from the resume point, in milliseconds (`ItemSummary::time_left`). Ignored on the way in.
+    #[uniffi(default = None)]
+    pub time_left_ms: Option<u64>,
 }
 
 /// One of the user's libraries, for the app's navigation.
@@ -500,6 +503,7 @@ impl From<&model::ItemSummary> for ItemSummary {
             poster: current_app::tile_artwork(summary, current_app::TileShape::Poster)
                 .map(Into::into),
             wide: current_app::tile_artwork(summary, current_app::TileShape::Wide).map(Into::into),
+            time_left_ms: summary.time_left().map(millis),
         }
     }
 }

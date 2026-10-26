@@ -46,7 +46,8 @@ public sealed record EpisodeLinks(
 
 /// <summary>
 /// An item as a tile or a row shows it. <c>Kind</c> is the media kind: movie, series, episode..., or one the server named.
-/// <c>Poster</c> and <c>Wide</c> are the artwork a poster (2:3) and a wide (16:9) tile show, as the core picks them.
+/// <c>Poster</c> and <c>Wide</c> are the artwork a poster (2:3) and a wide (16:9) tile show, as the core picks them. <c>TimeLeft</c>
+/// is what is left to watch from the resume point, as the core counts it; ignored on the way in.
 /// </summary>
 public sealed record ItemSummary(
     ItemRef Item,
@@ -59,7 +60,8 @@ public sealed record ItemSummary(
     EpisodeLinks? Episode,
     int? ChildCount,
     Artwork? Poster = null,
-    Artwork? Wide = null);
+    Artwork? Wide = null,
+    TimeSpan? TimeLeft = null);
 
 /// <summary>
 /// What a Play button starts (ADR 0019): <c>Item</c> (on a series' page, its next episode) from <c>Start</c>. When <c>Resumes</c>, the
@@ -359,7 +361,8 @@ internal static class MapBrowse
         summary.Episode is { } episode ? From(episode) : null,
         Count(summary.ChildCount),
         summary.Poster is { } poster ? From(poster) : null,
-        summary.Wide is { } wide ? From(wide) : null);
+        summary.Wide is { } wide ? From(wide) : null,
+        Millis(summary.TimeLeftMs));
 
     private static ulong? ToMillis(TimeSpan? time) => time is { } value ? (ulong)Math.Max(0, value.TotalMilliseconds) : null;
 
@@ -394,7 +397,8 @@ internal static class MapBrowse
         summary.Episode is { } episode ? ToFfi(episode) : null,
         Size(summary.ChildCount, nameof(summary.ChildCount)),
         summary.Poster is { } poster ? ToFfi(poster) : null,
-        summary.Wide is { } wide ? ToFfi(wide) : null);
+        summary.Wide is { } wide ? ToFfi(wide) : null,
+        null);
 
     public static PlayTarget From(Ffi.PlayTarget target) =>
         new(From(target.Item), Millis(target.StartMs) ?? TimeSpan.Zero, target.Resumes);

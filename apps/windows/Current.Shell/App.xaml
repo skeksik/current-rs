@@ -9,6 +9,26 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+            <!-- The shade under a tile's progress (ItemTile.xaml): clear at the top to SmokeFillColorDefault, the overlay shade, at the
+                 bottom. High contrast defines no smoke colour of its own (its SmokeFillColorDefault is a placeholder) but a brush in
+                 the system's window colour, which is used whole. -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <LinearGradientBrush x:Key="TileScrimBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Offset="0" Color="Transparent" />
+                        <GradientStop Offset="1" Color="{StaticResource SmokeFillColorDefault}" />
+                    </LinearGradientBrush>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Light">
+                    <LinearGradientBrush x:Key="TileScrimBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Offset="0" Color="Transparent" />
+                        <GradientStop Offset="1" Color="{StaticResource SmokeFillColorDefault}" />
+                    </LinearGradientBrush>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <StaticResource x:Key="TileScrimBrush" ResourceKey="SmokeFillColorDefaultBrush" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
 
             <!-- Every page: its title over one column, centred, up to PageMaxWidth, as the WinUI Gallery's settings page lays out its
                  title and column (docs/notes/windows-shell.md, "Page layout"). Each page puts the column in a plain Border inside its
