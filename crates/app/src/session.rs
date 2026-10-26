@@ -32,7 +32,7 @@ use current_net::{
     RoamingConfig, RoamingError, RoamingStatus, RuntimeHandle, Url,
 };
 use current_store::{
-    GatewayKey, Secret, SecretKey, Secrets, SecretsError, SettingsStore, StoreError,
+    GatewayKey, Secret, SecretKey, Secrets, SecretsError, Settings, SettingsStore, StoreError,
     forget_gateway_secret,
 };
 use tokio::sync::watch;
@@ -289,6 +289,15 @@ impl Shared {
         &self,
         change: impl FnOnce(&mut Vec<SavedServer>, u64) -> R,
     ) -> Result<R, StoreError> {
+        self.commit_with(change, |_| {})
+    }
+
+    /// As [`Shared::commit`], with `also` changing the rest of the settings in the same save; nothing when nothing is stored.
+    fn commit_with<R>(
+        &self,
+        change: impl FnOnce(&mut Vec<SavedServer>, u64) -> R,
+        also: impl FnOnce(&mut Settings),
+    ) -> Result<R, StoreError> {
         let _write = lock(&self.write);
         let mut next = self.servers();
         let last_key = self.last_key.load(Ordering::Relaxed);
@@ -298,6 +307,7 @@ impl Shared {
             storage.settings.update(|settings| {
                 settings.servers = next.clone();
                 settings.last_server_key = last_key;
+                also(settings);
             })?;
             // As saved: the store gives an id to any address added without one (ADR 0017).
             next = storage.settings.get().servers;
@@ -1011,8 +1021,12 @@ impl Shared {
             self.check_writable()?;
             let shared = self.clone();
             let removed = server.clone();
+            // The libraries remembered for it go in the same save.
             blocking("save", move || {
-                shared.commit(|servers, _| servers.retain(|saved| saved.server != removed))
+                shared.commit_with(
+                    |servers, _| servers.retain(|saved| saved.server != removed),
+                    |settings| settings.browse.forget_server(&removed),
+                )
             })
             .await??;
             let session = lock(&self.sessions).remove(&server);

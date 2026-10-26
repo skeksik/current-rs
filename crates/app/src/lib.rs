@@ -12,6 +12,7 @@ mod formats;
 mod gateway;
 mod gateway_sign_in;
 mod images;
+mod library_choices;
 mod list;
 mod player;
 mod session;
@@ -24,13 +25,13 @@ use current_jellyfin::{
     AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, platform_name,
 };
 use current_model::{
-    AppTheme, Capabilities, NetworkFacts, SavedServer, ServerAddress, ServerId, ServerRef,
+    AppTheme, Capabilities, ItemRef, NetworkFacts, SavedServer, ServerAddress, ServerId, ServerRef,
 };
 use current_net::{
     Gateway, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError, RuntimeHandle,
     Url,
 };
-use current_store::{DeviceId, LoadReport, Secrets, SettingsStore, StoreError};
+use current_store::{DeviceId, LibraryChoices, LoadReport, Secrets, SettingsStore, StoreError};
 use tokio::sync::watch;
 
 pub use add_server::{AddServer, AddServerState, NewServer};
@@ -49,6 +50,7 @@ pub use formats::{
 pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
 pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState};
 pub use images::{ImageError, ImageLoad, ImageSource, WIDTH_BUCKETS, bucket};
+pub use library_choices::LibraryMemory;
 pub use list::{ListSubscription, ObservableList, VectorDiff};
 #[cfg(any(test, feature = "test-engine"))]
 pub use player::test_engine;
@@ -98,6 +100,8 @@ pub struct App {
     images: ImageCache,
     browse: Arc<browse::Hub>,
     playback: Arc<player::PlaybackPrefs>,
+    /// Settings' "Remember sort", "Remember filter" and "Remember view", and the choices remembered per library.
+    libraries: library_choices::LibraryPrefs,
     /// The loopback relay for streams on addresses with a gateway (ADR 0020): one per app.
     relay: Arc<player::RelaySlot>,
     /// What the engine plays, kept from its last start or read once from a headless one (ADR 0021).
@@ -143,6 +147,7 @@ impl App {
             images: ImageCache::in_memory(),
             browse: Arc::default(),
             playback: Arc::new(player::PlaybackPrefs::load(None)),
+            libraries: library_choices::LibraryPrefs::new(),
             relay: Arc::default(),
             engine_capabilities: Arc::default(),
         }
@@ -181,6 +186,7 @@ impl App {
             images,
             browse: Arc::default(),
             playback,
+            libraries: library_choices::LibraryPrefs::new(),
             relay: Arc::default(),
             engine_capabilities: Arc::default(),
         };
@@ -373,6 +379,7 @@ impl App {
     /// signed in as before.
     pub async fn remove_server(&self, server: &ServerRef) -> Result<Removal, StoreError> {
         let removal = self.shared.remove_server(server).await?;
+        self.libraries.server_removed(self.settings(), server);
         self.images.forget_server(server).await;
         Ok(removal)
     }
@@ -455,6 +462,58 @@ impl App {
     /// The settings could not be saved; the setting stands for this run.
     pub fn set_auto_skip(&self, kinds: Vec<String>) -> Result<(), StoreError> {
         self.playback.set_auto_skip(&self.shared, kinds)
+    }
+
+    /// Settings' "Remember sort", "Remember filter" and "Remember view" now: all off by default.
+    pub fn library_memory(&self) -> LibraryMemory {
+        self.libraries.switches(self.settings())
+    }
+
+    /// Turns "Remember sort" on or off and saves it; off forgets every library's sort in the same save, so on again starts afresh.
+    /// Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved (a newer version's file, a failed write): nothing changed.
+    pub fn set_remember_sort(&self, on: bool) -> Result<(), StoreError> {
+        self.libraries
+            .set(self.settings(), library_choices::Part::Sort, on)
+    }
+
+    /// Turns "Remember filter" on or off, as [`App::set_remember_sort`].
+    ///
+    /// # Errors
+    /// As [`App::set_remember_sort`].
+    pub fn set_remember_filter(&self, on: bool) -> Result<(), StoreError> {
+        self.libraries
+            .set(self.settings(), library_choices::Part::Filter, on)
+    }
+
+    /// Turns "Remember view" on or off, as [`App::set_remember_sort`].
+    ///
+    /// # Errors
+    /// As [`App::set_remember_sort`].
+    pub fn set_remember_view(&self, on: bool) -> Result<(), StoreError> {
+        self.libraries
+            .set(self.settings(), library_choices::Part::View, on)
+    }
+
+    /// What `library` opens with: the last sort, filter and view chosen there, each only while its switch is on; `None` for a part
+    /// with nothing remembered, which opens with the library's first choice.
+    pub fn library_choices(&self, library: &ItemRef) -> LibraryChoices {
+        self.libraries.choices(self.settings(), library)
+    }
+
+    /// Remembers the user's choices in `library`: each part given (`Some`) whose switch is on; the others stay as they were. Saved at
+    /// once; nothing is written when nothing changed. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved (a newer version's file, a failed write): nothing changed.
+    pub fn remember_library_choices(
+        &self,
+        library: &ItemRef,
+        choices: LibraryChoices,
+    ) -> Result<(), StoreError> {
+        self.libraries.remember(self.settings(), library, &choices)
     }
 
     /// The platform's report of the network, on start and on every change (ADR 0014). Every server's address provider hears it, and
