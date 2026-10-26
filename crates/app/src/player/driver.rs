@@ -72,8 +72,12 @@ async fn start(
     use super::mpv::MpvBackend;
     let (events, raw) = mpsc::unbounded_channel();
     // Blocking: libmpv starts its threads and VO, and waits for an earlier engine of the process to go.
-    let backend = tokio::task::spawn_blocking(move || MpvBackend::start(size, display, events))
-        .await
+    let started =
+        tokio::task::spawn_blocking(move || MpvBackend::start(size, display, events)).await;
+    if !matches!(started, Ok(Ok(_))) {
+        context.capabilities.start_failed();
+    }
+    let backend = started
         .map_err(|_| PlayerError::EngineFailed {
             kind: EngineErrorKind::LOADING_FAILED,
         })?
@@ -97,8 +101,11 @@ async fn start(
 ) -> Result<Player, PlayerError> {
     use super::test_engine::TestBackend;
     let (events, raw) = mpsc::unbounded_channel();
-    let mut backend = tokio::task::spawn_blocking(move || TestBackend::start(events))
-        .await
+    let started = tokio::task::spawn_blocking(move || TestBackend::start(events)).await;
+    if !matches!(started, Ok(Ok(_))) {
+        context.capabilities.start_failed();
+    }
+    let mut backend = started
         .map_err(|_| PlayerError::Busy)?
         .map_err(|_| PlayerError::Busy)?;
     // libmpv takes both as options at start; the test engine records them.

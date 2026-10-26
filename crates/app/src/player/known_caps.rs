@@ -42,6 +42,10 @@ const HOLDER_WAIT: Duration = Duration::from_secs(5);
 #[derive(Debug)]
 pub(crate) struct KnownCapabilities {
     known: watch::Sender<Option<EngineCapabilities>>,
+    /// Counts player starts that failed, so a probe waiting for a slot holder's capabilities stops when that start failed.
+    failed_starts: watch::Sender<u64>,
+    /// How long a probe waits for the slot holder's capabilities ([`HOLDER_WAIT`]; shorter in tests).
+    holder_wait: Duration,
     /// One headless start at a time: a second caller waits and then finds the first one's answer.
     probing: tokio::sync::Mutex<()>,
 }
@@ -50,6 +54,8 @@ impl Default for KnownCapabilities {
     fn default() -> Self {
         Self {
             known: watch::Sender::new(None),
+            failed_starts: watch::Sender::new(0),
+            holder_wait: HOLDER_WAIT,
             probing: tokio::sync::Mutex::new(()),
         }
     }
@@ -59,6 +65,11 @@ impl KnownCapabilities {
     /// Keeps the capabilities a player's engine reported at its start. They replace any others: a player's engine wins.
     pub(crate) fn remember(&self, capabilities: EngineCapabilities) {
         self.known.send_replace(Some(capabilities));
+    }
+
+    /// A player's engine failed to start: a probe waiting for its capabilities stops waiting.
+    pub(crate) fn start_failed(&self) {
+        self.failed_starts.send_modify(|count| *count += 1);
     }
 
     /// Keeps a headless engine's capabilities unless a player's are already known, and returns the ones kept.
@@ -107,18 +118,29 @@ impl KnownCapabilities {
         if let Some(capabilities) = self.known() {
             return EngineReport::Ready(capabilities);
         }
+        let mut failed_starts = self.failed_starts.subscribe();
+        failed_starts.mark_unchanged();
         match probe().await {
             Probe::Report(EngineReport::Ready(capabilities)) => {
                 EngineReport::Ready(self.fill(capabilities))
             }
-            // The slot's holder is a player: its capabilities answer, as soon as it has them.
+            // The slot's holder is a player: its capabilities answer, as soon as it has them. The wait ends early when a player's start
+            // fails, and at the latest after `holder_wait` (a holder that never reports, or the app shutting down): then the page says
+            // "Couldn't check" rather than waiting on.
             Probe::Busy => {
                 let mut known = self.known.subscribe();
-                match tokio::time::timeout(HOLDER_WAIT, known.wait_for(Option::is_some)).await {
-                    Ok(Ok(capabilities)) => capabilities
-                        .clone()
+                let holder = async {
+                    tokio::select! {
+                        found = known.wait_for(Option::is_some) => found.ok().and_then(|found| found.clone()),
+                        _ = failed_starts.changed() => None,
+                    }
+                };
+                match tokio::time::timeout(self.holder_wait, holder).await {
+                    Ok(Some(capabilities)) => EngineReport::Ready(capabilities),
+                    Ok(None) => self
+                        .known()
                         .map_or(EngineReport::Failed, EngineReport::Ready),
-                    _ => EngineReport::Failed,
+                    Err(_) => EngineReport::Failed,
                 }
             }
             Probe::Report(other) => self.known().map_or(other, EngineReport::Ready),
@@ -249,5 +271,45 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    #[tokio::test]
+    async fn a_probe_beside_a_failed_player_start_stops_waiting() {
+        let known = Arc::new(KnownCapabilities::default());
+        let player = Arc::clone(&known);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            player.start_failed();
+        });
+        let started = std::time::Instant::now();
+        assert_eq!(
+            known.get_with(|| async { Probe::Busy }).await,
+            EngineReport::Failed
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_holder_that_never_reports_ends_the_wait_after_its_bound() {
+        let known = Arc::new(KnownCapabilities {
+            holder_wait: Duration::from_millis(100),
+            ..KnownCapabilities::default()
+        });
+        let started = std::time::Instant::now();
+        assert_eq!(
+            known.get_with(|| async { Probe::Busy }).await,
+            EngineReport::Failed
+        );
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(known.known(), None);
     }
 }
