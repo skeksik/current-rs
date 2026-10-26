@@ -10,8 +10,8 @@ use current_app::test_engine::{self, TestCommand};
 use jellyfin_stand_in::{
     DIRECT_PLAY_ITEM, GATE_COOKIE, GATE_COOKIE_VALUE, GATE_HEADER, GATE_HEADER_VALUE,
     GATE_PASSWORD, GATE_USER, Gate, OTHER_GATE_HEADER_VALUE, PASSWORD, STREAM_LENGTH, StreamSeen,
-    TRANSCODE_ITEM, USER_NAME, library::EPISODE_IDS, master_playlist_path, segment_body,
-    stream_byte,
+    TRANSCODE_ITEM, TRANSCODE_ITEM_PATH_ID, USER_NAME, library::EPISODE_IDS, master_playlist_path,
+    segment_body, stream_byte,
 };
 
 use super::*;
@@ -322,7 +322,7 @@ fn hls_is_rewritten_through_the_relay_and_a_playlist_that_points_elsewhere_fails
     assert_eq!(reply.status, 200);
     assert_eq!(
         reply.body,
-        segment_body(&format!("/videos/{TRANSCODE_ITEM}/hls1/main/0.mp4"))
+        segment_body(&format!("/videos/{TRANSCODE_ITEM_PATH_ID}/hls1/main/0.mp4"))
     );
     for seen in stand_in.streams() {
         assert_carried(&seen, Gate::Header, GATE_HEADER_VALUE);

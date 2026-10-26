@@ -283,7 +283,8 @@ mod live {
     use jellyfin_stand_in::{
         DIRECT_PLAY_ITEM, GATE_BASIC, GATE_COOKIE, GATE_COOKIE_VALUE, GATE_HEADER,
         GATE_HEADER_VALUE, GATE_PASSWORD, GATE_USER, Gate, PASSWORD, PLAY_SESSION, StandIn,
-        StreamSeen, TRANSCODE_ITEM, USER_NAME, master_playlist_path, media_playlist_path,
+        StreamSeen, TRANSCODE_ITEM, TRANSCODE_ITEM_PATH_ID, USER_NAME, master_playlist_path,
+        media_playlist_path,
     };
     use tokio::net::TcpListener;
     use tokio::sync::watch;
@@ -348,7 +349,7 @@ mod live {
     }
 
     fn segment_path(n: usize) -> String {
-        format!("/videos/{TRANSCODE_ITEM}/hls1/main/{n}.wav")
+        format!("/videos/{TRANSCODE_ITEM_PATH_ID}/hls1/main/{n}.wav")
     }
 
     /// A VOD media playlist of `count` WAV segments, relative, in the shape of the stand-in's own.
@@ -681,8 +682,8 @@ mod live {
         serve_hls(&run.stand_in, 4);
         // Another port of this machine, and another host name for it.
         for elsewhere in [
-            format!("http://127.0.0.1:{port}/videos/{TRANSCODE_ITEM}/hls1/main/0.wav"),
-            format!("http://localhost:{port}/videos/{TRANSCODE_ITEM}/hls1/main/0.wav"),
+            format!("http://127.0.0.1:{port}/videos/{TRANSCODE_ITEM_PATH_ID}/hls1/main/0.wav"),
+            format!("http://localhost:{port}/videos/{TRANSCODE_ITEM_PATH_ID}/hls1/main/0.wav"),
         ] {
             let playlist = media_playlist(4).replacen(
                 &format!("hls1/main/0.wav?PlaySessionId={PLAY_SESSION}"),
@@ -1011,7 +1012,7 @@ mod live {
         // The main file of an HLS plan at a path the relay does not take for a playlist by its name or type, with bodies libmpv's own
         // playlist and EDL readers know (mpv v0.41.0 `demux/demux_playlist.c`, `demux/demux_edl.c`, read 2026-10-26) and a DASH
         // manifest FFmpeg's `dash` demuxer would read; none starts with `#EXTM3U`. The relay refuses each at the route's HLS entry.
-        let path = format!("/videos/{TRANSCODE_ITEM}/live");
+        let path = format!("/videos/{TRANSCODE_ITEM_PATH_ID}/live");
         run.stand_in.set_transcoding_path(&path);
         for (name, body) in [
             ("plain URL list", format!("{entry}\n")),
