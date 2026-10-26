@@ -1073,10 +1073,10 @@ mod live {
         let started = std::time::Instant::now();
         let (report, player) =
             tokio::join!(app.engine_capabilities(), app.open_player(SIZE, display()));
-        println!(
-            "observed: a probe and a player start together took {:?}",
-            started.elapsed()
-        );
+        let elapsed = started.elapsed();
+        println!("observed: a probe and a player start together took {elapsed:?}");
+        // Each alone takes milliseconds: together they must not wait for one another's timeout.
+        assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
         let player = player.expect("a player starts beside a probe");
         let EngineReport::Ready(capabilities) = report else {
             panic!("the probe beside a player: {report:?}");
@@ -1097,10 +1097,10 @@ mod live {
             .open_player(SIZE, display())
             .await
             .expect("a player starts right after a probe");
-        println!(
-            "observed: a player start right after the probe took {:?}",
-            started.elapsed()
-        );
+        let elapsed = started.elapsed();
+        println!("observed: a player start right after the probe took {elapsed:?}");
+        // Each alone takes milliseconds: together they must not wait for one another's timeout.
+        assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
         player.close().await;
     }
 }

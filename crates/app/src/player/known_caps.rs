@@ -3,14 +3,17 @@
 //!
 //! The headless engine is libmpv with `vo=null` and `ao=null` and no `force-window` (`current-mpv`'s `Output::Headless`), so it opens
 //! no window and no audio device. It runs on the blocking pool, never the UI thread, and is shut down as soon as its lists are read.
-//! It takes the process's one engine slot for that moment (not measured); a player starting meanwhile waits for it, as it waits for a
-//! closing one, and then wins: once a player's engine has reported, its capabilities are the ones kept. A probe that finds the slot
-//! held by a player fails `Busy` after `current-mpv`'s wait, and the player's capabilities answer instead.
+//! It takes the process's one engine slot for that moment (about 10 ms on CI's Windows runner); a player starting meanwhile waits for
+//! it, as it waits for a closing one, and then wins: once a player's engine has reported, its capabilities are the ones kept. The probe
+//! never waits for the slot: one that finds it taken (a player starting, playing or closing) answers with that player's capabilities
+//! as soon as they are known, rather than waiting for the player to close.
 
 use std::future::Future;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
+use std::time::Duration;
 
 use current_model::EngineCapabilities;
+use tokio::sync::watch;
 
 /// What is known about the engine of this build.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,34 +25,55 @@ pub enum EngineReport {
     Ready(EngineCapabilities),
 }
 
+/// What one headless start gave.
+#[derive(Debug)]
+enum Probe {
+    Report(EngineReport),
+    /// Another engine holds the process's slot: a player starting or playing, or one closing.
+    #[cfg_attr(not(feature = "libmpv"), allow(dead_code))]
+    Busy,
+}
+
+/// How long a probe that found the slot taken waits for the holder's capabilities. A player remembers them as soon as its engine has
+/// started (milliseconds; `a_headless_probe_and_a_player_start_both_succeed`), and one playing or closing already has.
+const HOLDER_WAIT: Duration = Duration::from_secs(5);
+
 /// The capabilities known in this run. One per app.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct KnownCapabilities {
-    known: Mutex<Option<EngineCapabilities>>,
+    known: watch::Sender<Option<EngineCapabilities>>,
     /// One headless start at a time: a second caller waits and then finds the first one's answer.
     probing: tokio::sync::Mutex<()>,
+}
+
+impl Default for KnownCapabilities {
+    fn default() -> Self {
+        Self {
+            known: watch::Sender::new(None),
+            probing: tokio::sync::Mutex::new(()),
+        }
+    }
 }
 
 impl KnownCapabilities {
     /// Keeps the capabilities a player's engine reported at its start. They replace any others: a player's engine wins.
     pub(crate) fn remember(&self, capabilities: EngineCapabilities) {
-        *self.known.lock().unwrap_or_else(PoisonError::into_inner) = Some(capabilities);
+        self.known.send_replace(Some(capabilities));
     }
 
     /// Keeps a headless engine's capabilities unless a player's are already known, and returns the ones kept.
     fn fill(&self, capabilities: EngineCapabilities) -> EngineCapabilities {
-        self.known
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get_or_insert(capabilities)
-            .clone()
+        let mut kept = None;
+        self.known.send_if_modified(|known| {
+            let filled = known.is_none();
+            kept = Some(known.get_or_insert(capabilities).clone());
+            filled
+        });
+        kept.unwrap_or_default()
     }
 
     pub(crate) fn known(&self) -> Option<EngineCapabilities> {
-        self.known
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.known.borrow().clone()
     }
 
     /// The known capabilities, or those of a headless engine started now (on the blocking pool) when none are. Needs tokio's runtime.
@@ -63,7 +87,7 @@ impl KnownCapabilities {
     async fn get_with<P, F>(self: &Arc<Self>, probe: P) -> EngineReport
     where
         P: FnOnce() -> F + Send + 'static,
-        F: Future<Output = EngineReport> + Send + 'static,
+        F: Future<Output = Probe> + Send + 'static,
     {
         if let Some(capabilities) = self.known() {
             return EngineReport::Ready(capabilities);
@@ -77,36 +101,48 @@ impl KnownCapabilities {
     async fn probe_once<P, F>(&self, probe: P) -> EngineReport
     where
         P: FnOnce() -> F,
-        F: Future<Output = EngineReport>,
+        F: Future<Output = Probe>,
     {
         let _probing = self.probing.lock().await;
         if let Some(capabilities) = self.known() {
             return EngineReport::Ready(capabilities);
         }
         match probe().await {
-            EngineReport::Ready(capabilities) => EngineReport::Ready(self.fill(capabilities)),
-            // A probe that failed behind a player's start (the slot held past `current-mpv`'s wait) finds the player's capabilities.
-            other => self.known().map_or(other, EngineReport::Ready),
+            Probe::Report(EngineReport::Ready(capabilities)) => {
+                EngineReport::Ready(self.fill(capabilities))
+            }
+            // The slot's holder is a player: its capabilities answer, as soon as it has them.
+            Probe::Busy => {
+                let mut known = self.known.subscribe();
+                match tokio::time::timeout(HOLDER_WAIT, known.wait_for(Option::is_some)).await {
+                    Ok(Ok(capabilities)) => capabilities
+                        .clone()
+                        .map_or(EngineReport::Failed, EngineReport::Ready),
+                    _ => EngineReport::Failed,
+                }
+            }
+            Probe::Report(other) => self.known().map_or(other, EngineReport::Ready),
         }
     }
 }
 
 #[cfg(feature = "libmpv")]
-async fn probe() -> EngineReport {
+async fn probe() -> Probe {
     match tokio::task::spawn_blocking(super::mpv::probe_capabilities).await {
-        Ok(Ok(capabilities)) => EngineReport::Ready(capabilities),
-        _ => EngineReport::Failed,
+        Ok(Ok(capabilities)) => Probe::Report(EngineReport::Ready(capabilities)),
+        Ok(Err(current_mpv::EngineError::Busy)) => Probe::Busy,
+        _ => Probe::Report(EngineReport::Failed),
     }
 }
 
 #[cfg(all(not(feature = "libmpv"), any(test, feature = "test-engine")))]
-async fn probe() -> EngineReport {
-    EngineReport::Ready(super::test_engine::capabilities())
+async fn probe() -> Probe {
+    Probe::Report(EngineReport::Ready(super::test_engine::capabilities()))
 }
 
 #[cfg(not(any(feature = "libmpv", test, feature = "test-engine")))]
-async fn probe() -> EngineReport {
-    EngineReport::Unavailable
+async fn probe() -> Probe {
+    Probe::Report(EngineReport::Unavailable)
 }
 
 #[cfg(all(test, not(feature = "libmpv")))]
@@ -141,14 +177,16 @@ mod tests {
         let report = known
             .get_with(move || async move {
                 player.remember(other());
-                EngineReport::Failed
+                Probe::Report(EngineReport::Failed)
             })
             .await;
         assert_eq!(report, EngineReport::Ready(other()));
         // Without a player, a failure is reported and not kept.
         let fresh = Arc::new(KnownCapabilities::default());
         assert_eq!(
-            fresh.get_with(|| async { EngineReport::Failed }).await,
+            fresh
+                .get_with(|| async { Probe::Report(EngineReport::Failed) })
+                .await,
             EngineReport::Failed
         );
         assert_eq!(fresh.known(), None);
@@ -161,7 +199,7 @@ mod tests {
         let report = known
             .get_with(move || async move {
                 player.remember(other());
-                EngineReport::Ready(EngineCapabilities::default())
+                Probe::Report(EngineReport::Ready(EngineCapabilities::default()))
             })
             .await;
         assert_eq!(report, EngineReport::Ready(other()));
@@ -173,7 +211,7 @@ mod tests {
         let known = Arc::new(KnownCapabilities::default());
         let slow = known.get_with(|| async {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            EngineReport::Ready(other())
+            Probe::Report(EngineReport::Ready(other()))
         });
         assert!(
             tokio::time::timeout(Duration::from_millis(10), slow)
@@ -187,8 +225,29 @@ mod tests {
         assert_eq!(known.known(), Some(other()));
         // The next caller does not probe again.
         assert_eq!(
-            known.get_with(|| async { EngineReport::Failed }).await,
+            known
+                .get_with(|| async { Probe::Report(EngineReport::Failed) })
+                .await,
             EngineReport::Ready(other())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_probe_beside_a_player_takes_its_capabilities_without_waiting_for_it_to_close() {
+        let known = Arc::new(KnownCapabilities::default());
+        let player = Arc::clone(&known);
+        // The player took the slot and remembers its capabilities 50 ms later; it stays open.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            player.remember(other());
+        });
+        let started = std::time::Instant::now();
+        let report = known.get_with(|| async { Probe::Busy }).await;
+        assert_eq!(report, EngineReport::Ready(other()));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
         );
     }
 }

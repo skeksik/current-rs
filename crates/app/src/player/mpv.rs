@@ -349,7 +349,8 @@ mod real {
     use crate::player::backend::{Backend, EngineOutput, Signal};
 
     /// The capabilities of this build's libmpv, from a headless engine started only to read them and shut down at once (ADR 0021):
-    /// `vo=null`, `ao=null`, no `force-window`, so no window or audio device opens. Blocking: call it on the blocking pool.
+    /// `vo=null`, `ao=null`, no `force-window`, so no window or audio device opens. `EngineError::Busy` at once while another engine
+    /// exists. Blocking: call it on the blocking pool.
     pub(crate) fn probe_capabilities() -> Result<EngineCapabilities, EngineError> {
         let config = EngineConfig {
             output: Output::Headless,
@@ -357,7 +358,8 @@ mod real {
             log_level: LogLevel::Info,
             video_sync: None,
         };
-        let mpv = Mpv::start(&config, Box::new(|_| {}))?;
+        // Never waits for the slot: a player holding it reports its own capabilities instead (`known_caps`).
+        let mpv = Mpv::start_if_free(&config, Box::new(|_| {}))?;
         let capabilities = mpv.capabilities().engine_capabilities();
         mpv.shutdown();
         Ok(capabilities)

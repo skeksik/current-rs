@@ -87,10 +87,13 @@ opens. It runs in a task of its own on the blocking pool, never on the UI thread
 answer is kept for the run even when the page that asked was closed meanwhile; a failed start is not kept, so opening the page again
 retries.
 
-It shares the process's one engine slot (ADR 0019). libmpv's initialisation cannot be cut short, so a play that starts during a probe
-waits for it (the probe's whole life, not a fixed timeout; `a_headless_probe_and_a_player_start_both_succeed`, run by CI's "mpv
-(Windows)" job, starts both together and prints the times); then the play wins: a player's capabilities replace the probe's, the probe
-never replaces a player's, and a probe that failed behind a player's start answers with the player's.
+It shares the process's one engine slot (ADR 0019), and never waits for it: `current-mpv`'s `Engine::start_if_free` fails `Busy` at once
+when another engine holds the slot, and the probe then answers with that player's capabilities as soon as the player has them (a player
+remembers them right after its engine starts). A play that starts during a probe waits for it only while the probe lives (about 10 ms
+on CI's Windows runner), then wins: a player's capabilities replace the probe's, and the probe never replaces a player's.
+`a_headless_probe_and_a_player_start_both_succeed` (CI's "mpv (Windows)" job) starts both together and a player right after a probe,
+prints the times and requires each under 2 s. Its first run, before the probe stopped waiting for the slot, took 5.0 s together: the
+player had taken the slot and stayed open, and the probe waited out `current-mpv`'s 5 s start wait.
 
 Considered: caching the capabilities on disk from the last run (stale after an update of the bundled libmpv, and empty on first start);
 a fixed list per build (would claim what a build lacks).
