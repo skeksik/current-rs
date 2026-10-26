@@ -89,7 +89,7 @@
         </Grid>
 
         <Grid Grid.Row="2" MaxWidth="{StaticResource PageMaxWidth}" Margin="24,0,24,24">
-            <ProgressRing x:Name="Loading" IsActive="False" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,24,0,0" />
+            <ProgressRing x:Name="LoadingRing" IsActive="False" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,24,0,0" />
             <!-- A list the keyboard and Narrator walk row by row; nothing to select or click. Each row is named for Narrator in
                  ContainerContentChanging, as the add-server page names its found servers. -->
             <ListView

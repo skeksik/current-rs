@@ -69,7 +69,7 @@ public sealed partial class SupportedFormatsPage : Page
         var load = new CancellationTokenSource();
         _load = load;
         LoadInfo.IsOpen = false;
-        Loading.IsActive = _formats is null;
+        LoadingRing.IsActive = _formats is null;
         try
         {
             var hardware = await DecoderTest.GetAsync();
@@ -95,7 +95,7 @@ public sealed partial class SupportedFormatsPage : Page
         {
             if (_load == load)
             {
-                Loading.IsActive = false;
+                LoadingRing.IsActive = false;
             }
         }
     }
