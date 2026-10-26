@@ -1,0 +1,22 @@
+[package]
+name = "current-relay"
+description = "The loopback relay: a 127.0.0.1 HTTP/1.1 server that forwards a player's stream requests to the server (ADR 0020)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+current-net.workspace = true
+getrandom.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+url.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[lints]
+workspace = true

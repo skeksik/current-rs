@@ -17,11 +17,14 @@ current-model = { path = "crates/model" }
 current-mpv = { path = "crates/mpv" }
 current-net = { path = "crates/net" }
 current-playback = { path = "crates/playback" }
+current-relay = { path = "crates/relay" }
 current-store = { path = "crates/store" }
 jellyfin-stand-in = { path = "tools/jellyfin-stand-in" }
 
 apple-native-keyring-store = { version = "=1.0.2", features = ["keychain"] }
 getrandom = "=0.4.3"
+hyper = { version = "=1.12.0", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio"] }
 keyring-core = "=1.0.1"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider", "http2", "charset", "system-proxy"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
