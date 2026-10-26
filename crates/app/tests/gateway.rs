@@ -15,7 +15,7 @@ use current_app::{
     AddServerState, App, CookieInput, GatewaySignInState, GatewaySubmitError, HeaderInput,
     NewServer, SignInState,
 };
-use current_jellyfin::{AuthError, JellyfinClient};
+use current_jellyfin::{AuthError, GatewayAnswer, JellyfinClient};
 use current_model::{
     AuthHeader, Connectivity, GatewayKind, NetworkFacts, NetworkKey, ServerKey, ServerRef,
     ServiceType,
@@ -878,16 +878,11 @@ async fn an_expired_gateway_session_keeps_the_jellyfin_session_until_signed_in_a
     let temp = tempfile::tempdir().unwrap();
     let secrets = Arc::new(MemorySecrets::new());
     let (server, app, client) = signed_in_through_portal(temp.path(), &secrets).await;
-    // The gateway forgets its session: requests get its sign-in page, which is no JSON.
+    // The gateway forgets its session: requests get its sign-in page, which is no JSON. Once the probe found the gateway's
+    // answer, the request says so, not that the page could not be read.
     server.cookies.lock().unwrap().clear();
     let result = client.current_user().await;
-    assert!(
-        matches!(
-            result,
-            Err(AuthError::Network(current_net::NetError::Decode { .. }))
-        ),
-        "{result:?}"
-    );
+    assert_eq!(result, Err(AuthError::Gateway(GatewayAnswer::SignIn)));
     eventually(|| app.capabilities().borrow().servers[0].gateway_sign_in_needed).await;
     let status = app.capabilities().borrow().servers[0].clone();
     assert!(status.signed_in, "{status:?}");
@@ -921,6 +916,23 @@ async fn an_expired_gateway_session_keeps_the_jellyfin_session_until_signed_in_a
     let stored = stored_gateway(&app, &secrets, 0).unwrap();
     assert!(stored.contains(RENEWED_VALUE) && !stored.contains(PROVIDER_COOKIE));
     assert_nothing_secret(&app, temp.path(), &format!("{flow:?}"));
+}
+
+/// A portal on another host redirects there once its session ends: the request answers the gateway's sign-in, not the redirect, so
+/// a screen shows "Sign in to the gateway again" and not "HTTP 302" (Windows relay check, 2026-10-26).
+#[tokio::test]
+async fn an_expired_gateway_session_that_redirects_answers_the_gateway_sign_in() {
+    let temp = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(MemorySecrets::new());
+    let (server, app, client) = signed_in_through_portal(temp.path(), &secrets).await;
+    server.set_gate(Gate::PortalRedirect);
+    server.cookies.lock().unwrap().clear();
+    let result = client.current_user().await;
+    assert_eq!(result, Err(AuthError::Gateway(GatewayAnswer::SignIn)));
+    eventually(|| app.capabilities().borrow().servers[0].gateway_sign_in_needed).await;
+    assert!(app.capabilities().borrow().servers[0].signed_in);
+    assert!(client.has_token());
+    assert!(token_kept(&app, &secrets));
 }
 
 fn info_probes(server: &Server) -> usize {

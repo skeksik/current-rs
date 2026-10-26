@@ -572,10 +572,10 @@ impl JellyfinClient {
     /// not followed, or an HTML page where JSON was expected may be a gateway's: with a hook, the token is kept and the hook asked
     /// to confirm ([`SessionEvent::Unconfirmed`], the 401 rule's second part). The 401 waits for the app's decision, within the
     /// request's own deadline (its timeout, else the client's), and answers [`AuthError::SessionRevoked`],
-    /// [`AuthError::NotAvailable`], or [`AuthError::Unconfirmed`] when nothing was decided in time; a page or a redirect answers as
-    /// it would without a hook ([`AuthError::Refused`] for a 403 page, the network error for a redirect, the page itself for a 2xx
-    /// one). Without a hook, a 401 forgets the token (ADR 0015). A 403 never does: the token is valid, only this request was
-    /// refused.
+    /// [`AuthError::NotAvailable`], or [`AuthError::Unconfirmed`] when nothing was decided in time. A page or a redirect waits for
+    /// the check the same way and answers [`AuthError::Gateway`] when the probe found the gateway's answer, else as it would
+    /// without a hook ([`AuthError::Refused`] for a 403 page, the network error for a redirect, the page itself for a 2xx one).
+    /// Without a hook, a 401 forgets the token (ADR 0015). A 403 never does: the token is valid, only this request was refused.
     pub async fn send_authenticated(&self, request: Request) -> Result<Response, AuthError> {
         self.send_checked(request, true).await
     }
@@ -634,6 +634,14 @@ impl JellyfinClient {
                     },
                     _ => AuthError::Unconfirmed,
                 });
+            }
+            // A redirect or a page: once the probe found the gateway's answer, the request says so, so a screen asks for the
+            // gateway's sign-in instead of showing its redirect or page (Windows relay check, 2026-10-26).
+            if wait
+                && let Some((number, _)) = check
+                && self.check_ended(number, deadline).await == Some(Outcome::Gateway)
+            {
+                return Err(AuthError::Gateway(GatewayAnswer::SignIn));
             }
         }
         match result {

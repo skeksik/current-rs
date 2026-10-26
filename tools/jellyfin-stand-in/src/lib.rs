@@ -56,6 +56,9 @@ pub const STREAM_LENGTH: usize = 256 * 1024;
 pub const DIRECT_PLAY_ITEM: &str = "57a2d1e0000000000000000000000010";
 /// An item PlaybackInfo answers with an HLS remux (`ContainerNotSupported`).
 pub const TRANSCODE_ITEM: &str = "57a2d1e0000000000000000000000011";
+/// [`TRANSCODE_ITEM`] as its HLS paths spell it: a GUID with dashes, as a real Jellyfin 12.3.0 server wrote the item id in a
+/// `TranscodingUrl` (seen on the Windows relay check, 2026-10-26).
+pub const TRANSCODE_ITEM_PATH_ID: &str = "57a2d1e0-0000-0000-0000-000000000011";
 /// The one media source of either item.
 pub const MEDIA_SOURCE: &str = "57a2d1e0000000000000000000000012";
 /// The play session id PlaybackInfo hands out.
@@ -147,12 +150,12 @@ pub struct PlaylistSeen {
 
 /// The path of [`TRANSCODE_ITEM`]'s master playlist (its `TranscodingUrl`'s path).
 pub fn master_playlist_path() -> String {
-    format!("/videos/{TRANSCODE_ITEM}/master.m3u8")
+    format!("/videos/{TRANSCODE_ITEM_PATH_ID}/master.m3u8")
 }
 
 /// The path of the media playlist [`TRANSCODE_ITEM`]'s master playlist names by default.
 pub fn media_playlist_path() -> String {
-    format!("/videos/{TRANSCODE_ITEM}/main.m3u8")
+    format!("/videos/{TRANSCODE_ITEM_PATH_ID}/main.m3u8")
 }
 
 /// [`TRANSCODE_ITEM`]'s master playlist until [`Controls::set_playlist`] changes it: one variant, relative, in the shape of Jellyfin's
@@ -822,7 +825,7 @@ fn stream(path: &str) -> Option<Vec<u8>> {
         return Some((0..STREAM_LENGTH).map(stream_byte).collect());
     }
     let segment = lower
-        .strip_prefix(&format!("/videos/{TRANSCODE_ITEM}/hls1/main/"))
+        .strip_prefix(&format!("/videos/{TRANSCODE_ITEM_PATH_ID}/hls1/main/"))
         .is_some_and(|name| name.ends_with(".mp4") && !name.contains('/'));
     segment.then(|| segment_body(path))
 }
