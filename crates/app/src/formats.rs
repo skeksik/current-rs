@@ -419,10 +419,7 @@ fn hardware_support(codec: &Codec, hardware: &HardwareDecoding) -> (FormatSuppor
     }
     let ten_bit = codec == &Codec::HEVC || codec == &Codec::VP9 || codec == &Codec::AV1;
     match (eight, ten) {
-        (false, false) => (
-            software,
-            "No hardware decoder on this graphics card".to_owned(),
-        ),
+        (false, false) => (software, "No hardware decoder on this GPU".to_owned()),
         (true, true) => (FormatSupport::Hardware, "8-bit and 10-bit".to_owned()),
         (true, false) if ten_bit => (
             FormatSupport::Hardware,
@@ -742,7 +739,7 @@ mod tests {
             &row(
                 "AV1",
                 FormatSupport::Software,
-                "No hardware decoder on this graphics card"
+                "No hardware decoder on this GPU"
             )
         );
         // mpv leaves MPEG-2 out of its hardware codecs; VP8 has no D3D11 decoder in FFmpeg.

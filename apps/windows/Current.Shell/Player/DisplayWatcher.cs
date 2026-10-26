@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Current.Bindings;
 using Microsoft.Graphics.Display;
+using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 
@@ -65,13 +66,33 @@ internal sealed class DisplayWatcher : IDisposable
         }
     }
 
-    private DisplayFacts Read()
+    private DisplayFacts Read() => Read(_display, _monitor);
+
+    /// <summary>
+    /// The facts of the monitor the window <paramref name="window"/> names is on, read once (Settings' "Supported formats", ADR 0021);
+    /// null when they cannot be read.
+    /// </summary>
+    public static DisplayFacts? ReadOnce(WindowId window)
+    {
+        try
+        {
+            using var display = DisplayInformation.CreateForWindowId(window);
+            return Read(display, PlayerNative.MonitorOf(Win32Interop.GetWindowFromWindowId(window)));
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: reading the display failed: {error.GetType().Name}");
+            return null;
+        }
+    }
+
+    private static DisplayFacts Read(DisplayInformation? display, IntPtr monitor)
     {
         var hdr = false;
         float peak = 0, white = 0;
         try
         {
-            if (_display?.GetAdvancedColorInfo() is { } colour)
+            if (display?.GetAdvancedColorInfo() is { } colour)
             {
                 hdr = colour.CurrentAdvancedColorKind == DisplayAdvancedColorKind.HighDynamicRange;
                 peak = (float)colour.MaxLuminanceInNits;
@@ -82,7 +103,7 @@ internal sealed class DisplayWatcher : IDisposable
         {
             Trace.TraceError($"Current: reading the display's colour failed: {error.GetType().Name}");
         }
-        return new DisplayFacts(hdr, peak, white, PlayerNative.RefreshRate(_monitor));
+        return new DisplayFacts(hdr, peak, white, PlayerNative.RefreshRate(monitor));
     }
 
     private void Refresh()

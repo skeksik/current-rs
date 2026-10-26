@@ -74,6 +74,10 @@ screen goes away; lists arrive as diffs. Actions are methods on the state object
   next-episode card and autoplay countdown, one fallback without direct play, and state published at most 4 times a second plus
   changes. It queues `PlayerEvent`s (state, stopped, quality changed) that the root drains. `StreamUrl` and `StreamAuth` carry the
   token and gateway credentials with redacted Debug.
+- **Supported formats** (ADR 0021): `current-app`'s `formats` builds Settings' "Supported formats" page (five tabs of rows with a
+  support value and notes) from the engine's `EngineCapabilities`, `current-jellyfin`'s `transcode_targets` and the facts the UI
+  passes in (the graphics card's Direct3D 11 decoder profiles, the window's display). The capabilities come from the last engine start
+  in the run, else from a headless libmpv (`vo=null`, `ao=null`) started once to read them.
 - **`current-ffi`** is the UniFFI surface. It owns the one tokio runtime (`core-worker` threads, I/O and time enabled) and exports
   `Core`, `TaskHandle` (cancel and abort on drop), `CancelToken` and one error enum, `CoreError`. Values are pumped from `watch`
   channels to listeners, lists as diff batches (`list_diff!` declares the per-item diff enum). `Core::live_listeners` counts the

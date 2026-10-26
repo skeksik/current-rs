@@ -64,6 +64,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a cancelled play leaves nothing started", PlayerTests.CancelledPlayLeavesNothingStarted),
     ("an HLS stream behind a header gateway is relayed, and no URL crosses", PlayerTests.HlsBehindAHeaderGatewayIsRelayed),
     ("the skip switch is saved", PlayerTests.SkipSwitchIsSaved),
+    ("the supported formats page crosses with the facts passed in", PlayerTests.SupportedFormatsCrossWithTheFactsPassedIn),
 };
 
 var failed = 0;

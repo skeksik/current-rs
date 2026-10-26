@@ -3,6 +3,7 @@ using Current.Bindings;
 using Current.Shell.Browsing;
 using Current.Shell.Gateway;
 using Current.Shell.Pages;
+using Current.Shell.Player;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
@@ -76,8 +77,9 @@ internal static class SmokeRun
             _ = new AddServerPage();
             _ = new SignInPage();
             _ = new SettingsPage();
+            _ = new SupportedFormatsPage();
             _ = new ExtraHeadersEditor();
-            Check(true, "home, add-server, sign-in and settings pages and the extra headers editor built");
+            Check(true, "home, add-server, sign-in, settings and supported formats pages and the extra headers editor built");
 
             // The network observer reads the facts without asking for anything; the facts themselves are not printed.
             var facts = NetworkObserver.Read();
@@ -116,6 +118,7 @@ internal static class SmokeRun
                 Check(applied, $"the {theme} app theme reaches the window and its caption buttons ({window.ActualTheme})");
             }
             await core.SetAppThemeAsync(AppTheme.System);
+            await SupportedFormatsChecksAsync(window, core, Check);
             // While the main window is open: closing the sign-in window must not be the last window closing.
             await BrowseChecksAsync(window, ui, Check);
             await SignInWindowChecksAsync(Check);
@@ -346,6 +349,46 @@ internal static class SmokeRun
             {
                 standIn.Kill();
             }
+        }
+    }
+
+    /// <summary>
+    /// Settings > Supported formats (ADR 0021): the core reads what this build's libmpv plays from a headless engine (no window, no audio
+    /// device), the page opens inside Settings, and every tab has rows after it loads with this runner's graphics card test and display.
+    /// The test's result is printed as a count only, never the adapter's name.
+    /// </summary>
+    private static async Task SupportedFormatsChecksAsync(MainWindow window, CoreHost core, Action<bool, string> check)
+    {
+        try
+        {
+            var formats = await core.SupportedFormatsAsync(null, null).WaitAsync(Timeout * 3);
+            check(formats.Tabs.Count == 5 && formats.Tabs.All(tab => tab.Rows.Count > 0), "the core's supported formats have five tabs with rows");
+            var video = formats.Tabs.FirstOrDefault(tab => tab.Kind == FormatTabKind.Video)?.Rows ?? Array.Empty<FormatRow>();
+            check(video.Any(row => row.Support == FormatSupport.Plays),
+                $"a headless libmpv reports the codecs it decodes ({video.Count(row => row.Support == FormatSupport.Plays)} play)");
+            var hardware = await DecoderTest.GetAsync().WaitAsync(Timeout);
+            Console.WriteLine(hardware is null
+                ? "     the graphics card test did not run"
+                : $"     the graphics card test found {hardware.Profiles.Count} decoder profile(s)");
+
+            window.ShowSupportedFormats();
+            check(window.ShownPage is SupportedFormatsPage, $"the supported formats page opens ({window.ShownPage?.GetType().Name})");
+            if (window.ShownPage is not SupportedFormatsPage page)
+            {
+                return;
+            }
+            await page.LoadAsync(core).WaitAsync(Timeout * 3);
+            check(page.TabCount == 5, $"it has five tabs ({page.TabCount})");
+            for (var index = 0; index < page.TabCount; index++)
+            {
+                var (header, rows) = page.ShowTabForTest(index);
+                check(rows > 0 && header.Length > 0, $"tab {index + 1} has rows under \"{header}\" ({rows})");
+            }
+            window.ShowSettings();
+        }
+        catch (Exception error)
+        {
+            check(false, $"the supported formats check failed: {error.GetType().Name}");
         }
     }
 
