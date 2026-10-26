@@ -76,6 +76,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         Activated += OnActivated;
         Closed += (_, _) =>
         {
+            _closed = true;
             _appTheme?.Dispose();
             _appTheme = null;
         };
@@ -781,7 +782,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// </summary>
     private void QueueTitleBarRegions()
     {
-        if (_titleBarRegionsQueued)
+        if (_titleBarRegionsQueued || _closed)
         {
             return;
         }
@@ -789,9 +790,25 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             _titleBarRegionsQueued = false;
-            SetTitleBarRegions();
+            if (_closed)
+            {
+                return;
+            }
+            try
+            {
+                SetTitleBarRegions();
+            }
+            catch (Exception error)
+            {
+                // A layout pass as the window closes can queue this after its AppWindow is gone: an exception here, unhandled on the
+                // UI thread, ended the process with 0xC000027B after a passing smoke run (CI's install test, 2026-10-26).
+                Trace.TraceWarning($"Current: the title bar's click-through areas were not set: {error.GetType().Name}");
+            }
         });
     }
+
+    /// <summary>The window has closed: nothing touches its AppWindow any more.</summary>
+    private bool _closed;
 
     private void SetTitleBarRegions()
     {
