@@ -6,7 +6,11 @@
 //! libmpv opens with references allowed.
 //!
 //! The media is generated: a WAV tone (FFmpeg's built-in `wav` demuxer and `pcm_s16le` decoder), served whole for direct play and
-//! cut into segments for HLS (`.wav` is in FFmpeg 9.0.2's `allowed_segment_extensions`, `libavformat/hls.c`, read 2026-10-26).
+//! cut into segments for HLS. Under mpv FFmpeg's `extension_picky` check of segment names is off (mpv v0.41.0 `demux/demux_lavf.c`
+//! sets `extension_picky=0` for `hls`, and FFmpeg 9.0.2 `libavformat/hls.c`'s `test_segment` then returns at once; both read
+//! 2026-10-26). What keeps a segment from opening anything is elsewhere in `hls.c`: a segment's own demuxer gets `nested_io_open`,
+//! which refuses every open ("Opening this file was forbidden for security reasons", `AVERROR(EPERM)`), and `open_url` takes only
+//! http(s), file (with `allowed_extensions`), data and crypto URLs.
 //!
 //! What libmpv sent is read on a tap: a recording forwarder between libmpv and the relay, which the route's URL points at in this
 //! crate's tests only (`server.rs`). What libmpv reported is recorded from the engine's events (`mpv.rs`), and each case prints it
@@ -534,9 +538,11 @@ mod live {
         app.capabilities().borrow().servers[0].server.clone()
     }
 
-    /// libmpv's requests to the relay carry no cookie, no gateway header, no `Authorization` and no `ApiKey`.
-    fn assert_bare(seen: &[TapSeen]) {
+    /// libmpv's requests to the relay carry no cookie, no gateway header, no `Authorization`, no `ApiKey`, and the session token
+    /// nowhere (no `X-Emby-Authorization`, `X-Emby-Token` or `X-MediaBrowser-Token` either).
+    fn assert_bare(seen: &[TapSeen], stand_in: &StandIn) {
         assert!(!seen.is_empty(), "libmpv sent nothing to the relay");
+        let token = stand_in.live_token().expect("a session token");
         for request in seen {
             let target = request.target.to_ascii_lowercase();
             assert!(
@@ -546,6 +552,14 @@ mod live {
                     && !target.contains("apikey")
                     && !target.contains("api_key"),
                 "a credential in libmpv's request: {request:?}"
+            );
+            assert!(
+                !request.target.contains(&token)
+                    && request
+                        .headers
+                        .iter()
+                        .all(|(_, value)| !value.contains(&token)),
+                "the session token in libmpv's request: {request:?}"
             );
             assert!(
                 matches!(request.method.as_str(), "GET" | "HEAD"),
@@ -593,9 +607,10 @@ mod live {
         run.play(DIRECT_PLAY_ITEM).await;
         run.playing_past(1).await;
         let seen = run.tap.seen();
+        assert!(!seen.is_empty(), "libmpv sent nothing to the relay");
         let user_agent = seen[0].header("user-agent").unwrap_or_default().to_owned();
         run.player.stop().await.unwrap();
-        assert_bare(&seen);
+        assert_bare(&seen, &run.stand_in);
         assert!(
             seen.iter().all(|request| request
                 .target
@@ -618,7 +633,7 @@ mod live {
         run.playing_past(3).await;
         run.player.stop().await.unwrap();
         let seen = run.tap.seen();
-        assert_bare(&seen);
+        assert_bare(&seen, &run.stand_in);
         for part in ["/master.m3u8", "/main.m3u8", "/hls1/main/1.wav"] {
             assert!(
                 seen.iter().any(|request| request.target.contains(part)),
@@ -640,18 +655,23 @@ mod live {
         run.close().await;
     }
 
-    /// A listener that only counts the connections it gets.
+    /// A listener that only counts the connections it gets, on 127.0.0.1 and, where the machine has IPv6 loopback and the port is
+    /// free there, on `::1` too (where `localhost` may resolve first).
     async fn counting_listener() -> (u16, Arc<AtomicUsize>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let count = Arc::new(AtomicUsize::new(0));
-        let counting = count.clone();
-        tokio::spawn(async move {
-            while let Ok((socket, _)) = listener.accept().await {
-                counting.fetch_add(1, Ordering::SeqCst);
-                drop(socket);
-            }
-        });
+        let listeners =
+            std::iter::once(listener).chain(TcpListener::bind(("::1", port)).await.ok());
+        for listener in listeners {
+            let counting = count.clone();
+            tokio::spawn(async move {
+                while let Ok((socket, _)) = listener.accept().await {
+                    counting.fetch_add(1, Ordering::SeqCst);
+                    drop(socket);
+                }
+            });
+        }
         (port, count)
     }
 
@@ -696,7 +716,7 @@ mod live {
         // Whatever libmpv did meanwhile, nothing reached the other port.
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert_eq!(connections.load(Ordering::SeqCst), 0);
-        assert_bare(&run.tap.seen());
+        assert_bare(&run.tap.seen(), &run.stand_in);
         run.close().await;
     }
 
@@ -765,7 +785,10 @@ mod live {
         for id in [DIRECT_PLAY_ITEM, TRANSCODE_ITEM] {
             run.play(id).await;
             run.playing_past(1).await;
-            assert!(run.stand_in.open_streams() >= 1, "nothing streams");
+            eventually("an upstream answer in progress", || {
+                run.stand_in.open_streams() >= 1
+            })
+            .await;
             run.player.stop().await.unwrap();
             eventually("every upstream connection closed", || {
                 run.stand_in.open_streams() == 0
@@ -985,8 +1008,9 @@ mod live {
         let run = Run::start(Gate::Header).await;
         let (port, connections) = counting_listener().await;
         let entry = format!("http://127.0.0.1:{port}/elsewhere.wav");
-        // The main file of an HLS plan at a path the relay does not take for a playlist, with bodies libmpv's own playlist and EDL
-        // readers know (mpv v0.41.0 `demux/demux_playlist.c`, `demux/demux_edl.c`, read 2026-10-26); none starts with `#EXTM3U`.
+        // The main file of an HLS plan at a path the relay does not take for a playlist by its name or type, with bodies libmpv's own
+        // playlist and EDL readers know (mpv v0.41.0 `demux/demux_playlist.c`, `demux/demux_edl.c`, read 2026-10-26) and a DASH
+        // manifest FFmpeg's `dash` demuxer would read; none starts with `#EXTM3U`. The relay refuses each at the route's HLS entry.
         let path = format!("/videos/{TRANSCODE_ITEM}/live");
         run.stand_in.set_transcoding_path(&path);
         for (name, body) in [
@@ -998,6 +1022,16 @@ mod live {
             ("ref ini", format!("[Reference]\nRef1={entry}\n")),
             ("url", format!("[InternetShortcut]\nURL={entry}\n")),
             ("EDL", format!("# mpv EDL v0\n{entry}\n")),
+            (
+                "DASH MPD",
+                format!(
+                    "<?xml version=\"1.0\"?>\n<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" type=\"static\" \
+                     mediaPresentationDuration=\"PT10S\" minBufferTime=\"PT1S\" \
+                     profiles=\"urn:mpeg:dash:profile:isoff-on-demand:2011\"><Period><AdaptationSet mimeType=\"audio/wav\">\
+                     <Representation id=\"a\" bandwidth=\"128000\"><BaseURL>{entry}</BaseURL></Representation>\
+                     </AdaptationSet></Period></MPD>\n"
+                ),
+            ),
         ] {
             run.stand_in
                 .set_stream(&path, "text/plain", body.into_bytes());
@@ -1012,9 +1046,13 @@ mod live {
                 &format!("{state:?}; connections to the entry's port: {opened}"),
             );
             assert_eq!(opened, 0, "libmpv opened the {name} entry directly");
-            assert!(
-                matches!(state, PlayerState::Failed { .. }),
-                "{name}: {state:?}"
+            // The relay's refusal (`PlaylistUnreadable`), as the controller shows it.
+            assert_eq!(
+                state,
+                PlayerState::Failed {
+                    problem: PlaybackProblem::PlaylistElsewhere
+                },
+                "{name}"
             );
         }
         run.close().await;

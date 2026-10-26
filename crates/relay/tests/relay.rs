@@ -150,6 +150,7 @@ fn route_on(relay: &Relay, upstream: Arc<Fake>) -> (Route, mpsc::UnboundedReceiv
             upstream,
             prefixes: vec!["/Videos/abc/".into(), "/Audio/abc/".into()],
             events: Arc::new(sink),
+            hls_entry: None,
         })
         .unwrap();
     (route, events)
@@ -1088,6 +1089,7 @@ async fn bad_prefixes_are_refused() {
             upstream: ok_media(),
             prefixes: vec!["/".into()],
             events: Arc::new(sink),
+            hls_entry: None,
         })
         .unwrap_err();
     assert_eq!(error, current_relay::RelayError::InvalidPrefix);
@@ -1307,6 +1309,7 @@ async fn removing_a_route_while_its_request_waits_upstream_ends_both() {
             }),
             prefixes: vec!["/Videos/abc/".into()],
             events: Arc::new(sink),
+            hls_entry: None,
         })
         .unwrap();
     let port = route.port();
@@ -1356,5 +1359,143 @@ async fn a_range_from_inside_a_media_file_is_not_sniffed() {
     let reply = get(&setup, "/Videos/abc/stream", "Range: bytes=100-114\r\n").await;
     assert_eq!(reply.status, 206);
     assert_eq!(reply.body, b"#EXTM3U\nhttp://");
+    assert!(drain(&mut setup.events).is_empty());
+}
+
+#[tokio::test]
+async fn the_hls_entry_answers_with_an_hls_playlist_or_fails() {
+    const ELSEWHERE: &str = "http://192.168.1.10/elsewhere.wav";
+    let bodies: Vec<(&str, String)> = vec![
+        ("plain", format!("{ELSEWHERE}\n")),
+        (
+            "pls",
+            format!("[playlist]\nFile1={ELSEWHERE}\nNumberOfEntries=1\n"),
+        ),
+        ("ini", format!("[Reference]\nRef1={ELSEWHERE}\n")),
+        ("url", format!("[InternetShortcut]\nURL={ELSEWHERE}\n")),
+        ("edl", format!("# mpv EDL v0\n{ELSEWHERE}\n")),
+        (
+            "mpd",
+            format!(
+                "<?xml version=\"1.0\"?><MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\"><Period><AdaptationSet><Representation \
+                 id=\"a\" bandwidth=\"1\"><BaseURL>{ELSEWHERE}</BaseURL></Representation></AdaptationSet></Period></MPD>"
+            ),
+        ),
+        ("hls", "#EXTM3U\n0.wav\n".to_owned()),
+    ];
+    let served = bodies.clone();
+    let upstream = Fake::new(move |request| {
+        let name = request
+            .path
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        let body = served
+            .iter()
+            .find(|(kind, _)| request.query.iter().any(|(_, value)| value == kind))
+            .map_or_else(String::new, |(_, body)| body.clone());
+        let kind = if name == "live" {
+            "text/plain"
+        } else {
+            "audio/wav"
+        };
+        Ok(answer(200, &[("content-type", kind)], body))
+    });
+    let relay = Relay::new(&tokio::runtime::Handle::current());
+    let (sink, mut events) = mpsc::unbounded_channel();
+    let route = relay
+        .add_route(RouteConfig {
+            upstream: upstream.clone(),
+            prefixes: vec!["/videos/abc/".into()],
+            events: Arc::new(sink),
+            hls_entry: Some("/videos/abc/live".into()),
+        })
+        .unwrap();
+    let port = route.port();
+    let token = route.token().to_owned();
+    for (kind, body) in &bodies {
+        let target = path_on(&route, &format!("/videos/abc/live?kind={kind}"));
+        let reply = exchange(port, &request("GET", &target, port, "")).await;
+        if *kind == "hls" {
+            assert_eq!(reply.status, 200, "{kind}");
+            assert_eq!(
+                String::from_utf8(reply.body).unwrap(),
+                format!("#EXTM3U\n/{token}/videos/abc/0.wav\n")
+            );
+            assert!(drain(&mut events).is_empty());
+        } else {
+            assert_eq!(reply.status, 502, "{kind}");
+            assert!(reply.body.is_empty(), "{kind}");
+            // Reported once per route; the first refusal reports it.
+            let reported = drain(&mut events);
+            assert!(
+                reported.is_empty() || reported == [RelayEvent::PlaylistUnreadable],
+                "{kind}: {reported:?}"
+            );
+        }
+        if *kind == "hls" {
+            continue;
+        }
+        // Off the entry, the same body is media: the rule is for the URL the route was made for.
+        let target = path_on(&route, &format!("/videos/abc/0.wav?kind={kind}"));
+        let reply = exchange(port, &request("GET", &target, port, "")).await;
+        assert_eq!(reply.status, 200, "{kind} off the entry");
+        assert_eq!(reply.body, body.as_bytes(), "{kind} off the entry");
+    }
+}
+
+#[tokio::test]
+async fn a_206_for_another_part_than_asked_fails() {
+    const TEXT: &str = "#EXTM3U\nhttp://192.168.1.10/0.ts\n";
+    let upstream = Fake::new(|request| {
+        let total = TEXT.len();
+        let range = request
+            .headers
+            .get("range")
+            .map(|value| value.to_str().unwrap().to_owned());
+        let content_range = match (request.path.as_str(), range.as_deref()) {
+            // From the second byte, when the first was asked for (or nothing was).
+            ("/Videos/abc/shifted", _) => Some(format!("bytes 1-{}/{total}", total - 1)),
+            ("/Videos/abc/none", _) => None,
+            (_, Some("bytes=-5")) => Some(format!("bytes {}-{}/{total}", total - 5, total - 1)),
+            (_, Some(_)) => Some(format!("bytes 4-{}/{total}", total - 1)),
+            (_, None) => Some(format!("bytes 0-{}/{total}", total - 1)),
+        };
+        let start = content_range
+            .as_deref()
+            .and_then(|range| range.strip_prefix("bytes "))
+            .and_then(|range| range.split('-').next())
+            .and_then(|start| start.parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut pairs = vec![("content-type", "video/mp2t")];
+        if let Some(content_range) = &content_range {
+            pairs.push(("content-range", content_range.as_str()));
+        }
+        Ok(answer(206, &pairs, &TEXT.as_bytes()[start.max(1)..]))
+    });
+    let mut setup = setup(upstream);
+    for (path, range) in [
+        // A playlist that would be sniffed from its first byte, sent as if from its second: not rewritten, so refused.
+        ("/Videos/abc/shifted", "Range: bytes=0-\r\n"),
+        // A 206 to a request that asked for no part.
+        ("/Videos/abc/stream", ""),
+        // A 206 without Content-Range.
+        ("/Videos/abc/none", "Range: bytes=0-\r\n"),
+        // Another start than asked.
+        ("/Videos/abc/stream", "Range: bytes=8-\r\n"),
+    ] {
+        let reply = get(&setup, path, range).await;
+        assert_eq!(reply.status, 502, "{path} {range:?}");
+        assert!(reply.body.is_empty(), "{path} {range:?}");
+    }
+    assert_eq!(drain(&mut setup.events), [RelayEvent::BadRange]);
+    // The parts asked for pass: a start, and a suffix.
+    let reply = get(&setup, "/Videos/abc/stream", "Range: bytes=4-\r\n").await;
+    assert_eq!(reply.status, 206);
+    assert_eq!(reply.body, &TEXT.as_bytes()[4..]);
+    let reply = get(&setup, "/Videos/abc/stream", "Range: bytes=-5\r\n").await;
+    assert_eq!(reply.status, 206);
+    assert_eq!(reply.body, &TEXT.as_bytes()[TEXT.len() - 5..]);
     assert!(drain(&mut setup.events).is_empty());
 }

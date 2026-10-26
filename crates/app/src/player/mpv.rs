@@ -110,7 +110,7 @@ impl MpvMapper {
             request = request.without_references();
         }
         if hls {
-            request = request.hls_only();
+            request = request.lavf_only();
         }
         // The guard: a playlist with credentials that nobody checked never reaches libmpv. The core gives none (ADR 0020).
         request
@@ -600,11 +600,11 @@ mod tests {
         let request = mapper.file_request(relayed).unwrap();
         assert!(!request.has_credentials());
         assert!(format!("{request:?}").contains("no_references: true"));
-        assert!(format!("{request:?}").contains("hls_only: false"));
+        assert!(format!("{request:?}").contains("lavf_only: false"));
     }
 
     #[test]
-    fn an_hls_file_is_opened_as_hls_only() {
+    fn an_hls_file_is_opened_with_ffmpeg_demuxers_only() {
         let mut mapper = MpvMapper::default();
         let hls = EngineFile {
             hls: true,
@@ -617,7 +617,7 @@ mod tests {
         };
         let request = mapper.file_request(hls).unwrap();
         assert!(format!("{request:?}").contains("no_references: false"));
-        assert!(format!("{request:?}").contains("hls_only: true"));
+        assert!(format!("{request:?}").contains("lavf_only: true"));
     }
 
     #[test]

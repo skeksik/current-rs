@@ -26,6 +26,10 @@ pub enum RelayEvent {
     PlaylistUnreadable,
     /// The upstream could not build the request for the address in use: a bug, not a server problem. The player got a 502.
     InvalidRequest,
+    /// The server answered 206 with another part than the one asked for: a `Content-Range` that does not start where the request's
+    /// `Range` does, none at all, or a 206 to a request without `Range`. A player would take such a body for what it asked for (a
+    /// playlist's first bytes, say) that the relay judged as something else. The player got a 502.
+    BadRange,
 }
 
 impl RelayEvent {
@@ -38,6 +42,7 @@ impl RelayEvent {
             Self::PlaylistElsewhere => 1 << 4,
             Self::PlaylistUnreadable => 1 << 5,
             Self::InvalidRequest => 1 << 6,
+            Self::BadRange => 1 << 7,
         }
     }
 }

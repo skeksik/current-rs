@@ -1015,8 +1015,9 @@ fn a_relayed_stream_loads_the_relay_url_and_opens_references_only_for_hls() {
         assert!(file.url.expose().contains(SECRETS[1]));
         assert_eq!(file.auth.secrets, [SECRETS[1]]);
         assert_eq!(file.references, references, "{route:?}");
-        // Opened as HLS and as nothing else exactly when the route is HLS.
+        // Given and opened as HLS exactly when the route is HLS.
         assert_eq!(file.hls, references, "{route:?}");
+        assert_eq!(player.server.state().hls_streams, [references], "{route:?}");
     }
 }
 

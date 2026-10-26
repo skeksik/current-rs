@@ -56,6 +56,12 @@ pub struct RouteConfig {
     pub prefixes: Vec<String>,
     /// Where its events go.
     pub events: Arc<dyn RelayEvents>,
+    /// The path (relative to the server's address, no query) of the HLS playlist the route was made for, when it was made for one:
+    /// whatever answers there must be an HLS playlist (`#EXTM3U` first), and is rewritten; anything else fails as
+    /// [`RelayEvent::PlaylistUnreadable`](crate::RelayEvent::PlaylistUnreadable). A player told to open an HLS stream may take
+    /// another kind of body there (another playlist format, a DASH manifest) and open what it names directly, past the relay
+    /// (ADR 0020 task 4).
+    pub hls_entry: Option<String>,
 }
 
 /// A route: one playback's way through the relay. Dropping it (or [`Route::remove`]) removes it: its open connections are aborted
@@ -90,6 +96,8 @@ pub(crate) struct RouteEntry {
     pub(crate) upstream: Arc<dyn Upstream>,
     pub(crate) prefixes: Prefixes,
     pub(crate) events: Arc<RouteEvents>,
+    /// [`RouteConfig::hls_entry`].
+    pub(crate) hls_entry: Option<String>,
     connections: Mutex<Connections>,
 }
 
@@ -160,6 +168,7 @@ impl Relay {
             upstream: config.upstream,
             prefixes,
             events: Arc::new(RouteEvents::new(config.events)),
+            hls_entry: config.hls_entry,
             connections: Mutex::default(),
         });
         state.next_id += 1;

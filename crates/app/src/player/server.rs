@@ -95,6 +95,7 @@ impl JellyfinMedia {
         client: Arc<JellyfinClient>,
         item: &ItemRef,
         path: &str,
+        hls: bool,
     ) -> Result<EngineStream, PlaybackProblem> {
         let relay = self.relay.relay().ok_or(PlaybackProblem::LocalRelay)?;
         let number = self.last_route.fetch_add(1, Ordering::Relaxed) + 1;
@@ -108,6 +109,8 @@ impl JellyfinMedia {
                     route: number,
                     sender: self.events.clone(),
                 }),
+                // An HLS plan's URL must answer with an HLS playlist (ADR 0020 task 4).
+                hls_entry: hls.then(|| path.split('?').next().unwrap_or(path).to_owned()),
             })
             // No port, no random bytes, or an item id the relay cannot serve: no stream connection for it.
             .map_err(|_| PlaybackProblem::LocalRelay)?;
@@ -164,6 +167,8 @@ pub(crate) fn relay_problem(event: RelayEvent) -> Result<PlaybackProblem, (u16, 
         }
         // The request could not be built for the address in use: nothing the user can do but play again.
         RelayEvent::InvalidRequest => Ok(PlaybackProblem::Network),
+        // The server sent another part than asked for: its answer is broken, as a 502 from it would be.
+        RelayEvent::BadRange => Ok(PlaybackProblem::Server { status: 502 }),
     }
 }
 
@@ -334,7 +339,12 @@ impl MediaServer for JellyfinMedia {
             .map_err(|error| problem(&error))
     }
 
-    fn stream_url(&self, item: &ItemRef, url: &StreamUrl) -> Result<EngineStream, PlaybackProblem> {
+    fn stream_url(
+        &self,
+        item: &ItemRef,
+        url: &StreamUrl,
+        hls: bool,
+    ) -> Result<EngineStream, PlaybackProblem> {
         self.remove_route();
         let client = self.session()?;
         // One snapshot of the address: the URL must be on it, and the choice is for it. The server moved since the plan: a new plan
@@ -355,7 +365,7 @@ impl MediaServer for JellyfinMedia {
                 relayed: false,
             });
         }
-        self.relay(client, item, &target.path)
+        self.relay(client, item, &target.path, hls)
     }
 
     fn end_stream(&self) {
