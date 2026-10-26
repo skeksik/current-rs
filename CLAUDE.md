@@ -17,7 +17,7 @@ libadwaita in Rust on Linux; Android, iOS, tvOS and the web later. **Desktop fir
 ```
 crates/model        current-model: domain types (pure, no I/O)
 crates/playback     current-playback: playback logic (ADR 0019): Engine and MediaServer traits, route planner, playback controller; no service, no HTTP, no libmpv
-crates/net          current-net: HTTP client per server, typed errors, redacted request log, plain-HTTP rule, gateway credentials (ADR 0017)
+crates/net          current-net: HTTP client per server, typed errors, redacted request log, plain-HTTP rule, gateway credentials (ADR 0017), streaming send for the loopback relay (ADR 0020)
 crates/store        current-store: settings file, secrets in the OS keyring, device id (ADR 0013)
 crates/jellyfin     current-jellyfin: Jellyfin client; so far server setup (ADR 0012), discovery (ADR 0016), sign-in (ADR 0015), gateway answers and header placement (ADR 0017), browse queries and images (ADR 0018), playback calls, the device profile and the HLS playlist origin check (ADR 0019)
 crates/mpv          current-mpv: the libmpv engine (ADR 0019): client API declarations, event thread, options, display facts, swap chain, capabilities, log redaction; the only crate with `unsafe`; links libmpv only with its `libmpv` feature

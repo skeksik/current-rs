@@ -427,3 +427,56 @@ async fn no_log_line_error_or_debug_output_names_an_address_or_the_network() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_stream_is_retried_once_on_the_new_address_after_a_connect_failure() {
+    let first = StandIn::start(Mode::Serve(SERVER_ID)).await;
+    let second = StandIn::start(Mode::Serve(SERVER_ID)).await;
+    let (roaming, client, log) = setup(&[first.port, second.port]);
+    client.send(Request::get("/Items")).await.unwrap();
+    assert_eq!(position(&roaming), Some(1));
+
+    let ports = Ports::hold().await;
+    first.stop(&ports).await;
+    let mut stream = client
+        .send_stream(Request::get("/Videos/1/stream"))
+        .await
+        .unwrap();
+    assert_eq!(stream.status(), 200);
+    assert_eq!(
+        stream.next_chunk().await.unwrap().as_deref(),
+        Some(&b"{}"[..])
+    );
+    assert_eq!(position(&roaming), Some(2));
+    assert_eq!(second.count("GET", "/Videos/1/stream"), 1);
+    // The token went to the new address, as for any request.
+    assert!(second.received().iter().any(|head| head.contains(SECRET)));
+    let text = log.to_text();
+    assert!(
+        text.contains("address 1 GET /Videos/1/stream -> unreachable"),
+        "{text}"
+    );
+    // The success on address 2 is not logged.
+    assert!(!text.contains("address 2 GET /Videos/1/stream"), "{text}");
+}
+
+#[tokio::test]
+async fn a_stream_is_retried_only_once() {
+    let first = StandIn::start(Mode::Serve(SERVER_ID)).await;
+    let second = StandIn::start(Mode::DropRequests).await;
+    let (roaming, client, log) = setup(&[first.port, second.port]);
+    client.send(Request::get("/Items")).await.unwrap();
+    assert_eq!(position(&roaming), Some(1));
+
+    let ports = Ports::hold().await;
+    first.stop(&ports).await;
+    let result = client.send_stream(Request::get("/Videos/1/stream")).await;
+    assert_eq!(result.err(), Some(current_net::StreamError::Unreachable));
+    assert_eq!(second.count("GET", "/Videos/1/stream"), 1);
+    let text = log.to_text();
+    assert_eq!(
+        text.matches("GET /Videos/1/stream -> unreachable").count(),
+        2,
+        "{text}"
+    );
+}

@@ -4,6 +4,7 @@
 //! Service crates (Jellyfin, Seerr, Stash) build on [`ServerClient`] and add their credentials through [`RequestAuth`]. [`transport`]
 //! tells whether plain HTTP to an address needs the user's confirmation (ADR 0012). An authentication gateway in front of an address
 //! gets its credentials through a [`Gateway`], and [`classify`] tells a gateway's answer from the service's (ADR 0017).
+//! [`ServerClient::send_stream`] streams an answer chunk by chunk for the loopback relay (ADR 0020).
 
 mod address;
 mod challenge;
@@ -14,6 +15,7 @@ mod log;
 mod roaming;
 mod scope;
 mod shape;
+mod stream;
 
 pub use address::{AddressOutcome, AddressProvider, FixedAddress, GatewayAddress, Selected};
 pub use challenge::{AuthChallenge, AuthScheme};
@@ -32,4 +34,8 @@ pub use roaming::{
 };
 pub use scope::{HostScope, Transport, host_scope, transport};
 pub use shape::{GatewayShape, classify};
+pub use stream::{
+    DEFAULT_READ_TIMEOUT, STREAM_REQUEST_HEADERS, STREAM_RESPONSE_HEADERS, StreamError,
+    StreamResponse,
+};
 pub use url::Url;
