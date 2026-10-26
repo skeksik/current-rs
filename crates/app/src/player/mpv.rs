@@ -348,7 +348,6 @@ mod real {
     use super::{MpvCommand, MpvMapper, TrackKind, VIDEO_SYNC_VARIABLE, engine_error_kind};
     use crate::player::backend::{Backend, EngineOutput, Signal};
 
-    /// The libmpv engine of one player.
     /// The capabilities of this build's libmpv, from a headless engine started only to read them and shut down at once (ADR 0021):
     /// `vo=null`, `ao=null`, no `force-window`, so no window or audio device opens. Blocking: call it on the blocking pool.
     pub(crate) fn probe_capabilities() -> Result<EngineCapabilities, EngineError> {
@@ -364,6 +363,7 @@ mod real {
         Ok(capabilities)
     }
 
+    /// The libmpv engine of one player.
     pub(crate) struct MpvBackend {
         mpv: Option<Mpv>,
         capabilities: EngineCapabilities,

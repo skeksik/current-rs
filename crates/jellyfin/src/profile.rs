@@ -162,6 +162,16 @@ pub fn transcode_targets(capabilities: &EngineCapabilities) -> TranscodeTargets 
     targets
 }
 
+/// The subtitle formats the device profile offers as a separate file (`External`) for `capabilities`, in the profile's order (ADR 0021):
+/// what the server can convert a text subtitle the engine does not render into.
+pub fn external_subtitle_formats(capabilities: &EngineCapabilities) -> Vec<SubtitleFormat> {
+    subtitle_profiles(capabilities)
+        .into_iter()
+        .filter(|profile| profile.method == "External")
+        .map(|profile| SubtitleFormat::new(profile.format))
+        .collect()
+}
+
 #[derive(Clone, Copy)]
 enum Kind {
     Video,
@@ -396,6 +406,18 @@ mod tests {
             transcode_targets(&EngineCapabilities::default()),
             TranscodeTargets::default()
         );
+    }
+
+    #[test]
+    fn external_subtitle_formats_are_the_external_profiles() {
+        let mut capabilities = mpv_windows();
+        capabilities.subtitles = vec![SubtitleFormat::SRT, SubtitleFormat::DVBSUB];
+        assert_eq!(
+            external_subtitle_formats(&capabilities),
+            vec![SubtitleFormat::SRT]
+        );
+        capabilities.external_subtitles = false;
+        assert!(external_subtitle_formats(&capabilities).is_empty());
     }
 
     #[test]

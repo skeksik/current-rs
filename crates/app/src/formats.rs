@@ -1,18 +1,18 @@
 //! Settings' "Supported formats" page (ADR 0021): what this PC plays, directly, after the server repackages the stream (remux) and
-//! after it converts it (transcode), with whether the graphics card decodes each video codec. The core builds the whole page; the UI
-//! only renders it.
+//! after it converts it (transcode), with whether the graphics card decodes each video codec. The core builds the whole page, words
+//! included (tab titles, column headers, the support column's labels and the notes); the UI only renders it.
 //!
 //! Every answer comes from three inputs, never from a fixed list of what should work:
 //! - the engine's own capabilities ([`EngineReport`], from libmpv's `decoder-list` and `demuxer-lavf-list`);
-//! - the server's transcode targets for them (`current_jellyfin::transcode_targets`, the codecs of the device profile's transcoding
-//!   profiles);
+//! - what the device profile asks of the server for them (`current_jellyfin::transcode_targets` and
+//!   `current_jellyfin::external_subtitle_formats`, read from the profiles themselves);
 //! - the facts the UI passes in: the graphics card's video decoder profiles ([`HardwareDecoding`], a Direct3D 11 test on Windows) and
 //!   the display the window is on ([`DisplayFacts`]).
 //!
 //! The tables below only name and order the rows. A codec, container or subtitle format the engine reports that they lack still gets
 //! a row, under its own name (open values).
 
-use current_jellyfin::{TranscodeTargets, transcode_targets};
+use current_jellyfin::{TranscodeTargets, external_subtitle_formats, transcode_targets};
 use current_model::{Codec, Container, EngineCapabilities, SubtitleFormat};
 
 use crate::player::{DisplayFacts, EngineReport};
@@ -30,11 +30,21 @@ pub struct DecoderProfile {
 }
 
 /// What the UI found out about the graphics card the engine decodes on.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct HardwareDecoding {
-    /// The adapter's name as the system reports it, shown on the page.
+    /// The adapter's name as the system reports it: shown on the page, never logged.
     pub adapter: String,
     pub profiles: Vec<DecoderProfile>,
+}
+
+impl std::fmt::Debug for HardwareDecoding {
+    /// Leaves out the adapter's name.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HardwareDecoding")
+            .field("adapter", &"<redacted>")
+            .field("profiles", &self.profiles)
+            .finish()
+    }
 }
 
 /// The tabs, in order.
@@ -45,6 +55,25 @@ pub enum FormatTabKind {
     Containers,
     Subtitles,
     Hdr,
+}
+
+impl FormatTabKind {
+    fn title(self) -> &'static str {
+        match self {
+            FormatTabKind::Video => "Video",
+            FormatTabKind::Audio => "Audio",
+            FormatTabKind::Containers => "Containers",
+            FormatTabKind::Subtitles => "Subtitles",
+            FormatTabKind::Hdr => "HDR",
+        }
+    }
+
+    fn name_header(self) -> &'static str {
+        match self {
+            FormatTabKind::Video | FormatTabKind::Audio => "Codec",
+            FormatTabKind::Containers | FormatTabKind::Subtitles | FormatTabKind::Hdr => "Format",
+        }
+    }
 }
 
 /// The "On this PC" column.
@@ -58,7 +87,7 @@ pub enum FormatSupport {
     Plays,
     /// Plays after the server repackages the stream into a container the engine reads (remux).
     ServerRepackages,
-    /// Plays after the server converts it to a format the engine decodes (transcode).
+    /// Plays after the server converts it to a format the engine takes (transcode).
     ServerConverts,
     /// Does not play.
     NotSupported,
@@ -66,21 +95,45 @@ pub enum FormatSupport {
     Hdr,
     /// HDR video converted to SDR by the player: the display is not in HDR mode.
     ToneMapped,
+    /// Not known: the player could not be started to find out.
+    Unknown,
 }
 
-/// One row: the format's name, the column, and a note (empty when there is nothing to say).
+impl FormatSupport {
+    /// The column's word for it.
+    pub fn label(self) -> &'static str {
+        match self {
+            FormatSupport::Hardware => "Hardware",
+            FormatSupport::Software => "Software",
+            FormatSupport::Plays => "Plays",
+            FormatSupport::ServerRepackages => "Server repackages",
+            FormatSupport::ServerConverts => "Server converts",
+            FormatSupport::NotSupported => "Not supported",
+            FormatSupport::Hdr => "HDR",
+            FormatSupport::ToneMapped => "Tone-mapped",
+            FormatSupport::Unknown => "Couldn't check",
+        }
+    }
+}
+
+/// One row: the format's name, the column (its value and its word), and a note (empty when there is nothing to say).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FormatRow {
     pub name: String,
     pub support: FormatSupport,
+    pub support_label: String,
     pub notes: String,
 }
 
-/// One tab: its rows under a name column header ("Codec" or "Format").
+/// One tab: its title, its three column headers and its rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FormatTab {
     pub kind: FormatTabKind,
+    pub title: String,
+    /// "Codec" or "Format".
     pub name_header: String,
+    pub support_header: String,
+    pub notes_header: String,
     pub rows: Vec<FormatRow>,
 }
 
@@ -96,6 +149,12 @@ pub struct SupportedFormats {
 
 const DESCRIPTION: &str = "What this PC plays. Whether a file plays also depends on the file itself, on how the server sends it, and \
                            on the display.";
+
+const SUPPORT_HEADER: &str = "On this PC";
+const NOTES_HEADER: &str = "Notes";
+
+/// Every row's note when the player could not be started to check.
+const UNKNOWN_NOTE: &str = "The player couldn't be started to check this";
 
 /// Codecs mpv tries hardware decoding for: `--hwdec-codecs`' default, "h264,vc1,hevc,vp8,vp9,av1,prores,prores_raw,ffv1,dpx"
 /// (`DOCS/man/options.rst` and `video/decode/vd_lavc.c`, mpv v0.41.0, read 2026-10-26). `hwdec=auto-safe` (ADR 0007, ADR 0019) is
@@ -233,40 +292,60 @@ pub fn supported_formats(
     hardware: Option<&HardwareDecoding>,
     display: Option<&DisplayFacts>,
 ) -> SupportedFormats {
-    let capabilities = match engine {
-        EngineReport::Ready(capabilities) => Some(capabilities),
-        EngineReport::Unavailable | EngineReport::Failed => None,
-    };
     let empty = EngineCapabilities::default();
-    let caps = capabilities.unwrap_or(&empty);
+    let caps = match engine {
+        EngineReport::Ready(capabilities) => capabilities,
+        EngineReport::Unavailable | EngineReport::Failed => &empty,
+    };
+    let ready = matches!(engine, EngineReport::Ready(_));
     let targets = transcode_targets(caps);
     let description = match engine {
-        EngineReport::Ready(_) => DESCRIPTION.to_owned(),
-        EngineReport::Unavailable => "This version of Current has no player, so nothing plays on this PC.".to_owned(),
+        EngineReport::Ready(_) => DESCRIPTION,
+        EngineReport::Unavailable => {
+            "This version of Current has no player, so nothing plays on this PC."
+        }
         EngineReport::Failed => {
-            "The player couldn't be started to find out what it plays. Close any video that is playing and open this page again."
-                .to_owned()
+            "The player couldn't be started to find out what it plays. Open this page again to try again."
         }
     };
-    let hardware_note = match (capabilities, hardware) {
-        (None, _) => String::new(),
-        (Some(_), Some(hardware)) if hardware.adapter.trim().is_empty() => {
-            "Tested on this PC's graphics card.".to_owned()
-        }
-        (Some(_), Some(hardware)) => format!("Tested on: {}", hardware.adapter.trim()),
-        (Some(_), None) => "The graphics card couldn't be tested, so video shows as \"Plays\" rather than Hardware or Software."
-            .to_owned(),
+    let hardware_note = match hardware {
+        _ if !ready => String::new(),
+        Some(hardware) if hardware.adapter.trim().is_empty() => "Tested on this PC's graphics card.".to_owned(),
+        Some(hardware) => format!("Tested on: {}", hardware.adapter.trim()),
+        None => "The graphics card couldn't be tested, so video shows as \"Plays\" rather than Hardware or Software.".to_owned(),
     };
+    let mut tabs = vec![
+        tab(FormatTabKind::Video, video_rows(caps, &targets, hardware)),
+        tab(FormatTabKind::Audio, audio_rows(caps, &targets)),
+        tab(FormatTabKind::Containers, container_rows(caps, &targets)),
+        tab(FormatTabKind::Subtitles, subtitle_rows(caps, &targets)),
+        tab(FormatTabKind::Hdr, hdr_rows(ready, display)),
+    ];
+    // Without the engine's answer nothing is known: no row claims a format does not play.
+    if *engine == EngineReport::Failed {
+        for row in tabs.iter_mut().flat_map(|tab| &mut tab.rows) {
+            *row = self::row(
+                std::mem::take(&mut row.name),
+                FormatSupport::Unknown,
+                UNKNOWN_NOTE,
+            );
+        }
+    }
     SupportedFormats {
-        description,
+        description: description.to_owned(),
         hardware_note,
-        tabs: vec![
-            video_tab(caps, &targets, hardware),
-            audio_tab(caps, &targets),
-            containers_tab(caps, &targets),
-            subtitles_tab(caps, &targets),
-            hdr_tab(capabilities.is_some(), display),
-        ],
+        tabs,
+    }
+}
+
+fn tab(kind: FormatTabKind, rows: Vec<FormatRow>) -> FormatTab {
+    FormatTab {
+        kind,
+        title: kind.title().to_owned(),
+        name_header: kind.name_header().to_owned(),
+        support_header: SUPPORT_HEADER.to_owned(),
+        notes_header: NOTES_HEADER.to_owned(),
+        rows,
     }
 }
 
@@ -274,6 +353,7 @@ fn row(name: impl Into<String>, support: FormatSupport, notes: impl Into<String>
     FormatRow {
         name: name.into(),
         support,
+        support_label: support.label().to_owned(),
         notes: notes.into(),
     }
 }
@@ -288,17 +368,22 @@ fn notes(parts: &[&str]) -> String {
         .join(". ")
 }
 
+/// Names joined as "a, b or c".
+fn either(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
 /// The display names of `codecs`, from `names`, or their own.
 fn codec_names(codecs: &[Codec], names: impl Fn(&Codec) -> Option<&'static str>) -> String {
     let names: Vec<String> = codecs
         .iter()
         .map(|codec| names(codec).map_or_else(|| codec.as_str().to_owned(), str::to_owned))
         .collect();
-    match names.as_slice() {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
-    }
+    either(&names)
 }
 
 fn video_name(codec: &Codec) -> Option<&'static str> {
@@ -315,11 +400,11 @@ fn audio_name(codec: &Codec) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-fn video_tab(
+fn video_rows(
     caps: &EngineCapabilities,
     targets: &TranscodeTargets,
     hardware: Option<&HardwareDecoding>,
-) -> FormatTab {
+) -> Vec<FormatRow> {
     let converts = format!(
         "The server converts it to {}",
         codec_names(&targets.video, video_name)
@@ -333,7 +418,7 @@ fn video_tab(
             codecs.push((support.codec.clone(), support.codec.as_str().to_owned(), ""));
         }
     }
-    let rows = codecs
+    codecs
         .into_iter()
         .map(|(codec, name, always)| {
             if caps.decodes_video(&codec) {
@@ -354,12 +439,7 @@ fn video_tab(
                 row(name, FormatSupport::NotSupported, always)
             }
         })
-        .collect();
-    FormatTab {
-        kind: FormatTabKind::Video,
-        name_header: "Codec".to_owned(),
-        rows,
-    }
+        .collect()
 }
 
 /// `{8D2...}` or `8d2...` as lower case without braces.
@@ -371,8 +451,12 @@ fn normalized_guid(guid: &str) -> String {
 }
 
 /// Whether the engine decodes `codec` on the graphics card, and why not when it does not. The engine plays with mpv's
-/// `hwdec=auto-safe`, which is d3d11va on Windows (ADR 0007, ADR 0019): a codec mpv tries hardware decoding for, with a decoder
-/// profile the card lists and an output format the driver accepts for it, is decoded there.
+/// `hwdec=auto-safe` (ADR 0007, ADR 0019), which tries the whitelisted methods of `hwdec_autoprobe_info` (`video/decode/vd_lavc.c`,
+/// mpv v0.41.0, read 2026-10-26) with the direct ones first ("List non-copying entries first, so --hwdec=auto takes them",
+/// `hwdec_compare`): on Windows `d3d11va` comes first, and this answers for it. A codec mpv tries hardware decoding for, with a decoder
+/// profile the card lists and an output format the driver accepts for it, is decoded there. When d3d11va cannot take a file, auto-safe
+/// can still fall back to a copying method (`d3d11va-copy`, `dxva2-copy`, `nvdec-copy`), so "Software" may still be decoded by the card
+/// through a copy (not verified).
 fn hardware_support(codec: &Codec, hardware: &HardwareDecoding) -> (FormatSupport, String) {
     let listed: Vec<(String, &DecoderProfile)> = hardware
         .profiles
@@ -414,7 +498,10 @@ fn hardware_support(codec: &Codec, hardware: &HardwareDecoding) -> (FormatSuppor
     }
     let ten_bit = codec == &Codec::HEVC || codec == &Codec::VP9 || codec == &Codec::AV1;
     match (eight, ten) {
-        (false, false) => (software, "No hardware decoder on this GPU".to_owned()),
+        (false, false) => (
+            software,
+            "No hardware decoder on this graphics card".to_owned(),
+        ),
         (true, true) => (FormatSupport::Hardware, "8-bit and 10-bit".to_owned()),
         (true, false) if ten_bit => (
             FormatSupport::Hardware,
@@ -428,7 +515,7 @@ fn hardware_support(codec: &Codec, hardware: &HardwareDecoding) -> (FormatSuppor
     }
 }
 
-fn audio_tab(caps: &EngineCapabilities, targets: &TranscodeTargets) -> FormatTab {
+fn audio_rows(caps: &EngineCapabilities, targets: &TranscodeTargets) -> Vec<FormatRow> {
     let converts = format!(
         "The server converts it to {}",
         codec_names(&targets.audio, audio_name)
@@ -462,11 +549,7 @@ fn audio_tab(caps: &EngineCapabilities, targets: &TranscodeTargets) -> FormatTab
             rows.push(atmos_row(caps, targets, &converts));
         }
     }
-    FormatTab {
-        kind: FormatTabKind::Audio,
-        name_header: "Codec".to_owned(),
-        rows,
-    }
+    rows
 }
 
 /// Dolby Atmos travels inside TrueHD or E-AC-3. The engine sets no `audio-spdif` (`current-mpv`'s `start_options`), and mpv passes
@@ -488,7 +571,12 @@ fn atmos_row(caps: &EngineCapabilities, targets: &TranscodeTargets, converts: &s
     }
 }
 
-fn containers_tab(caps: &EngineCapabilities, targets: &TranscodeTargets) -> FormatTab {
+/// A container the engine does not read is repackaged by the server. Jellyfin turns direct stream off for every client
+/// (`MediaInfoHelper`: "direct-stream http streaming is currently broken"), so a remux arrives as a transcode into one of the device
+/// profile's HLS transcoding profiles whose job copies the video and audio streams the device takes (`AllowVideoStreamCopy`,
+/// `AllowAudioStreamCopy`, default true; `GetVideoTranscodeProfile` ranks profiles by whether the video can be copied) (Jellyfin v12.2,
+/// commit ca0f16eb, read 2026-10-25, docs/notes/playback.md "How the server decides"). So it needs a transcoding profile.
+fn container_rows(caps: &EngineCapabilities, targets: &TranscodeTargets) -> Vec<FormatRow> {
     let mut containers: Vec<(Container, String)> = CONTAINERS
         .iter()
         .map(|(container, name)| (container.clone(), (*name).to_owned()))
@@ -498,28 +586,65 @@ fn containers_tab(caps: &EngineCapabilities, targets: &TranscodeTargets) -> Form
             containers.push((container.clone(), container.as_str().to_owned()));
         }
     }
-    // The server repackages into the HLS segments of a transcoding profile, so only when there is one.
     let repackages = !targets.video.is_empty();
-    let rows = containers
+    containers
         .into_iter()
         .map(|(container, name)| {
             if caps.containers.contains(&container) {
                 row(name, FormatSupport::Plays, "")
             } else if repackages {
-                row(name, FormatSupport::ServerRepackages, "")
+                row(
+                    name,
+                    FormatSupport::ServerRepackages,
+                    "The server repackages it as an HLS stream, copying the video and audio this PC decodes",
+                )
             } else {
                 row(name, FormatSupport::NotSupported, "")
             }
         })
-        .collect();
-    FormatTab {
-        kind: FormatTabKind::Containers,
-        name_header: "Format".to_owned(),
-        rows,
-    }
+        .collect()
 }
 
-fn subtitles_tab(caps: &EngineCapabilities, targets: &TranscodeTargets) -> FormatTab {
+/// Whether Jellyfin counts `format` as text (`MediaStream.IsTextFormat`: anything but PGS, DVD, VobSub, DVB, `sup` and `sub`).
+fn is_text_subtitle(format: &str) -> bool {
+    let format = format.to_ascii_lowercase();
+    format.contains("microdvd")
+        || !(format.contains("pgs")
+            || format.contains("dvdsub")
+            || format.contains("vobsub")
+            || format.contains("dvbsub")
+            || format == "sup"
+            || format == "sub")
+}
+
+/// Whether Jellyfin can convert a text subtitle from or to `format` (`MediaStream.SupportsSubtitleConversionTo`: not from or to ASS
+/// or SSA).
+fn converts_text(format: &str) -> bool {
+    !format.eq_ignore_ascii_case("ass") && !format.eq_ignore_ascii_case("ssa")
+}
+
+fn subtitle_name(format: &SubtitleFormat) -> String {
+    SUBTITLES
+        .iter()
+        .find(|(spellings, _, _)| {
+            spellings
+                .iter()
+                .any(|known| known.as_str().eq_ignore_ascii_case(format.as_str()))
+        })
+        .map_or_else(
+            || format.as_str().to_owned(),
+            |(_, name, _)| (*name).to_owned(),
+        )
+}
+
+/// A subtitle format the engine does not render, by Jellyfin's rule (`StreamBuilder.GetSubtitleProfile` and
+/// `GetExternalSubtitleProfile`, `MediaStream.SupportsSubtitleConversionTo`; Jellyfin v12.2, commit ca0f16eb, read 2026-10-26): an
+/// `External` profile of the same kind is looked for without conversion, then with one, which only a text subtitle allows ("Can't
+/// convert from this": `ass`, `ssa`; "Can't convert to this": the same); otherwise the server falls back to
+/// `SubtitleDeliveryMethod.Encode`, burning it into the picture, which converts the video. So a text format other than ASS and SSA
+/// becomes one of the profile's external text formats; ASS, SSA and picture-based formats are burned in. That the server can extract
+/// the track (its `EnableSubtitleExtraction` setting, on by default) is assumed.
+fn subtitle_rows(caps: &EngineCapabilities, targets: &TranscodeTargets) -> Vec<FormatRow> {
     let mut formats: Vec<(Vec<SubtitleFormat>, String, &str)> = SUBTITLES
         .iter()
         .map(|(formats, name, note)| (formats.to_vec(), (*name).to_owned(), *note))
@@ -541,41 +666,51 @@ fn subtitles_tab(caps: &EngineCapabilities, targets: &TranscodeTargets) -> Forma
                 .any(|known| known.as_str().eq_ignore_ascii_case(format.as_str()))
         })
     };
-    let rows = formats
+    let mut text_targets: Vec<String> = Vec::new();
+    for format in external_subtitle_formats(caps) {
+        let name = subtitle_name(&format);
+        if is_text_subtitle(format.as_str())
+            && converts_text(format.as_str())
+            && !text_targets.contains(&name)
+        {
+            text_targets.push(name);
+        }
+    }
+    formats
         .into_iter()
-        .map(|(spellings, name, note)| {
+        .map(|(spellings, name, always)| {
+            let format = spellings[0].as_str();
             if renders(&spellings) {
-                row(name, FormatSupport::Plays, note)
+                row(name, FormatSupport::Plays, always)
+            } else if is_text_subtitle(format) && converts_text(format) && !text_targets.is_empty()
+            {
+                let note = format!("The server converts it to {}", either(&text_targets));
+                row(name, FormatSupport::ServerConverts, notes(&[always, &note]))
             } else if !targets.video.is_empty() {
-                // The server burns subtitles the device cannot show into the picture, which needs a video transcode.
                 row(
                     name,
                     FormatSupport::ServerConverts,
-                    "The server draws them into the picture",
+                    notes(&[
+                        always,
+                        "The server burns it into the picture, which means converting the video",
+                    ]),
                 )
             } else {
-                row(name, FormatSupport::NotSupported, "")
+                row(name, FormatSupport::NotSupported, always)
             }
         })
-        .collect();
-    FormatTab {
-        kind: FormatTabKind::Subtitles,
-        name_header: "Format".to_owned(),
-        rows,
-    }
+        .collect()
 }
 
-/// HDR as ADR 0007 maps it: on a display in HDR mode the engine outputs HDR (PQ, BT.2020); on any other it tone-maps to SDR. With no
-/// display facts the page cannot say which.
-fn hdr_tab(engine: bool, display: Option<&DisplayFacts>) -> FormatTab {
-    let rows = HDR
-        .iter()
+/// HDR as ADR 0007 maps it: on a display in HDR mode the engine outputs HDR (PQ, BT.2020); on any other it tone-maps to SDR. The facts
+/// are those of the display the window showing the page is on; with none the page cannot say which.
+fn hdr_rows(engine: bool, display: Option<&DisplayFacts>) -> Vec<FormatRow> {
+    HDR.iter()
         .map(|(name, always)| {
             if !engine {
                 return row(*name, FormatSupport::NotSupported, "");
             }
             match display {
-                // The facts are those of the display the window showing the page is on.
                 Some(display) if display.hdr => row(
                     *name,
                     FormatSupport::Hdr,
@@ -592,19 +727,11 @@ fn hdr_tab(engine: bool, display: Option<&DisplayFacts>) -> FormatTab {
                 None => row(
                     *name,
                     FormatSupport::Plays,
-                    notes(&[
-                        "HDR or tone-mapped to SDR, depending on the display",
-                        always,
-                    ]),
+                    notes(&["HDR or tone-mapped to SDR, depending on the display", always]),
                 ),
             }
         })
-        .collect();
-    FormatTab {
-        kind: FormatTabKind::Hdr,
-        name_header: "Format".to_owned(),
-        rows,
-    }
+        .collect()
 }
 
 #[cfg(test)]
@@ -736,7 +863,7 @@ mod tests {
             &row(
                 "AV1",
                 FormatSupport::Software,
-                "No hardware decoder on this GPU"
+                "No hardware decoder on this graphics card"
             )
         );
         // mpv leaves MPEG-2 out of its hardware codecs; VP8 has no D3D11 decoder in FFmpeg.
@@ -827,9 +954,28 @@ mod tests {
             find(subtitles, "SubRip (SRT)").support,
             FormatSupport::Plays
         );
+        // Picture-based and ASS are burned in; another text format becomes the external text format the profile takes.
+        for burned in ["PGS (Blu-ray)", "SubStation Alpha (ASS, SSA)"] {
+            let row = find(subtitles, burned);
+            assert_eq!(row.support, FormatSupport::ServerConverts, "{burned}");
+            assert!(
+                row.notes.ends_with(
+                    "The server burns it into the picture, which means converting the video"
+                ),
+                "{burned}"
+            );
+        }
         assert_eq!(
-            find(subtitles, "PGS (Blu-ray)").support,
-            FormatSupport::ServerConverts
+            find(subtitles, "WebVTT"),
+            &row(
+                "WebVTT",
+                FormatSupport::ServerConverts,
+                "The server converts it to SubRip (SRT)"
+            )
+        );
+        assert_eq!(
+            find(containers, "AVI").notes,
+            "The server repackages it as an HLS stream, copying the video and audio this PC decodes"
         );
     }
 
@@ -918,18 +1064,65 @@ mod tests {
 
     #[test]
     fn without_an_engine_nothing_plays() {
-        for report in [EngineReport::Unavailable, EngineReport::Failed] {
-            let page = supported_formats(&report, Some(&card()), Some(&sdr()));
-            assert!(page.tabs.iter().all(|tab| !tab.rows.is_empty()));
-            assert!(
-                page.tabs
-                    .iter()
-                    .flat_map(|tab| &tab.rows)
-                    .all(|row| row.support == FormatSupport::NotSupported)
-            );
-            assert_eq!(page.hardware_note, "");
-            assert_ne!(page.description, DESCRIPTION);
+        let page = supported_formats(&EngineReport::Unavailable, Some(&card()), Some(&sdr()));
+        assert!(page.tabs.iter().all(|tab| !tab.rows.is_empty()));
+        assert!(
+            page.tabs
+                .iter()
+                .flat_map(|tab| &tab.rows)
+                .all(|row| row.support == FormatSupport::NotSupported)
+        );
+        assert_eq!(page.hardware_note, "");
+        assert_ne!(page.description, DESCRIPTION);
+    }
+
+    #[test]
+    fn a_failed_start_claims_nothing() {
+        let page = supported_formats(&EngineReport::Failed, Some(&card()), Some(&sdr()));
+        assert!(page.tabs.iter().all(|tab| !tab.rows.is_empty()));
+        for row in page.tabs.iter().flat_map(|tab| &tab.rows) {
+            assert_eq!(row.support, FormatSupport::Unknown, "{}", row.name);
+            assert_eq!(row.support_label, "Couldn't check");
+            assert_eq!(row.notes, UNKNOWN_NOTE);
         }
+        assert_eq!(
+            find(tab(&page, FormatTabKind::Video), "H.264 (AVC)").support,
+            FormatSupport::Unknown
+        );
+        assert_eq!(
+            page.description,
+            "The player couldn't be started to find out what it plays. Open this page again to try again."
+        );
+        assert_eq!(page.hardware_note, "");
+    }
+
+    #[test]
+    fn the_core_gives_every_word_the_page_shows() {
+        let page = supported_formats(&EngineReport::Ready(mpv_windows()), Some(&card()), None);
+        let titles: Vec<&str> = page.tabs.iter().map(|tab| tab.title.as_str()).collect();
+        assert_eq!(titles, ["Video", "Audio", "Containers", "Subtitles", "HDR"]);
+        let headers: Vec<&str> = page
+            .tabs
+            .iter()
+            .map(|tab| tab.name_header.as_str())
+            .collect();
+        assert_eq!(headers, ["Codec", "Codec", "Format", "Format", "Format"]);
+        assert!(
+            page.tabs
+                .iter()
+                .all(|tab| tab.support_header == "On this PC" && tab.notes_header == "Notes")
+        );
+        for row in page.tabs.iter().flat_map(|tab| &tab.rows) {
+            assert_eq!(row.support_label, row.support.label());
+        }
+        assert_eq!(FormatSupport::ServerRepackages.label(), "Server repackages");
+    }
+
+    #[test]
+    fn the_adapter_name_stays_out_of_debug() {
+        let text = format!("{:?}", card());
+        assert!(!text.contains("Example Graphics"), "{text}");
+        assert!(text.contains("<redacted>"));
     }
 
     #[test]

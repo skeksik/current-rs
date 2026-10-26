@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace Current.Shell.Pages;
 
-/// <summary>One row as the list shows it: the core's name and notes, and the support as the column's word.</summary>
+/// <summary>One row as the list shows it: the core's name, the core's word for the support, and the core's notes.</summary>
 public sealed record FormatRowView(string Name, string Support, string Notes)
 {
     /// <summary>What Narrator reads for the row: name, support, notes.</summary>
@@ -28,23 +28,11 @@ public sealed partial class SupportedFormatsPage : Page
     public SupportedFormatsPage()
     {
         InitializeComponent();
+        // The page's own title, as every page's title is in its XAML; everything under it comes from the core.
         Breadcrumb.ItemsSource = new[] { "Settings", "Supported formats" };
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
-
-    /// <summary>The words of the "On this PC" column.</summary>
-    internal static string SupportText(FormatSupport support) => support switch
-    {
-        FormatSupport.Hardware => "Hardware",
-        FormatSupport.Software => "Software",
-        FormatSupport.Plays => "Plays",
-        FormatSupport.ServerRepackages => "Server repackages",
-        FormatSupport.ServerConverts => "Server converts",
-        FormatSupport.Hdr => "HDR",
-        FormatSupport.ToneMapped => "Tone-mapped",
-        _ => "Not supported",
-    };
 
     // async void, as event handlers are: it catches everything itself.
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -118,7 +106,14 @@ public sealed partial class SupportedFormatsPage : Page
         DescriptionText.Text = formats.Description;
         HardwareText.Text = formats.HardwareNote;
         HardwareText.Visibility = formats.HardwareNote.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (Tabs.SelectedItem is null)
+        if (Tabs.Items.Count == 0)
+        {
+            foreach (var tab in formats.Tabs)
+            {
+                Tabs.Items.Add(new SelectorBarItem { Text = tab.Title, Tag = tab.Kind });
+            }
+        }
+        if (Tabs.SelectedItem is null && Tabs.Items.Count > 0)
         {
             // Raises SelectionChanged, which shows the tab.
             Tabs.SelectedItem = Tabs.Items[0];
@@ -133,13 +128,15 @@ public sealed partial class SupportedFormatsPage : Page
 
     private void ShowTab()
     {
-        if (_formats is null || Tabs.SelectedItem?.Tag is not string tag || !Enum.TryParse<FormatTabKind>(tag, out var kind))
+        if (_formats is null || Tabs.SelectedItem?.Tag is not FormatTabKind kind)
         {
             return;
         }
         var tab = _formats.Tabs.FirstOrDefault(t => t.Kind == kind);
         NameHeader.Text = tab?.NameHeader ?? "";
-        RowsList.ItemsSource = tab?.Rows.Select(row => new FormatRowView(row.Name, SupportText(row.Support), row.Notes)).ToList()
+        SupportHeader.Text = tab?.SupportHeader ?? "";
+        NotesHeader.Text = tab?.NotesHeader ?? "";
+        RowsList.ItemsSource = tab?.Rows.Select(row => new FormatRowView(row.Name, row.SupportLabel, row.Notes)).ToList()
             ?? new List<FormatRowView>();
     }
 

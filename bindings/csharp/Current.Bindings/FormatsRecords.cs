@@ -8,8 +8,14 @@ namespace Current.Bindings;
 /// </summary>
 public sealed record DecoderProfileFact(string Guid, bool Nv12, bool P010);
 
-/// <summary>What the app's test of the graphics card found (ADR 0021): the adapter's name, shown on the page, and its decoder profiles.</summary>
-public sealed record HardwareDecodeFacts(string Adapter, IReadOnlyList<DecoderProfileFact> Profiles);
+/// <summary>
+/// What the app's test of the graphics card found (ADR 0021): the adapter's name, shown on the page and never logged, and its decoder
+/// profiles. Its text form leaves the name out.
+/// </summary>
+public sealed record HardwareDecodeFacts(string Adapter, IReadOnlyList<DecoderProfileFact> Profiles)
+{
+    public override string ToString() => $"HardwareDecodeFacts {{ Adapter = <redacted>, Profiles = {Profiles.Count} }}";
+}
 
 /// <summary>The tabs of Settings' "Supported formats" page, in order.</summary>
 public enum FormatTabKind
@@ -39,13 +45,16 @@ public enum FormatSupport
     Hdr,
     /// <summary>HDR converted to SDR by the player.</summary>
     ToneMapped,
+    /// <summary>Not known: the player could not be started to find out.</summary>
+    Unknown,
 }
 
-/// <summary>One row: the format's name, the column, and a note (empty when there is nothing to say).</summary>
-public sealed record FormatRow(string Name, FormatSupport Support, string Notes);
+/// <summary>One row: the format's name, the column (its value and the word to show), and a note (empty when there is nothing to say).</summary>
+public sealed record FormatRow(string Name, FormatSupport Support, string SupportLabel, string Notes);
 
-/// <summary>One tab, with the name column's header ("Codec" or "Format").</summary>
-public sealed record FormatTab(FormatTabKind Kind, string NameHeader, IReadOnlyList<FormatRow> Rows);
+/// <summary>One tab: its title, its three column headers and its rows. Every word the page shows comes from the core.</summary>
+public sealed record FormatTab(
+    FormatTabKind Kind, string Title, string NameHeader, string SupportHeader, string NotesHeader, IReadOnlyList<FormatRow> Rows);
 
 /// <summary>The page, built by the core: the text above the tabs, what the Hardware column rests on, and the tabs.</summary>
 public sealed record SupportedFormats(string Description, string HardwareNote, IReadOnlyList<FormatTab> Tabs);
@@ -83,8 +92,11 @@ internal static class FormatsMap
         page.HardwareNote,
         Array.ConvertAll(page.Tabs, tab => new FormatTab(
             From(tab.Kind),
+            tab.Title,
             tab.NameHeader,
-            Array.ConvertAll(tab.Rows, row => new FormatRow(row.Name, From(row.Support), row.Notes)))));
+            tab.SupportHeader,
+            tab.NotesHeader,
+            Array.ConvertAll(tab.Rows, row => new FormatRow(row.Name, From(row.Support), row.SupportLabel, row.Notes)))));
 
     private static FormatTabKind From(Ffi.FormatTabKind kind) => kind switch
     {
@@ -104,6 +116,7 @@ internal static class FormatsMap
         Ffi.FormatSupport.ServerConverts => FormatSupport.ServerConverts,
         Ffi.FormatSupport.Hdr => FormatSupport.Hdr,
         Ffi.FormatSupport.ToneMapped => FormatSupport.ToneMapped,
+        Ffi.FormatSupport.Unknown => FormatSupport.Unknown,
         _ => FormatSupport.NotSupported,
     };
 }

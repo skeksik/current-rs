@@ -7,7 +7,8 @@
 //! closing one, and then wins: once a player's engine has reported, its capabilities are the ones kept. A probe that finds the slot
 //! held by a player fails `Busy` after `current-mpv`'s wait, and the player's capabilities answer instead.
 
-use std::sync::{Mutex, PoisonError};
+use std::future::Future;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use current_model::EngineCapabilities;
 
@@ -30,38 +31,63 @@ pub(crate) struct KnownCapabilities {
 }
 
 impl KnownCapabilities {
-    /// Keeps the capabilities an engine reported at its start.
+    /// Keeps the capabilities a player's engine reported at its start. They replace any others: a player's engine wins.
     pub(crate) fn remember(&self, capabilities: EngineCapabilities) {
         *self.known.lock().unwrap_or_else(PoisonError::into_inner) = Some(capabilities);
     }
 
-    fn known(&self) -> Option<EngineCapabilities> {
+    /// Keeps a headless engine's capabilities unless a player's are already known, and returns the ones kept.
+    fn fill(&self, capabilities: EngineCapabilities) -> EngineCapabilities {
+        self.known
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert(capabilities)
+            .clone()
+    }
+
+    pub(crate) fn known(&self) -> Option<EngineCapabilities> {
         self.known
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
-    /// The known capabilities, or those of a headless engine started now (on the blocking pool) when none are. A failed start is not
-    /// remembered: the next call tries again. Needs tokio's runtime.
-    pub(crate) async fn get(&self) -> EngineReport {
+    /// The known capabilities, or those of a headless engine started now (on the blocking pool) when none are. Needs tokio's runtime.
+    pub(crate) async fn get(self: &Arc<Self>) -> EngineReport {
+        self.get_with(probe).await
+    }
+
+    /// [`KnownCapabilities::get`] with the probe given. The probe runs in a task of its own, so it runs to its end and its answer is kept
+    /// even when the caller stops waiting (a page closed during it); the next caller finds it. A failed probe is not kept: the next call
+    /// tries again.
+    async fn get_with<P, F>(self: &Arc<Self>, probe: P) -> EngineReport
+    where
+        P: FnOnce() -> F + Send + 'static,
+        F: Future<Output = EngineReport> + Send + 'static,
+    {
         if let Some(capabilities) = self.known() {
             return EngineReport::Ready(capabilities);
         }
+        let this = Arc::clone(self);
+        tokio::spawn(async move { this.probe_once(probe).await })
+            .await
+            .unwrap_or(EngineReport::Failed)
+    }
+
+    async fn probe_once<P, F>(&self, probe: P) -> EngineReport
+    where
+        P: FnOnce() -> F,
+        F: Future<Output = EngineReport>,
+    {
         let _probing = self.probing.lock().await;
         if let Some(capabilities) = self.known() {
             return EngineReport::Ready(capabilities);
         }
-        let report = probe().await;
-        // A player that started meanwhile wins: its engine's capabilities are kept, and the headless one's (already shut down, or never
-        // started because the player held the slot) are dropped.
-        if let Some(capabilities) = self.known() {
-            return EngineReport::Ready(capabilities);
+        match probe().await {
+            EngineReport::Ready(capabilities) => EngineReport::Ready(self.fill(capabilities)),
+            // A probe that failed behind a player's start (the slot held past `current-mpv`'s wait) finds the player's capabilities.
+            other => self.known().map_or(other, EngineReport::Ready),
         }
-        if let EngineReport::Ready(capabilities) = &report {
-            self.remember(capabilities.clone());
-        }
-        report
     }
 }
 
@@ -85,22 +111,84 @@ async fn probe() -> EngineReport {
 
 #[cfg(all(test, not(feature = "libmpv")))]
 mod tests {
+    use std::time::Duration;
+
     use current_model::{Codec, CodecSupport};
 
     use super::*;
 
-    #[tokio::test]
-    async fn the_last_engine_start_wins_over_a_probe() {
-        let known = KnownCapabilities::default();
-        assert_eq!(
-            known.get().await,
-            EngineReport::Ready(super::super::test_engine::capabilities())
-        );
-        let other = EngineCapabilities {
+    fn other() -> EngineCapabilities {
+        EngineCapabilities {
             video: vec![CodecSupport::any(Codec::AV1)],
             ..EngineCapabilities::default()
-        };
-        known.remember(other.clone());
-        assert_eq!(known.get().await, EngineReport::Ready(other));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_probe_fills_once_and_a_player_start_replaces_it() {
+        let known = Arc::new(KnownCapabilities::default());
+        let test_engine = super::super::test_engine::capabilities();
+        assert_eq!(known.get().await, EngineReport::Ready(test_engine.clone()));
+        assert_eq!(known.known(), Some(test_engine));
+        known.remember(other());
+        assert_eq!(known.get().await, EngineReport::Ready(other()));
+    }
+
+    #[tokio::test]
+    async fn a_failed_probe_finds_what_a_player_remembered_meanwhile() {
+        let known = Arc::new(KnownCapabilities::default());
+        let player = Arc::clone(&known);
+        let report = known
+            .get_with(move || async move {
+                player.remember(other());
+                EngineReport::Failed
+            })
+            .await;
+        assert_eq!(report, EngineReport::Ready(other()));
+        // Without a player, a failure is reported and not kept.
+        let fresh = Arc::new(KnownCapabilities::default());
+        assert_eq!(
+            fresh.get_with(|| async { EngineReport::Failed }).await,
+            EngineReport::Failed
+        );
+        assert_eq!(fresh.known(), None);
+    }
+
+    #[tokio::test]
+    async fn a_probe_never_replaces_a_players_capabilities() {
+        let known = Arc::new(KnownCapabilities::default());
+        let player = Arc::clone(&known);
+        let report = known
+            .get_with(move || async move {
+                player.remember(other());
+                EngineReport::Ready(EngineCapabilities::default())
+            })
+            .await;
+        assert_eq!(report, EngineReport::Ready(other()));
+        assert_eq!(known.known(), Some(other()));
+    }
+
+    #[tokio::test]
+    async fn a_probe_whose_caller_gave_up_still_keeps_its_answer() {
+        let known = Arc::new(KnownCapabilities::default());
+        let slow = known.get_with(|| async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            EngineReport::Ready(other())
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), slow)
+                .await
+                .is_err()
+        );
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while known.known().is_none() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(known.known(), Some(other()));
+        // The next caller does not probe again.
+        assert_eq!(
+            known.get_with(|| async { EngineReport::Failed }).await,
+            EngineReport::Ready(other())
+        );
     }
 }

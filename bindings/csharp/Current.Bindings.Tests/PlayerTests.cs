@@ -241,10 +241,14 @@ internal static class PlayerTests
         Check(page.Tabs.Select(tab => tab.Kind).SequenceEqual(
             [FormatTabKind.Video, FormatTabKind.Audio, FormatTabKind.Containers, FormatTabKind.Subtitles, FormatTabKind.Hdr]), "five tabs in order");
         Check(page.Tabs.All(tab => tab.Rows.Count > 0), "every tab has rows");
+        Check(page.Tabs.Select(tab => tab.Title).SequenceEqual(["Video", "Audio", "Containers", "Subtitles", "HDR"]), "the core's tab titles");
+        Check(page.Tabs.All(tab => tab.SupportHeader == "On this PC" && tab.NotesHeader == "Notes"), "the core's column headers");
+        Check(!hardware.ToString().Contains("Example"), "the adapter's name stays out of the text form");
         Check(page.HardwareNote == "Tested on: Example Graphics", page.HardwareNote);
         // The test engine decodes HEVC and H.264 only; the card lists HEVC Main.
         var video = page.Tabs[0].Rows;
-        Check(video.Single(row => row.Name == "HEVC (H.265)").Support == FormatSupport.Hardware, "HEVC on the card");
+        var hevc = video.Single(row => row.Name == "HEVC (H.265)");
+        Check(hevc.Support == FormatSupport.Hardware && hevc.SupportLabel == "Hardware", "HEVC on the card");
         Check(video.Single(row => row.Name == "AV1").Support == FormatSupport.ServerConverts, "AV1 converted by the server");
         Check(page.Tabs[4].Rows.All(row => row.Support == FormatSupport.ToneMapped), "HDR tone-mapped on an SDR display");
         var unknown = await core.SupportedFormatsAsync(null, null);

@@ -9,8 +9,8 @@
     <Page.Resources>
         <!-- The rows' padding: Microsoft gives none for a table like this (none found in its design pages, read 2026-10-26), so 12 before
              the text and 8 above and below, multiples of 4 ("Screen sizes and breakpoints", learn.microsoft.com, ms.date 2026-07-13, read
-             2026-10-25), for the owner to check on their PC. The columns, in the header and in the item template alike: 240 for the name, 160
-             for the support, the rest for the notes, which wrap. -->
+             2026-10-25), for the owner to check on their PC. The columns, in the header and in the item template alike, share the width 3 : 2 : 5
+             (name, support, notes), so a narrow window narrows all three; every cell wraps. -->
         <Thickness x:Key="FormatRowPadding">12,8,12,8</Thickness>
     </Page.Resources>
     <Grid>
@@ -61,19 +61,14 @@
             <InfoBar x:Name="LoadInfo" Grid.Row="2" Margin="0,8,0,0" IsOpen="False" />
             <!-- Five tabs, one list each: "When a user selects an item in the selector bar, you typically change the view by ...
                  changing the data shown in a collection control" (Selector bar, learn.microsoft.com, ms.date 2025-02-26, read
-                 2026-10-26). Text only, as the owner's mock. The arrow keys move between items: the control's own keyboard handling. -->
+                 2026-10-26). Text only, as the owner's mock; the core gives the titles, so the items are added in code. The arrow keys
+                 move between items: the control's own keyboard handling. -->
             <SelectorBar
                 x:Name="Tabs"
                 Grid.Row="3"
                 Margin="0,12,0,0"
                 AutomationProperties.Name="Kind of format"
-                SelectionChanged="OnTabChanged">
-                <SelectorBarItem Text="Video" Tag="Video" />
-                <SelectorBarItem Text="Audio" Tag="Audio" />
-                <SelectorBarItem Text="Containers" Tag="Containers" />
-                <SelectorBarItem Text="Subtitles" Tag="Subtitles" />
-                <SelectorBarItem Text="HDR" Tag="Hdr" />
-            </SelectorBar>
+                SelectionChanged="OnTabChanged" />
             <!-- Column headers over the list, in the rows' columns (the item template below). Each row is also read whole, as
                  "name, support, notes". -->
             <!-- 4 more at each side: the list's items keep ListViewItem's default margin (4 at the sides, not verified; the owner checks
@@ -83,13 +78,13 @@
                 Margin="4,12,4,0"
                 Padding="{StaticResource FormatRowPadding}">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="240" />
-                    <ColumnDefinition Width="160" />
-                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="3*" />
+                    <ColumnDefinition Width="2*" />
+                    <ColumnDefinition Width="5*" />
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="NameHeader" Style="{StaticResource BodyStrongTextBlockStyle}" Text="Codec" />
-                <TextBlock Grid.Column="1" Style="{StaticResource BodyStrongTextBlockStyle}" Text="On this PC" />
-                <TextBlock Grid.Column="2" Style="{StaticResource BodyStrongTextBlockStyle}" Text="Notes" />
+                <TextBlock x:Name="NameHeader" Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap" />
+                <TextBlock x:Name="SupportHeader" Grid.Column="1" Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap" />
+                <TextBlock x:Name="NotesHeader" Grid.Column="2" Style="{StaticResource BodyStrongTextBlockStyle}" TextWrapping="Wrap" />
             </Grid>
         </Grid>
 
@@ -112,9 +107,9 @@
                     <DataTemplate x:DataType="local:FormatRowView">
                         <Grid Padding="{StaticResource FormatRowPadding}">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="240" />
-                                <ColumnDefinition Width="160" />
-                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="3*" />
+                                <ColumnDefinition Width="2*" />
+                                <ColumnDefinition Width="5*" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="{x:Bind Name}" TextWrapping="Wrap" />
                             <TextBlock Grid.Column="1" Text="{x:Bind Support}" TextWrapping="Wrap" />

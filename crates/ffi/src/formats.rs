@@ -17,11 +17,22 @@ pub struct DecoderProfileFact {
     pub p010: bool,
 }
 
-/// What the UI's test of the graphics card found: the adapter's name (shown on the page) and every decoder profile it lists.
-#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+/// What the UI's test of the graphics card found: the adapter's name (shown on the page, never logged) and every decoder profile it
+/// lists.
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
 pub struct HardwareDecodeFacts {
     pub adapter: String,
     pub profiles: Vec<DecoderProfileFact>,
+}
+
+impl std::fmt::Debug for HardwareDecodeFacts {
+    /// Leaves out the adapter's name.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HardwareDecodeFacts")
+            .field("adapter", &"<redacted>")
+            .field("profiles", &self.profiles)
+            .finish()
+    }
 }
 
 impl From<HardwareDecodeFacts> for current_app::HardwareDecoding {
@@ -82,6 +93,8 @@ pub enum FormatSupport {
     Hdr,
     /// HDR converted to SDR by the player.
     ToneMapped,
+    /// Not known: the player could not be started to find out.
+    Unknown,
 }
 
 impl From<current_app::FormatSupport> for FormatSupport {
@@ -96,23 +109,29 @@ impl From<current_app::FormatSupport> for FormatSupport {
             S::NotSupported => Self::NotSupported,
             S::Hdr => Self::Hdr,
             S::ToneMapped => Self::ToneMapped,
+            S::Unknown => Self::Unknown,
         }
     }
 }
 
-/// One row: the format's name, the column, and a note (empty when there is nothing to say).
+/// One row: the format's name, the column (its value and the word to show for it), and a note (empty when there is nothing to say).
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct FormatRow {
     pub name: String,
     pub support: FormatSupport,
+    pub support_label: String,
     pub notes: String,
 }
 
-/// One tab, with the name column's header ("Codec" or "Format").
+/// One tab: its title and the headers of its three columns ("Codec" or "Format", "On this PC", "Notes"), and its rows. Every word
+/// the page shows comes from the core.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct FormatTab {
     pub kind: FormatTabKind,
+    pub title: String,
     pub name_header: String,
+    pub support_header: String,
+    pub notes_header: String,
     pub rows: Vec<FormatRow>,
 }
 
@@ -134,13 +153,17 @@ impl From<current_app::SupportedFormats> for SupportedFormats {
                 .into_iter()
                 .map(|tab| FormatTab {
                     kind: tab.kind.into(),
+                    title: tab.title,
                     name_header: tab.name_header,
+                    support_header: tab.support_header,
+                    notes_header: tab.notes_header,
                     rows: tab
                         .rows
                         .into_iter()
                         .map(|row| FormatRow {
                             name: row.name,
                             support: row.support.into(),
+                            support_label: row.support_label,
                             notes: row.notes,
                         })
                         .collect(),
@@ -211,11 +234,26 @@ mod tests {
             .find(|row| row.name == "HEVC (H.265)")
             .unwrap();
         assert_eq!(hevc.support, FormatSupport::Hardware);
+        assert_eq!(hevc.support_label, "Hardware");
+        assert_eq!(video.title, "Video");
+        assert_eq!(
+            (video.support_header.as_str(), video.notes_header.as_str()),
+            ("On this PC", "Notes")
+        );
         assert!(
             page.tabs[4]
                 .rows
                 .iter()
                 .all(|row| row.support == FormatSupport::Hdr)
         );
+    }
+
+    #[test]
+    fn the_facts_hide_the_adapter_name() {
+        let facts = HardwareDecodeFacts {
+            adapter: "Example Graphics".into(),
+            profiles: Vec::new(),
+        };
+        assert!(!format!("{facts:?}").contains("Example"));
     }
 }
