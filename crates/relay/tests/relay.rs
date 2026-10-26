@@ -1335,3 +1335,24 @@ async fn removing_a_route_while_its_request_waits_upstream_ends_both() {
     .await
     .expect("the pending upstream request is dropped");
 }
+
+#[tokio::test]
+async fn a_range_from_inside_a_media_file_is_not_sniffed() {
+    // Whitespace, or even the magic, in the middle of a media file is media: only a body from its first byte is sniffed.
+    let upstream = Fake::new(|_| {
+        Ok(answer(
+            206,
+            &[
+                ("content-type", "video/mp4"),
+                ("content-range", "bytes 100-114/1000"),
+                ("content-length", "15"),
+            ],
+            "#EXTM3U\nhttp://",
+        ))
+    });
+    let mut setup = setup(upstream);
+    let reply = get(&setup, "/Videos/abc/stream", "Range: bytes=100-114\r\n").await;
+    assert_eq!(reply.status, 206);
+    assert_eq!(reply.body, b"#EXTM3U\nhttp://");
+    assert!(drain(&mut setup.events).is_empty());
+}

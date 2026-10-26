@@ -7,8 +7,8 @@
 //!   and a [`RelayEvents`] sink. Dropping it aborts its open connections.
 //! - Refused before anything goes upstream: a wrong token or a path outside the prefixes (404), a `Host` other than
 //!   `127.0.0.1:<port>`, an absolute-form target or a request body (400), any `Origin` (403), methods other than GET and HEAD (405).
-//! - Only `current-net`'s `STREAM_REQUEST_HEADERS` go upstream and only its `STREAM_RESPONSE_HEADERS` come back; HLS playlists are rewritten so that every URI
-//!   points back at the route, without `ApiKey`, or the playlist fails.
+//! - Only `current-net`'s `STREAM_REQUEST_HEADERS` go upstream and only its `STREAM_RESPONSE_HEADERS` come back; HLS playlists are
+//!   rewritten so that every URI points back at the route, without `ApiKey`, or the playlist fails.
 //! - It knows no service: whatever implements [`Upstream`] can be relayed.
 //!
 //! No Debug, Display or error of this crate shows a URL, a token or a credential.

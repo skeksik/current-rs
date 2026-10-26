@@ -175,23 +175,25 @@ async fn forward(route: Arc<RouteEntry>, request: UpstreamRequest) -> Response<R
     let mut head: Vec<Bytes> = Vec::new();
     let mut sniffed = Vec::new();
     let mut done = false;
+    // Only a body from its first byte: a seek into a media file can land anywhere, whitespace included.
     let playlist = declared
-        || loop {
-            if let Some(playlist) = starts_like_playlist(&sniffed, done) {
-                break playlist;
-            }
-            match body.chunk().await {
-                Ok(Some(chunk)) => {
-                    sniffed.extend_from_slice(&chunk);
-                    head.push(chunk);
+        || from_start(&headers)
+            && loop {
+                if let Some(playlist) = starts_like_playlist(&sniffed, done) {
+                    break playlist;
                 }
-                Ok(None) => done = true,
-                Err(_) => {
-                    route.events.report(RelayEvent::Network);
-                    return empty(StatusCode::BAD_GATEWAY);
+                match body.chunk().await {
+                    Ok(Some(chunk)) => {
+                        sniffed.extend_from_slice(&chunk);
+                        head.push(chunk);
+                    }
+                    Ok(None) => done = true,
+                    Err(_) => {
+                        route.events.report(RelayEvent::Network);
+                        return empty(StatusCode::BAD_GATEWAY);
+                    }
                 }
-            }
-        };
+            };
     drop(sniffed);
     if playlist {
         let rest = (!done).then_some(body);
@@ -262,6 +264,15 @@ async fn rewrite_playlist(
         .headers_mut()
         .insert(CONTENT_LENGTH, HeaderValue::from(length));
     answer
+}
+
+/// Whether an answer's body starts at the resource's first byte: no `Content-Range`, or one from 0.
+fn from_start(headers: &HeaderMap) -> bool {
+    headers.get(CONTENT_RANGE).is_none_or(|range| {
+        range
+            .to_str()
+            .is_ok_and(|range| range.starts_with("bytes 0-"))
+    })
 }
 
 /// Whether a 206's `Content-Range` (`bytes 0-<end>/<total>`) covers the whole resource, `length` bytes long.

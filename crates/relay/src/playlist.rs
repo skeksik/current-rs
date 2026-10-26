@@ -126,63 +126,72 @@ impl Rewriter<'_> {
                 return Err(malformed);
             }
             if index > 0 {
-                out.push('\n');
+                append(&mut out, "\n")?;
             }
             let trimmed = line.trim();
             if index == 0 {
                 if trimmed != "#EXTM3U" {
                     return Err(malformed);
                 }
-                out.push_str(line);
+                append(&mut out, line)?;
             } else if let Some(tag) = trimmed.strip_prefix('#') {
                 if tag.starts_with("EXT") {
-                    out.push('#');
-                    out.push_str(&self.tag(tag)?);
+                    append(&mut out, "#")?;
+                    self.tag(tag, &mut out)?;
                 } else {
-                    out.push_str(line);
+                    append(&mut out, line)?;
                 }
             } else if trimmed.is_empty() {
-                out.push_str(line);
+                append(&mut out, line)?;
             } else {
-                out.push_str(&self.uri(trimmed)?);
+                append(&mut out, &self.uri(trimmed)?)?;
             }
-            out.push_str(end);
-            if out.len() > MAX_REWRITTEN_BYTES {
-                return Err(PlaylistError::TooLarge);
-            }
+            append(&mut out, end)?;
         }
         Ok(out)
     }
 
-    /// A tag (without its `#`) with every `URI` and `*-URI` attribute rewritten. A value that is a strict attribute list (RFC 8216
-    /// §4.2) is written out again attribute by attribute, so the player reads exactly what was checked. A value that is not one
-    /// (EXTINF's duration and title, a byte range, a date) passes unchanged only if nothing in it could be read as an attribute or a
-    /// quote by a laxer parser: FFmpeg's (`ff_parse_key_value`) ends an unquoted value at whitespace, opens a quote only at a value's
-    /// start and honours `\` escapes inside quotes, so `IV=0x1 URI="..."` or `X=a"b,URI="..."` would hide a URI from a loose split.
-    fn tag(&self, tag: &str) -> Result<String, PlaylistError> {
+    /// A tag (without its `#`) with every `URI` and `*-URI` attribute rewritten, appended to `out`. A value that is a strict
+    /// attribute list (RFC 8216 §4.2) is written out again attribute by attribute, so the player reads exactly what was checked. A
+    /// value that is not one (EXTINF's duration and title, a byte range, a date) passes unchanged only if nothing in it could be read
+    /// as an attribute or a quote by a laxer parser: FFmpeg's (`ff_parse_key_value`) ends an unquoted value at whitespace, opens a
+    /// quote only at a value's start and honours `\` escapes inside quotes, so `IV=0x1 URI="..."` or `X=a"b,URI="..."` would hide a URI
+    /// from a loose split.
+    ///
+    /// The output's limit is checked before every attribute: a single line of many short URIs under a long path must not grow far
+    /// past it before it is caught.
+    fn tag(&self, tag: &str, out: &mut String) -> Result<(), PlaylistError> {
         let Some((name, value)) = tag.split_once(':') else {
-            return Ok(tag.to_owned());
+            return append(out, tag);
         };
         let Some(attributes) = attribute_list(value) else {
             let upper = value.to_ascii_uppercase();
             if value.contains(['"', '\\']) || upper.contains("URI=") {
                 return Err(PlaylistError::Malformed);
             }
-            return Ok(tag.to_owned());
+            return append(out, tag);
         };
-        let mut pieces = Vec::with_capacity(attributes.len());
-        for (attribute, value) in attributes {
+        append(out, name)?;
+        append(out, ":")?;
+        for (at, (attribute, value)) in attributes.into_iter().enumerate() {
+            if at > 0 {
+                append(out, ",")?;
+            }
+            append(out, attribute)?;
+            append(out, "=")?;
             if attribute != "URI" && !attribute.ends_with("-URI") {
-                pieces.push(format!("{attribute}={value}"));
+                append(out, value)?;
                 continue;
             }
             let uri = value
                 .strip_prefix('"')
                 .and_then(|value| value.strip_suffix('"'))
                 .ok_or(PlaylistError::Malformed)?;
-            pieces.push(format!("{attribute}=\"{}\"", self.uri(uri)?));
+            append(out, "\"")?;
+            append(out, &self.uri(uri)?)?;
+            append(out, "\"")?;
         }
-        Ok(format!("{name}:{}", pieces.join(",")))
+        Ok(())
     }
 
     /// `uri` resolved against the playlist and turned into a path on the relay, if it is on the server's address and inside the
@@ -228,6 +237,15 @@ impl Rewriter<'_> {
         }
         Ok(out)
     }
+}
+
+/// Appends `text` to a rewritten playlist, unless that would take it past [`MAX_REWRITTEN_BYTES`].
+fn append(out: &mut String, text: &str) -> Result<(), PlaylistError> {
+    if out.len() + text.len() > MAX_REWRITTEN_BYTES {
+        return Err(PlaylistError::TooLarge);
+    }
+    out.push_str(text);
+    Ok(())
 }
 
 /// A raw query without its `ApiKey` and `api_key` pairs (in any case), the others as they were written.
@@ -461,6 +479,40 @@ mod tests {
             text.push_str("a\n");
         }
         assert_eq!(rewrite(&text), Err(PlaylistError::TooLarge));
+    }
+
+    #[test]
+    fn one_long_tag_line_fails_once_its_output_would_pass_the_limit() {
+        // 1,000 two-byte URIs, each becoming a path of over 4 KiB: about 500 times the input, in one line.
+        let deep = format!("/videos/abc/{}/main.m3u8", "d".repeat(4096));
+        let mut line = String::from("#EXT-X-FUTURE:A=1");
+        for _ in 0..1_000 {
+            line.push_str(",URI=\"x\"");
+        }
+        let text = format!("#EXTM3U\n{line}\n");
+        let base = url("https://media.example.com/jf/");
+        let playlist = url(&format!("https://media.example.com/jf{deep}"));
+        let prefixes = Prefixes::new(vec!["/Videos/abc/".into()]).unwrap();
+        let rewriter = Rewriter {
+            playlist: &playlist,
+            base: &base,
+            prefixes: &prefixes,
+            token: TOKEN,
+        };
+        // Under the limit the line is rewritten in full; over it, the line fails before the output passes the limit.
+        assert!(rewriter.rewrite(&text).unwrap().len() > 4_000_000);
+        let mut long = String::from("#EXT-X-FUTURE:A=1");
+        for _ in 0..5_000 {
+            long.push_str(",URI=\"x\"");
+        }
+        assert_eq!(
+            rewriter.rewrite(&format!("#EXTM3U\n{long}\n")),
+            Err(PlaylistError::TooLarge)
+        );
+        let mut out = "a".repeat(MAX_REWRITTEN_BYTES - 1);
+        assert_eq!(append(&mut out, "bc"), Err(PlaylistError::TooLarge));
+        assert_eq!(out.len(), MAX_REWRITTEN_BYTES - 1);
+        assert_eq!(append(&mut out, "b"), Ok(()));
     }
 
     #[test]

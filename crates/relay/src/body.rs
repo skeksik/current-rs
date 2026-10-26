@@ -6,11 +6,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use current_net::StreamError;
 use hyper::body::{Body, Bytes, Frame};
 
 use crate::events::{RelayEvent, RouteEvents};
-use current_net::StreamError;
-
 use crate::upstream::UpstreamBody;
 
 /// The upstream body broke off; the player's connection is closed. No detail: it could name the server.
