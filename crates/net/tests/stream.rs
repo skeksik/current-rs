@@ -271,14 +271,20 @@ async fn a_large_body_streams_with_bounded_memory() {
         assert!(chunk.len() <= MIB, "a chunk of {} bytes", chunk.len());
         read += chunk.len();
     }
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let stalled = written.load(Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(
-        written.load(Ordering::SeqCst),
-        stalled,
-        "the stand-in kept writing"
-    );
+    // The writes stop once the buffers are full. Windows grows its socket buffers for a while after the reader stops (seen on CI:
+    // 1.38 MB, then 1.51 MB 500 ms later), so wait for two readings 500 ms apart to agree, for at most 10 s.
+    let mut stalled = written.load(Ordering::SeqCst);
+    let mut settled = false;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let now = written.load(Ordering::SeqCst);
+        if now == stalled {
+            settled = true;
+            break;
+        }
+        stalled = now;
+    }
+    assert!(settled, "the stand-in kept writing: {stalled} bytes");
     // Socket buffers on both ends and hyper's read buffer hold the difference; Linux allows a few MiB per socket by default.
     assert!(
         stalled < (16 * MIB) as u64,
