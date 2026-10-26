@@ -36,10 +36,11 @@ pub use browse::{
     Chapter, DetailsView, EpisodeLinks, HomeFeed, HomeRow, HomeRowDiff, HomeRowKind,
     HomeRowsListener, HomeState, HomeStateListener, ImageProblem, ImageRef, ImageRequest,
     ImageSource, ItemAction, ItemDetails, ItemDetailsListener, ItemQuery, ItemRef, ItemSummary,
-    ItemSummaryDiff, ItemsListener, LibrariesListener, Library, LoadState, LoadStateListener,
-    MediaSummary, NoticeKind, PagedItems, PagedState, PagedStateListener, Person, SearchGroup,
-    SearchGroupDiff, SearchGroupsListener, SearchResults, SeriesRun, Slot, SlotDiff, SlotsListener,
-    SortChoice, SortOrder, StreamSummary, UserState, library_filter_choices, library_query,
+    ItemSummaryDiff, ItemsListener, LibrariesListener, Library, LibraryChoices,
+    LibraryMemorySettings, LibraryView, LoadState, LoadStateListener, MediaSummary, NoticeKind,
+    PagedItems, PagedState, PagedStateListener, Person, SearchGroup, SearchGroupDiff,
+    SearchGroupsListener, SearchResults, SeriesRun, Slot, SlotDiff, SlotsListener, SortChoice,
+    SortOrder, StreamSummary, UserState, library_filter_choices, library_query,
     library_sort_choices,
 };
 pub use cancel::CancelToken;

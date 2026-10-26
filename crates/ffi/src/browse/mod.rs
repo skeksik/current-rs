@@ -1,13 +1,15 @@
 //! Browsing across the bridge (ADR 0018, section 7): [`Core::browse`] gives a [`Browse`] for a signed-in Jellyfin server, with library
 //! grids ([`PagedItems`]), Home ([`HomeFeed`]), detail pages ([`DetailsView`]) and search ([`SearchResults`]); played and favourite
 //! changes go through it, and their notices through [`Core::subscribe_browse_notices`]. [`Core::load_image`] hands the UI an
-//! image's encoded bytes; [`Core::image_cache_size`] and [`Core::clear_image_cache`] serve Settings → Storage. Lists and values use the shapes of `subscribe` (ADR 0004).
+//! image's encoded bytes; [`Core::image_cache_size`] and [`Core::clear_image_cache`] serve Settings → Storage. Settings' switches
+//! that remember each library's sort, filter and view, and the choices remembered, are in `remember`. Lists and values use the shapes of `subscribe` (ADR 0004).
 //!
 //! Each object holds its `current-app` counterpart: dropping it (every foreign reference, and every subscription it started)
 //! stops its requests.
 
 mod problems;
 mod records;
+mod remember;
 
 use std::sync::Arc;
 
@@ -24,6 +26,7 @@ pub use records::{
     PagedState, Person, PlayTarget, SearchGroup, SearchGroupDiff, SeriesRun, Slot, SlotDiff,
     SortChoice, SortOrder, StreamSummary, UserState,
 };
+pub use remember::{LibraryChoices, LibraryMemorySettings, LibraryView};
 
 /// Receives a grid's slots: `[Reset]` first, then batches of diffs, on a core thread. Apply each batch in order. It must only hand
 /// the batch to the UI thread and return, and must never throw.
