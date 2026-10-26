@@ -1,6 +1,7 @@
 # 0020: A loopback relay for streams behind a gateway
 
-Status: proposed (2026-10-26), from the loopback relay spike; accepted when its PR merges and the owner has decided the open choices.
+Status: accepted (2026-10-26); open choices decided by the owner 2026-10-26 (see "Decided by the owner"). From the loopback relay
+spike.
 Research, quotes and sources: `docs/notes/loopback-relay.md`. No product code was written.
 
 ## Context
@@ -34,7 +35,7 @@ What the research found (details and quotes in the notes):
 - **Today a gateway refusal mid-play is invisible to the core:** mpv's request fails, the controller sees an engine error and falls back
   or fails with `Engine { kind }` (`crates/playback/src/controller.rs`, `engine_failed`). A relay sees the status.
 
-## Decision (as proposed)
+## Decision
 
 ### What the relay is
 A small HTTP/1.1 server in the core, bound to `127.0.0.1` on a random port, that forwards a player's GET and HEAD requests to the
@@ -132,6 +133,23 @@ the container.
 - **AVPlayer (M3):** the engine is given the relay URL for gateway streams; the app sets `NSAllowsLocalNetworking`; no resource loader.
 - **Images and subtitles:** no change. The core fetches image bytes (ADR 0018 choice A) and external subtitles (ADR 0019) itself.
 
+## Decided by the owner (2026-10-26)
+"All as recommended."
+1. Where the relay applies: **A**, every stream on an address with gateway credentials, on every platform.
+2. The HTTP server: **B, hyper's server.** Approved dependencies, at exact versions: `hyper` 1.12.0 (features `server`, `http1`),
+   `hyper-util` 0.1.21 (feature `tokio`), `http-body-util` 0.1.5 and `httpdate` 1.0.3, plus `http` and `bytes` if the code names them
+   directly (at the versions in the lock file: `http` 1.5.0, `bytes` 1.12.1).
+3. Which crate: **A**, a new `current-relay`.
+4. The session token in player URLs: **B**, the relay strips `ApiKey` and `current-net` adds the token upstream.
+5. A playlist URI off the server's origin: **A**, the playlist fails (`PlaylistElsewhere`).
+6. Roaming during playback: **A**, relayed streams follow the selected address with its own credentials.
+7. The relay's lifetime: **A**, one per app, listening only while a route exists.
+8. The playlist check: **A**, removed when the relay lands; `current-mpv`'s refusal kept as a guard.
+
+The amendments below are written into the other ADRs by the implementation tasks, not by this record.
+
+The options as they were put to the owner follow.
+
 ## Open choices (as proposed)
 
 1. **Where the relay applies.** A (recommended): every stream on an address with gateway credentials, on every platform. B: every
@@ -180,7 +198,7 @@ the container.
 8. **The playlist check.** A (recommended): removed when the relay lands, `current-mpv`'s refusal kept as a guard. B: kept as well (a
    second fetch of every playlist before play, for no added protection). **Recommendation: A.**
 
-## Amendments it would make to merged ADRs (listed, not applied)
+## Amendments to merged ADRs (approved with the choices; written by the tasks)
 - **ADR 0019, "Gateways, tokens and the player":** gateway cookies and headers no longer go to FFmpeg; streams on gateway addresses go
   through the relay; "Playlists and headers" is replaced by this record (the check, `playlist_checked` and `check_playlist` removed);
   with choice 4 B, `ApiKey` is not in relayed URLs; refusals on streams reach the 401 rule through `RelayRefused`; choice 5's
@@ -203,7 +221,7 @@ Each task is its own branch and PR (CLAUDE.md). 1 and 2 can run in parallel; 3 n
    streamed with bounded memory (the stand-in pauses and the client's reads stop), `Range` and `If-Range` forwarded and `206` with
    `Content-Range` returned, a cookie set mid-stream updates the gateway, a redirect is a refusal with nothing followed, a dropped
    response closes the upstream connection, and no log line holds a token, cookie or header value.
-2. **`current-relay`: the relay** (feat/loopback-relay, after the owner approves choice 2). Listener, routes, refusals, forwarding over
+2. **`current-relay`: the relay** (feat/loopback-relay). Listener, routes, refusals, forwarding over
    an `Upstream` trait, playlist rewriting (the parser moved from `hls.rs`), events, connection limit, cancellation. Done when: tests
    with a fake upstream cover a wrong token, a path outside the prefixes, a foreign `Host`, an `Origin` header, other methods, an
    absolute-form target and a body (all refused, nothing upstream); playlists with relative, absolute same-origin, off-origin, `URI=`
@@ -235,7 +253,7 @@ Each task is its own branch and PR (CLAUDE.md). 1 and 2 can run in parallel; 3 n
 - The core runs a local listener while gateway streams play: one more thing to keep safe, with its own tests.
 - Two stream paths exist (direct for addresses without a gateway, relayed with one).
 - One new crate in the lock file (`httpdate`) and three to five new direct dependencies already in it (hyper, hyper-util,
-  http-body-util; `http` and `bytes` if named directly), if choice 2 B is approved.
+  http-body-util; `http` and `bytes` if named directly), approved by the owner (2026-10-26).
 - Not verified: firewall prompts on Windows and macOS, ATS for `http://127.0.0.1` with and without `NSAllowsLocalNetworking`,
   connection counts per player, and Jellyfin's header token on segment endpoints. Each has a task above.
 
