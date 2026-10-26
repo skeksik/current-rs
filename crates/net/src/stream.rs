@@ -8,6 +8,7 @@ use bytes::Bytes;
 use reqwest::Method;
 use reqwest::header::{self, HeaderMap, HeaderName};
 use tokio::time::Instant;
+use url::Url;
 
 use crate::address::{AddressOutcome, AddressProvider, Selected};
 use crate::client::{Request, Response, ServerClient, gateway_for, join};
@@ -109,6 +110,8 @@ impl StreamError {
 pub struct StreamResponse {
     status: u16,
     headers: HeaderMap,
+    /// The base address the request went to; see [`StreamResponse::base`].
+    base: Url,
     body: reqwest::Response,
     read_timeout: Duration,
     failed: Option<StreamError>,
@@ -144,6 +147,13 @@ impl StreamResponse {
     /// The answer's headers that are on [`STREAM_RESPONSE_HEADERS`], and no others.
     pub fn headers(&self) -> &HeaderMap {
         &self.headers
+    }
+
+    /// The server's base address this request went to (after a roaming retry, the new one), including any path prefix, without
+    /// user info, query or fragment, and without the credentials the request carried: what an HLS playlist is resolved against.
+    /// Not in `Debug`, and never logged.
+    pub fn base(&self) -> &Url {
+        &self.base
     }
 
     /// The next chunk of the body as the server sent it, or `None` at its end (at once for HEAD and 304). Waits at most the read
@@ -330,6 +340,7 @@ impl ServerClient {
         Ok(StreamResponse {
             status,
             headers,
+            base: bare(selected.url()),
             body: response,
             read_timeout: request.read_timeout.unwrap_or(DEFAULT_READ_TIMEOUT),
             failed: None,
@@ -382,6 +393,17 @@ impl ServerClient {
     }
 }
 
+/// `url` without user info, query or fragment.
+fn bare(url: &Url) -> Url {
+    let mut url = url.clone();
+    // Fails only for URLs that cannot have user info, which then have none.
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+    url
+}
+
 fn push(log: &RequestLog, entry: LogEntry) {
     tracing::debug!(target: "current_net", "{}", entry.to_line());
     log.push(entry);
@@ -420,5 +442,11 @@ mod tests {
         };
         assert_eq!(page.outcome(), Outcome::Error("sign-in page"));
         assert_eq!(StreamError::Timeout.outcome(), Outcome::Error("timeout"));
+    }
+
+    #[test]
+    fn a_base_has_no_user_info_query_or_fragment() {
+        let url = Url::parse("https://user:pass@media.example.com:8443/jf/?a=1#f").unwrap();
+        assert_eq!(bare(&url).as_str(), "https://media.example.com:8443/jf/");
     }
 }

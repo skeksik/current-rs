@@ -404,6 +404,7 @@ async fn range_and_if_range_are_forwarded_and_206_comes_back() {
     assert!(!sent.contains("player-agent"), "{sent}");
 
     assert_eq!(stream.status(), 206);
+    assert_eq!(stream.base(), &stand_in.url());
     let headers = stream.headers();
     assert_eq!(headers[header::CONTENT_RANGE], "bytes 100-199/1000");
     assert_eq!(headers[header::CONTENT_LENGTH], "100");

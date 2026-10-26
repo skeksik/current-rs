@@ -448,6 +448,11 @@ async fn a_stream_is_retried_once_on_the_new_address_after_a_connect_failure() {
         Some(&b"{}"[..])
     );
     assert_eq!(position(&roaming), Some(2));
+    // The base it went to is the second address's.
+    assert_eq!(
+        stream.base().as_str(),
+        format!("http://127.0.0.1:{}/", second.port)
+    );
     assert_eq!(second.count("GET", "/Videos/1/stream"), 1);
     // The token went to the new address, as for any request.
     assert!(second.received().iter().any(|head| head.contains(SECRET)));
