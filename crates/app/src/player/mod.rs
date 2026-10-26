@@ -24,6 +24,8 @@
 
 mod backend;
 mod driver;
+#[cfg(test)]
+mod live_tests;
 mod mpv;
 mod now_playing;
 mod prefs;

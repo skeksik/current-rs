@@ -927,6 +927,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         );
         let file = EngineFile {
             references: hls || !stream.relayed,
+            hls,
             url: stream.url,
             auth: stream.auth,
             start,

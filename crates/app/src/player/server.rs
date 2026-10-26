@@ -111,8 +111,12 @@ impl JellyfinMedia {
             })
             // No port, no random bytes, or an item id the relay cannot serve: no stream connection for it.
             .map_err(|_| PlaybackProblem::LocalRelay)?;
+        let url = route.url(path);
+        // The live tests record what libmpv sends to the relay through a tap in between (`live_tests`).
+        #[cfg(test)]
+        let url = super::live_tests::through_tap(url);
         let stream = EngineStream {
-            url: StreamUrl::new(route.url(path)),
+            url: StreamUrl::new(url),
             auth: StreamAuth {
                 secrets: vec![route.token().to_owned()],
             },

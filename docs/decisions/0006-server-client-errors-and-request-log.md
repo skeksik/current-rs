@@ -1,6 +1,6 @@
 # 0006: Server client, errors and request log
 
-Status: accepted (2026-10-22).
+Status: accepted (2026-10-22). Amended 2026-10-24 (ADR 0017) and 2026-10-26 (ADR 0020), below.
 
 ## Context
 `current-net` is the one HTTP client every service crate builds on. Its errors reach the UI, and its log is meant to be pasted into bug
@@ -56,6 +56,12 @@ Approved by the owner as ADR 0017's "Proposed amendments" lists it:
   Debug).
 - `ServerClient` gains the per-address gateway layer (ADR 0017's "Where the credentials go").
 - `Redirected` and HTML answers feed the classification (ADR 0017's "Classifying the answer").
+
+## Amendment (2026-10-26, from ADR 0020)
+Amended 2026-10-26 (ADR 0020), approved by the owner with ADR 0020's choices: requests that the loopback relay sends for a player
+(`ServerClient::send_stream`) enter the request log only when they fail (status 400 and up, or a network error), so a long HLS
+stream (about 1,200 segment requests in two hours) does not push everything else out of the ring buffer. Logged lines follow the
+rules above.
 
 ## Consequences
 - A UI can map each error to one message and action (sign in again, retry, check the connection) without parsing text.

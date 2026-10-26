@@ -526,6 +526,7 @@ fn the_test_engine_records_a_load_without_its_url() {
             audio: EngineTrack::Auto,
             subtitle: EngineTrack::Auto,
             references: false,
+            hls: false,
         })
         .unwrap();
     assert_eq!(

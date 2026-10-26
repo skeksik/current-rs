@@ -265,6 +265,8 @@ pub struct FileRequest {
     playlist_checked: bool,
     /// Set only through [`FileRequest::without_references`].
     no_references: bool,
+    /// Set only through [`FileRequest::hls_only`].
+    hls_only: bool,
 }
 
 impl std::fmt::Debug for FileRequest {
@@ -286,6 +288,7 @@ impl std::fmt::Debug for FileRequest {
             .field("secrets", &self.secrets.len())
             .field("playlist_checked", &self.playlist_checked)
             .field("no_references", &self.no_references)
+            .field("hls_only", &self.hls_only)
             .finish()
     }
 }
@@ -302,6 +305,7 @@ impl FileRequest {
             secrets: Vec::new(),
             playlist_checked: false,
             no_references: false,
+            hls_only: false,
         }
     }
 
@@ -317,6 +321,19 @@ impl FileRequest {
     /// is not verified.
     pub fn without_references(mut self) -> FileRequest {
         self.no_references = true;
+        self
+    }
+
+    /// Opens the file with FFmpeg's `hls` demuxer and nothing else (mpv's `demuxer=lavf`, `demuxer-lavf-format=hls`): for an HLS
+    /// stream, which may open references (its playlists and segments). Without it mpv tries its own demuxers too, and with references
+    /// allowed its playlist and EDL readers take a body that is not HLS (a `[playlist]` file, an `[InternetShortcut]`, an mpv EDL)
+    /// and open the URLs it names directly: past the loopback relay, which rewrites only HLS playlists. Seen on libmpv with a `pls`
+    /// body on a relayed HLS route (ADR 0020 task 4's live test); mpv v0.41.0 `demux/demux_playlist.c` and `demux/demux_edl.c`
+    /// (read 2026-10-26) read such bodies only while `access-references` is on. FFmpeg's `hls` demuxer refuses a playlist whose
+    /// first line is not `#EXTM3U` (FFmpeg 9.0.2 `libavformat/hls.c`, `parse_playlist`, read 2026-10-26), and every `#EXTM3U` body
+    /// on a relayed route is rewritten by the relay.
+    pub fn hls_only(mut self) -> FileRequest {
+        self.hls_only = true;
         self
     }
 
@@ -448,6 +465,10 @@ impl FileRequest {
             // to any host whose name ends in the stream's (FFmpeg matches a cookie domain as a suffix). mpv's
             // `block_io_open` refuses them ("Not opening '%s' due to --access-references=no", `demux/demux_lavf.c`).
             pairs.push(("access-references".into(), "no".into()));
+        }
+        if self.hls_only {
+            pairs.push(("demuxer".into(), "lavf".into()));
+            pairs.push(("demuxer-lavf-format".into(), "hls".into()));
         }
         Node::string_map(pairs)
     }
@@ -883,6 +904,22 @@ mod tests {
             guarded.check_header_scope(),
             Err(EngineError::UncheckedPlaylist)
         ));
+    }
+
+    #[test]
+    fn an_hls_stream_is_opened_with_the_hls_demuxer_only() {
+        let hls = FileRequest::new("http://127.0.0.1:50123/route/videos/1/master.m3u8").hls_only();
+        let options = hls.file_options();
+        assert_eq!(options.get("demuxer").and_then(Node::as_str), Some("lavf"));
+        assert_eq!(
+            options.get("demuxer-lavf-format").and_then(Node::as_str),
+            Some("hls")
+        );
+        // References stay allowed: the segments are references.
+        assert!(options.get("access-references").is_none());
+        let plain = FileRequest::new("http://127.0.0.1:50123/route/Videos/1/stream");
+        assert!(plain.file_options().get("demuxer").is_none());
+        assert!(plain.file_options().get("demuxer-lavf-format").is_none());
     }
 
     #[test]
