@@ -61,7 +61,34 @@
                                             <TextBlock
                                                 Style="{StaticResource SectionHeaderTextBlockStyle}"
                                                 AutomationProperties.HeadingLevel="Level3"
-                                                Text="{x:Bind Title}" />
+                                                Text="{x:Bind Title}"
+                                                Visibility="{x:Bind HeaderTextVisibility}" />
+                                            <!-- A row with a page of its own (a library's latest): its header is a link to it, with a
+                                                 chevron, still a heading for Narrator (owner, 2026-10-26; no Microsoft guideline for a
+                                                 clickable section header found, not verified). The margin takes back the button's
+                                                 padding (ButtonPadding 11,5,11,6, generic.xaml of Microsoft.WindowsAppSDK.WinUI 2.3.9),
+                                                 so the text sits where the plain header's does (SectionHeaderTextBlockStyle's 0,12,0,8).
+                                                 Glyph: Segoe Fluent Icons E76C "ChevronRight" ("Segoe Fluent Icons font",
+                                                 learn.microsoft.com, ms.date 2026-10-13, not re-read for this). The tooltip names where
+                                                 it goes: "Add tooltips to hyperlinks that indicate to where the user will be directed"
+                                                 (Hyperlinks page, learn.microsoft.com, ms.date 2025-02-26, read 2026-10-26). -->
+                                            <HyperlinkButton
+                                                Margin="-11,7,0,2"
+                                                Tag="{x:Bind}"
+                                                ToolTipService.ToolTip="{x:Bind HeaderLinkTip}"
+                                                Click="OnRowHeader"
+                                                AutomationProperties.HeadingLevel="Level3"
+                                                AutomationProperties.Name="{x:Bind Title}"
+                                                Visibility="{x:Bind HeaderLinkVisibility}">
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <TextBlock
+                                                        Style="{StaticResource SubtitleTextBlockStyle}"
+                                                        TextTrimming="CharacterEllipsis"
+                                                        TextWrapping="NoWrap"
+                                                        Text="{x:Bind Title}" />
+                                                    <FontIcon VerticalAlignment="Center" FontSize="16" Glyph="&#xE76C;" />
+                                                </StackPanel>
+                                            </HyperlinkButton>
                                             <!-- The right padding keeps the last tile off the window's edge, less the 4 each item
                                                  has on its right by default (LibraryPage.xaml). -->
                                             <!-- The bottom padding keeps the scroll bar off the tiles: with the 4 each item has below it, 20, the bar's

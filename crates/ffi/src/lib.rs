@@ -40,7 +40,7 @@ pub use browse::{
     MediaSummary, NoticeKind, PagedItems, PagedState, PagedStateListener, Person, SearchGroup,
     SearchGroupDiff, SearchGroupsListener, SearchResults, SeriesRun, Slot, SlotDiff, SlotsListener,
     SortChoice, SortOrder, StreamSummary, UserState, library_filter_choices, library_query,
-    library_sort_choices,
+    library_sort_choices, recently_added_query,
 };
 pub use cancel::CancelToken;
 pub use error::CoreError;

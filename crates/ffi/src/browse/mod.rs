@@ -256,6 +256,12 @@ pub fn library_query(library: Library) -> ItemQuery {
     (&current_app::library_query(&(&library).into())).into()
 }
 
+/// What a Home row of `library`'s latest items opens when its header is chosen: the library's grid, the newest added first.
+#[uniffi::export]
+pub fn recently_added_query(library: Library) -> ItemQuery {
+    (&current_app::recently_added_query(&(&library).into())).into()
+}
+
 /// What Play on a tile's item starts: the item from its resume point, unless played; `None` for a kind that does not play by itself
 /// (a series plays its next episode from its page, which asks the server). Pass the item with the user's marks as every list shows them.
 #[uniffi::export]

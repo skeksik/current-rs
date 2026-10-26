@@ -10,11 +10,22 @@ namespace Current.Shell.Browsing;
 /// One titled row of tiles that scrolls sideways: a Home row or a search group. Its items are the core's list, mirrored on the UI
 /// thread. Public, because x:DataType needs a public type.
 /// </summary>
-public sealed class TileRow(string key, string title, ListSubscription<ItemSummary> items, bool wide) : IDisposable
+public sealed class TileRow(string key, string title, ListSubscription<ItemSummary> items, bool wide, ItemRef? library = null)
+    : IDisposable
 {
     public string Key { get; } = key;
 
     public string Title { get; } = title;
+
+    /// <summary>The library a Latest row shows, whose grid its header opens; null for a row without a page of its own.</summary>
+    public ItemRef? Library { get; } = library;
+
+    /// <summary>Where the header link goes: the library's name and its order (BrowseText.LibraryLinkTip).</summary>
+    public string HeaderLinkTip { get; init; } = "";
+
+    public Visibility HeaderLinkVisibility => Library is null ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility HeaderTextVisibility => Library is null ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>The row's items as its tiles bind to them: a change to an item updates its card (TileList).</summary>
     public TileList Items { get; } = new(items.Items);
@@ -90,7 +101,12 @@ public sealed class HomeSection : INotifyPropertyChanged, IDisposable
                 {
                     continue;
                 }
-                existing = new TileRow(row.Key, BrowseText.RowTitle(row), items, row.Kind != HomeRowKind.Latest);
+                existing = new TileRow(
+                    row.Key, BrowseText.RowTitle(row), items, row.Kind != HomeRowKind.Latest,
+                    row.Kind == HomeRowKind.Latest ? row.Library : null)
+                {
+                    HeaderLinkTip = BrowseText.RecentlyAddedLinkTip(row),
+                };
                 Rows.Insert(position, existing);
             }
             else if (Rows.IndexOf(existing) != position)

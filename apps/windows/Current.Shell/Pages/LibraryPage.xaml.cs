@@ -137,7 +137,7 @@ public sealed partial class LibraryPage : Page
             _grid.FirstVisible = 0;
             _grid.Wide = false;
             _grid.ShowsTitles = true;
-            var first = ItemQuery.ForLibrary(library);
+            var first = args.Query ?? ItemQuery.ForLibrary(library);
             if (!SameChoices(_grid.Query, first))
             {
                 _grid.Query = first;

@@ -272,6 +272,15 @@ public sealed partial class HomePage : Page
         args.Handled = _sections.Count > 0;
     }
 
+    /// <summary>A Latest row's header: its library's grid, the newest added first (the core's query).</summary>
+    private void OnRowHeader(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is TileRow { Library: { } item } && App.Browsing?.FindLibrary(item) is { } library)
+        {
+            Frame.Navigate(typeof(LibraryPage), new LibraryArgs(library, ItemQuery.RecentlyAdded(library)));
+        }
+    }
+
     private void OnRetrySection(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.Tag is HomeSection section)

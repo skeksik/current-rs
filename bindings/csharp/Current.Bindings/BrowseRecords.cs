@@ -165,6 +165,13 @@ public sealed record ItemQuery
         return MapBrowse.From(Ffi.CurrentFfiMethods.LibraryQuery(MapBrowse.ToFfi(library)));
     }
 
+    /// <summary>What a Home row of <paramref name="library"/>'s latest items opens (the core decides): its grid, the newest added first.</summary>
+    public static ItemQuery RecentlyAdded(Library library)
+    {
+        ArgumentNullException.ThrowIfNull(library);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.RecentlyAddedQuery(MapBrowse.ToFfi(library)));
+    }
+
     /// <summary>The sorts a library grid offers, in the order to list them, each with its order (the core decides). The UI names each key.</summary>
     public static IReadOnlyList<SortChoice> SortChoices { get; } = Array.ConvertAll(
         Ffi.CurrentFfiMethods.LibrarySortChoices(),

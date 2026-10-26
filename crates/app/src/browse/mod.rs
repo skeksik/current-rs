@@ -27,7 +27,7 @@ use std::time::Duration;
 use current_jellyfin::{AuthError, JellyfinClient};
 use current_model::{
     CollectionKind, ItemQuery, ItemRef, ItemSummary, Library, MediaKind, Reachability, ServerRef,
-    ServerStatus, ServiceType, SortKey, UserState,
+    ServerStatus, ServiceType, SortKey, SortOrder, UserState,
 };
 use current_net::RuntimeHandle;
 use tokio::sync::watch;
@@ -530,13 +530,23 @@ pub fn library_query(library: &Library) -> ItemQuery {
     }
 }
 
+/// What a Home row of `library`'s latest items opens when its header is chosen (owner, 2026-10-26): the library's grid, the newest
+/// added first.
+pub fn recently_added_query(library: &Library) -> ItemQuery {
+    ItemQuery {
+        sort: vec![SortKey::DATE_CREATED],
+        order: SortOrder::Descending,
+        ..library_query(library)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn a_library_s_first_query_follows_what_it_holds() {
-        use current_model::{ItemId, ServerKey, SortOrder};
+        use current_model::{ItemId, ServerKey};
         let library = |collection: Option<CollectionKind>| Library {
             item: ItemRef::new(
                 ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
@@ -565,6 +575,19 @@ mod tests {
             assert!(!query.recursive);
             assert_eq!(query.sort, [SortKey::SORT_NAME]);
         }
+
+        // A Latest row's header: the same items, the newest added first.
+        let recent = recently_added_query(&library(Some(CollectionKind::MOVIES)));
+        assert_eq!(recent.sort, [SortKey::DATE_CREATED]);
+        assert_eq!(recent.order, SortOrder::Descending);
+        assert_eq!(
+            ItemQuery {
+                sort: films.sort.clone(),
+                order: films.order,
+                ..recent
+            },
+            films
+        );
     }
 
     #[tokio::test]

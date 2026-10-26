@@ -81,6 +81,10 @@ internal static class BrowseText
         _ => row.Title.Length > 0 ? $"Recently added in {row.Title}" : "Recently added",
     };
 
+    /// <summary>A Latest row header's tooltip: where the link goes.</summary>
+    public static string RecentlyAddedLinkTip(HomeRow row) =>
+        row.Title.Length > 0 ? $"Open {row.Title}, newest first" : "Open the library, newest first";
+
     /// <summary>A search group's title, by media kind; a kind Current has no name for shows as the server named it.</summary>
     public static string KindGroup(string kind) => kind switch
     {
