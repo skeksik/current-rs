@@ -5,19 +5,19 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use current_net::NetError;
 use hyper::body::{Body, Bytes, Frame};
 
 use crate::events::{RelayEvent, RouteEvents};
-use crate::upstream::UpstreamBody;
+use crate::upstream::{UpstreamBody, UpstreamError};
 
 /// The upstream body broke off; the player's connection is closed. No detail: it could name the server.
 #[derive(Debug, thiserror::Error)]
 #[error("the server's answer broke off")]
 pub(crate) struct BodyError;
 
-type Next =
-    Pin<Box<dyn Future<Output = (Box<dyn UpstreamBody>, Result<Option<Bytes>, NetError>)> + Send>>;
+type Next = Pin<
+    Box<dyn Future<Output = (Box<dyn UpstreamBody>, Result<Option<Bytes>, UpstreamError>)> + Send>,
+>;
 
 pub(crate) enum RelayBody {
     Empty,

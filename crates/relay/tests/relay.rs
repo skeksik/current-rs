@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use current_net::header::{HeaderMap, HeaderName, HeaderValue};
-use current_net::{AuthChallenge, GatewayShape, NetError, Url};
+use current_net::{GatewayShape, Url};
 use current_relay::{
     Bytes, Relay, RelayEvent, Route, RouteConfig, StreamMethod, Upstream, UpstreamBody,
-    UpstreamFuture, UpstreamRequest, UpstreamResponse,
+    UpstreamError, UpstreamFuture, UpstreamRequest, UpstreamResponse,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -19,7 +19,7 @@ use tokio::time::{sleep, timeout};
 const BASE: &str = "https://media.example.com/jf/";
 const WAIT: Duration = Duration::from_secs(10);
 
-type Answer = dyn Fn(&UpstreamRequest) -> Result<UpstreamResponse, NetError> + Send + Sync;
+type Answer = dyn Fn(&UpstreamRequest) -> Result<UpstreamResponse, UpstreamError> + Send + Sync;
 
 /// An upstream that records what it was sent and answers with a closure.
 struct Fake {
@@ -29,7 +29,10 @@ struct Fake {
 
 impl Fake {
     fn new(
-        answer: impl Fn(&UpstreamRequest) -> Result<UpstreamResponse, NetError> + Send + Sync + 'static,
+        answer: impl Fn(&UpstreamRequest) -> Result<UpstreamResponse, UpstreamError>
+        + Send
+        + Sync
+        + 'static,
     ) -> Arc<Self> {
         Arc::new(Self {
             sent: Mutex::new(Vec::new()),
@@ -492,24 +495,19 @@ async fn refusals_and_failures_upstream_are_reported_once_per_route() {
     let upstream = Fake::new(|request| {
         let kind = request.path.rsplit('/').next().unwrap_or("");
         match kind {
-            "basic" => Err(NetError::Auth {
+            "basic" => Err(UpstreamError::Refused {
                 status: 401,
-                message: None,
-                challenges: vec![AuthChallenge {
-                    scheme: current_net::AuthScheme::BASIC,
+                shape: GatewayShape::Password {
                     realm: Some("a gateway".into()),
-                }],
-                page: false,
+                },
             }),
-            "forbidden" => Err(NetError::Auth {
+            "forbidden" => Err(UpstreamError::Refused {
                 status: 403,
-                message: None,
-                challenges: Vec::new(),
-                page: false,
+                shape: GatewayShape::Refused,
             }),
-            "redirect" => Err(NetError::Redirected {
+            "redirect" => Err(UpstreamError::Refused {
                 status: 302,
-                location: None,
+                shape: GatewayShape::SignIn,
             }),
             "ok-redirect" => Ok(answer(302, &[("location", "https://192.168.1.10/")], "")),
             "page" => Ok(answer(
@@ -517,20 +515,12 @@ async fn refusals_and_failures_upstream_are_reported_once_per_route() {
                 &[("content-type", "text/html; charset=utf-8")],
                 "<html>",
             )),
-            "missing" => Err(NetError::Status {
-                status: 404,
-                message: None,
-            }),
-            "past-the-end" => Err(NetError::Status {
-                status: 416,
-                message: None,
-            }),
-            "broken" => Err(NetError::Status {
-                status: 500,
-                message: None,
-            }),
-            "offline" => Err(NetError::Unreachable),
-            _ => Err(NetError::Timeout),
+            "missing" => Err(UpstreamError::Status { status: 404 }),
+            "past-the-end" => Err(UpstreamError::Status { status: 416 }),
+            "broken" => Err(UpstreamError::Status { status: 500 }),
+            "offline" => Err(UpstreamError::Unreachable),
+            "unbuildable" => Err(UpstreamError::InvalidRequest),
+            _ => Err(UpstreamError::Timeout),
         }
     });
     let mut setup = setup(upstream.clone());
@@ -555,6 +545,7 @@ async fn refusals_and_failures_upstream_are_reported_once_per_route() {
         ("broken", 500, Some(RelayEvent::Server { status: 500 })),
         ("offline", 502, Some(RelayEvent::Network)),
         ("slow", 504, None),
+        ("unbuildable", 502, None),
     ];
     for (kind, status, event) in expect {
         let reply = get(&setup, &format!("/Videos/abc/{kind}"), "").await;

@@ -15,7 +15,7 @@ use crate::events::RelayEvent;
 use crate::playlist::{MAX_PLAYLIST_BYTES, PlaylistError, Rewriter, is_api_key, is_playlist};
 use crate::relay::{Conn, RouteEntry};
 use crate::upstream::{
-    REQUEST_HEADERS, RESPONSE_HEADERS, StreamMethod, UpstreamBody, UpstreamRequest,
+    REQUEST_HEADERS, RESPONSE_HEADERS, StreamMethod, UpstreamBody, UpstreamError, UpstreamRequest,
     UpstreamResponse,
 };
 
@@ -205,58 +205,61 @@ async fn read_playlist(mut body: Box<dyn UpstreamBody>) -> Result<String, RelayE
 }
 
 /// The answer to a failed upstream request, after reporting it.
-fn failed(route: &RouteEntry, error: &NetError) -> Response<RelayBody> {
+fn failed(route: &RouteEntry, error: &UpstreamError) -> Response<RelayBody> {
     let status = match error {
-        NetError::Auth { .. } | NetError::Redirected { .. } => {
+        UpstreamError::Refused { shape, .. } => {
             route.events.report(RelayEvent::Refused {
-                shape: classify(&Err(error.clone())),
+                shape: shape.clone(),
             });
             StatusCode::BAD_GATEWAY
         }
-        NetError::Status { status: 404, .. } => {
+        UpstreamError::Status { status: 404 } => {
             route.events.report(RelayEvent::NotFound);
             StatusCode::NOT_FOUND
         }
-        // A range past the end: the player's own business (it probes the end of a file), not a failure of the stream.
-        NetError::Status { status: 416, .. } => StatusCode::RANGE_NOT_SATISFIABLE,
-        NetError::Status { status, .. } => {
+        // A range past the end: the player's own business (it probes the end of a file), not a failure of the stream. The upstream
+        // error carries no headers, so the player gets no `Content-Range` with it.
+        UpstreamError::Status { status: 416 } => StatusCode::RANGE_NOT_SATISFIABLE,
+        UpstreamError::Status { status } => {
             route.events.report(RelayEvent::Server { status: *status });
             StatusCode::from_u16(*status)
                 .ok()
                 .filter(|status| status.is_client_error() || status.is_server_error())
                 .unwrap_or(StatusCode::BAD_GATEWAY)
         }
-        NetError::Unreachable | NetError::Tls => {
+        UpstreamError::Unreachable | UpstreamError::Tls => {
             route.events.report(RelayEvent::Network);
             StatusCode::BAD_GATEWAY
         }
-        NetError::Timeout => {
+        UpstreamError::Timeout => {
             route.events.report(RelayEvent::Network);
             StatusCode::GATEWAY_TIMEOUT
         }
-        // Not a server's answer: a request the upstream could not build, or a body it should not have decoded.
-        _ => StatusCode::BAD_GATEWAY,
+        // Not a server's answer: a request the upstream could not build for the address in use.
+        UpstreamError::InvalidRequest => StatusCode::BAD_GATEWAY,
     };
     empty(status)
 }
 
-/// The error an `Ok` answer with this status should have been (the [`crate::Upstream`] contract), so it is handled the same.
-fn error_for(status: u16, headers: &HeaderMap) -> NetError {
+/// The error an `Ok` answer with this status should have been (the [`crate::Upstream`] contract), so it is handled the same. Its
+/// shape comes from `current-net`'s classifier, without the challenges the upstream did not pass on.
+fn error_for(status: u16, headers: &HeaderMap) -> UpstreamError {
+    let refused = |error: NetError| UpstreamError::Refused {
+        status,
+        shape: classify(&Err(error)),
+    };
     match status {
-        300..=399 => NetError::Redirected {
+        300..=399 => refused(NetError::Redirected {
             status,
             location: None,
-        },
-        401 | 403 => NetError::Auth {
+        }),
+        401 | 403 => refused(NetError::Auth {
             status,
             message: None,
             challenges: Vec::new(),
             page: is_html(headers),
-        },
-        _ => NetError::Status {
-            status,
-            message: None,
-        },
+        }),
+        _ => UpstreamError::Status { status },
     }
 }
 

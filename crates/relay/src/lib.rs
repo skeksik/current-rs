@@ -27,8 +27,8 @@ pub use hyper::body::Bytes;
 pub use playlist::MAX_PLAYLIST_BYTES;
 pub use relay::{MAX_CONNECTIONS, Relay, Route, RouteConfig};
 pub use upstream::{
-    REQUEST_HEADERS, RESPONSE_HEADERS, StreamMethod, Upstream, UpstreamBody, UpstreamFuture,
-    UpstreamRequest, UpstreamResponse,
+    REQUEST_HEADERS, RESPONSE_HEADERS, StreamMethod, Upstream, UpstreamBody, UpstreamError,
+    UpstreamFuture, UpstreamRequest, UpstreamResponse,
 };
 
 /// Why a route could not be created.

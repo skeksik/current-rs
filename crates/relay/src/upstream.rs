@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use current_net::header::{self, HeaderMap, HeaderName};
-use current_net::{NetError, Url, redact_query};
+use current_net::{GatewayShape, Url, redact_query};
 use hyper::body::Bytes;
 
 /// The request headers a player's request passes upstream; every other header is dropped, `Cookie` and `Authorization` included
@@ -68,8 +68,9 @@ pub struct UpstreamResponse {
     pub status: u16,
     /// Every header the server sent; the relay passes on only [`RESPONSE_HEADERS`].
     pub headers: HeaderMap,
-    /// The base URL of the address the request went to, without credentials: playlist URIs are resolved against it plus the
-    /// request's path. It may differ between requests of one route when the server roams to another address (ADR 0020 choice 6).
+    /// The base URL of the address the request went to (or, if the upstream cannot tell, the address selected now), without
+    /// credentials: playlist URIs are resolved against it plus the request's path, and an absolute URI must be on its origin. It may
+    /// differ between requests of one route when the server roams to another address (ADR 0020 choice 6).
     pub base: Url,
     pub body: Box<dyn UpstreamBody>,
 }
@@ -83,8 +84,31 @@ impl std::fmt::Debug for UpstreamResponse {
     }
 }
 
+/// Why an upstream request or body failed. It matches `current-net`'s `StreamError` (ADR 0020 task 1), so the app's adapter maps
+/// it one to one. No variant holds a URL, a header or the server's text.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum UpstreamError {
+    /// A refusal: 401, 403, a redirect (3xx other than 304), or an HTML page where media was expected (2xx `text/html`). `shape` is
+    /// `current-net`'s classification of it (ADR 0017).
+    #[error("the server or a gateway refused the stream ({status})")]
+    Refused { status: u16, shape: GatewayShape },
+    /// Any other status of 400 or more. Carries no header or body: a 416's `Content-Range` is not passed on.
+    #[error("the server answered with status {status}")]
+    Status { status: u16 },
+    #[error("the server could not be reached")]
+    Unreachable,
+    #[error("the server did not answer in time")]
+    Timeout,
+    #[error("the secure connection to the server failed")]
+    Tls,
+    /// The request could not be built for the address in use: a bug, not a server problem.
+    #[error("the request could not be built")]
+    InvalidRequest,
+}
+
 /// A future the relay can hold across polls.
-pub type UpstreamFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, NetError>> + Send + 'a>>;
+pub type UpstreamFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, UpstreamError>> + Send + 'a>>;
 
 /// A response body, read one chunk at a time. The relay asks for the next chunk only when the player's socket can take more, so a
 /// player that stops reading stops the reads upstream (ADR 0020, "Streaming"). Dropping the body ends the upstream request.
@@ -95,11 +119,10 @@ pub trait UpstreamBody: Send {
 
 /// Sends the relay's requests to one server.
 ///
-/// The contract, as for `ServerClient::send` (current-net): the request goes to the address selected now, with that address's
-/// gateway credentials and the service's token, and no redirect is followed. `Ok` for a 2xx or 304 answer; for any other status an
-/// error typed like `send`'s: [`NetError::Auth`] for 401 and 403 (with the challenges and whether the answer was a page),
-/// [`NetError::Redirected`] for a 3xx, [`NetError::Status`] otherwise; and [`NetError::Unreachable`], [`NetError::Timeout`] or
-/// [`NetError::Tls`] when the network failed. The relay also treats an `Ok` with another status as the error it should have been.
+/// The contract, as for `current-net`'s `ServerClient::send_stream`: the request goes to the address selected now, with that
+/// address's gateway credentials and the service's token, and no redirect is followed. `Ok` for a 2xx (other than an HTML page) or
+/// 304 answer; every other answer is an [`UpstreamError`]. The relay also treats an `Ok` with another status as the error it should
+/// have been.
 pub trait Upstream: Send + Sync {
     fn send(&self, request: UpstreamRequest) -> UpstreamFuture<'_, UpstreamResponse>;
 }
