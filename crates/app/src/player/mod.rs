@@ -24,6 +24,7 @@
 
 mod backend;
 mod driver;
+mod known_caps;
 #[cfg(test)]
 mod live_tests;
 mod mpv;
@@ -45,9 +46,11 @@ use current_playback::{AutoSkip, PlaybackDetails, PlayerStatus, Quality};
 use tokio::sync::{mpsc, oneshot, watch};
 
 pub use backend::{CompositionSize, DisplayFacts, EngineOutput, SwapChain, VideoOutput};
+pub use known_caps::EngineReport;
 pub use now_playing::{MediaStatus, NowPlaying, TIMELINE_INTERVAL};
 
 pub(crate) use driver::{Context, open};
+pub(crate) use known_caps::KnownCapabilities;
 pub(crate) use prefs::PlaybackPrefs;
 pub(crate) use relay::RelaySlot;
 

@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 use tokio::time::Instant;
 
+use super::KnownCapabilities;
 use super::backend::{Backend, CompositionSize, DisplayFacts, Signal, SwapChain};
 use super::now_playing::{NowPlaying, TIMELINE_INTERVAL, now_playing};
 use super::prefs::PlaybackPrefs;
@@ -34,6 +35,8 @@ pub(crate) struct Context {
     pub(crate) browse: Arc<Hub>,
     pub(crate) prefs: Arc<PlaybackPrefs>,
     pub(crate) relay: Arc<RelaySlot>,
+    /// Where each engine's capabilities are kept for Settings (ADR 0021).
+    pub(crate) capabilities: Arc<KnownCapabilities>,
 }
 
 /// The controller's clock: tokio's, so the driver's sleeps and the controller's deadlines agree.
@@ -69,8 +72,12 @@ async fn start(
     use super::mpv::MpvBackend;
     let (events, raw) = mpsc::unbounded_channel();
     // Blocking: libmpv starts its threads and VO, and waits for an earlier engine of the process to go.
-    let backend = tokio::task::spawn_blocking(move || MpvBackend::start(size, display, events))
-        .await
+    let started =
+        tokio::task::spawn_blocking(move || MpvBackend::start(size, display, events)).await;
+    if !matches!(started, Ok(Ok(_))) {
+        context.capabilities.start_failed();
+    }
+    let backend = started
         .map_err(|_| PlayerError::EngineFailed {
             kind: EngineErrorKind::LOADING_FAILED,
         })?
@@ -80,6 +87,9 @@ async fn start(
                 kind: EngineErrorKind::LOADING_FAILED,
             },
         })?;
+    context
+        .capabilities
+        .remember(current_playback::Engine::capabilities(&backend));
     Ok(spawn(context, backend, raw))
 }
 
@@ -91,13 +101,19 @@ async fn start(
 ) -> Result<Player, PlayerError> {
     use super::test_engine::TestBackend;
     let (events, raw) = mpsc::unbounded_channel();
-    let mut backend = tokio::task::spawn_blocking(move || TestBackend::start(events))
-        .await
+    let started = tokio::task::spawn_blocking(move || TestBackend::start(events)).await;
+    if !matches!(started, Ok(Ok(_))) {
+        context.capabilities.start_failed();
+    }
+    let mut backend = started
         .map_err(|_| PlayerError::Busy)?
         .map_err(|_| PlayerError::Busy)?;
     // libmpv takes both as options at start; the test engine records them.
     backend.set_composition_size(size);
     backend.set_display_facts(&display);
+    context
+        .capabilities
+        .remember(current_playback::Engine::capabilities(&backend));
     Ok(spawn(context, backend, raw))
 }
 

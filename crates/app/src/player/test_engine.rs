@@ -142,6 +142,25 @@ pub fn last_control() -> Option<TestEngineControl> {
     lock(&LAST).clone()
 }
 
+/// What the test engine plays: its answer to [`Engine::capabilities`], and what Settings' "Supported formats" shows in a build with it
+/// (ADR 0021).
+pub(crate) fn capabilities() -> EngineCapabilities {
+    EngineCapabilities {
+        containers: vec![Container::MKV, Container::MP4, Container::TS],
+        video: vec![
+            CodecSupport::any(Codec::HEVC),
+            CodecSupport::any(Codec::H264),
+        ],
+        audio: vec![
+            CodecSupport::any(Codec::AAC),
+            CodecSupport::any(Codec::AC3),
+            CodecSupport::any(Codec::EAC3),
+        ],
+        subtitles: vec![SubtitleFormat::new("srt"), SubtitleFormat::new("ass")],
+        external_subtitles: true,
+    }
+}
+
 pub(crate) struct TestBackend {
     control: TestEngineControl,
     capabilities: EngineCapabilities,
@@ -177,20 +196,7 @@ impl TestBackend {
         let _ = control.events.send(TestRaw::SwapChain);
         Ok(Self {
             control,
-            capabilities: EngineCapabilities {
-                containers: vec![Container::MKV, Container::MP4, Container::TS],
-                video: vec![
-                    CodecSupport::any(Codec::HEVC),
-                    CodecSupport::any(Codec::H264),
-                ],
-                audio: vec![
-                    CodecSupport::any(Codec::AAC),
-                    CodecSupport::any(Codec::AC3),
-                    CodecSupport::any(Codec::EAC3),
-                ],
-                subtitles: vec![SubtitleFormat::new("srt"), SubtitleFormat::new("ass")],
-                external_subtitles: true,
-            },
+            capabilities: capabilities(),
             position: Duration::ZERO,
             running: true,
             generation: 0,

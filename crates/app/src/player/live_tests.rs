@@ -271,6 +271,10 @@ libmpv_test!(
     a_plain_playlist_on_a_relayed_hls_route_opens_nothing_directly,
     plain_playlists()
 );
+libmpv_test!(
+    a_headless_probe_and_a_player_start_both_succeed,
+    probe_beside_a_player_start()
+);
 
 #[cfg(feature = "libmpv")]
 mod live {
@@ -1057,5 +1061,47 @@ mod live {
             );
         }
         run.close().await;
+    }
+
+    /// Settings' headless probe (ADR 0021) beside a player's start, which share the process's one engine slot: started together, and
+    /// a player right after a probe. Both succeed each time; the times are printed (`observed:` lines), for the ADR's "how long a
+    /// player waits".
+    pub(super) async fn probe_beside_a_player_start() {
+        use crate::player::EngineReport;
+        let _engine = ENGINE.lock().await;
+
+        let app = App::new();
+        let started = std::time::Instant::now();
+        let (report, player) =
+            tokio::join!(app.engine_capabilities(), app.open_player(SIZE, display()));
+        let elapsed = started.elapsed();
+        println!("observed: a probe and a player start together took {elapsed:?}");
+        // Each alone takes milliseconds: together they must not wait for one another's timeout.
+        assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+        let player = player.expect("a player starts beside a probe");
+        let EngineReport::Ready(capabilities) = report else {
+            panic!("the probe beside a player: {report:?}");
+        };
+        assert!(!capabilities.video.is_empty(), "{capabilities:?}");
+        player.close().await;
+
+        let app = App::new();
+        let started = std::time::Instant::now();
+        let report = app.engine_capabilities().await;
+        println!(
+            "observed: a headless probe alone took {:?}",
+            started.elapsed()
+        );
+        assert!(matches!(report, EngineReport::Ready(_)), "{report:?}");
+        let started = std::time::Instant::now();
+        let player = app
+            .open_player(SIZE, display())
+            .await
+            .expect("a player starts right after a probe");
+        let elapsed = started.elapsed();
+        println!("observed: a player start right after the probe took {elapsed:?}");
+        // Each alone takes milliseconds: together they must not wait for one another's timeout.
+        assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+        player.close().await;
     }
 }

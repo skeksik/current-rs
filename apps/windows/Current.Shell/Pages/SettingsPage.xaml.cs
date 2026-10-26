@@ -9,7 +9,7 @@ namespace Current.Shell.Pages;
 
 /// <summary>
 /// Settings: the app theme under Personalization, the saved servers under Accounts (sign out, sign in again, sign in to the gateway
-/// again, extra headers, remove), skipping intros and credits under Playback, the image cache under Storage, diagnostics, and About. It waits for the core to open (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
+/// again, extra headers, remove), skipping intros and credits and the supported formats page under Playback, the image cache under Storage, diagnostics, and About. It waits for the core to open (App.CoreReady); the server subscriptions live from Loaded to Unloaded (ADR 0004).
 /// </summary>
 public sealed partial class SettingsPage : Page
 {
@@ -162,6 +162,8 @@ public sealed partial class SettingsPage : Page
     }
 
     private void OnAddServer(object sender, RoutedEventArgs e) => Frame.Navigate(typeof(AddServerPage));
+
+    private void OnSupportedFormats(object sender, RoutedEventArgs e) => Frame.Navigate(typeof(SupportedFormatsPage));
 
     private void OnReload(object sender, RoutedEventArgs e) => Servers?.Reload();
 

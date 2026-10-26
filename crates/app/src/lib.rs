@@ -8,6 +8,7 @@
 mod add_server;
 mod browse;
 mod discovery;
+mod formats;
 mod gateway;
 mod gateway_sign_in;
 mod images;
@@ -41,6 +42,10 @@ pub use browse::{
     library_query, library_sorts, series_run, tile_artwork,
 };
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
+pub use formats::{
+    DecoderProfile, FormatRow, FormatSupport, FormatTab, FormatTabKind, HardwareDecoding,
+    SupportedFormats,
+};
 pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
 pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState};
 pub use images::{ImageError, ImageLoad, ImageSource, WIDTH_BUCKETS, bucket};
@@ -48,9 +53,9 @@ pub use list::{ListSubscription, ObservableList, VectorDiff};
 #[cfg(any(test, feature = "test-engine"))]
 pub use player::test_engine;
 pub use player::{
-    CompositionSize, DisplayFacts, EngineOutput, MediaStatus, NowPlaying, PlaybackInfo, Player,
-    PlayerAction, PlayerEngine, PlayerError, SwapChain, TIMELINE_INTERVAL, VideoOutput,
-    player_engine,
+    CompositionSize, DisplayFacts, EngineOutput, EngineReport, MediaStatus, NowPlaying,
+    PlaybackInfo, Player, PlayerAction, PlayerEngine, PlayerError, SwapChain, TIMELINE_INTERVAL,
+    VideoOutput, player_engine,
 };
 /// `current-playback`'s values that the player publishes.
 pub mod playback {
@@ -95,6 +100,8 @@ pub struct App {
     playback: Arc<player::PlaybackPrefs>,
     /// The loopback relay for streams on addresses with a gateway (ADR 0020): one per app.
     relay: Arc<player::RelaySlot>,
+    /// What the engine plays, kept from its last start or read once from a headless one (ADR 0021).
+    engine_capabilities: Arc<player::KnownCapabilities>,
 }
 
 impl std::fmt::Debug for App {
@@ -137,6 +144,7 @@ impl App {
             browse: Arc::default(),
             playback: Arc::new(player::PlaybackPrefs::load(None)),
             relay: Arc::default(),
+            engine_capabilities: Arc::default(),
         }
     }
 
@@ -174,6 +182,7 @@ impl App {
             browse: Arc::default(),
             playback,
             relay: Arc::default(),
+            engine_capabilities: Arc::default(),
         };
         Ok((app, report))
     }
@@ -410,8 +419,27 @@ impl App {
             browse: self.browse.clone(),
             prefs: self.playback.clone(),
             relay: self.relay.clone(),
+            capabilities: self.engine_capabilities.clone(),
         };
         player::open(context, size, display).await
+    }
+
+    /// What this build's engine plays, without playing anything (ADR 0021): the capabilities the last engine reported at its start,
+    /// else those of a headless engine started now only to read them (no window, no audio device). Call it on the tokio runtime.
+    pub async fn engine_capabilities(&self) -> EngineReport {
+        self.engine_capabilities.get().await
+    }
+
+    /// Settings' "Supported formats" page (ADR 0021) from the engine's capabilities ([`App::engine_capabilities`]), the graphics
+    /// card's decoder profiles (`None` when they could not be read) and the facts of the display the window is on (`None` when
+    /// unknown). Call it on the tokio runtime.
+    pub async fn supported_formats(
+        &self,
+        hardware: Option<HardwareDecoding>,
+        display: Option<DisplayFacts>,
+    ) -> SupportedFormats {
+        let engine = self.engine_capabilities().await;
+        formats::supported_formats(&engine, hardware.as_ref(), display.as_ref())
     }
 
     /// The segment kinds skipped automatically (Settings → Playback, ADR 0019 choice 8), by their names (`intro`, `outro`, and kinds

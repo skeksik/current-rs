@@ -542,3 +542,16 @@ fn the_test_engine_records_a_load_without_its_url() {
     drop(engine);
     drop(guard);
 }
+
+#[tokio::test]
+async fn a_player_start_keeps_its_engines_capabilities_for_settings() {
+    let _engine = ENGINE.lock().await;
+    let app = App::new();
+    assert_eq!(app.engine_capabilities.known(), None);
+    let (player, _) = open(&app).await;
+    assert_eq!(
+        app.engine_capabilities.known(),
+        Some(super::test_engine::capabilities())
+    );
+    player.close().await;
+}

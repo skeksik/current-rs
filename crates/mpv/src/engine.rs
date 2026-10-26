@@ -198,6 +198,12 @@ impl Engine {
         Engine::start_waiting(config, sink, START_WAIT)
     }
 
+    /// As [`Engine::start`], but fails with [`EngineError::Busy`] at once while another engine exists, without waiting: for reading a
+    /// build's capabilities beside a player, which must not wait for the player to close.
+    pub fn start_if_free(config: &EngineConfig, sink: EventSink) -> Result<Engine, EngineError> {
+        Engine::start_waiting(config, sink, Duration::ZERO)
+    }
+
     pub(crate) fn start_waiting(
         config: &EngineConfig,
         sink: EventSink,

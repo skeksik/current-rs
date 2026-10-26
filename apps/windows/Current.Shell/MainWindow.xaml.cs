@@ -169,6 +169,9 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>Opens Settings, as its item in the pane does (the smoke run).</summary>
     internal void ShowSettings() => Navigate(typeof(SettingsPage), new SuppressNavigationTransitionInfo());
 
+    /// <summary>Opens Settings > Supported formats, as its card in Settings does (the smoke run).</summary>
+    internal void ShowSupportedFormats() => Navigate(typeof(SupportedFormatsPage), new SuppressNavigationTransitionInfo());
+
     private void OnRootLoaded(object sender, RoutedEventArgs e)
     {
         Root.Loaded -= OnRootLoaded;
@@ -756,7 +759,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
             return;
         }
         // Each page shows its own title (App.xaml, PageTitleTextBlockStyle); the navigation view's header is not used.
-        if (ContentFrame.SourcePageType == typeof(SettingsPage))
+        if (ContentFrame.SourcePageType == typeof(SettingsPage) || ContentFrame.SourcePageType == typeof(SupportedFormatsPage))
         {
             // The settings item is not in MenuItems and has no tag.
             NavView.SelectedItem = NavView.SettingsItem;
