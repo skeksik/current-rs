@@ -159,6 +159,16 @@ public sealed class PlayerSession : IAsyncDisposable
     /// <summary>The panel's new size in physical pixels.</summary>
     public void SetCompositionSize(CompositionSize size) => Quick(() => Open.SetCompositionSize(PlayerMap.ToFfi(size)));
 
+    /// <summary>
+    /// The quality menu for the version playing, as the core names it: Maximum (the original) first, then the common steps, or every
+    /// step when <paramref name="all"/>, below the original's bitrate, each with the resolution the server would send it at and its
+    /// bitrate.
+    /// </summary>
+    public async Task<IReadOnlyList<QualityOption>> QualityOptionsAsync(bool all) =>
+        Array.ConvertAll(
+            await CoreCall.RunUncancellableAsync(() => Open.QualityOptions(all)).ConfigureAwait(false),
+            option => PlayerMap.From(option));
+
     /// <summary>The playback information view's content. No URL.</summary>
     public async Task<PlaybackInfo> PlaybackInfoAsync() =>
         PlayerMap.From(await CoreCall.RunUncancellableAsync(() => Open.PlaybackInfo()).ConfigureAwait(false));
@@ -218,6 +228,24 @@ public static class PlaybackExtensions
         CoreCall.RunUncancellableAsync(async () =>
         {
             await core.Core.SetSkipIntrosAndCredits(skip).ConfigureAwait(false);
+            return true;
+        });
+
+    /// <summary>The Settings switch: show each quality's resolution in the quality menu. Saved at once.</summary>
+    /// <exception cref="CoreStoreException">The settings could not be saved: the setting stands for this run.</exception>
+    public static Task SetShowQualityResolutionAsync(this CoreHost core, bool on) =>
+        CoreCall.RunUncancellableAsync(async () =>
+        {
+            await core.Core.SetShowQualityResolution(on).ConfigureAwait(false);
+            return true;
+        });
+
+    /// <summary>The Settings switch: list every quality step in the quality menu, not only the common ones. Saved at once.</summary>
+    /// <exception cref="CoreStoreException">The settings could not be saved: the setting stands for this run.</exception>
+    public static Task SetShowAllQualitiesAsync(this CoreHost core, bool all) =>
+        CoreCall.RunUncancellableAsync(async () =>
+        {
+            await core.Core.SetShowAllQualities(all).ConfigureAwait(false);
             return true;
         });
 

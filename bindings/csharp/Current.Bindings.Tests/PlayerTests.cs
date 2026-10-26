@@ -224,6 +224,14 @@ internal static class PlayerTests
     {
         using var core = CoreHost.Create();
         Check(!core.PlaybackSettings().SkipsIntrosAndCredits && core.PlaybackSettings().AutoSkip.Count == 0, "off by default");
+        Check(core.PlaybackSettings().ShowsQualityResolution, "resolutions shown by default");
+        await core.SetShowQualityResolutionAsync(false);
+        Check(!core.PlaybackSettings().ShowsQualityResolution, "resolutions hidden");
+        await core.SetShowQualityResolutionAsync(true);
+        Check(!core.PlaybackSettings().ShowsAllQualities, "common qualities by default");
+        await core.SetShowAllQualitiesAsync(true);
+        Check(core.PlaybackSettings().ShowsAllQualities, "all qualities");
+        await core.SetShowAllQualitiesAsync(false);
         await core.SetSkipIntrosAndCreditsAsync(true);
         Check(core.PlaybackSettings().SkipsIntrosAndCredits, "on");
         Check(core.PlaybackSettings().AutoSkip.SequenceEqual(new[] { "intro", "outro" }), "intro and outro");

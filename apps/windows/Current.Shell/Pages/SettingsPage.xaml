@@ -219,6 +219,38 @@
                                 IsEnabled="False"
                                 Toggled="OnAutoSkipToggled" />
                         </toolkit:SettingsCard>
+                        <!-- The quality menu names each choice's resolution as well as its bitrate ("1080p · 20 Mbit/s"), on
+                             by default (owner, 2026-10-26). Icon: Segoe Fluent Icons E713 "Settings", the player's Quality button's
+                             ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-25). -->
+                        <toolkit:SettingsCard
+                            Header="Show resolution in quality menu"
+                            Description="For example 1080p · 20 Mbit/s"
+                            AutomationProperties.Name="Show resolution in quality menu">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xE713;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <ToggleSwitch
+                                x:Name="QualityResolutionSwitch"
+                                AutomationProperties.Name="Show resolution in quality menu"
+                                IsEnabled="False"
+                                Toggled="OnQualityResolutionToggled" />
+                        </toolkit:SettingsCard>
+                        <!-- Every step below the original's bitrate, not only the common resolutions; off by default (owner,
+                             2026-10-26). Icon: Segoe Fluent Icons EA37 "List" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date
+                             2026-10-13, read 2026-10-26). -->
+                        <toolkit:SettingsCard
+                            Header="Show all quality options"
+                            Description="Every bitrate below the original's, not only 4K, 1080p, 720p and 480p"
+                            AutomationProperties.Name="Show all quality options">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xEA37;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <ToggleSwitch
+                                x:Name="AllQualitiesSwitch"
+                                AutomationProperties.Name="Show all quality options"
+                                IsEnabled="False"
+                                Toggled="OnAllQualitiesToggled" />
+                        </toolkit:SettingsCard>
                         <!-- Supported formats (ADR 0021, owner's decision 2026-10-26): a page inside Settings, opened from a clickable
                              card with the chevron, as Windows Settings opens its nested pages. "Setting the IsClickEnabled property to true
                              makes the entire card clickable, which is useful for navigation-style entries" ("Guidelines for app settings",

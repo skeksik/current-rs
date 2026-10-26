@@ -879,18 +879,58 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
-    private void OnQualityMenuOpening(object sender, object e)
+    /// <summary>The quality menu's entries as the core last named them for the version playing; null before the first.</summary>
+    private IReadOnlyList<QualityOption>? _qualityOptions;
+
+    /// <summary>
+    /// Fills the menu at once with the entries last named (or the bare steps the first time), then asks the core for the version
+    /// playing and fills it again if they changed. async void, as event handlers are: it catches everything itself.
+    /// </summary>
+    private async void OnQualityMenuOpening(object sender, object e)
     {
-        QualityMenu.Items.Clear();
         if (App.Core is not { } core)
+        {
+            QualityMenu.Items.Clear();
+            return;
+        }
+        var shown = _qualityOptions ?? [.. new QualityChoice[] { new QualityChoice.Maximum() }.Concat(core.QualitySteps())
+            .Select(quality => new QualityOption(quality, null, (quality as QualityChoice.Bitrate)?.BitsPerSecond))];
+        FillQualityMenu(core, shown);
+        if (_session is not { } session)
         {
             return;
         }
-        var current = State.Quality;
-        foreach (var quality in new QualityChoice[] { new QualityChoice.Maximum() }.Concat(core.QualitySteps()))
+        try
         {
-            var item = new RadioMenuFlyoutItem { Text = PlayerText.Quality(quality), GroupName = "quality", IsChecked = quality == current };
-            var chosen = quality;
+            var options = await session.QualityOptionsAsync(core.PlaybackSettings().ShowsAllQualities);
+            if (!options.SequenceEqual(shown))
+            {
+                _qualityOptions = options;
+                FillQualityMenu(core, options);
+            }
+        }
+        catch (Exception error)
+        {
+            Trace.TraceWarning($"Current: the quality menu kept its last names: {error.GetType().Name}");
+        }
+    }
+
+    private void FillQualityMenu(CoreHost core, IReadOnlyList<QualityOption> options)
+    {
+        QualityMenu.Items.Clear();
+        var withResolution = core.PlaybackSettings().ShowsQualityResolution;
+        // A limit the menu does not list (at or above the original's bitrate, so it changes nothing, or a step of an older version)
+        // plays the original: Original is checked.
+        var current = options.Any(option => option.Quality == State.Quality) ? State.Quality : new QualityChoice.Maximum();
+        foreach (var option in options)
+        {
+            var item = new RadioMenuFlyoutItem
+            {
+                Text = PlayerText.Quality(option, withResolution),
+                GroupName = "quality",
+                IsChecked = option.Quality == current,
+            };
+            var chosen = option.Quality;
             item.Click += (_, _) => Long(ct => _session?.SetQualityAsync(chosen, ct) ?? Task.CompletedTask);
             QualityMenu.Items.Add(item);
         }

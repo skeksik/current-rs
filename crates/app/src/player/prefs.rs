@@ -13,6 +13,8 @@ use crate::session::Shared;
 pub(crate) struct PlaybackPrefs {
     quality: Mutex<QualityMemory>,
     auto_skip: watch::Sender<Vec<String>>,
+    quality_resolution: watch::Sender<bool>,
+    quality_all: watch::Sender<bool>,
     /// Serializes the settings writes of this file's settings, so the last change is the one saved.
     write: Mutex<()>,
 }
@@ -42,6 +44,8 @@ impl PlaybackPrefs {
                 internet: quality(playback.quality_internet),
             }),
             auto_skip: watch::Sender::new(playback.auto_skip),
+            quality_resolution: watch::Sender::new(playback.quality_resolution),
+            quality_all: watch::Sender::new(playback.quality_all),
             write: Mutex::new(()),
         }
     }
@@ -53,6 +57,46 @@ impl PlaybackPrefs {
     /// The segment kinds skipped automatically, by name; empty when off.
     pub(crate) fn auto_skip(&self) -> watch::Receiver<Vec<String>> {
         self.auto_skip.subscribe()
+    }
+
+    /// Whether the quality menu names the resolution each choice gives; on by default.
+    pub(crate) fn quality_resolution(&self) -> bool {
+        *self.quality_resolution.borrow()
+    }
+
+    /// Sets whether the quality menu names resolutions and saves it. Blocking file I/O. It applies at once, also when the save fails
+    /// (the error says so; the setting stands for this run).
+    pub(crate) fn set_quality_resolution(
+        &self,
+        shared: &Shared,
+        on: bool,
+    ) -> Result<(), StoreError> {
+        let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        self.quality_resolution.send_replace(on);
+        match &shared.storage {
+            Some(storage) => storage
+                .settings
+                .update(|settings| settings.playback.quality_resolution = on),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether the quality menu lists every step, not only the common ones; off by default.
+    pub(crate) fn quality_all(&self) -> bool {
+        *self.quality_all.borrow()
+    }
+
+    /// Sets whether the quality menu lists every step and saves it. Blocking file I/O. It applies at once, also when the save fails
+    /// (the error says so; the setting stands for this run).
+    pub(crate) fn set_quality_all(&self, shared: &Shared, all: bool) -> Result<(), StoreError> {
+        let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        self.quality_all.send_replace(all);
+        match &shared.storage {
+            Some(storage) => storage
+                .settings
+                .update(|settings| settings.playback.quality_all = all),
+            None => Ok(()),
+        }
     }
 
     /// Remembers `quality` for the kind of address and saves it in the background; a failed save keeps it for the run.

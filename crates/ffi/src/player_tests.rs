@@ -315,9 +315,18 @@ fn the_playback_settings_switch_skipping() {
         core.playback_settings(),
         PlaybackSettingsSnapshot {
             auto_skip: Vec::new(),
-            skips_intros_and_credits: false
+            skips_intros_and_credits: false,
+            shows_quality_resolution: true,
+            shows_all_qualities: false,
         }
     );
+    block_on(core.set_show_all_qualities(true)).unwrap();
+    assert!(core.playback_settings().shows_all_qualities);
+    block_on(core.set_show_all_qualities(false)).unwrap();
+    block_on(core.set_show_quality_resolution(false)).unwrap();
+    assert!(!core.playback_settings().shows_quality_resolution);
+    block_on(core.set_show_quality_resolution(true)).unwrap();
+    assert!(core.playback_settings().shows_quality_resolution);
     block_on(core.set_skip_intros_and_credits(true)).unwrap();
     assert!(core.playback_settings().skips_intros_and_credits);
     assert_eq!(core.playback_settings().auto_skip, ["intro", "outro"]);
@@ -360,6 +369,7 @@ const RECORD_TYPES: &[&str] = &[
     "EngineOutputInfo",
     "PlaybackInfoSnapshot",
     "PlaybackSettingsSnapshot",
+    "QualityOptionInfo",
 ];
 
 #[test]

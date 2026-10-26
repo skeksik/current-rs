@@ -222,7 +222,17 @@ public sealed record PlaybackInfo(
     EngineOutputInfo Engine);
 
 /// <summary>Settings → Playback (ADR 0019): <c>SkipsIntrosAndCredits</c> is what the switch shows.</summary>
-public sealed record PlaybackSettings(IReadOnlyList<string> AutoSkip, bool SkipsIntrosAndCredits);
+public sealed record PlaybackSettings(
+    IReadOnlyList<string> AutoSkip,
+    bool SkipsIntrosAndCredits,
+    bool ShowsQualityResolution = true,
+    bool ShowsAllQualities = false);
+
+/// <summary>
+/// One entry of the quality menu as the core names it: the choice, the resolution the server would send it at ("4K", "1080p"...;
+/// null when not known) and its bitrate (the original's own for Maximum; null when not known).
+/// </summary>
+public sealed record QualityOption(QualityChoice Quality, string? Resolution, uint? Bitrate);
 
 internal static class PlayerMap
 {
@@ -403,5 +413,7 @@ internal static class PlayerMap
             info.Engine.Primaries, info.Engine.Transfer));
 
     public static PlaybackSettings From(Ffi.PlaybackSettingsSnapshot settings) =>
-        new(settings.AutoSkip, settings.SkipsIntrosAndCredits);
+        new(settings.AutoSkip, settings.SkipsIntrosAndCredits, settings.ShowsQualityResolution, settings.ShowsAllQualities);
+
+    public static QualityOption From(Ffi.QualityOptionInfo option) => new(From(option.Quality), option.Resolution, option.Bitrate);
 }

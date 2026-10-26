@@ -63,8 +63,9 @@ pub use player_records::{
     CompositionSize, DisplayFacts, EngineOutputInfo, MediaStatusKind, NextEpisodeInfo,
     NowPlayingSnapshot, PlanNoteInfo, PlaybackInfoSnapshot, PlaybackProblem,
     PlaybackSettingsSnapshot, PlayerEngineKind, PlayerProblem, PlayerStateKind,
-    PlayerStateSnapshot, QualityChoice, RouteInfo, RouteKind, SegmentInfo, SourceInfo, StreamInfo,
-    StreamProtocolKind, SubtitleSelection, TrackInfo, TranscodingInfo, quality_steps,
+    PlayerStateSnapshot, QualityChoice, QualityOptionInfo, RouteInfo, RouteKind, SegmentInfo,
+    SourceInfo, StreamInfo, StreamProtocolKind, SubtitleSelection, TrackInfo, TranscodingInfo,
+    quality_steps,
 };
 pub use problems::{
     AddressProblem, DiscoveryProblem, GatewayInputProblem, GatewayProblem, GatewaySignInProblem,

@@ -51,6 +51,10 @@ public sealed partial class SettingsPage : Page
             ThemeBox.IsEnabled = true;
             ShowAutoSkip(core.PlaybackSettings().SkipsIntrosAndCredits);
             AutoSkipSwitch.IsEnabled = true;
+            ShowQualityResolution(core.PlaybackSettings().ShowsQualityResolution);
+            QualityResolutionSwitch.IsEnabled = true;
+            ShowAllQualities(core.PlaybackSettings().ShowsAllQualities);
+            AllQualitiesSwitch.IsEnabled = true;
             ShowLibraryMemory(core.LibraryMemory);
             RememberSortSwitch.IsEnabled = RememberFilterSwitch.IsEnabled = RememberViewSwitch.IsEnabled = true;
             Servers ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
@@ -213,6 +217,74 @@ public sealed partial class SettingsPage : Page
         LibrariesInfo.Title = "Couldn't save this setting.";
         LibrariesInfo.Message = message;
         LibrariesInfo.IsOpen = true;
+    }
+
+    /// <summary>The quality resolution switch is being set from the core: its Toggled is not a choice of the user's.</summary>
+    private bool _showingQualityResolution;
+
+    private void ShowQualityResolution(bool on)
+    {
+        _showingQualityResolution = true;
+        QualityResolutionSwitch.IsOn = on;
+        _showingQualityResolution = false;
+    }
+
+    /// <summary>Saves "Show resolution in quality menu" at once; if it cannot be saved it still stands for this run (the core's rule).</summary>
+    private async void OnQualityResolutionToggled(object sender, RoutedEventArgs e)
+    {
+        if (_showingQualityResolution || App.Core is not { } core)
+        {
+            return;
+        }
+        PlaybackInfo.IsOpen = false;
+        try
+        {
+            await core.SetShowQualityResolutionAsync(QualityResolutionSwitch.IsOn);
+        }
+        catch (CoreStoreException error)
+        {
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing the quality menu's resolutions failed: {error.GetType().Name}");
+            ShowQualityResolution(core.PlaybackSettings().ShowsQualityResolution);
+            ShowPlaybackInfo(ProblemText.Unexpected);
+        }
+    }
+
+    /// <summary>The all-qualities switch is being set from the core: its Toggled is not a choice of the user's.</summary>
+    private bool _showingAllQualities;
+
+    private void ShowAllQualities(bool all)
+    {
+        _showingAllQualities = true;
+        AllQualitiesSwitch.IsOn = all;
+        _showingAllQualities = false;
+    }
+
+    /// <summary>Saves "Show all quality options" at once; if it cannot be saved it still stands for this run (the core's rule).</summary>
+    private async void OnAllQualitiesToggled(object sender, RoutedEventArgs e)
+    {
+        if (_showingAllQualities || App.Core is not { } core)
+        {
+            return;
+        }
+        PlaybackInfo.IsOpen = false;
+        try
+        {
+            await core.SetShowAllQualitiesAsync(AllQualitiesSwitch.IsOn);
+        }
+        catch (CoreStoreException error)
+        {
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing the quality menu's list failed: {error.GetType().Name}");
+            ShowAllQualities(core.PlaybackSettings().ShowsAllQualities);
+            ShowPlaybackInfo(ProblemText.Unexpected);
+        }
     }
 
     private void ShowPlaybackInfo(string message)

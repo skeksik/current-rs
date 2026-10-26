@@ -16,7 +16,7 @@ use crate::cancel::{self, CancelToken};
 use crate::player_records::{
     CompositionSize, DisplayFacts, NowPlayingSnapshot, PlaybackInfoSnapshot,
     PlaybackSettingsSnapshot, PlayerEngineKind, PlayerStateSnapshot, QualityChoice,
-    SubtitleSelection,
+    QualityOptionInfo, SubtitleSelection,
 };
 use crate::subscribe::{self, LiveListeners};
 use crate::{Core, CoreError, TaskHandle};
@@ -282,6 +282,33 @@ impl Player {
             .map_err(|error| player_error(&error))
     }
 
+    /// The quality menu for the version playing (`current_playback::quality_options`): "Maximum" (the original) first, then the common
+    /// steps, or every step when `all`, below the original's bitrate, each with the resolution the server would send it at and its
+    /// bitrate. Before a version is planned, every step of the list by its width cap.
+    ///
+    /// # Errors
+    /// [`CoreError::Player`] with `Closed`.
+    pub async fn quality_options(&self, all: bool) -> Result<Vec<QualityOptionInfo>, CoreError> {
+        let player = self.player.clone();
+        let info = self
+            .runtime
+            .spawn(async move { player.playback_info().await })
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| player_error(&error))?;
+        let source = info
+            .details
+            .as_ref()
+            .and_then(|details| details.plan.as_ref())
+            .map(|plan| &plan.source);
+        Ok(current_app::playback::quality_options(source, all)
+            .iter()
+            .map(Into::into)
+            .collect())
+    }
+
     /// Stops the item (reported to the server, best effort with a short timeout), gives the swap chain back and shuts the engine down;
     /// returns once it is gone, so the next player can open. Detach the panel and release the swap chain first. Not cancellable.
     pub async fn close(&self) {
@@ -324,7 +351,11 @@ impl Core {
 
     /// Settings → Playback now.
     pub fn playback_settings(&self) -> PlaybackSettingsSnapshot {
-        PlaybackSettingsSnapshot::new(self.app.auto_skip().borrow().clone())
+        PlaybackSettingsSnapshot::new(
+            self.app.auto_skip().borrow().clone(),
+            self.app.quality_resolution(),
+            self.app.quality_all(),
+        )
     }
 
     /// The Settings switch: skip intros and credits (`intro` and `outro` segments) automatically, or not. Saved at once on the core's
@@ -339,6 +370,40 @@ impl Core {
             Vec::new()
         };
         self.set_auto_skip(kinds).await
+    }
+
+    /// The Settings switch "Show resolution in quality menu". Saved at once on the core's blocking pool.
+    ///
+    /// # Errors
+    /// [`CoreError::Store`] if the settings could not be saved: the setting stands for this run.
+    pub async fn set_show_quality_resolution(&self, on: bool) -> Result<(), CoreError> {
+        let app = self.app.clone();
+        self.runtime
+            .spawn_blocking(move || app.set_quality_resolution(on))
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| CoreError::Store {
+                problem: (&error).into(),
+            })
+    }
+
+    /// The Settings switch "Show all quality options". Saved at once on the core's blocking pool.
+    ///
+    /// # Errors
+    /// [`CoreError::Store`] if the settings could not be saved: the setting stands for this run.
+    pub async fn set_show_all_qualities(&self, all: bool) -> Result<(), CoreError> {
+        let app = self.app.clone();
+        self.runtime
+            .spawn_blocking(move || app.set_quality_all(all))
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| CoreError::Store {
+                problem: (&error).into(),
+            })
     }
 
     /// The segment kinds skipped automatically, by open name; empty turns it off. Saved as [`Core::set_skip_intros_and_credits`].

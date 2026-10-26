@@ -63,7 +63,7 @@ pub use player::{
 pub mod playback {
     pub use current_playback::{
         AutoSkip, NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, QualityMemory,
-        Track,
+        QualityOption, Track, quality_options,
     };
 }
 pub use sign_in::{SignIn, SignInError, SignInState};
@@ -462,6 +462,34 @@ impl App {
     /// The settings could not be saved; the setting stands for this run.
     pub fn set_auto_skip(&self, kinds: Vec<String>) -> Result<(), StoreError> {
         self.playback.set_auto_skip(&self.shared, kinds)
+    }
+
+    /// Settings → Playback's "Show resolution in quality menu": whether the quality menu names the resolution each choice gives
+    /// (`current_playback::quality_options`); on by default.
+    pub fn quality_resolution(&self) -> bool {
+        self.playback.quality_resolution()
+    }
+
+    /// Turns "Show resolution in quality menu" on or off and saves it. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved; the setting stands for this run.
+    pub fn set_quality_resolution(&self, on: bool) -> Result<(), StoreError> {
+        self.playback.set_quality_resolution(&self.shared, on)
+    }
+
+    /// Settings → Playback's "Show all quality options": whether the quality menu lists every step below the original's bitrate, not
+    /// only the common ones (`current_playback::quality_options`); off by default.
+    pub fn quality_all(&self) -> bool {
+        self.playback.quality_all()
+    }
+
+    /// Turns "Show all quality options" on or off and saves it. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved; the setting stands for this run.
+    pub fn set_quality_all(&self, all: bool) -> Result<(), StoreError> {
+        self.playback.set_quality_all(&self.shared, all)
     }
 
     /// Settings' "Remember sort", "Remember filter" and "Remember view" now: all off by default.

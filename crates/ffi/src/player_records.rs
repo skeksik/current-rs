@@ -710,14 +710,43 @@ pub struct PlaybackSettingsSnapshot {
     pub auto_skip: Vec<String>,
     /// Whether intros and credits (`intro` and `outro`) are skipped: what the Settings switch shows.
     pub skips_intros_and_credits: bool,
+    /// "Show resolution in quality menu": whether the menu shows each choice's resolution (on by default).
+    pub shows_quality_resolution: bool,
+    /// "Show all quality options": whether the menu lists every step below the original's bitrate (off by default).
+    pub shows_all_qualities: bool,
 }
 
 impl PlaybackSettingsSnapshot {
-    pub(crate) fn new(auto_skip: Vec<String>) -> Self {
+    pub(crate) fn new(
+        auto_skip: Vec<String>,
+        shows_quality_resolution: bool,
+        shows_all_qualities: bool,
+    ) -> Self {
         let has = |kind: &str| auto_skip.iter().any(|k| k == kind);
         Self {
             skips_intros_and_credits: has("intro") && has("outro"),
             auto_skip,
+            shows_quality_resolution,
+            shows_all_qualities,
+        }
+    }
+}
+
+/// One entry of the quality menu, as the core names it: the choice, the resolution the server would send it at (`4K`, `1080p`...;
+/// none when not known) and its bitrate (the original's own for `Maximum`; none when not known).
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct QualityOptionInfo {
+    pub quality: QualityChoice,
+    pub resolution: Option<String>,
+    pub bitrate: Option<u32>,
+}
+
+impl From<&current_app::playback::QualityOption> for QualityOptionInfo {
+    fn from(option: &current_app::playback::QualityOption) -> Self {
+        Self {
+            quality: option.quality.into(),
+            resolution: option.resolution.map(str::to_owned),
+            bitrate: option.bitrate,
         }
     }
 }

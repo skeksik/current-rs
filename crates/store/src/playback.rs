@@ -3,7 +3,7 @@
 //! and is written back unchanged until the setting is changed here, and fields this version does not know are kept.
 //!
 //! The file keeps them under `playback`: `{"quality_local": "maximum" | <bits per second>, "quality_internet": ..., "auto_skip":
-//! ["intro", "outro", ...]}`, each left out at its default.
+//! ["intro", "outro", ...], "quality_resolution": false, "quality_all": true}`, each left out at its default.
 
 use serde_json::{Map, Value};
 
@@ -41,17 +41,38 @@ impl StreamQuality {
 const QUALITY_LOCAL: &str = "quality_local";
 const QUALITY_INTERNET: &str = "quality_internet";
 const AUTO_SKIP: &str = "auto_skip";
+const QUALITY_RESOLUTION: &str = "quality_resolution";
+const QUALITY_ALL: &str = "quality_all";
 
-/// The playback settings. Off and "Maximum" by default.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The playback settings. "Maximum", no automatic skipping, and the quality menu naming resolutions by default.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlaybackSettings {
     pub quality_local: StreamQuality,
     pub quality_internet: StreamQuality,
     /// The segment kinds skipped automatically, by their names in `current-model` (`intro`, `outro`, ...); empty when off. Kinds this
     /// version does not know are kept.
     pub auto_skip: Vec<String>,
+    /// Whether the quality menu names the resolution each choice gives ("Show resolution in quality menu"); on by default (owner,
+    /// 2026-10-26).
+    pub quality_resolution: bool,
+    /// Whether the quality menu lists every step below the original's bitrate, not only the common ones ("Show all quality
+    /// options"); off by default (owner, 2026-10-26).
+    pub quality_all: bool,
     /// The stored object as read: fields this version does not know, and known fields whose value it could not read.
     stored: Map<String, Value>,
+}
+
+impl Default for PlaybackSettings {
+    fn default() -> Self {
+        Self {
+            quality_local: StreamQuality::default(),
+            quality_internet: StreamQuality::default(),
+            auto_skip: Vec::new(),
+            quality_resolution: true,
+            quality_all: false,
+            stored: Map::new(),
+        }
+    }
 }
 
 impl PlaybackSettings {
@@ -76,11 +97,21 @@ impl PlaybackSettings {
                 .collect(),
             _ => Vec::new(),
         };
+        let quality_resolution = stored
+            .get(QUALITY_RESOLUTION)
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let quality_all = stored
+            .get(QUALITY_ALL)
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         (
             Self {
                 quality_local: quality(QUALITY_LOCAL),
                 quality_internet: quality(QUALITY_INTERNET),
                 auto_skip,
+                quality_resolution,
+                quality_all,
                 stored,
             },
             None,
@@ -97,6 +128,12 @@ impl PlaybackSettings {
         }
         if self.auto_skip != before.auto_skip {
             self.stored.remove(AUTO_SKIP);
+        }
+        if self.quality_resolution != before.quality_resolution {
+            self.stored.remove(QUALITY_RESOLUTION);
+        }
+        if self.quality_all != before.quality_all {
+            self.stored.remove(QUALITY_ALL);
         }
     }
 
@@ -139,6 +176,18 @@ impl PlaybackSettings {
             skip_readable,
             (!self.auto_skip.is_empty()).then(|| Value::from(self.auto_skip.clone())),
         );
+        set(
+            QUALITY_RESOLUTION,
+            self.stored
+                .get(QUALITY_RESOLUTION)
+                .is_none_or(Value::is_boolean),
+            (!self.quality_resolution).then_some(Value::Bool(false)),
+        );
+        set(
+            QUALITY_ALL,
+            self.stored.get(QUALITY_ALL).is_none_or(Value::is_boolean),
+            self.quality_all.then_some(Value::Bool(true)),
+        );
         (!object.is_empty()).then_some(Value::Object(object))
     }
 }
@@ -168,6 +217,35 @@ mod tests {
         // "maximum" was stored explicitly and still reads: written as the default, which is left out.
         assert_eq!(changed.write(), None);
         assert_eq!(PlaybackSettings::default().write(), None);
+    }
+
+    #[test]
+    fn the_quality_menu_names_resolutions_unless_turned_off() {
+        assert!(PlaybackSettings::default().quality_resolution);
+        let off = read(r#"{"quality_resolution": false}"#);
+        assert!(!off.quality_resolution);
+        assert_eq!(off.write().unwrap()["quality_resolution"], false);
+        let mut on = off.clone();
+        on.quality_resolution = true;
+        on.changed_from(&off);
+        // On is the default, left out of the file.
+        assert_eq!(on.write(), None);
+        // A value this version cannot read reads as on and is kept until changed here.
+        let odd = read(r#"{"quality_resolution": "sometimes"}"#);
+        assert!(odd.quality_resolution);
+        assert_eq!(odd.write().unwrap()["quality_resolution"], "sometimes");
+    }
+
+    #[test]
+    fn the_quality_menu_lists_the_common_steps_unless_all_are_asked_for() {
+        assert!(!PlaybackSettings::default().quality_all);
+        let all = read(r#"{"quality_all": true}"#);
+        assert!(all.quality_all);
+        assert_eq!(all.write().unwrap()["quality_all"], true);
+        let mut common = all.clone();
+        common.quality_all = false;
+        common.changed_from(&all);
+        assert_eq!(common.write(), None);
     }
 
     #[test]
