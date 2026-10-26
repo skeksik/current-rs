@@ -10,8 +10,9 @@ use current_net::GatewayShape;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RelayEvent {
     /// The server or a gateway refused a stream request: a 401, a 403, a redirect, or an HTML page where media was expected. The
-    /// player got a 502. `shape` is `current-net`'s classification, for ADR 0017's 401 rule.
-    Refused { shape: GatewayShape },
+    /// player got a 502. `status` is the answer's (200 for a page with a success status) and `shape` is `current-net`'s
+    /// classification, for ADR 0017's 401 rule.
+    Refused { status: u16, shape: GatewayShape },
     /// The server answered 404.
     NotFound,
     /// The server answered with another error status.

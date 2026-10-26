@@ -93,6 +93,8 @@ pub struct App {
     images: ImageCache,
     browse: Arc<browse::Hub>,
     playback: Arc<player::PlaybackPrefs>,
+    /// The loopback relay for streams on addresses with a gateway (ADR 0020): one per app.
+    relay: Arc<player::RelaySlot>,
 }
 
 impl std::fmt::Debug for App {
@@ -134,6 +136,7 @@ impl App {
             images: ImageCache::in_memory(),
             browse: Arc::default(),
             playback: Arc::new(player::PlaybackPrefs::load(None)),
+            relay: Arc::default(),
         }
     }
 
@@ -170,6 +173,7 @@ impl App {
             images,
             browse: Arc::default(),
             playback,
+            relay: Arc::default(),
         };
         Ok((app, report))
     }
@@ -405,6 +409,7 @@ impl App {
             images: self.images.clone(),
             browse: self.browse.clone(),
             prefs: self.playback.clone(),
+            relay: self.relay.clone(),
         };
         player::open(context, size, display).await
     }

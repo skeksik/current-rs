@@ -1,8 +1,9 @@
 //! A hand-written Jellyfin stand-in on 127.0.0.1, for the bridge tests (Rust, C# and Swift). It answers only what server setup,
 //! sign-in, restoring a session, sign-out, images, browsing a small fake library (see [`library`]) and a large generated one (see
-//! [`paging`]) and playback (PlaybackInfo, playstate reports, media segments, the session list, HLS playlists) ask, in Jellyfin
-//! 12.2's shapes as `current-jellyfin` reads them. Every name, id and credential in it is fake. Test code only: nothing shipped
-//! depends on it.
+//! [`paging`]) and playback (PlaybackInfo, playstate reports, media segments, the session list, HLS playlists, the direct-play
+//! stream with ranges and HLS segments) ask, in Jellyfin 12.2's shapes as `current-jellyfin` reads them. It can listen on more than
+//! one address ([`StandIn::add_address`]), each with its own gateway in front of everything, stream endpoints included. Every name,
+//! id and credential in it is fake. Test code only: nothing shipped depends on it.
 
 pub mod library;
 pub mod paging;
@@ -14,7 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 
 /// The stand-in's server id.
 pub const SERVER_ID: &str = "57a2d1e0000000000000000000000001";
@@ -42,6 +43,13 @@ pub const GATE_SIGN_IN_PATH: &str = "/gate/sign-in";
 /// The header [`Gate::Header`] wants.
 pub const GATE_HEADER: &str = "x-stand-in-gate";
 pub const GATE_HEADER_VALUE: &str = "not-a-real-gate-header";
+/// What the gateways of every address but the first want instead of [`GATE_HEADER_VALUE`] and [`GATE_COOKIE_VALUE`]: each address
+/// has its own credentials, as a LAN gateway and a public one would.
+pub const OTHER_GATE_HEADER_VALUE: &str = "not-a-real-other-gate-header";
+pub const OTHER_GATE_COOKIE_VALUE: &str = "not-a-real-other-gate-cookie";
+/// How long the direct-play stream (`/Videos/{item}/stream`) of [`DIRECT_PLAY_ITEM`] and the library's episodes is, in bytes. Its
+/// byte at offset `i` is [`stream_byte`]`(i)`.
+pub const STREAM_LENGTH: usize = 256 * 1024;
 /// An item PlaybackInfo answers with direct play. It has an intro and an outro segment. The library's episodes play directly too.
 pub const DIRECT_PLAY_ITEM: &str = "57a2d1e0000000000000000000000010";
 /// An item PlaybackInfo answers with an HLS remux (`ContainerNotSupported`).
@@ -89,6 +97,39 @@ pub struct ImageSeen {
     pub accept: String,
     /// The [`GATE_HEADER`] header, empty without it.
     pub gate_header: String,
+}
+
+/// The direct-play stream's byte at `offset`.
+pub fn stream_byte(offset: usize) -> u8 {
+    // A prime period, so a range that starts at the wrong offset never matches by chance.
+    (offset % 251) as u8
+}
+
+/// What an HLS segment of [`TRANSCODE_ITEM`] holds: its path, as bytes.
+pub fn segment_body(path: &str) -> Vec<u8> {
+    format!("segment {path}").into_bytes()
+}
+
+/// A stream request (the direct-play stream or an HLS segment) as the stand-in received it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamSeen {
+    /// Which of the stand-in's addresses it came to: 0 for the first ([`Controls::address`]), then in the order they were added.
+    pub address: usize,
+    pub method: String,
+    /// The path and query, as received.
+    pub target: String,
+    /// The `Range` header, empty without it.
+    pub range: String,
+    /// The `Authorization` header, empty without it.
+    pub authorization: String,
+    /// The `X-Emby-Authorization` header, empty without it.
+    pub emby_authorization: String,
+    /// The `Cookie` header, empty without it.
+    pub cookie: String,
+    /// The [`GATE_HEADER`] header, empty without it.
+    pub gate_header: String,
+    /// The status it was answered with.
+    pub status: u16,
 }
 
 /// A playlist request as the stand-in received it.
@@ -145,11 +186,37 @@ pub enum Gate {
     Header,
 }
 
+/// One address of the stand-in: its gateway and the credentials it takes.
+struct Door {
+    gate: Gate,
+    /// The cookie value [`Gate::Portal`] takes.
+    cookie: String,
+    /// The value [`Gate::Header`] wants.
+    header: String,
+    /// Stops its listener.
+    listener: Option<AbortHandle>,
+}
+
+impl Door {
+    fn new(index: usize) -> Self {
+        let (cookie, header) = if index == 0 {
+            (GATE_COOKIE_VALUE, GATE_HEADER_VALUE)
+        } else {
+            (OTHER_GATE_COOKIE_VALUE, OTHER_GATE_HEADER_VALUE)
+        };
+        Self {
+            gate: Gate::Off,
+            cookie: cookie.to_owned(),
+            header: header.to_owned(),
+            listener: None,
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
-    gate: Mutex<Gate>,
-    /// The cookie value [`Gate::Portal`] takes; [`GATE_COOKIE_VALUE`] when unset.
-    gate_cookie: Mutex<Option<String>>,
+    /// The addresses, the first one's always there.
+    doors: Mutex<Vec<Door>>,
     /// Live tokens.
     tokens: Mutex<Vec<String>>,
     issued: AtomicUsize,
@@ -169,6 +236,10 @@ struct State {
     playlists: Mutex<HashMap<String, String>>,
     /// Every playlist request that the gateway let through, in order.
     playlists_seen: Mutex<Vec<PlaylistSeen>>,
+    /// Every stream request that the gateway let through, in order.
+    streams_seen: Mutex<Vec<StreamSeen>>,
+    /// Paths whose stream requests answer 401 to a live token, as Jellyfin does for an item the user cannot see.
+    refused: Mutex<HashSet<String>>,
     /// The path of every held request whose client closed the connection before it was released.
     cancelled: Mutex<Vec<String>>,
     /// What the user marked played or favourite.
@@ -190,19 +261,23 @@ impl StandIn {
     /// # Errors
     /// The port could not be bound.
     pub async fn start() -> std::io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let address = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
         let state = Arc::new(State::default());
-        let serving = state.clone();
-        let task = tokio::spawn(async move {
-            while let Ok((socket, _)) = listener.accept().await {
-                tokio::spawn(serve(socket, serving.clone()));
-            }
-        });
+        let (address, task) = listen(&state).await?;
         Ok(Self {
             controls: Controls { state, address },
             task,
         })
+    }
+
+    /// Listens on another free port of 127.0.0.1 for the same server (the same id, users, tokens and library), behind a gateway of
+    /// its own ([`Controls::set_gate_at`]) that takes [`OTHER_GATE_HEADER_VALUE`] and [`OTHER_GATE_COOKIE_VALUE`]. Returns its
+    /// number (1 for the first added) and its address.
+    ///
+    /// # Errors
+    /// The port could not be bound.
+    pub async fn add_address(&self) -> std::io::Result<(usize, String)> {
+        let (address, _) = listen(&self.controls.state).await?;
+        Ok((lock(&self.controls.state.doors).len() - 1, address))
     }
 
     /// A handle that changes the stand-in from another thread.
@@ -222,7 +297,30 @@ impl std::ops::Deref for StandIn {
 impl Drop for StandIn {
     fn drop(&mut self) {
         self.task.abort();
+        for door in lock(&self.controls.state.doors).iter() {
+            if let Some(listener) = &door.listener {
+                listener.abort();
+            }
+        }
     }
+}
+
+/// Opens a new address for `state` and serves it.
+async fn listen(state: &Arc<State>) -> std::io::Result<(String, JoinHandle<()>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = format!("http://127.0.0.1:{}", listener.local_addr()?.port());
+    let mut doors = lock(&state.doors);
+    let index = doors.len();
+    let serving = state.clone();
+    let task = tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            tokio::spawn(serve(socket, serving.clone(), index));
+        }
+    });
+    let mut door = Door::new(index);
+    door.listener = Some(task.abort_handle());
+    doors.push(door);
+    Ok((address, task))
 }
 
 /// Changes a running stand-in and reads what it received, from any thread.
@@ -288,14 +386,44 @@ impl Controls {
             .count()
     }
 
-    /// Puts `gate` in front of the stand-in.
+    /// Puts `gate` in front of the stand-in's first address.
     pub fn set_gate(&self, gate: Gate) {
-        *lock(&self.state.gate) = gate;
+        self.set_gate_at(0, gate);
     }
 
-    /// The cookie value [`Gate::Portal`] takes from now on (the gateway's session expired and a new one began).
+    /// Puts `gate` in front of address `index` (0 for the first, then as [`StandIn::add_address`] numbered them).
+    pub fn set_gate_at(&self, index: usize, gate: Gate) {
+        if let Some(door) = lock(&self.state.doors).get_mut(index) {
+            door.gate = gate;
+        }
+    }
+
+    /// The cookie value [`Gate::Portal`] of the first address takes from now on (the gateway's session expired and a new one began).
     pub fn set_gate_cookie(&self, value: &str) {
-        *lock(&self.state.gate_cookie) = Some(value.to_owned());
+        if let Some(door) = lock(&self.state.doors).first_mut() {
+            value.clone_into(&mut door.cookie);
+        }
+    }
+
+    /// Stops listening on address `index`: connections to it are refused from now on, as for an address that went away.
+    pub fn close_address(&self, index: usize) {
+        if let Some(listener) = lock(&self.state.doors)
+            .get_mut(index)
+            .and_then(|door| door.listener.take())
+        {
+            listener.abort();
+        }
+    }
+
+    /// The stream requests that passed the gateways so far, oldest first.
+    pub fn streams(&self) -> Vec<StreamSeen> {
+        lock(&self.state.streams_seen).clone()
+    }
+
+    /// Stream requests to `path` answer 401 to a live token from now on, as Jellyfin does for an item the user cannot see while the
+    /// session goes on.
+    pub fn refuse_stream(&self, path: &str) {
+        lock(&self.state.refused).insert(path.to_owned());
     }
 
     /// The playstate reports received so far (`/Sessions/Playing`, `/Progress`, `/Stopped`), oldest first: path and JSON body.
@@ -430,10 +558,11 @@ struct Received {
     emby_authorization: String,
     cookie: String,
     gate_header: String,
+    range: String,
     body: String,
 }
 
-async fn serve(mut socket: TcpStream, state: Arc<State>) {
+async fn serve(mut socket: TcpStream, state: Arc<State>, door: usize) {
     let Some(received) = read_request(&mut socket).await else {
         return;
     };
@@ -466,8 +595,28 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
             }
         }
     }
-    let response = match gate(&state, &received) {
+    let response = match gate(&state, door, &received) {
         Some(blocked) => blocked,
+        None if let Some(body) = stream(&received.path) => {
+            let (status, head, body) = streamed(&state, &received, &body);
+            lock(&state.streams_seen).push(StreamSeen {
+                address: door,
+                method: received.method.clone(),
+                target: received.target.clone(),
+                range: received.range.clone(),
+                authorization: received.authorization.clone(),
+                emby_authorization: received.emby_authorization.clone(),
+                cookie: received.cookie.clone(),
+                gate_header: received.gate_header.clone(),
+                status,
+            });
+            let _ = socket.write_all(head.as_bytes()).await;
+            if received.method != "HEAD" {
+                let _ = socket.write_all(&body).await;
+            }
+            let _ = socket.shutdown().await;
+            return;
+        }
         None if paging::failing(&state.paging, &received.path, page.as_deref()) => {
             "HTTP/1.1 500 X\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned()
         }
@@ -491,7 +640,7 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
                 target: received.target.clone(),
                 gate_header: received.gate_header.clone(),
             });
-            let (status, body) = if authorized(&state, &received) {
+            let (status, body) = if stream_authorized(&state, &received) {
                 (200, body)
             } else {
                 (401, String::new())
@@ -513,15 +662,20 @@ async fn serve(mut socket: TcpStream, state: Arc<State>) {
     let _ = socket.shutdown().await;
 }
 
-/// The gateway's answer when it does not let `received` through.
-fn gate(state: &State, received: &Received) -> Option<String> {
+/// The gateway's answer at address `door` when it does not let `received` through.
+fn gate(state: &State, door: usize, received: &Received) -> Option<String> {
     let reply = |status: u16, header: &str, body: &str| {
         format!(
             "HTTP/1.1 {status} X\r\n{header}content-length: {}\r\nconnection: close\r\n\r\n{body}",
             body.len()
         )
     };
-    match *lock(&state.gate) {
+    let (gate, cookie, header) = {
+        let doors = lock(&state.doors);
+        let door = &doors[door];
+        (door.gate, door.cookie.clone(), door.header.clone())
+    };
+    match gate {
         Gate::Off => None,
         Gate::Basic => (received.authorization != format!("Basic {GATE_BASIC}")).then(|| {
             reply(
@@ -531,10 +685,7 @@ fn gate(state: &State, received: &Received) -> Option<String> {
             )
         }),
         Gate::Portal => {
-            let value = lock(&state.gate_cookie)
-                .clone()
-                .unwrap_or_else(|| GATE_COOKIE_VALUE.to_owned());
-            let wanted = format!("{GATE_COOKIE}={value}");
+            let wanted = format!("{GATE_COOKIE}={cookie}");
             if received.path == GATE_SIGN_IN_PATH {
                 // The page's link: "signs in" by setting the cookie (HttpOnly, as portals do) and going back to the start.
                 return Some(reply(
@@ -553,7 +704,7 @@ fn gate(state: &State, received: &Received) -> Option<String> {
                 )
             })
         }
-        Gate::Header => (received.gate_header != GATE_HEADER_VALUE).then(|| reply(403, "", "")),
+        Gate::Header => (received.gate_header != header).then(|| reply(403, "", "")),
     }
 }
 
@@ -569,6 +720,63 @@ fn playlist(state: &State, path: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// What a stream path serves: the direct-play stream of an item that plays directly, or a segment of [`TRANSCODE_ITEM`]'s HLS stream
+/// (`/videos/{item}/hls1/main/{n}.mp4`). Paths match without regard to case, as Jellyfin's routes do.
+fn stream(path: &str) -> Option<Vec<u8>> {
+    let lower = path.to_ascii_lowercase();
+    let direct = std::iter::once(DIRECT_PLAY_ITEM)
+        .chain(library::EPISODE_IDS.iter().copied())
+        .any(|item| lower == format!("/videos/{item}/stream"));
+    if direct {
+        return Some((0..STREAM_LENGTH).map(stream_byte).collect());
+    }
+    let segment = lower
+        .strip_prefix(&format!("/videos/{TRANSCODE_ITEM}/hls1/main/"))
+        .is_some_and(|name| name.ends_with(".mp4") && !name.contains('/'));
+    segment.then(|| segment_body(path))
+}
+
+/// The answer to a stream request for `body`: 401 without a live token (in Jellyfin's header or as `ApiKey`), or to a path refused
+/// with [`Controls::refuse_stream`]; else the body, or the range asked for (`bytes=<first>-[<last>]`) as a 206, or 416 for one past
+/// the end. Status, head and body.
+fn streamed(state: &State, received: &Received, body: &[u8]) -> (u16, String, Vec<u8>) {
+    let head = |status: u16, extra: &str, length: usize| {
+        format!(
+            "HTTP/1.1 {status} X\r\ncontent-type: video/mp4\r\naccept-ranges: bytes\r\n{extra}content-length: {length}\r\nconnection: close\r\n\r\n"
+        )
+    };
+    if !stream_authorized(state, received) || lock(&state.refused).contains(&received.path) {
+        return (401, head(401, "", 0), Vec::new());
+    }
+    let total = body.len();
+    let Some(range) = received.range.strip_prefix("bytes=") else {
+        return (200, head(200, "", total), body.to_vec());
+    };
+    let (first, last) = range.split_once('-').unwrap_or((range, ""));
+    let first: usize = first.parse().unwrap_or(0);
+    let last: usize = last
+        .parse()
+        .unwrap_or(total.saturating_sub(1))
+        .min(total.saturating_sub(1));
+    if first >= total || first > last {
+        return (
+            416,
+            head(416, &format!("content-range: bytes */{total}\r\n"), 0),
+            Vec::new(),
+        );
+    }
+    let part = body[first..=last].to_vec();
+    (
+        206,
+        head(
+            206,
+            &format!("content-range: bytes {first}-{last}/{total}\r\n"),
+            part.len(),
+        ),
+        part,
+    )
 }
 
 /// `/Items/{id}/Images/{type}` with an optional `/{index}`.
@@ -792,6 +1000,14 @@ fn authorized(state: &State, received: &Received) -> bool {
     token(received).is_some_and(|token| lock(&state.tokens).contains(&token))
 }
 
+/// Whether a stream or playlist request carries a live token: in Jellyfin's header, or as `ApiKey` (`api_key`) in the query, which
+/// Jellyfin also reads (`AuthorizationContext.cs`).
+fn stream_authorized(state: &State, received: &Received) -> bool {
+    let key = param(&received.query, "ApiKey").or_else(|| param(&received.query, "api_key"));
+    authorized(state, received)
+        || key.is_some_and(|key| lock(&state.tokens).iter().any(|live| live == key))
+}
+
 async fn read_request(socket: &mut TcpStream) -> Option<Received> {
     let mut data = Vec::new();
     let mut buffer = [0u8; 4096];
@@ -842,6 +1058,7 @@ async fn read_request(socket: &mut TcpStream) -> Option<Received> {
         emby_authorization: header("x-emby-authorization"),
         cookie: header("cookie"),
         gate_header: header(GATE_HEADER),
+        range: header("range"),
         body: String::from_utf8_lossy(&data[head_end..]).into_owned(),
     })
 }

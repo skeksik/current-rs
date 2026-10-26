@@ -62,6 +62,9 @@ struct Session {
     seeking: bool,
     /// When the engine last moved (an event that changed something, or a command); the stall rule counts from here.
     last_progress: Duration,
+    /// The stream's connection failed while the engine was playing from its buffer ([`Controller::stream_failed`]): an engine
+    /// error or a stall that follows is that failure, not the file's.
+    stream_lost: bool,
     /// Whether the server was told this play session started, and that it stopped.
     started: bool,
     stop_reported: bool,
@@ -97,6 +100,7 @@ impl Session {
             buffering: false,
             seeking: false,
             last_progress: now,
+            stream_lost: false,
             started: false,
             stop_reported: false,
             item_stopped: false,
@@ -705,6 +709,30 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         }
     }
 
+    /// The stream failed outside the engine: the loopback relay saw the server refuse it, not find it, fail, become unreachable, or
+    /// send a playlist it refused (ADR 0020, "Lifecycle"), and the composition root made that a problem (the 401 rule for a
+    /// refusal). Playback fails with it, reported stopped with `Failed = true`, with no fallback: another route would meet the same
+    /// server. Only while a file is loading or playing; the root drops events of a stream that was replaced.
+    ///
+    /// [`PlaybackProblem::Network`] while the engine plays on from its buffer (not loading, seeking or buffering) does not stop it:
+    /// an idle connection of a paused player that the server closed is opened again at the next read. If the engine then fails or
+    /// stalls, playback fails with `Network`.
+    pub async fn stream_failed(&mut self, problem: PlaybackProblem) {
+        if !matches!(self.phase, Phase::Active | Phase::Loading) {
+            return;
+        }
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let waiting = self.phase == Phase::Loading || session.seeking || session.buffering;
+        if problem == PlaybackProblem::Network && !waiting {
+            session.stream_lost = true;
+            return;
+        }
+        self.engine.stop();
+        self.fail(problem).await;
+    }
+
     /// Does what is due: the stall rule, the periodic progress report, a held-back state, the autoplay countdown.
     pub async fn tick(&mut self) {
         let now = self.clock.now();
@@ -835,33 +863,25 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             }
         };
         let planned = planner::plan(&item, &request, answer, &own, &session.permissions, local);
-        // FFmpeg sends the headers to every host a playlist names, and matches a cookie's domain as a plain suffix, so an HLS stream
-        // with any gateway credential is checked first (ADR 0019).
-        let playlist_checked = (!planned.auth.headers.is_empty()
-            || !planned.auth.cookies.is_empty())
-            && matches!(
-                planned.plan.route,
-                Route::ServerStream {
-                    protocol: StreamProtocol::Hls,
-                    ..
-                }
-            );
-        if playlist_checked {
-            let checked = self.server.check_playlist(&planned.url).await;
-            let Some(session) = &mut self.session else {
-                return Ok(());
-            };
-            if let Err(problem) = checked {
+        let stream = match self.server.stream_url(&item, &planned.url) {
+            Ok(stream) => stream,
+            Err(problem) => {
                 session.planned = None;
                 return Err(problem);
             }
-        }
-        let Some(session) = &mut self.session else {
-            return Ok(());
         };
+        // The relay rewrites HLS playlists only: any other relayed file opens no reference (ADR 0020).
+        let hls = matches!(
+            planned.plan.route,
+            Route::ServerStream {
+                protocol: StreamProtocol::Hls,
+                ..
+            }
+        );
         let file = EngineFile {
-            url: planned.url.clone(),
-            auth: planned.auth.clone(),
+            references: hls || !stream.relayed,
+            url: stream.url,
+            auth: stream.auth,
             start,
             audio: if planned.plan.route.is_direct_play() {
                 planned
@@ -873,11 +893,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 EngineTrack::Auto
             },
             subtitle: EngineTrack::Off,
-            playlist_checked,
         };
         session.planned = Some(planned);
         session.position = start;
         session.last_progress = self.clock.now();
+        session.stream_lost = false;
         session.started = false;
         session.stop_reported = false;
         session.paused = false;
@@ -932,6 +952,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         let Some(session) = &mut self.session else {
             return;
         };
+        if session.stream_lost {
+            self.fail(PlaybackProblem::Network).await;
+            return;
+        }
         if !session.is_direct_play() || session.fallback_used {
             self.fail(PlaybackProblem::Engine { kind }).await;
             return;
@@ -982,8 +1006,9 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         self.publish(true);
     }
 
-    /// Tells the server and the rest of the app that the item stopped, once.
+    /// Ends the stream (its relay route) and tells the server and the rest of the app that the item stopped, once.
     async fn end_item(&mut self, failed: bool) {
+        self.server.end_stream();
         self.report_stopped(failed).await;
         let Some(session) = &mut self.session else {
             return;

@@ -324,6 +324,12 @@ impl JellyfinClient {
         auth::read(&self.token).is_some()
     }
 
+    /// The token in use, for the 401 rule's token check ([`JellyfinClient::check_token`]) after a refusal the client did not see
+    /// itself: a stream's, which the loopback relay reports (ADR 0020).
+    pub fn current_token(&self) -> Option<AccessToken> {
+        auth::read(&self.token)
+    }
+
     /// Puts Jellyfin's credentials in `placement`'s header from now on: the server's saved setting (ADR 0017), or
     /// [`HeaderPlacement::for_gateway`] for an address with Basic gateway credentials.
     pub fn set_header_placement(&self, placement: HeaderPlacement) {

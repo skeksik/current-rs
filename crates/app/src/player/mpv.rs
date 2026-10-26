@@ -2,9 +2,10 @@
 //! to the controller's. The mapping ([`MpvMapper`]) needs no libmpv and is tested everywhere; the engine itself ([`MpvBackend`]) is
 //! built only with the `libmpv` feature.
 //!
-//! - The URL and its credentials move into a [`FileRequest`] as they are: never formatted, logged or shown.
-//! - A playlist (HLS, DASH) with gateway headers is refused with [`EngineErrorKind::GATEWAY_PLAYLIST_UNCHECKED`] unless the file says
-//!   the core checked its playlists (ADR 0019, "Playlists and headers"); `current-mpv` refuses it too.
+//! - The URL and its secrets move into a [`FileRequest`] as they are: never formatted, logged or shown. No gateway credential ever
+//!   goes to libmpv: streams on an address with a gateway go through the loopback relay (ADR 0020). `current-mpv` still refuses a
+//!   playlist with credentials that was not checked, as a guard no load of the core triggers.
+//! - A file that may open no reference ([`EngineFile::references`], a relayed stream that is not HLS) gets `access-references=no`.
 //! - Tracks are chosen by the server's stream index. libmpv names tracks by its own ids, so an embedded stream is found by `ff-index`
 //!   (that it equals Jellyfin's index is checked on real files in task 5) and an added external subtitle by the order it was added in.
 //!   A choice made before the track list is known is applied when it arrives.
@@ -18,7 +19,7 @@ use std::time::Duration;
 use current_model::EngineErrorKind;
 use current_mpv::{
     EndReason as MpvEnd, EngineError, EngineEvent as MpvEvent, FileRequest, MpvError,
-    PropertyChange, StreamCookie, SubtitleFile, Track, TrackChoice,
+    PropertyChange, SubtitleFile, Track, TrackChoice,
 };
 use current_playback::{EndReason, EngineEvent, EngineFile, EngineTrack, ExternalSubtitle};
 
@@ -88,8 +89,7 @@ pub(crate) fn engine_error_kind(error: &EngineError) -> EngineErrorKind {
 }
 
 impl MpvMapper {
-    /// The request for `file`, from now on the file the mapping is about. A file whose playlists the core checked
-    /// ([`EngineFile::playlist_checked`]) is marked so; any other playlist with gateway headers is refused.
+    /// The request for `file`, from now on the file the mapping is about. One that may open no reference is marked so.
     pub(crate) fn file_request(
         &mut self,
         file: EngineFile,
@@ -100,26 +100,15 @@ impl MpvMapper {
             start,
             audio,
             subtitle,
-            playlist_checked,
+            references,
         } = file;
         let mut request = FileRequest::new(url.expose().to_owned());
         request.start = (start > Duration::ZERO).then(|| seconds(start));
-        request.cookies = auth
-            .cookies
-            .into_iter()
-            .map(|cookie| StreamCookie {
-                name: cookie.name,
-                value: cookie.value,
-                path: cookie.path,
-                secure: cookie.secure,
-            })
-            .collect();
-        request.headers = auth.headers;
         request.secrets = auth.secrets;
-        if playlist_checked {
-            request = request.playlist_checked_same_origin();
+        if !references {
+            request = request.without_references();
         }
-        // The defensive refusal: an unchecked playlist with headers never reaches libmpv (the controller checks before it loads).
+        // The guard: a playlist with credentials that nobody checked never reaches libmpv. The core gives none (ADR 0020).
         request
             .check_header_scope()
             .map_err(|error| engine_error_kind(&error))?;
@@ -527,7 +516,7 @@ mod real {
 #[cfg(test)]
 mod tests {
     use current_mpv::VideoParams;
-    use current_playback::{StreamAuth, StreamCookie as PlaybackCookie, StreamUrl};
+    use current_playback::{StreamAuth, StreamUrl};
 
     use super::*;
 
@@ -538,14 +527,7 @@ mod tests {
             start: Duration::from_secs(90),
             audio: EngineTrack::Stream(1),
             subtitle: EngineTrack::Stream(3),
-            playlist_checked: false,
-        }
-    }
-
-    fn checked(file: EngineFile) -> EngineFile {
-        EngineFile {
-            playlist_checked: true,
-            ..file
+            references: true,
         }
     }
 
@@ -570,16 +552,9 @@ mod tests {
     }
 
     #[test]
-    fn a_file_moves_into_the_request_with_its_credentials() {
+    fn a_file_moves_into_the_request_with_its_secrets_only() {
         let mut mapper = MpvMapper::default();
         let auth = StreamAuth {
-            cookies: vec![PlaybackCookie {
-                name: "gate".into(),
-                value: "cookie-value".into(),
-                path: "/".into(),
-                secure: true,
-            }],
-            headers: vec![("X-Gate".into(), "header-value".into())],
             secrets: vec!["t0ken".into()],
         };
         let request = mapper
@@ -593,62 +568,29 @@ mod tests {
             "https://media.example.com/Videos/1/stream?ApiKey=t0ken"
         );
         assert_eq!(request.start, Some(90.0));
-        assert_eq!(request.cookies[0].value, "cookie-value");
-        assert_eq!(
-            request.headers,
-            vec![("X-Gate".to_owned(), "header-value".to_owned())]
-        );
+        assert!(!request.has_credentials());
         assert_eq!(request.secrets, vec!["t0ken".to_owned()]);
+        assert!(format!("{request:?}").contains("no_references: false"));
         // Tracks by server index wait for the track list.
         assert_eq!(request.audio, None);
         assert_eq!(request.subtitle, None);
     }
 
     #[test]
-    fn an_unchecked_playlist_with_headers_is_refused_and_a_checked_one_passes() {
-        let auth = StreamAuth {
-            headers: vec![("Authorization".into(), "Basic header-value".into())],
-            ..StreamAuth::default()
-        };
-        let url = "https://media.example.com/videos/1/master.m3u8?ApiKey=t0ken";
+    fn a_file_that_may_open_no_reference_is_marked() {
         let mut mapper = MpvMapper::default();
-        assert_eq!(
-            mapper.file_request(file(url, auth.clone())).unwrap_err(),
-            EngineErrorKind::GATEWAY_PLAYLIST_UNCHECKED
-        );
-        assert!(
-            mapper
-                .file_request(checked(file(url, auth.clone())))
-                .is_ok()
-        );
-        // Cookies alone are refused too: FFmpeg matches their domain as a suffix, so a look-alike host would get them.
-        let cookie_only = StreamAuth {
-            cookies: vec![PlaybackCookie {
-                name: "gate".into(),
-                value: "cookie-value".into(),
-                path: "/".into(),
-                secure: true,
-            }],
-            ..StreamAuth::default()
+        let relayed = EngineFile {
+            references: false,
+            ..file(
+                "http://127.0.0.1:50123/route/Videos/1/stream?static=true",
+                StreamAuth {
+                    secrets: vec!["route".into()],
+                },
+            )
         };
-        assert_eq!(
-            mapper
-                .file_request(file(url, cookie_only.clone()))
-                .unwrap_err(),
-            EngineErrorKind::GATEWAY_PLAYLIST_UNCHECKED
-        );
-        assert!(mapper.file_request(checked(file(url, cookie_only))).is_ok());
-        // Without credentials, or for a file, nothing to check.
-        assert!(
-            mapper
-                .file_request(file(url, StreamAuth::default()))
-                .is_ok()
-        );
-        assert!(
-            mapper
-                .file_request(file("https://media.example.com/Videos/1/stream", auth))
-                .is_ok()
-        );
+        let request = mapper.file_request(relayed).unwrap();
+        assert!(!request.has_credentials());
+        assert!(format!("{request:?}").contains("no_references: true"));
     }
 
     #[test]

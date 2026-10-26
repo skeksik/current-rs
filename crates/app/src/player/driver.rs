@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use current_model::{EngineErrorKind, ImageType, ItemRef, ItemSummary, MediaKind, PlayerState};
 use current_playback::{Clock, Controller, EndReason, EngineEvent, PlayerEvent, PlayerStatus};
+use current_relay::RelayEvent;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 use tokio::time::Instant;
@@ -15,7 +16,8 @@ use tokio::time::Instant;
 use super::backend::{Backend, CompositionSize, DisplayFacts, Signal, SwapChain};
 use super::now_playing::{NowPlaying, TIMELINE_INTERVAL, now_playing};
 use super::prefs::PlaybackPrefs;
-use super::server::JellyfinMedia;
+use super::relay::RelaySlot;
+use super::server::{JellyfinMedia, relay_problem};
 use super::{Command, PlaybackInfo, Player, PlayerAction as Action, PlayerError, auto_skip};
 use crate::browse::Hub;
 use crate::images::{ImageCache, ImageLoad, ImageSource};
@@ -31,6 +33,7 @@ pub(crate) struct Context {
     pub(crate) images: ImageCache,
     pub(crate) browse: Arc<Hub>,
     pub(crate) prefs: Arc<PlaybackPrefs>,
+    pub(crate) relay: Arc<RelaySlot>,
 }
 
 /// The controller's clock: tokio's, so the driver's sleeps and the controller's deadlines agree.
@@ -117,9 +120,10 @@ fn spawn<B: Backend>(context: Context, backend: B, raw: mpsc::UnboundedReceiver<
     };
     let auto_skip_rx = context.prefs.auto_skip();
     let initial_skip = auto_skip(&auto_skip_rx.borrow());
+    let (relay_events, relay_rx) = mpsc::unbounded_channel();
     let controller = Controller::new(
         backend,
-        JellyfinMedia::default(),
+        JellyfinMedia::new(context.relay.clone(), relay_events),
         clock,
         context.prefs.quality(),
         initial_skip,
@@ -129,6 +133,7 @@ fn spawn<B: Backend>(context: Context, backend: B, raw: mpsc::UnboundedReceiver<
         context,
         clock,
         raw: Some(raw),
+        relay: Some(relay_rx),
         state,
         now_playing: now,
         swap_chain,
@@ -156,6 +161,8 @@ struct Driver<B: Backend> {
     clock: TokioClock,
     /// `None` once the engine's thread ended.
     raw: Option<mpsc::UnboundedReceiver<B::Raw>>,
+    /// The relay routes' events, by route number.
+    relay: Option<mpsc::UnboundedReceiver<(u64, RelayEvent)>>,
     state: watch::Sender<PlayerStatus>,
     now_playing: watch::Sender<NowPlaying>,
     swap_chain: watch::Sender<Option<Arc<SwapChain>>>,
@@ -177,6 +184,8 @@ enum Wake<R> {
     HandleGone,
     Raw(R),
     EngineThreadEnded,
+    Relay(u64, RelayEvent),
+    RelayGone,
     AutoSkip,
     AutoSkipGone,
     Deadline,
@@ -233,6 +242,8 @@ impl<B: Backend> Driver<B> {
                 Wake::Command(command) => self.command(command, &mut commands, &mut deferred).await,
                 Wake::Raw(raw) => self.engine(raw).await,
                 Wake::EngineThreadEnded => self.raw = None,
+                Wake::Relay(route, event) => self.relay_event(route, event).await,
+                Wake::RelayGone => self.relay = None,
                 Wake::AutoSkip => {
                     if let Some(kinds) = &self.auto_skip {
                         let skip = auto_skip(&kinds.borrow());
@@ -255,11 +266,15 @@ impl<B: Backend> Driver<B> {
     async fn wait(&mut self, commands: &mut mpsc::UnboundedReceiver<Command>) -> Wake<B::Raw> {
         let deadline = self.deadline();
         let raw = &mut self.raw;
+        let relay = &mut self.relay;
         let skip = &mut self.auto_skip;
         tokio::select! {
             command = commands.recv() => command.map_or(Wake::HandleGone, Wake::Command),
             raw = async { raw.as_mut()?.recv().await }, if raw.is_some() => {
                 raw.map_or(Wake::EngineThreadEnded, Wake::Raw)
+            }
+            event = async { relay.as_mut()?.recv().await }, if relay.is_some() => {
+                event.map_or(Wake::RelayGone, |(route, event)| Wake::Relay(route, event))
             }
             changed = async { skip.as_mut()?.changed().await.ok() }, if skip.is_some() => {
                 changed.map_or(Wake::AutoSkipGone, |()| Wake::AutoSkip)
@@ -373,13 +388,18 @@ impl<B: Backend> Driver<B> {
                     self.refresh_now_playing();
                 }
             }
+            Command::StreamProblem { route, problem } => {
+                if self.controller.server().is_current_route(route) {
+                    self.controller.stream_failed(problem).await;
+                }
+            }
             // Handled by `run`.
             Command::Close(_) => {}
         }
     }
 
     async fn play(&mut self, item: ItemRef, start: Duration) -> Result<(), PlayerError> {
-        let (_, client) = self
+        let (id, client) = self
             .context
             .shared
             .current_session(&item.server)
@@ -392,7 +412,7 @@ impl<B: Backend> Driver<B> {
         if !same {
             // The item playing is reported stopped to its own server first.
             self.controller.stop().await;
-            self.controller.server().set_client(client.clone());
+            self.controller.server().set_client(id, client.clone());
         }
         if let Some(task) = self.artwork_task.take() {
             task.abort();
@@ -432,6 +452,37 @@ impl<B: Backend> Driver<B> {
             Action::DisplayFacts(facts) => controller.engine_mut().set_display_facts(&facts),
             Action::CompositionSize(size) => controller.engine_mut().set_composition_size(size),
         }
+    }
+
+    /// An event of relay route `route`: dropped unless the route is the stream playing. A refusal goes to the 401 rule in the
+    /// background (a probe and a token check, which must not hold the user's actions), and its answer comes back as
+    /// [`Command::StreamProblem`].
+    async fn relay_event(&mut self, route: u64, event: RelayEvent) {
+        if !self.controller.server().is_current_route(route) {
+            return;
+        }
+        let (status, shape) = match relay_problem(event) {
+            Ok(problem) => {
+                self.controller.stream_failed(problem).await;
+                return;
+            }
+            Err(refusal) => refusal,
+        };
+        let Some((id, client)) = self.controller.server().session_with_id() else {
+            return;
+        };
+        let shared = self.context.shared.clone();
+        let commands = self.commands.clone();
+        tokio::spawn(async move {
+            let server = client.server().clone();
+            let problem = shared
+                .stream_refused(&server, id, &client, status, &shape)
+                .await;
+            // Weak until here, so a closed player's channel closes meanwhile.
+            if let Some(commands) = commands.upgrade() {
+                let _ = commands.send(Command::StreamProblem { route, problem });
+            }
+        });
     }
 
     async fn engine(&mut self, raw: B::Raw) {

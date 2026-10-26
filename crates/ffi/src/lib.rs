@@ -468,4 +468,6 @@ mod gateway_tests;
 #[cfg(test)]
 mod player_tests;
 #[cfg(test)]
+mod relay_tests;
+#[cfg(test)]
 mod tests;

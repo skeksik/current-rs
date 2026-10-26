@@ -3,7 +3,8 @@ using Current.Bindings;
 /// <summary>
 /// The player through <see cref="PlayerSession"/> (ADR 0019 task 4), on the core's test engine (the test build of the core library;
 /// the app ships without it), against the Jellyfin stand-in: the state, the reports the stand-in receives, the swap chain and its
-/// release, one engine per process, cancelling, the playlist check behind a header gateway, and that no URL or secret is in a record.
+/// release, one engine per process, cancelling, playback behind a header gateway (through the core's loopback relay, ADR 0020), and
+/// that no URL or secret is in a record.
 /// </summary>
 internal static class PlayerTests
 {
@@ -178,7 +179,7 @@ internal static class PlayerTests
         }
     }
 
-    public static async Task HlsBehindAHeaderGatewayIsChecked()
+    public static async Task HlsBehindAHeaderGatewayIsRelayed()
     {
         using var standIn = StandIn.Start();
         standIn.Send("gate header");
@@ -192,17 +193,17 @@ internal static class PlayerTests
             session.State.PropertyChanged += (_, _) => seen.Add(session.State.Value.ToString());
             session.NowPlaying.PropertyChanged += (_, _) => seen.Add(session.NowPlaying.Value.ToString());
 
-            // Direct play behind the gateway plays (the engine gets the header, the UI never does).
+            // Direct play behind the gateway plays (the engine gets a URL on the core's relay, the UI never sees it).
             await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
             await Eventually("playing", ui, () => session.State.Value.State == PlayerStateKind.Playing);
             seen.Add((await session.PlaybackInfoAsync()).ToString());
 
-            // An HLS stream behind the gateway: the core checks its playlists (all on the stand-in's address) before the engine opens it.
+            // An HLS stream behind the gateway: the relay rewrites its playlists when the engine fetches them; the core fetches none first.
             await session.PlayAsync(Item(StandIn.TranscodeItem), TimeSpan.FromSeconds(30));
             await Eventually("the HLS stream playing", ui, () => session.State.Value.State == PlayerStateKind.Playing
                 && session.State.Value.Item == Item(StandIn.TranscodeItem));
             Check(session.State.Value.Route?.Kind == RouteKind.Remux, $"a remux, not {session.State.Value.Route}");
-            Check(standIn.Count($"/videos/{StandIn.TranscodeItem}/master.m3u8") >= 1, "the master playlist was checked");
+            Check(standIn.Count($"/videos/{StandIn.TranscodeItem}/master.m3u8") == 0, "no playlist fetched before the engine asks");
             seen.Add((await session.PlaybackInfoAsync()).ToString());
 
             var host = standIn.Address.Replace("http://", "", StringComparison.Ordinal);

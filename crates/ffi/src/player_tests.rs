@@ -17,15 +17,15 @@ use crate::tests::{WAIT, block_on, eventually};
 /// One engine per process: the tests that open a player take turns.
 static ENGINE: Mutex<()> = Mutex::new(());
 
-fn engine_turn() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn engine_turn() -> std::sync::MutexGuard<'static, ()> {
     ENGINE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-struct Recorder<T>(Mutex<Sender<T>>);
+pub(crate) struct Recorder<T>(Mutex<Sender<T>>);
 
-fn recorder<T>() -> (Box<Recorder<T>>, Receiver<T>) {
+pub(crate) fn recorder<T>() -> (Box<Recorder<T>>, Receiver<T>) {
     let (tx, rx) = mpsc::channel();
     (Box::new(Recorder(Mutex::new(tx))), rx)
 }
@@ -55,7 +55,11 @@ impl SwapChainListener for Recorder<Option<Arc<SwapChainHandle>>> {
 }
 
 /// Receives until `done` holds; returns everything received, the matching value last.
-fn until<T: std::fmt::Debug>(rx: &Receiver<T>, what: &str, done: impl Fn(&T) -> bool) -> Vec<T> {
+pub(crate) fn until<T: std::fmt::Debug>(
+    rx: &Receiver<T>,
+    what: &str,
+    done: impl Fn(&T) -> bool,
+) -> Vec<T> {
     let mut seen = Vec::new();
     loop {
         match rx.recv_timeout(WAIT) {
@@ -71,7 +75,7 @@ fn until<T: std::fmt::Debug>(rx: &Receiver<T>, what: &str, done: impl Fn(&T) -> 
     }
 }
 
-fn stand_in(gate: Gate) -> StandIn {
+pub(crate) fn stand_in(gate: Gate) -> StandIn {
     let stand_in = runtime::handle()
         .unwrap()
         .block_on(StandIn::start())
@@ -81,7 +85,7 @@ fn stand_in(gate: Gate) -> StandIn {
 }
 
 /// Adds the stand-in (with its gateway header when it has the header gate) and signs in.
-fn signed_in(core: &Core, stand_in: &StandIn, gate_header: bool) {
+pub(crate) fn signed_in(core: &Core, stand_in: &StandIn, gate_header: bool) {
     let add = core.add_server();
     block_on(add.probe(stand_in.address().into(), CancelToken::new())).unwrap();
     if gate_header {
@@ -123,7 +127,7 @@ fn flow_recorder() -> (Box<CapabilitiesRecorder>, Receiver<CapabilitiesSnapshot>
     (Box::new(CapabilitiesRecorder(Mutex::new(tx))), rx)
 }
 
-fn item(id: &str) -> ItemRef {
+pub(crate) fn item(id: &str) -> ItemRef {
     ItemRef {
         server: ServerRef {
             service: "jellyfin".into(),
@@ -133,12 +137,12 @@ fn item(id: &str) -> ItemRef {
     }
 }
 
-const SIZE: CompositionSize = CompositionSize {
+pub(crate) const SIZE: CompositionSize = CompositionSize {
     width: 1280,
     height: 720,
 };
 
-const DISPLAY: DisplayFacts = DisplayFacts {
+pub(crate) const DISPLAY: DisplayFacts = DisplayFacts {
     hdr: true,
     peak_nits: 1000.0,
     sdr_white_nits: 240.0,
@@ -398,18 +402,13 @@ fn no_url_token_cookie_or_header_value_crosses_the_bridge() {
     ];
     let mut crossed: Vec<String> = Vec::new();
 
-    // Direct play behind the gateway: the engine gets the header, the bridge does not.
+    // Direct play behind the gateway: the engine gets a relay URL, with no credential; the bridge gets neither.
     block_on(player.play(item(DIRECT_PLAY_ITEM), 0, CancelToken::new())).unwrap();
     let states_seen = until(&state_rx, "playing", |state| {
         state.state == PlayerStateKind::Playing
     });
-    assert!(control.commands().iter().any(|command| matches!(
-        command,
-        TestCommand::Load {
-            credentials: true,
-            ..
-        }
-    )));
+    let relayed = control.loaded_urls().pop().unwrap();
+    assert!(relayed.starts_with("http://127.0.0.1:") && !relayed.contains("ApiKey"));
     crossed.extend(states_seen.iter().map(|state| format!("{state:?}")));
     crossed.extend(
         until(&now_rx, "a title", |now| now.title.is_some())
@@ -428,7 +427,7 @@ fn no_url_token_cookie_or_header_value_crosses_the_bridge() {
         swap_chain.is_released()
     ));
 
-    // An HLS stream behind a header gateway: the core checks its playlists first (ADR 0019), and the engine gets it marked checked.
+    // An HLS stream behind a header gateway, through the relay too.
     block_on(player.play(item(TRANSCODE_ITEM), 30_000, CancelToken::new())).unwrap();
     let hls = until(&state_rx, "the HLS stream playing", |state| {
         state.state == PlayerStateKind::Playing && state.item == Some(item(TRANSCODE_ITEM))
@@ -436,19 +435,20 @@ fn no_url_token_cookie_or_header_value_crosses_the_bridge() {
     assert!(control.commands().iter().any(|command| matches!(
         command,
         TestCommand::Load {
-            credentials: true,
-            playlist_checked: true,
+            references: true,
             ..
         }
     )));
     crossed.extend(hls.iter().map(|state| format!("{state:?}")));
 
-    // A playlist that names another host is refused: its headers would go there.
+    // A playlist that names another host is refused by the relay when the player asks for it.
     stand_in.set_playlist(
         &jellyfin_stand_in::master_playlist_path(),
         "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=8000000\nhttps://cdn.example.com/main.m3u8\n",
     );
     block_on(player.play(item(TRANSCODE_ITEM), 0, CancelToken::new())).unwrap();
+    let url = control.loaded_urls().pop().unwrap();
+    assert_eq!(crate::relay_tests::fetch(&url, None).unwrap().status, 502);
     let failed = until(&state_rx, "the refusal", |state| {
         state.state == PlayerStateKind::Failed
     });
@@ -461,18 +461,20 @@ fn no_url_token_cookie_or_header_value_crosses_the_bridge() {
     crossed.push(format!("{:?}", player.state()));
     crossed.push(format!("{:?}", core.playback_settings()));
 
-    let url = control.loaded_urls().pop().unwrap();
-    let token = url
-        .split("ApiKey=")
+    // The relay's route token, the first path segment of its URLs.
+    let route = url
+        .trim_start_matches("http://127.0.0.1:")
+        .split('/')
         .nth(1)
-        .and_then(|rest| rest.split('&').next())
         .unwrap()
         .to_owned();
-    assert!(token.len() > 8);
+    assert!(route.len() > 8);
     let host = stand_in.address().trim_start_matches("http://").to_owned();
     let crossed = crossed.join("\n");
     for secret in [
-        token.as_str(),
+        route.as_str(),
+        "t0ken",
+        "127.0.0.1",
         GATE_HEADER_VALUE,
         host.as_str(),
         "ApiKey",

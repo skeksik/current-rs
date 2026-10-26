@@ -383,9 +383,12 @@ pub enum PlaybackProblem {
         status: u16,
     },
     NotFound,
-    /// The server's HLS playlist names another host, port or scheme than the stream's address, or could not be read, so it cannot
-    /// be played with the address's gateway headers (ADR 0019, "Playlists and headers"). Holds no address.
+    /// The server's HLS playlist, fetched through the loopback relay, names a URI off the server's address or outside the item's
+    /// streams, or could not be read, so the relay refused it (ADR 0020, "HLS playlists"). Holds no address.
     PlaylistElsewhere,
+    /// Current could not start its local stream connection, the loopback relay on 127.0.0.1 that streams on an address with a
+    /// gateway go through (ADR 0020). No fallback hands the player the gateway's credentials.
+    LocalRelay,
 }
 
 /// What the server reports about its transcode of this playback (a session's transcoding information). Before start the route is

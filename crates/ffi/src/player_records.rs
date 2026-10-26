@@ -129,9 +129,12 @@ pub enum PlaybackProblem {
         status: u16,
     },
     NotFound,
-    /// The server's HLS playlist names another address (or could not be checked), so it cannot be played with the address's gateway
-    /// headers (ADR 0019, "Playlists and headers").
+    /// The server's HLS playlist names another address or another item, or could not be read, so the local stream connection
+    /// refused it (ADR 0020).
     PlaylistElsewhere,
+    /// Current could not start its local stream connection (the loopback relay, ADR 0020). Shown as "Current could not start its
+    /// local stream connection".
+    LocalRelay,
 }
 
 impl From<&ModelProblem> for PlaybackProblem {
@@ -149,6 +152,7 @@ impl From<&ModelProblem> for PlaybackProblem {
             ModelProblem::Server { status } => Self::Server { status: *status },
             ModelProblem::NotFound => Self::NotFound,
             ModelProblem::PlaylistElsewhere => Self::PlaylistElsewhere,
+            ModelProblem::LocalRelay => Self::LocalRelay,
         }
     }
 }

@@ -1,5 +1,5 @@
 //! What the player asks besides PlaybackInfo and the reports, against `tools/jellyfin-stand-in`: the next episode, the transcoding
-//! policy, a subtitle file and the stream's access (gateway credentials and secrets).
+//! policy, a subtitle file, and the stream's secrets and path for the loopback relay.
 
 use std::sync::Arc;
 
@@ -121,8 +121,19 @@ async fn a_stream_without_a_gateway_needs_only_the_token_redacted() {
         .await
         .unwrap();
     let (_, stream) = answer.playable(None).unwrap();
-    let access = client.stream_access(&stream.url);
-    assert!(access.headers.is_empty() && access.cookies.is_empty());
-    assert_eq!(access.secrets.len(), 1);
-    assert!(stream.url.expose().contains(&access.secrets[0]));
+    let secrets = client.stream_secrets();
+    assert_eq!(secrets.len(), 1);
+    assert!(stream.url.expose().contains(&secrets[0]));
+    assert!(!client.address_has_gateway());
+    // For the loopback relay: the path on the address, without the token.
+    let path = client.stream_path(stream.url.expose()).unwrap();
+    assert!(
+        path.starts_with(&format!("/Videos/{DIRECT_PLAY_ITEM}/stream?")),
+        "{path}"
+    );
+    assert!(path.contains("static=true"), "{path}");
+    assert!(
+        !path.contains(&secrets[0]) && !path.contains("ApiKey"),
+        "{path}"
+    );
 }

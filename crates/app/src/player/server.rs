@@ -2,49 +2,143 @@
 //! fetches segments, the next episode, the user's preferences and policy, the transcode's facts and external subtitles. Its errors
 //! become flat [`PlaybackProblem`]s with no server text and no URL.
 //!
-//! The stream URL moves from `current-jellyfin`'s type into `current-playback`'s without being formatted, with the address's gateway
-//! credentials and the session token (for redaction) as its [`StreamAuth`].
+//! The stream URL moves from `current-jellyfin`'s type into `current-playback`'s without being formatted. On an address with gateway
+//! credentials the engine gets a URL on the loopback relay instead (ADR 0020): a route per stream, made when the controller loads
+//! it and removed when it ends or another replaces it, whose events go to the player's driver.
 //!
 //! One player plays items of any signed-in server, one at a time: the driver points it at the item's session before each play, after
 //! stopping an item of another server (so its stop report goes to its own server).
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use current_jellyfin::{
     AuthError, JellyfinClient, MAXIMUM_STREAMING_BITRATE, PlaybackError, PlaybackRequest,
-    PlaylistCheckError,
 };
 use current_model::{
     EngineCapabilities, ItemRef, ItemSummary, MediaSource, MediaStream, PlaybackPreferences,
     PlaybackProblem, Segment, TranscodingFacts,
 };
-use current_net::NetError;
+use current_net::{GatewayShape, NetError};
 use current_playback::{
-    MediaServer, PlanRequest, ProgressReport, Quality, ServerAnswer, StopReport, StreamAuth,
-    StreamCookie, StreamUrl, TranscodePermissions,
+    EngineStream, MediaServer, PlanRequest, ProgressReport, Quality, ServerAnswer, StopReport,
+    StreamAuth, StreamUrl, TranscodePermissions,
 };
+use current_relay::{RelayEvent, Route, RouteConfig};
+use tokio::sync::mpsc;
+
+use super::relay::{RelaySlot, RouteEvents, SessionUpstream};
 
 /// The session of the item playing, as a media server for one player.
-#[derive(Default)]
 pub(crate) struct JellyfinMedia {
-    client: Mutex<Option<Arc<JellyfinClient>>>,
+    /// The session's id in the app and its client.
+    session: Mutex<Option<(u64, Arc<JellyfinClient>)>>,
+    relay: Arc<RelaySlot>,
+    /// The relay route of the stream given last, by its number.
+    route: Mutex<Option<(u64, Route)>>,
+    last_route: AtomicU64,
+    events: mpsc::UnboundedSender<(u64, RelayEvent)>,
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl JellyfinMedia {
-    /// The session in use, if any.
-    pub(crate) fn client(&self) -> Option<Arc<JellyfinClient>> {
-        self.client
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+    /// A media server whose relay routes report to `events`.
+    pub(crate) fn new(
+        relay: Arc<RelaySlot>,
+        events: mpsc::UnboundedSender<(u64, RelayEvent)>,
+    ) -> Self {
+        Self {
+            session: Mutex::new(None),
+            relay,
+            route: Mutex::new(None),
+            last_route: AtomicU64::new(0),
+            events,
+        }
     }
 
-    pub(crate) fn set_client(&self, client: Arc<JellyfinClient>) {
-        *self.client.lock().unwrap_or_else(PoisonError::into_inner) = Some(client);
+    /// The session in use, if any.
+    pub(crate) fn client(&self) -> Option<Arc<JellyfinClient>> {
+        lock(&self.session)
+            .as_ref()
+            .map(|(_, client)| client.clone())
+    }
+
+    /// The session in use with its id in the app.
+    pub(crate) fn session_with_id(&self) -> Option<(u64, Arc<JellyfinClient>)> {
+        lock(&self.session).clone()
+    }
+
+    pub(crate) fn set_client(&self, id: u64, client: Arc<JellyfinClient>) {
+        *lock(&self.session) = Some((id, client));
     }
 
     fn session(&self) -> Result<Arc<JellyfinClient>, PlaybackProblem> {
         self.client().ok_or(PlaybackProblem::SignedOut)
+    }
+
+    /// Whether `route` is the relay route of the stream given last and still played.
+    pub(crate) fn is_current_route(&self, route: u64) -> bool {
+        lock(&self.route)
+            .as_ref()
+            .is_some_and(|(number, _)| *number == route)
+    }
+
+    /// Removes the relay route, if any. The route is dropped outside the lock: dropping aborts its connections.
+    fn remove_route(&self) {
+        let route = lock(&self.route).take();
+        drop(route);
+    }
+
+    /// A relay route for `path` (on the address in use, without the token) of `item`'s streams.
+    fn relay(
+        &self,
+        client: Arc<JellyfinClient>,
+        item: &ItemRef,
+        path: &str,
+    ) -> Result<EngineStream, PlaybackProblem> {
+        let relay = self.relay.relay().ok_or(PlaybackProblem::LocalRelay)?;
+        let number = self.last_route.fetch_add(1, Ordering::Relaxed) + 1;
+        let id = item.id.as_str();
+        let route = relay
+            .add_route(RouteConfig {
+                upstream: Arc::new(SessionUpstream(client)),
+                // Only the item's own streams: Jellyfin's stream, HLS and segment endpoints are under these (ADR 0020).
+                prefixes: vec![format!("/Videos/{id}/"), format!("/Audio/{id}/")],
+                events: Arc::new(RouteEvents {
+                    route: number,
+                    sender: self.events.clone(),
+                }),
+            })
+            // No port, no random bytes, or an item id the relay cannot serve: no stream connection for it.
+            .map_err(|_| PlaybackProblem::LocalRelay)?;
+        let stream = EngineStream {
+            url: StreamUrl::new(route.url(path)),
+            auth: StreamAuth {
+                secrets: vec![route.token().to_owned()],
+            },
+            relayed: true,
+        };
+        *lock(&self.route) = Some((number, route));
+        Ok(stream)
+    }
+}
+
+/// What a relay event means for playback (ADR 0020, "Lifecycle"); a refusal is given back with its status and shape, for the 401
+/// rule to decide.
+pub(crate) fn relay_problem(event: RelayEvent) -> Result<PlaybackProblem, (u16, GatewayShape)> {
+    match event {
+        RelayEvent::Refused { status, shape } => Err((status, shape)),
+        RelayEvent::NotFound => Ok(PlaybackProblem::NotFound),
+        RelayEvent::Server { status } => Ok(PlaybackProblem::Server { status }),
+        RelayEvent::Network => Ok(PlaybackProblem::Network),
+        RelayEvent::PlaylistElsewhere | RelayEvent::PlaylistUnreadable => {
+            Ok(PlaybackProblem::PlaylistElsewhere)
+        }
+        // The request could not be built for the address in use: nothing the user can do but play again.
+        RelayEvent::InvalidRequest => Ok(PlaybackProblem::Network),
     }
 }
 
@@ -123,7 +217,6 @@ impl MediaServer for JellyfinMedia {
         let (source, stream) = answer
             .playable(request.media_source.as_deref())
             .map_err(|error| playback_problem(&error))?;
-        let access = client.stream_access(&stream.url);
         Ok(ServerAnswer {
             play_session_id: answer.play_session_id.clone(),
             source: source.clone(),
@@ -131,20 +224,6 @@ impl MediaServer for JellyfinMedia {
             reasons: stream.reasons.clone(),
             // Moved as it is: the URL is never formatted, logged or shown.
             url: StreamUrl::new(stream.url.expose().to_owned()),
-            auth: StreamAuth {
-                cookies: access
-                    .cookies
-                    .into_iter()
-                    .map(|cookie| StreamCookie {
-                        name: cookie.name,
-                        value: cookie.value,
-                        path: cookie.path,
-                        secure: cookie.secure,
-                    })
-                    .collect(),
-                headers: access.headers,
-                secrets: access.secrets,
-            },
         })
     }
 
@@ -230,18 +309,27 @@ impl MediaServer for JellyfinMedia {
             .map_err(|error| problem(&error))
     }
 
-    async fn check_playlist(&self, url: &StreamUrl) -> Result<(), PlaybackProblem> {
-        self.session()?
-            .check_playlist_origin(url.expose())
-            .await
-            .map_err(|error| match error {
-                // The server moved to another address since the URL was made: a new plan gets a new URL.
-                PlaylistCheckError::AddressChanged => PlaybackProblem::Network,
-                PlaylistCheckError::Auth(error) => problem(&error),
-                PlaylistCheckError::Elsewhere
-                | PlaylistCheckError::TooLarge
-                | PlaylistCheckError::Malformed => PlaybackProblem::PlaylistElsewhere,
-            })
+    fn stream_url(&self, item: &ItemRef, url: &StreamUrl) -> Result<EngineStream, PlaybackProblem> {
+        self.remove_route();
+        let client = self.session()?;
+        if !client.address_has_gateway() {
+            return Ok(EngineStream {
+                url: url.clone(),
+                auth: StreamAuth {
+                    secrets: client.stream_secrets(),
+                },
+                relayed: false,
+            });
+        }
+        // The server moved to another address since the plan: a new plan gets a URL on the new one.
+        let path = client
+            .stream_path(url.expose())
+            .ok_or(PlaybackProblem::Network)?;
+        self.relay(client, item, &path)
+    }
+
+    fn end_stream(&self) {
+        self.remove_route();
     }
 
     fn is_local_address(&self) -> bool {

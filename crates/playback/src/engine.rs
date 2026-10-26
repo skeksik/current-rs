@@ -22,7 +22,7 @@ pub enum EngineTrack {
     Stream(u32),
 }
 
-/// One file to load: the URL, the credentials for it, where to start and which tracks to show from the start.
+/// One file to load: the URL, the secrets in it, where to start and which tracks to show from the start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EngineFile {
     pub url: StreamUrl,
@@ -31,11 +31,10 @@ pub struct EngineFile {
     pub start: Duration,
     pub audio: EngineTrack,
     pub subtitle: EngineTrack,
-    /// The URL is an HLS playlist with gateway headers whose playlists [`MediaServer::check_playlist`] found on the stream's own
-    /// origin. For libmpv, `FileRequest::playlist_checked_same_origin`; false for every other load.
-    ///
-    /// [`MediaServer::check_playlist`]: crate::server::MediaServer::check_playlist
-    pub playlist_checked: bool,
+    /// Whether the engine may open what the file refers to (an HLS playlist's media playlists, segments, keys and maps). False for a
+    /// relayed stream that is not HLS: the relay rewrites only HLS playlists (ADR 0020), so a reference in any other format would
+    /// send the engine past the relay, to whatever host it names. For libmpv, `access-references=no`.
+    pub references: bool,
 }
 
 /// An external subtitle the core fetched itself (ADR 0019, "External subtitles"), for the engine to add to the file playing (for

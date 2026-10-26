@@ -4,8 +4,9 @@
 //!
 //! - it runs the actions the handle sends, one at a time; a play or a stop that arrives while another action runs replaces it, and an
 //!   action whose caller gave up (a cancelled call) is dropped where it stands, which the controller allows;
-//! - it hands the controller every engine event (the engine's own thread only sends them into a channel) and sleeps until the
-//!   controller's next deadline otherwise;
+//! - it hands the controller every engine event (the engine's own thread only sends them into a channel) and every event of the
+//!   stream's relay route (ADR 0020; a refusal after the 401 rule has run in the background), and sleeps until the controller's next
+//!   deadline otherwise;
 //! - it publishes the state (at most 4 a second for the position, at once on any other change: the controller's rate), the media
 //!   controls' value and the swap chain to watch channels, tells browse when an item stopped, and saves a picked quality.
 //!
@@ -26,6 +27,7 @@ mod driver;
 mod mpv;
 mod now_playing;
 mod prefs;
+mod relay;
 mod server;
 #[cfg(any(test, feature = "test-engine"))]
 pub mod test_engine;
@@ -45,6 +47,7 @@ pub use now_playing::{MediaStatus, NowPlaying, TIMELINE_INTERVAL};
 
 pub(crate) use driver::{Context, open};
 pub(crate) use prefs::PlaybackPrefs;
+pub(crate) use relay::RelaySlot;
 
 /// Which engine [`App::open_player`](crate::App::open_player) uses in this build.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -154,6 +157,11 @@ pub(crate) enum Command {
         item: ItemRef,
         bytes: Arc<[u8]>,
     },
+    /// The 401 rule decided what a refusal of relay route `route`'s stream means (ADR 0020).
+    StreamProblem {
+        route: u64,
+        problem: current_model::PlaybackProblem,
+    },
     Close(oneshot::Sender<()>),
 }
 
@@ -162,7 +170,10 @@ impl Command {
         match self {
             Command::Play { .. } | Command::Close(_) => true,
             Command::Action { action, .. } => action.replaces(),
-            Command::Info(_) | Command::Summary(_) | Command::Artwork { .. } => false,
+            Command::Info(_)
+            | Command::Summary(_)
+            | Command::Artwork { .. }
+            | Command::StreamProblem { .. } => false,
         }
     }
 }

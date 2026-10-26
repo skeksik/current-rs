@@ -150,6 +150,7 @@ async fn forward(route: Arc<RouteEntry>, request: UpstreamRequest) -> Response<R
     }
     if success && is_html(&response.headers) {
         route.events.report(RelayEvent::Refused {
+            status,
             shape: GatewayShape::SignIn,
         });
         return empty(StatusCode::BAD_GATEWAY);
@@ -322,8 +323,9 @@ async fn read_playlist(
 /// to a player (404, 416 and 5xx); every other failure is a 502.
 fn failed(route: &RouteEntry, error: &StreamError) -> Response<RelayBody> {
     let status = match error {
-        StreamError::Refused { shape, .. } => {
+        StreamError::Refused { status, shape } => {
             route.events.report(RelayEvent::Refused {
+                status: *status,
                 shape: shape.clone(),
             });
             StatusCode::BAD_GATEWAY

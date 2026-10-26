@@ -14,7 +14,7 @@ use current_model::{
 
 use crate::quality::Quality;
 use crate::server::{PlanRequest, ServerAnswer, TranscodePermissions};
-use crate::stream::{StreamAuth, StreamUrl};
+use crate::stream::StreamUrl;
 
 /// Why a plan came out the way it did, from the user's permissions on the server, which the server enforces (ADR 0019,
 /// "Permissions"). For the playback information view.
@@ -47,12 +47,11 @@ pub fn request(
     }
 }
 
-/// A plan with what the engine needs to open it.
+/// A plan with the server's URL for its stream ([`MediaServer::stream_url`](crate::MediaServer::stream_url) makes the engine's).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Planned {
     pub plan: PlaybackPlan,
     pub url: StreamUrl,
-    pub auth: StreamAuth,
     pub notes: Vec<PlanNote>,
 }
 
@@ -72,7 +71,6 @@ pub fn plan(
         route,
         reasons: server_reasons,
         url,
-        auth,
     } = answer;
     let mut reasons = Vec::new();
     let mut notes = Vec::new();
@@ -109,7 +107,6 @@ pub fn plan(
             tracks,
         },
         url,
-        auth,
         notes,
     }
 }

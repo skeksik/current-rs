@@ -263,6 +263,8 @@ pub struct FileRequest {
     pub secrets: Vec<String>,
     /// Set only through [`FileRequest::playlist_checked_same_origin`].
     playlist_checked: bool,
+    /// Set only through [`FileRequest::without_references`].
+    no_references: bool,
 }
 
 impl std::fmt::Debug for FileRequest {
@@ -283,6 +285,7 @@ impl std::fmt::Debug for FileRequest {
             )
             .field("secrets", &self.secrets.len())
             .field("playlist_checked", &self.playlist_checked)
+            .field("no_references", &self.no_references)
             .finish()
     }
 }
@@ -298,7 +301,23 @@ impl FileRequest {
             headers: Vec::new(),
             secrets: Vec::new(),
             playlist_checked: false,
+            no_references: false,
         }
+    }
+
+    /// Opens nothing the file refers to (mpv's `access-references=no`), credentials or not: for a stream through the loopback relay
+    /// that is not HLS (ADR 0020). The relay rewrites only HLS playlists, so a reference in any other format would send the player
+    /// straight to whatever host it names, past the relay. It would carry no credential there, but would tell that host the user's
+    /// address and that they play this item, which the relay's refusal of a playlist URI off the server's address avoids (ADR 0020
+    /// choice 5). A direct-played file needs no reference: Jellyfin serves one file.
+    ///
+    /// mpv v0.41.0 `DOCS/man/options.rst` (read 2026-10-26): "Follow any references in the file being opened (default: yes). [...]
+    /// This option also disables ordered chapters, mov reference files, opening of archives, and a number of other features." and
+    /// "Some FFmpeg demuxers might not respect this option." So it narrows what a non-HLS file can open; that it covers every format
+    /// is not verified.
+    pub fn without_references(mut self) -> FileRequest {
+        self.no_references = true;
+        self
     }
 
     /// Marks an HLS or DASH stream whose playlists the caller has checked: it fetched the master playlist and every playlist it names,
@@ -307,8 +326,9 @@ impl FileRequest {
     /// (FFmpeg 9.0.2 `libavformat/aviobuf.c`, `ffio_copy_url_options`; ADR 0019, 2026-10-25).
     ///
     /// Not enforced by this: mpv fetches the playlists again itself, so a playlist that changes after the check (a live one) could
-    /// still name another host and get the headers. The loopback relay planned for M3 enforces it (roadmap). Cookies are not affected:
-    /// they carry the stream's host and port as their domain.
+    /// still name another host and get the headers. The core no longer gives libmpv credentials: gateway streams go through the
+    /// loopback relay, which enforces it (ADR 0020), so this stays as a guard. Cookies are not affected: they carry the stream's host
+    /// and port as their domain.
     pub fn playlist_checked_same_origin(mut self) -> FileRequest {
         self.playlist_checked = true;
         self
@@ -423,7 +443,7 @@ impl FileRequest {
             pairs.push(("sid".into(), sid.option_value()));
         }
         pairs.push(("stream-lavf-o".into(), self.lavf_options()));
-        if self.has_credentials() && !self.playlist_checked {
+        if self.no_references || (self.has_credentials() && !self.playlist_checked) {
             // No nested opens (playlist entries, segments, references): they would carry the headers to any host, and the cookies
             // to any host whose name ends in the stream's (FFmpeg matches a cookie domain as a suffix). mpv's
             // `block_io_open` refuses them ("Not opening '%s' due to --access-references=no", `demux/demux_lavf.c`).
@@ -834,6 +854,35 @@ mod tests {
         let plain = FileRequest::new("https://media.example.com/master.m3u8");
         assert!(plain.check_header_scope().is_ok());
         assert!(plain.file_options().get("access-references").is_none());
+    }
+
+    #[test]
+    fn a_relayed_stream_that_is_not_hls_opens_no_reference() {
+        // Direct play through the loopback relay (ADR 0020): no credentials, and still no nested opens.
+        let relayed = FileRequest::new("http://127.0.0.1:50123/route/Videos/1/stream?static=true")
+            .without_references();
+        assert!(!relayed.has_credentials());
+        assert!(relayed.check_header_scope().is_ok());
+        assert_eq!(
+            relayed
+                .file_options()
+                .get("access-references")
+                .and_then(Node::as_str),
+            Some("no")
+        );
+        assert!(format!("{relayed:?}").contains("no_references: true"));
+        // A relayed HLS stream keeps them: its segments are references, and the relay rewrites every playlist.
+        let hls = FileRequest::new("http://127.0.0.1:50123/route/videos/1/master.m3u8");
+        assert!(hls.check_header_scope().is_ok());
+        assert!(hls.file_options().get("access-references").is_none());
+        // The guard for credentials stays whatever the mark: an unchecked playlist with headers is refused.
+        let mut guarded =
+            FileRequest::new("https://media.example.com/videos/1/master.m3u8").without_references();
+        guarded.headers.push(("X-Gate".into(), "v".into()));
+        assert!(matches!(
+            guarded.check_header_scope(),
+            Err(EngineError::UncheckedPlaylist)
+        ));
     }
 
     #[test]
