@@ -88,6 +88,22 @@ before merging, and its PR carries only the record.
       until it is empty after the removal. After the fixes, 200 runs under the same load (100 at each `RUST_BACKTRACE`): the fixed
       tests passed every time; `a_blocking_listener_does_not_delay_other_subscriptions_or_tasks` failed once (`RUST_BACKTRACE=1`,
       its 1 s `PROMPT` bound on the first value), not investigated here (PR #59, 2026-10-25)
+- [x] `current-ffi`'s tests after PR #59: `a_failing_listener_keeps_its_subscription` and `a_failing_list_listener_gets_a_reset_next`
+      failed again under load (2026-10-26). Reproduced with 60 copies of the test binary at once on 4 CPUs: both failed in 58 of
+      60 runs with `RUST_BACKTRACE=1`, each on the `recv_timeout(WAIT)` after the failed delivery, and passed 60 of 60 with
+      `RUST_BACKTRACE=0`. Cause: the time the process's own panic hook takes, not a race. Their stand-in foreign exception went to
+      the default hook, which with `RUST_BACKTRACE=1` captures and symbolizes a backtrace in the 198 MB debug binary on the pool
+      thread; measured under that load, median 11.4 s and 116 of 120 calls over the 5 s `WAIT` (about 40 µs with
+      `RUST_BACKTRACE=0`). The subscription is not lost, only that delivery delayed, as designed ("Listener delivery"): no
+      product bug. The test hook now returns at once for that payload, so these tests no longer time an unbounded hook; the
+      slow-hook tests still bound a hook's cost. After: 0 failures in 240 runs (120 at `RUST_BACKTRACE=1`, 60 at 0, 60 beside 8
+      CPU-burning processes; the same load failed 60 of 60 before), the binary taking about 36 s instead of 46 s.
+      `a_blocking_listener_does_not_delay_other_subscriptions_or_tasks` passed in all of those runs and the 120 before: not
+      reproduced, so its one failure is not explained; it ran at `RUST_BACKTRACE=1` beside those two tests' backtraces, which
+      used the CPUs for seconds (not proven). Seen once each under the same load and not investigated:
+      `browse::tests::a_failed_page_becomes_failed_and_retry_fills_it` (`browse/tests.rs:158`, 1 of 60 at `RUST_BACKTRACE=0`)
+      and `player_tests::a_player_plays_reports_and_releases_through_the_bridge` (`player_tests.rs:188`, 2 of 60 with a timing
+      hook added); neither failed after the fix (test/ffi-subscription-flakes)
 - [ ] Windows, not measured in the owner's M1 runs: the caption buttons' pressed colour against Windows' own apps (high contrast
       and Narrator passed on PR 39's run, 2026-10-24; docs/notes/windows-shell.md)
 - [ ] Linux: choose how to ship (Flatpak, per-distro packages, AppImage or tarball; ADR 0011) before M5's release work
