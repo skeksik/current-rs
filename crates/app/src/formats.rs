@@ -251,14 +251,9 @@ pub fn supported_formats(
     let hardware_note = match (capabilities, hardware) {
         (None, _) => String::new(),
         (Some(_), Some(hardware)) if hardware.adapter.trim().is_empty() => {
-            "Hardware decoding was tested on this PC's graphics card.".to_owned()
+            "Tested on this PC's graphics card.".to_owned()
         }
-        (Some(_), Some(hardware)) => {
-            format!(
-                "Hardware decoding was tested on {}.",
-                hardware.adapter.trim()
-            )
-        }
+        (Some(_), Some(hardware)) => format!("Tested on: {}", hardware.adapter.trim()),
         (Some(_), None) => "The graphics card couldn't be tested, so video shows as \"Plays\" rather than Hardware or Software."
             .to_owned(),
     };
@@ -580,12 +575,17 @@ fn hdr_tab(engine: bool, display: Option<&DisplayFacts>) -> FormatTab {
                 return row(*name, FormatSupport::NotSupported, "");
             }
             match display {
-                Some(display) if display.hdr => row(*name, FormatSupport::Hdr, *always),
+                // The facts are those of the display the window showing the page is on.
+                Some(display) if display.hdr => row(
+                    *name,
+                    FormatSupport::Hdr,
+                    notes(&["On the display this window is on, which is in HDR mode", always]),
+                ),
                 Some(_) => row(
                     *name,
                     FormatSupport::ToneMapped,
                     notes(&[
-                        "This display isn't in HDR mode, so the player converts it to SDR",
+                        "The display this window is on isn't in HDR mode, so the player converts it to SDR",
                         always,
                     ]),
                 ),
@@ -708,10 +708,7 @@ mod tests {
         assert_eq!(tab(&page, FormatTabKind::Video).name_header, "Codec");
         assert_eq!(tab(&page, FormatTabKind::Containers).name_header, "Format");
         assert_eq!(page.description, DESCRIPTION);
-        assert_eq!(
-            page.hardware_note,
-            "Hardware decoding was tested on Example Graphics."
-        );
+        assert_eq!(page.hardware_note, "Tested on: Example Graphics");
     }
 
     #[test]
@@ -777,10 +774,7 @@ mod tests {
         );
         assert_eq!(find(video, "AV1").notes, "8-bit and 10-bit");
         assert_eq!(find(video, "VP9").support, FormatSupport::Software);
-        assert_eq!(
-            page.hardware_note,
-            "Hardware decoding was tested on this PC's graphics card."
-        );
+        assert_eq!(page.hardware_note, "Tested on this PC's graphics card.");
     }
 
     #[test]
@@ -872,7 +866,10 @@ mod tests {
                 .iter()
                 .all(|row| row.support == FormatSupport::Hdr)
         );
-        assert_eq!(find(tab(&on, FormatTabKind::Hdr), "HDR10").notes, "");
+        assert_eq!(
+            find(tab(&on, FormatTabKind::Hdr), "HDR10").notes,
+            "On the display this window is on, which is in HDR mode"
+        );
         let off = supported_formats(&engine, None, Some(&sdr()));
         let hdr10 = find(tab(&off, FormatTabKind::Hdr), "HDR10");
         assert_eq!(hdr10.support, FormatSupport::ToneMapped);

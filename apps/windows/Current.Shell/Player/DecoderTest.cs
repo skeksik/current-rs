@@ -10,10 +10,14 @@ namespace Current.Shell.Player;
 /// profile decodes is the core's to say. Platform integration, so it lives here; through COM vtables and delegates as PlayerNative does,
 /// so no package and no unsafe code.
 /// <list type="bullet">
-/// <item>The adapter is DXGI's first (<c>IDXGIFactory1::EnumAdapters1(0)</c>), the default adapter mpv's D3D11 output picks when
-/// <c>--d3d11-adapter</c> is unset ("Will pick the default adapter if unset", which d3d11va decodes on: "Hardware decoders utilizing
-/// the D3D11 rendering abstraction's helper functionality to receive a device, such as D3D11VA ... will be affected by this choice",
-/// <c>DOCS/man/options.rst</c>, mpv v0.41.0, read 2026-10-26). That mpv's default is adapter 0 was not checked in its source.</item>
+/// <item>The adapter is DXGI's first (<c>IDXGIFactory1::EnumAdapters1(0)</c>), the one mpv decodes on. With <c>--d3d11-adapter</c>
+/// unset, mpv's <c>mp_d3d11_create_present_device</c> gets no adapter from <c>mp_get_dxgi_adapter</c> and calls
+/// <c>D3D11CreateDevice</c> with a null adapter and <c>D3D_DRIVER_TYPE_HARDWARE</c> (<c>video/out/gpu/d3d11_helpers.c</c>, mpv v0.41.0,
+/// read 2026-10-26); "Pass NULL to use the default adapter, which is the first adapter that is enumerated by
+/// IDXGIFactory1::EnumAdapters" (D3D11CreateDevice page, learn.microsoft.com, read 2026-10-26). d3d11va decodes on that device:
+/// "Hardware decoders utilizing the D3D11 rendering abstraction's helper functionality to receive a device, such as D3D11VA ... will
+/// be affected by this choice" (<c>--d3d11-adapter</c>, <c>DOCS/man/options.rst</c>, v0.41.0). The adapter's name is shown on the page
+/// and never logged.</item>
 /// <item><c>D3D11CreateDevice</c> with <c>D3D11_CREATE_DEVICE_VIDEO_SUPPORT</c> (0x800), then <c>ID3D11VideoDevice</c>'s
 /// <c>GetVideoDecoderProfileCount</c>, <c>GetVideoDecoderProfile</c> ("To get the number of profiles that the driver supports, call
 /// ID3D11VideoDevice::GetVideoDecoderProfileCount") and <c>CheckVideoDecoderFormat</c> ("Receives the value TRUE if the format is

@@ -2,8 +2,10 @@
 //! that started in this run, or else those of a short-lived headless engine started only to read them.
 //!
 //! The headless engine is libmpv with `vo=null` and `ao=null` and no `force-window` (`current-mpv`'s `Output::Headless`), so it opens
-//! no window and no audio device. It takes the process's one engine slot for the moment it lives (well under a second, not measured);
-//! a player starting meanwhile waits for it, as it waits for a closing one.
+//! no window and no audio device. It runs on the blocking pool, never the UI thread, and is shut down as soon as its lists are read.
+//! It takes the process's one engine slot for that moment (not measured); a player starting meanwhile waits for it, as it waits for a
+//! closing one, and then wins: once a player's engine has reported, its capabilities are the ones kept. A probe that finds the slot
+//! held by a player fails `Busy` after `current-mpv`'s wait, and the player's capabilities answer instead.
 
 use std::sync::{Mutex, PoisonError};
 
@@ -51,6 +53,11 @@ impl KnownCapabilities {
             return EngineReport::Ready(capabilities);
         }
         let report = probe().await;
+        // A player that started meanwhile wins: its engine's capabilities are kept, and the headless one's (already shut down, or never
+        // started because the player held the slot) are dropped.
+        if let Some(capabilities) = self.known() {
+            return EngineReport::Ready(capabilities);
+        }
         if let EngineReport::Ready(capabilities) = &report {
             self.remember(capabilities.clone());
         }

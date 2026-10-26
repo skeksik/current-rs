@@ -44,6 +44,9 @@ rows come from three inputs and never from a fixed list of what should work:
 - **The facts the UI passes in:** the graphics card's decoder profiles, and the display the window is on (the same `DisplayFacts` the
   player takes, ADR 0007).
 
+When display facts are passed, they are those of the display the window showing the page is on, and the HDR rows' notes say so.
+A failure to start the headless engine becomes the page's description, not an error dialog.
+
 The column's values: **Hardware**, **Software**, **Plays** (containers, subtitles; video when the card could not be tested),
 **Server repackages** (a container the engine does not read: the server remuxes into HLS), **Server converts** (transcode),
 **Not supported**, and for the HDR tab **HDR** and **Tone-mapped**.
@@ -52,8 +55,10 @@ The column's values: **Hardware**, **Software**, **Plays** (containers, subtitle
 The app keeps the capabilities of the last engine start in the run (every player start records them). When none is known, a short-lived
 **headless engine** is started on the blocking pool only to read them: `current-mpv`'s `Output::Headless`, which sets `vo=null` and
 `ao=null` and no `force-window`, so no window and no audio device opens. It is shut down at once, and its answer is kept for the run;
-a failed start is not kept, so opening the page again retries. It shares the process's one engine slot (ADR 0019), so a player starting
-at the same moment waits for it as it waits for a closing one.
+a failed start is not kept, so opening the page again retries. It runs on the blocking pool, never the UI thread. It shares the
+process's one engine slot (ADR 0019): a player starting at the same moment waits for it (only while its lists are read) and then
+wins: once a player's engine has reported, its capabilities are kept and the headless engine's are dropped. A probe that finds the
+slot held by a player fails and the player's capabilities answer.
 
 Considered: caching the capabilities on disk from the last run (stale after an update of the bundled libmpv, and empty on first start);
 a fixed list per build (would claim what a build lacks, against the brief). The headless start costs one libmpv initialisation per run
@@ -95,10 +100,13 @@ the owner's PC (docs/notes/windows-video.md, "ADR 0007 item 5"). HLG and HDR10 w
 ## Limits
 - **The test asks the driver, not a decode.** A listed profile can still fail on a given file (level, resolution, a driver bug), and
   mpv then falls back to software. The page does not claim more than "the card has a decoder for it".
-- **One adapter:** DXGI's first, taken to be the default adapter mpv's D3D11 output picks when `--d3d11-adapter` is unset ("Will pick
-  the default adapter if unset"; d3d11va is "affected by this choice", `DOCS/man/options.rst`, v0.41.0). That mpv's default is DXGI's
-  adapter 0 was not checked in mpv's source. On a PC with two graphics cards, Windows' per-app graphics preference may change it (not
-  verified).
+- **One adapter: the one mpv decodes on.** With `--d3d11-adapter` unset, mpv's `mp_d3d11_create_present_device` finds no adapter by
+  name and calls `D3D11CreateDevice` with a null adapter and `D3D_DRIVER_TYPE_HARDWARE` (`video/out/gpu/d3d11_helpers.c`, v0.41.0);
+  "Pass NULL to use the default adapter, which is the first adapter that is enumerated by IDXGIFactory1::EnumAdapters"
+  (`D3D11CreateDevice`, learn.microsoft.com). d3d11va decodes on that device ("will be affected by this choice", `--d3d11-adapter`,
+  `DOCS/man/options.rst`). So the test uses DXGI's adapter 0, and on a PC with two graphics cards that is the one tested. The page names
+  it ("Tested on: <name>"); the name is runtime data only, never logged (the smoke run prints a count of profiles). Windows' per-app
+  graphics preference on a two-GPU PC may change which adapter is first (not verified).
 - **MPEG-4 Part 2** (DivX, Xvid) is not in `current-mpv`'s codec table, so the device profile does not offer it and the server converts
   it; the page shows that. Adding it to the table would change direct play and is a separate task.
 - **Containers and subtitles** are what the engine reports, not what the server would offer for a given file.
@@ -111,7 +119,8 @@ the owner's PC (docs/notes/windows-video.md, "ADR 0007 item 5"). HLG and HDR10 w
 
 ## Sources (read 2026-10-26)
 - mpv v0.41.0: `DOCS/man/options.rst` (`--hwdec`, `--hwdec-codecs`, `--audio-spdif`, `--d3d11-adapter`), `video/decode/vd_lavc.c`
-  (`hwdec_codecs` default, `hwdec_codec_allowed`), `filters/f_decoder_wrapper.c` (`audio-spdif` option and defaults).
+  (`hwdec_codecs` default, `hwdec_codec_allowed`), `video/out/gpu/d3d11_helpers.c` (`mp_get_dxgi_adapter`,
+  `mp_d3d11_create_present_device`), `filters/f_decoder_wrapper.c` (`audio-spdif` option and defaults).
   https://github.com/mpv-player/mpv/tree/v0.41.0
 - FFmpeg n8.0: `libavcodec/dxva2.c` (`dxva_modes`, the DXVA GUIDs, `d3d11va_map_sw_to_hw_format`). https://github.com/FFmpeg/FFmpeg
 - learn.microsoft.com: `ID3D11VideoDevice::GetVideoDecoderProfileCount`, `GetVideoDecoderProfile` (updated 2024-02-22),

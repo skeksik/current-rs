@@ -241,7 +241,7 @@ internal static class PlayerTests
         Check(page.Tabs.Select(tab => tab.Kind).SequenceEqual(
             [FormatTabKind.Video, FormatTabKind.Audio, FormatTabKind.Containers, FormatTabKind.Subtitles, FormatTabKind.Hdr]), "five tabs in order");
         Check(page.Tabs.All(tab => tab.Rows.Count > 0), "every tab has rows");
-        Check(page.HardwareNote == "Hardware decoding was tested on Example Graphics.", page.HardwareNote);
+        Check(page.HardwareNote == "Tested on: Example Graphics", page.HardwareNote);
         // The test engine decodes HEVC and H.264 only; the card lists HEVC Main.
         var video = page.Tabs[0].Rows;
         Check(video.Single(row => row.Name == "HEVC (H.265)").Support == FormatSupport.Hardware, "HEVC on the card");

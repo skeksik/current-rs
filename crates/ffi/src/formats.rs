@@ -202,10 +202,7 @@ mod tests {
                 .unwrap();
         assert_eq!(page.tabs.len(), 5);
         assert!(page.tabs.iter().all(|tab| !tab.rows.is_empty()));
-        assert_eq!(
-            page.hardware_note,
-            "Hardware decoding was tested on Example Graphics."
-        );
+        assert_eq!(page.hardware_note, "Tested on: Example Graphics");
         let video = &page.tabs[0];
         assert_eq!(video.kind, FormatTabKind::Video);
         let hevc = video
