@@ -35,6 +35,10 @@ pub struct EngineFile {
     /// relayed stream that is not HLS: the relay rewrites only HLS playlists (ADR 0020), so a reference in any other format would
     /// send the engine past the relay, to whatever host it names. For libmpv, `access-references=no`.
     pub references: bool,
+    /// The file is an HLS playlist (the plan's route): the engine reads it with nothing that would take another kind of playlist from
+    /// it and open what it names past the relay (ADR 0020 task 4). For libmpv, FFmpeg's demuxers only (`demuxer=lavf`); the relay
+    /// refuses anything but an HLS playlist at the URL.
+    pub hls: bool,
 }
 
 /// An external subtitle the core fetched itself (ADR 0019, "External subtitles"), for the engine to add to the file playing (for

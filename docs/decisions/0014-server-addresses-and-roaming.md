@@ -117,6 +117,11 @@ capabilities state.
 - **Playback streams** hold the address that was selected when they started; after a switch they fail when the old address does.
   M2 decides how the player re-opens at the current position on the new address. Stream URLs with credentials follow the same rule:
   only verified addresses.
+  Amended 2026-10-26 (ADR 0020, choice 6 A): streams through the loopback relay (those on an address with gateway credentials)
+  follow the selected address. The relay forwards each request through the server's `ServerClient`, to the address selected at that
+  moment and with that address's own credentials, retrying a failed GET once on a newly selected address as above; the identity check
+  keeps it the same server, so direct play continues at the next range request and HLS at the next segment. Streams not relayed keep
+  the rule above until a later task.
 - **The request log** (ADR 0006) gains the address's position: `jellyfin/1 address 2 GET /Items -> 200`. Never the address. Probes are
   logged like requests. Errors stay without addresses.
 

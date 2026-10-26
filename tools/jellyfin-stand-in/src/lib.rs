@@ -2,8 +2,9 @@
 //! sign-in, restoring a session, sign-out, images, browsing a small fake library (see [`library`]) and a large generated one (see
 //! [`paging`]) and playback (PlaybackInfo, playstate reports, media segments, the session list, HLS playlists, the direct-play
 //! stream with ranges and HLS segments) ask, in Jellyfin 12.2's shapes as `current-jellyfin` reads them. It can listen on more than
-//! one address ([`StandIn::add_address`]), each with its own gateway in front of everything, stream endpoints included. Every name,
-//! id and credential in it is fake. Test code only: nothing shipped depends on it.
+//! one address ([`StandIn::add_address`]), each with its own gateway in front of everything, stream endpoints included. For the live
+//! tests through libmpv it can also serve real media at any stream path ([`Controls::set_stream`]), pace its stream bodies, fail or
+//! cut one, and expire its gateway. Every name, id and credential in it is fake. Test code only: nothing shipped depends on it.
 
 pub mod library;
 pub mod paging;
@@ -11,6 +12,7 @@ pub mod paging;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -32,7 +34,7 @@ pub const QUICK_CONNECT_CODE: &str = "123456";
 pub const GATE_USER: &str = "stand-in-gate-user";
 pub const GATE_PASSWORD: &str = "not-a-real-gate-password";
 /// `stand-in-gate-user:not-a-real-gate-password` in base64.
-const GATE_BASIC: &str = "c3RhbmQtaW4tZ2F0ZS11c2VyOm5vdC1hLXJlYWwtZ2F0ZS1wYXNzd29yZA==";
+pub const GATE_BASIC: &str = "c3RhbmQtaW4tZ2F0ZS11c2VyOm5vdC1hLXJlYWwtZ2F0ZS1wYXNzd29yZA==";
 /// The realm of [`Gate::Basic`]'s challenge.
 pub const GATE_REALM: &str = "Stand-in Gate";
 /// The cookie [`Gate::Portal`] wants, and the value it takes until [`Controls::set_gate_cookie`] changes it.
@@ -128,6 +130,8 @@ pub struct StreamSeen {
     pub cookie: String,
     /// The [`GATE_HEADER`] header, empty without it.
     pub gate_header: String,
+    /// The `User-Agent` header, empty without it.
+    pub user_agent: String,
     /// The status it was answered with.
     pub status: u16,
 }
@@ -193,6 +197,8 @@ struct Door {
     cookie: String,
     /// The value [`Gate::Header`] wants.
     header: String,
+    /// The gateway's session ended: it lets nothing through ([`Controls::expire_gate`]).
+    expired: bool,
     /// Stops its listener.
     listener: Option<AbortHandle>,
 }
@@ -208,6 +214,7 @@ impl Door {
             gate: Gate::Off,
             cookie: cookie.to_owned(),
             header: header.to_owned(),
+            expired: false,
             listener: None,
         }
     }
@@ -240,6 +247,18 @@ struct State {
     streams_seen: Mutex<Vec<StreamSeen>>,
     /// Paths whose stream requests answer 401 to a live token, as Jellyfin does for an item the user cannot see.
     refused: Mutex<HashSet<String>>,
+    /// Bodies served at stream paths (lowercase), over the generated ones: content type and bytes.
+    media: Mutex<HashMap<String, Media>>,
+    /// Stream paths (lowercase) that answer this status instead.
+    failing: Mutex<HashMap<String, u16>>,
+    /// Stream paths (lowercase) whose next answer breaks off after this many body bytes.
+    cuts: Mutex<HashMap<String, usize>>,
+    /// Stream bodies go out in pieces of at most this many bytes, one per [`PACE_TICK`]; 0 sends them at once.
+    pace: AtomicUsize,
+    /// Stream answers still being sent: their connection is open.
+    open_streams: AtomicUsize,
+    /// The path [`TRANSCODE_ITEM`]'s `TranscodingUrl` names, over [`master_playlist_path`].
+    transcoding_path: Mutex<Option<String>>,
     /// The path of every held request whose client closed the connection before it was released.
     cancelled: Mutex<Vec<String>>,
     /// What the user marked played or favourite.
@@ -249,6 +268,9 @@ struct State {
     /// The generated library and its controls.
     paging: paging::Paging,
 }
+
+/// A stream body and its content type.
+type Media = (String, Arc<Vec<u8>>);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Each change is one push or one replacement: a poisoned lock still holds a usable value.
@@ -391,6 +413,54 @@ impl Controls {
         self.set_gate_at(0, gate);
     }
 
+    /// The gateway of the first address lets nothing through from now on, as one whose session ended: [`Gate::Basic`] challenges,
+    /// [`Gate::Portal`] shows its sign-in page and [`Gate::Header`] answers 403, whatever the request carries.
+    pub fn expire_gate(&self) {
+        if let Some(door) = lock(&self.state.doors).first_mut() {
+            door.expired = true;
+        }
+    }
+
+    /// Serves `body` with `content_type` as a stream at `path` (any case; e.g. `/Videos/{item}/stream`, or a segment path a playlist
+    /// names), as the stand-in's stream endpoints do: behind the gateway, to a live token, with ranges.
+    pub fn set_stream(&self, path: &str, content_type: &str, body: Vec<u8>) {
+        lock(&self.state.media).insert(
+            path.to_ascii_lowercase(),
+            (content_type.to_owned(), Arc::new(body)),
+        );
+    }
+
+    /// Stream requests to `path` (any case) answer `status` with no body from now on (a 500 or a 404 on one HLS segment).
+    pub fn fail_stream(&self, path: &str, status: u16) {
+        lock(&self.state.failing).insert(path.to_ascii_lowercase(), status);
+    }
+
+    /// The next answer to `path` (any case) announces its whole length and breaks off after `after` bytes of its body: the
+    /// connection closes mid-body. Later answers are whole.
+    pub fn cut_stream(&self, path: &str, after: usize) {
+        lock(&self.state.cuts).insert(path.to_ascii_lowercase(), after);
+    }
+
+    /// Stream bodies go out at about `bytes_per_second` from now on (in pieces every [`PACE_TICK`]), so a player's read-ahead stays
+    /// behind and its connection stays open; 0 sends them at once.
+    pub fn set_stream_pace(&self, bytes_per_second: usize) {
+        let piece = bytes_per_second * PACE_TICK.as_millis() as usize / 1000;
+        self.state.pace.store(
+            piece.max(usize::from(bytes_per_second > 0)),
+            Ordering::SeqCst,
+        );
+    }
+
+    /// How many stream answers are still being sent: each holds a connection open.
+    pub fn open_streams(&self) -> usize {
+        self.state.open_streams.load(Ordering::SeqCst)
+    }
+
+    /// [`TRANSCODE_ITEM`]'s `TranscodingUrl` names `path` from now on instead of [`master_playlist_path`] (same query).
+    pub fn set_transcoding_path(&self, path: &str) {
+        *lock(&self.state.transcoding_path) = Some(path.to_owned());
+    }
+
     /// Puts `gate` in front of address `index` (0 for the first, then as [`StandIn::add_address`] numbered them).
     pub fn set_gate_at(&self, index: usize, gate: Gate) {
         if let Some(door) = lock(&self.state.doors).get_mut(index) {
@@ -462,6 +532,11 @@ impl Controls {
             .iter()
             .filter(|seen| *seen == path)
             .count()
+    }
+
+    /// The live session token, if one was issued: for playlists that name it as `ApiKey`, as Jellyfin's do for an unrelayed player.
+    pub fn live_token(&self) -> Option<String> {
+        lock(&self.state.tokens).first().cloned()
     }
 
     /// How many sessions are live.
@@ -558,6 +633,7 @@ struct Received {
     emby_authorization: String,
     cookie: String,
     gate_header: String,
+    user_agent: String,
     range: String,
     body: String,
 }
@@ -597,8 +673,8 @@ async fn serve(mut socket: TcpStream, state: Arc<State>, door: usize) {
     }
     let response = match gate(&state, door, &received) {
         Some(blocked) => blocked,
-        None if let Some(body) = stream(&received.path) => {
-            let (status, head, body) = streamed(&state, &received, &body);
+        None if let Some((kind, body)) = stream_body(&state, &received.path) => {
+            let (status, head, body) = streamed(&state, &received, &kind, &body);
             lock(&state.streams_seen).push(StreamSeen {
                 address: door,
                 method: received.method.clone(),
@@ -608,11 +684,17 @@ async fn serve(mut socket: TcpStream, state: Arc<State>, door: usize) {
                 emby_authorization: received.emby_authorization.clone(),
                 cookie: received.cookie.clone(),
                 gate_header: received.gate_header.clone(),
+                user_agent: received.user_agent.clone(),
                 status,
             });
+            let cut = if (200..300).contains(&status) {
+                lock(&state.cuts).remove(&received.path.to_ascii_lowercase())
+            } else {
+                None
+            };
             let _ = socket.write_all(head.as_bytes()).await;
             if received.method != "HEAD" {
-                let _ = socket.write_all(&body).await;
+                send_body(&state, &mut socket, &body, cut).await;
             }
             let _ = socket.shutdown().await;
             return;
@@ -670,20 +752,27 @@ fn gate(state: &State, door: usize, received: &Received) -> Option<String> {
             body.len()
         )
     };
-    let (gate, cookie, header) = {
+    let (gate, cookie, header, expired) = {
         let doors = lock(&state.doors);
         let door = &doors[door];
-        (door.gate, door.cookie.clone(), door.header.clone())
+        (
+            door.gate,
+            door.cookie.clone(),
+            door.header.clone(),
+            door.expired,
+        )
     };
     match gate {
         Gate::Off => None,
-        Gate::Basic => (received.authorization != format!("Basic {GATE_BASIC}")).then(|| {
-            reply(
-                401,
-                &format!("www-authenticate: Basic realm=\"{GATE_REALM}\"\r\n"),
-                "",
-            )
-        }),
+        Gate::Basic => {
+            (expired || received.authorization != format!("Basic {GATE_BASIC}")).then(|| {
+                reply(
+                    401,
+                    &format!("www-authenticate: Basic realm=\"{GATE_REALM}\"\r\n"),
+                    "",
+                )
+            })
+        }
         Gate::Portal => {
             let wanted = format!("{GATE_COOKIE}={cookie}");
             if received.path == GATE_SIGN_IN_PATH {
@@ -694,7 +783,7 @@ fn gate(state: &State, door: usize, received: &Received) -> Option<String> {
                     "",
                 ));
             }
-            (!received.cookie.split("; ").any(|pair| pair == wanted)).then(|| {
+            (expired || !received.cookie.split("; ").any(|pair| pair == wanted)).then(|| {
                 reply(
                     200,
                     "content-type: text/html\r\n",
@@ -704,7 +793,7 @@ fn gate(state: &State, door: usize, received: &Received) -> Option<String> {
                 )
             })
         }
-        Gate::Header => (received.gate_header != header).then(|| reply(403, "", "")),
+        Gate::Header => (expired || received.gate_header != header).then(|| reply(403, "", "")),
     }
 }
 
@@ -738,17 +827,77 @@ fn stream(path: &str) -> Option<Vec<u8>> {
     segment.then(|| segment_body(path))
 }
 
+/// What a stream path serves, and its content type: a body set with [`Controls::set_stream`], else [`stream`]'s as `video/mp4`.
+fn stream_body(state: &State, path: &str) -> Option<Media> {
+    if let Some(media) = lock(&state.media).get(&path.to_ascii_lowercase()) {
+        return Some(media.clone());
+    }
+    stream(path).map(|body| ("video/mp4".to_owned(), Arc::new(body)))
+}
+
+/// How often a paced body sends its next piece ([`Controls::set_stream_pace`]).
+pub const PACE_TICK: Duration = Duration::from_millis(50);
+
+/// Counts an answer still being sent ([`Controls::open_streams`]).
+struct OpenStream<'a>(&'a AtomicUsize);
+
+impl<'a> OpenStream<'a> {
+    fn new(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(count)
+    }
+}
+
+impl Drop for OpenStream<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Sends `body` (only its first `cut` bytes, if given), paced as [`Controls::set_stream_pace`] says. A paced body stops as soon as
+/// the client closes the connection.
+async fn send_body(state: &State, socket: &mut TcpStream, body: &[u8], cut: Option<usize>) {
+    let _open = OpenStream::new(&state.open_streams);
+    let body = &body[..cut.unwrap_or(body.len()).min(body.len())];
+    let piece = state.pace.load(Ordering::SeqCst);
+    if piece == 0 {
+        let _ = socket.write_all(body).await;
+        return;
+    }
+    for chunk in body.chunks(piece) {
+        if socket.write_all(chunk).await.is_err() {
+            return;
+        }
+        let mut probe = [0u8; 1];
+        tokio::select! {
+            () = tokio::time::sleep(PACE_TICK) => {}
+            // The client sent its whole request already, so a read that ends means it closed the connection.
+            read = socket.read(&mut probe) => {
+                if matches!(read, Ok(0) | Err(_)) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 /// The answer to a stream request for `body`: 401 without a live token (in Jellyfin's header or as `ApiKey`), or to a path refused
-/// with [`Controls::refuse_stream`]; else the body, or the range asked for (`bytes=<first>-[<last>]`) as a 206, or 416 for one past
-/// the end. Status, head and body.
-fn streamed(state: &State, received: &Received, body: &[u8]) -> (u16, String, Vec<u8>) {
+/// with [`Controls::refuse_stream`]; the status set with [`Controls::fail_stream`]; else the body, or the range asked for
+/// (`bytes=<first>-[<last>]`) as a 206, or 416 for one past the end. Status, head and body.
+fn streamed(state: &State, received: &Received, kind: &str, body: &[u8]) -> (u16, String, Vec<u8>) {
     let head = |status: u16, extra: &str, length: usize| {
         format!(
-            "HTTP/1.1 {status} X\r\ncontent-type: video/mp4\r\naccept-ranges: bytes\r\n{extra}content-length: {length}\r\nconnection: close\r\n\r\n"
+            "HTTP/1.1 {status} X\r\ncontent-type: {kind}\r\naccept-ranges: bytes\r\n{extra}content-length: {length}\r\nconnection: close\r\n\r\n"
         )
     };
     if !stream_authorized(state, received) || lock(&state.refused).contains(&received.path) {
         return (401, head(401, "", 0), Vec::new());
+    }
+    if let Some(status) = lock(&state.failing)
+        .get(&received.path.to_ascii_lowercase())
+        .copied()
+    {
+        return (status, head(status, "", 0), Vec::new());
     }
     let total = body.len();
     let Some(range) = received.range.strip_prefix("bytes=") else {
@@ -893,10 +1042,13 @@ fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
         }
         _ if path == format!("/Items/{TRANSCODE_ITEM}/PlaybackInfo") => {
             let token = token(received).unwrap_or_default();
+            let path = lock(&state.transcoding_path)
+                .clone()
+                .unwrap_or_else(master_playlist_path);
             (
                 200,
                 playback_info(format!(
-                    r#""SupportsDirectPlay":false,"TranscodingUrl":"/videos/{TRANSCODE_ITEM}/master.m3u8?DeviceId=d&MediaSourceId={MEDIA_SOURCE}&VideoCodec=hevc,h264&AudioCodec=aac,ac3,eac3&AudioStreamIndex=1&PlaySessionId={PLAY_SESSION}&ApiKey={token}&SegmentContainer=mp4&TranscodeReasons=ContainerNotSupported","TranscodingSubProtocol":"hls","TranscodingContainer":"mp4""#
+                    r#""SupportsDirectPlay":false,"TranscodingUrl":"{path}?DeviceId=d&MediaSourceId={MEDIA_SOURCE}&VideoCodec=hevc,h264&AudioCodec=aac,ac3,eac3&AudioStreamIndex=1&PlaySessionId={PLAY_SESSION}&ApiKey={token}&SegmentContainer=mp4&TranscodeReasons=ContainerNotSupported","TranscodingSubProtocol":"hls","TranscodingContainer":"mp4""#
                 )),
             )
         }
@@ -1058,6 +1210,7 @@ async fn read_request(socket: &mut TcpStream) -> Option<Received> {
         emby_authorization: header("x-emby-authorization"),
         cookie: header("cookie"),
         gate_header: header(GATE_HEADER),
+        user_agent: header("user-agent"),
         range: header("range"),
         body: String::from_utf8_lossy(&data[head_end..]).into_owned(),
     })

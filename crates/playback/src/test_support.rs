@@ -161,6 +161,8 @@ pub struct ServerState {
     pub local: bool,
     /// The server URLs given to `stream_url`, exposed.
     pub streams: Vec<String>,
+    /// Whether each of `streams` was given as HLS.
+    pub hls_streams: Vec<bool>,
     /// Whether `stream_url` relays (an address with gateway credentials).
     pub relay: bool,
     /// What `stream_url` fails with; `None` gives a URL.
@@ -202,6 +204,7 @@ impl FakeServer {
                 subtitle_fetches: Vec::new(),
                 local: true,
                 streams: Vec::new(),
+                hls_streams: Vec::new(),
                 relay: false,
                 stream_problem: None,
                 stream_live: false,
@@ -300,9 +303,11 @@ impl MediaServer for FakeServer {
         &self,
         _item: &ItemRef,
         url: &StreamUrl,
+        hls: bool,
     ) -> Result<EngineStream, PlaybackProblem> {
         let mut state = self.state();
         state.streams.push(url.expose().to_owned());
+        state.hls_streams.push(hls);
         state.stream_live = false;
         if let Some(problem) = state.stream_problem.clone() {
             return Err(problem);

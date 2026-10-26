@@ -142,6 +142,24 @@ the container.
 3. Which crate: **A**, a new `current-relay`.
 4. The session token in player URLs: **B**, the relay strips `ApiKey` and `current-net` adds the token upstream.
 5. A playlist URI off the server's origin: **A**, the playlist fails (`PlaylistElsewhere`).
+   **Amended 2026-10-26 (owner)**, from task 4's live tests on libmpv, so that nothing on a relayed HLS route can name a host for
+   the player to open directly:
+   - **HLS loads open with `demuxer=lavf`** (`FileRequest::lavf_only`), relayed ones included, so mpv's own demuxers are skipped.
+     Reason: relayed HLS keeps `access-references` on, and with it mpv's playlist and EDL readers take a `[playlist]`,
+     `[Reference]`, `[InternetShortcut]` or `# mpv EDL v0` body and open the URLs it names (mpv v0.41.0 `demux/demux_playlist.c`,
+     `demux/demux_edl.c`, read 2026-10-26). Seen on libmpv: a `pls` body on a relayed HLS route made mpv connect to the port it
+     named.
+   - **The relay refuses an HLS route's entry body unless it is an `#EXTM3U` playlist** (`RouteConfig::hls_entry`, the URL the
+     route was made for; anything else fails as `PlaylistUnreadable`, shown as `PlaylistElsewhere`). Reason: FFmpeg's own probing
+     would still take another manifest there, such as a DASH MPD.
+   - **A 206 must be the part asked for:** its `Content-Range` must start where the request's `Range` does, and a 206 to a request
+     without `Range` fails (`RelayEvent::BadRange`, a 502 to the player, `Server { status: 502 }` to the user). Reason: the relay
+     sniffs a body for `#EXTM3U` only from the resource's first byte, and FFmpeg accepts any start in `Content-Range` (FFmpeg 9.0.2
+     `libavformat/http.c`, `parse_content_range`, read 2026-10-26), so a playlist sent as if from its second byte would pass
+     unrewritten.
+   Consequence: external subtitles keep working on HLS. `demuxer-lavf-format=hls` is not forced, because every lavf demuxer of the
+   file reads it, the one `sub-add` opens included (mpv v0.41.0 `demux/demux_lavf.c`, `player/loadfile.c`), and FFmpeg's `hls`
+   demuxer refuses a subtitle (seen in task 4's test before the change).
 6. Roaming during playback: **A**, relayed streams follow the selected address with its own credentials.
 7. The relay's lifetime: **A**, one per app, listening only while a route exists.
 8. The playlist check: **A**, removed when the relay lands; `current-mpv`'s refusal kept as a guard.

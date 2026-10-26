@@ -36,6 +36,7 @@ libmpv_test!(a_panicking_sink_still_frees_the_engine);
 libmpv_test!(hls_segment_over_https_is_verified);
 libmpv_test!(gateway_headers_never_reach_an_unchecked_playlist_segment);
 libmpv_test!(a_subtitle_added_with_select_shows_on_a_file_loaded_without_one);
+libmpv_test!(a_subtitle_added_to_an_hls_stream_read_by_ffmpeg_only_shows);
 
 /// The child half of `ffmpeg_writes_nothing_to_stderr_across_two_engines`, which runs this test binary again with only this test and
 /// reads its stderr. Not meant to run on its own.
@@ -491,6 +492,63 @@ mod live {
             })
         };
         assert_eq!(selected(&seen), Some(true), "{seen:#?}");
+        running.finish();
+    }
+
+    /// An HLS stream loaded with FFmpeg's demuxers only ([`crate::FileRequest::lavf_only`], the core's HLS loads) still takes a
+    /// subtitle added from memory: `demuxer=lavf` is for the main file, and `sub-add` keeps `sub-demuxer` (ADR 0020 task 4's review:
+    /// forcing `demuxer-lavf-format=hls` instead would have made FFmpeg read the subtitle as HLS).
+    pub(super) fn a_subtitle_added_to_an_hls_stream_read_by_ffmpeg_only_shows() {
+        let tone = wav();
+        // Two segments that together are the WAV file: the header and the first half, then the rest.
+        let half = 44 + (tone.len() - 44) / 4 * 2;
+        let (first, second) = (tone[..half].to_vec(), tone[half..].to_vec());
+        let origin = StandIn::start(move |req| {
+            if req.path.starts_with("/master.m3u8") {
+                Reply::Body(
+                    "application/vnd.apple.mpegurl",
+                    b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-PLAYLIST-TYPE:VOD\n\
+                      #EXTINF:0.5,\n0.wav\n#EXTINF:0.5,\n1.wav\n#EXT-X-ENDLIST\n"
+                        .to_vec(),
+                )
+            } else if req.path.starts_with("/0.wav") {
+                Reply::Body("audio/wav", first.clone())
+            } else if req.path.starts_with("/1.wav") {
+                Reply::Body("audio/wav", second.clone())
+            } else {
+                Reply::NotFound
+            }
+        });
+
+        let mut running = Running::start();
+        let mut request = FileRequest::new(origin.url("/master.m3u8")).lavf_only();
+        request.subtitle = Some(crate::TrackChoice::Off);
+        running.engine.load(&request).expect("load");
+        let seen = running.wait_for("file-loaded", |e| {
+            matches!(e, EngineEvent::FileLoaded) || end_file(e).is_some()
+        });
+        assert!(
+            matches!(seen.last(), Some(EngineEvent::FileLoaded)),
+            "{seen:#?}"
+        );
+        running
+            .engine
+            .add_subtitle(&crate::SubtitleFile {
+                data: b"1\n00:00:00,000 --> 00:00:01,000\nHello\n".to_vec(),
+                title: Some("English".into()),
+                language: Some("eng".into()),
+                select: true,
+            })
+            .expect("sub-add");
+        let seen = running.wait_for("the added subtitle, selected", |e| {
+            matches!(e, EngineEvent::Property(PropertyChange::TrackList(tracks))
+                if tracks.iter().any(|t| t.kind == "sub" && t.external && t.selected))
+                || matches!(e, EngineEvent::CommandFailed { .. })
+        });
+        assert!(
+            !matches!(seen.last(), Some(EngineEvent::CommandFailed { .. })),
+            "{seen:#?}"
+        );
         running.finish();
     }
 

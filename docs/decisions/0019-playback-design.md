@@ -1,7 +1,7 @@
 # 0019: Playback: current-playback and current-mpv (M2, Windows first)
 
 Status: accepted when its PR merges; open choices decided by the owner 2026-10-25 (see "Decided by the owner"). From the playback
-spike.
+spike. Amended 2026-10-26 (ADR 0020): gateway streams go through the loopback relay; see "Gateways, tokens and the player".
 Research, quotes and sources: `docs/notes/playback.md`. No code was written.
 
 ## Context
@@ -118,6 +118,10 @@ fake engine, a fake server and a fake clock):
 - **Errors** (`PlaybackProblem`, flat, no server text or URL): `NotPlayable { reasons }`, `Engine { kind }`, `Network`,
   `GatewaySignInNeeded`, `SignedOut`, `Server { status }`, `NotFound`. A redirect, a 401, 403 or an HTML answer on a stream runs ADR
   0017's 401 rule through `current-net`'s probe before choosing between `GatewaySignInNeeded` and `SignedOut`.
+  Amended 2026-10-26 (ADR 0020): `PlaybackProblem` gains `LocalRelay` (the loopback relay could not start; no fallback to giving
+  the player credentials). On a relayed stream the relay sees the refusal and reports it as `RelayRefused`
+  (`RelayEvent::Refused`), which takes it to the 401 rule; the engine's error or end about the refused request waits for the rule's
+  answer.
 - **Stall** (added after the Windows run, 2026-10-25, case 7 in docs/notes/windows-shell.md): while `Loading`, `Seeking`, or
   `Buffering` and not paused, 60 s with no change of position or buffer (`STALL_TIMEOUT`, twice mpv's `network-timeout` and
   `current-net`'s request timeout) stops the engine, reports `/Stopped` with `Failed = true` and ends in `Failed { Network }`. Not
@@ -128,17 +132,27 @@ fake engine, a fake server and a fake clock):
   resume point.
 
 ### Gateways, tokens and the player
+**Amended 2026-10-26 (ADR 0020):** streams on an address with gateway credentials go through the loopback relay (ADR 0020): the
+player gets `http://127.0.0.1:<port>/<route>/...`, and the core adds the gateway credentials and the session token upstream. Gateway
+cookies and headers no longer go to FFmpeg, and with ADR 0020 choice 4 B a relayed URL holds no `ApiKey` (the route token only).
+Relayed requests reach the server with the core's `User-Agent` (`current-net`'s), not FFmpeg's (both are `Current/<version>` today).
+"Playlists and headers" below is replaced by ADR 0020: the relay rewrites every playlist and refuses a URI off the server's address,
+so the check (`check_playlist_origin`, `MediaServer::check_playlist`, `EngineFile::playlist_checked`) is removed; `current-mpv` keeps
+its refusal of an unchecked playlist with credentials as a guard. The items below on cookies, headers and playlists hold only for an
+address without a gateway, which has none to pass.
 - **Token:** `ApiKey` in the URL (choice 3), since every server-made URL already carries it.
 - **TLS:** always `tls-verify=yes` (mpv's default is off); verification is Windows' own through SChannel, which matches ADR 0014's
   "OS trust only". Plain http only where ADR 0012 allows it for the token.
 - **Gateway cookies:** never a cookie file. The engine passes FFmpeg's own `cookies` option (newline-separated `Set-Cookie` syntax,
   with domain, path and `secure`) through `stream-lavf-o` as a per-file option of `loadfile`, so it lives only for that file and
-  FFmpeg scopes it per request (choice 5). This corrects ADR 0017's wording ("its `cookies` option").
-- **Basic and extra headers:** FFmpeg's `headers` option the same way, per file.
+  FFmpeg scopes it per request (choice 5). This corrects ADR 0017's wording ("its `cookies` option"). Amended 2026-10-26 (ADR 0020):
+  no longer used; gateway streams go through the relay.
+- **Basic and extra headers:** FFmpeg's `headers` option the same way, per file. Amended 2026-10-26 (ADR 0020): no longer used.
 - **Redirects off the address** (choice 4): every stream Current gives mpv gets `max_redirects=0`. Jellyfin's stream endpoints
   do not redirect (remote sources are proxied by the server), so a redirect means a gateway or a misconfigured proxy, which the 401
   rule then classifies. Headers therefore never follow a redirect to another host.
-- **Playlists and headers** (2026-10-25, found in task 3; the owner's choice: check now, relay in M3): FFmpeg copies `headers` and
+- **Playlists and headers** (2026-10-25, found in task 3; the owner's choice: check now, relay in M3; replaced 2026-10-26 by ADR
+  0020, kept for the record): FFmpeg copies `headers` and
   `cookies` into every HLS and DASH sub-request (FFmpeg 9.0.2 `libavformat/aviobuf.c`, `ffio_copy_url_options`: `"headers",
   "user_agent", "cookies", "http_proxy", "referer", "rw_timeout", "icy"`), so a playlist that names another host gets the gateway
   headers (cookies do not: the engine scopes them to the stream's host and port). `max_redirects=0` and `tls_verify` are not in that
@@ -183,7 +197,8 @@ fake engine, a fake server and a fake clock):
   `user-agent=Current/<version>`, `network-timeout=30`. `load-scripts`, `osc` and `ytdl` exist only in builds with Lua, JavaScript
   or C plugins (`options/options.c`, `#if HAVE_LUA`), which ours is not; the engine turns them off only where mpv knows them (a
   system libmpv on Linux, ADR 0011). Per file through `loadfile`'s option map: `start`, `aid`, `sid`, `stream-lavf-o`
-  (`max_redirects`, `cookies`, `headers`).
+  (`max_redirects`, `cookies`, `headers`). Amended 2026-10-26 (owner): HLS loads also get `demuxer=lavf` (ADR 0020, choice 5's
+  amendment).
 - **Display facts to options:** ADR 0007's mapping, unchanged, plus `display-fps-override` from the refresh rate. `video-sync` stays
   mpv's default until `display-resample` is checked on a device (ADR 0007 item 5).
 - **Swap chain:** on each `display-swapchain` change the engine `AddRef`s the pointer through `IUnknown`'s vtable (no Windows crate
@@ -241,7 +256,9 @@ fake engine, a fake server and a fake clock):
 2. Transcode format: **A**, HLS with fMP4 segments (HEVC, then H.264), with the TS/H.264 profile listed second.
 3. Token for the player: **`ApiKey` in the URL**, with the redaction rules in "Gateways, tokens and the player".
 4. Redirects off the address: **A**, `max_redirects=0` on every stream.
-5. Gateway cookies for mpv: **A**, FFmpeg's `cookies` option through `stream-lavf-o`, per file.
+5. Gateway cookies for mpv: **A**, FFmpeg's `cookies` option through `stream-lavf-o`, per file. Amended 2026-10-26 (ADR 0020):
+   gateway streams go through the loopback relay instead; `current-net` reads a rotated `Set-Cookie` into the address's cookies, so
+   the consequence that cookies a gateway rotates during playback are not read back no longer holds for relayed streams.
 6. Remembered track choices: **A**, follow the Jellyfin user's own preferences.
 7. Progress cadence: **A**, every 10 s plus at once on events.
 8. Segments and next episode: **B, the auto-skip option.** Skip buttons; the "Next episode" card at the outro, or in the last 30 s

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use current_net::header::{
     ACCEPT_RANGES, CONNECTION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, HOST, HeaderMap,
-    HeaderValue, ORIGIN, TRANSFER_ENCODING,
+    HeaderValue, ORIGIN, RANGE, TRANSFER_ENCODING,
 };
 use current_net::{GatewayShape, STREAM_REQUEST_HEADERS, STREAM_RESPONSE_HEADERS, StreamError};
 use hyper::body::{Body, Bytes, Incoming};
@@ -137,6 +137,11 @@ fn decode_component(text: &str) -> Option<String> {
 async fn forward(route: Arc<RouteEntry>, request: UpstreamRequest) -> Response<RelayBody> {
     let method = request.method;
     let path = request.path.clone();
+    let range = request
+        .headers
+        .get(RANGE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let response = match route.upstream.send(request).await {
         Ok(response) => response,
         Err(error) => return failed(&route, &error),
@@ -148,6 +153,11 @@ async fn forward(route: Arc<RouteEntry>, request: UpstreamRequest) -> Response<R
         route.events.report(RelayEvent::Server { status });
         return empty(StatusCode::BAD_GATEWAY);
     }
+    // A part other than the one asked for: the sniffing below and the player would both misjudge where the body starts.
+    if status == 206 && !is_part_asked(range.as_deref(), &response.headers) {
+        route.events.report(RelayEvent::BadRange);
+        return empty(StatusCode::BAD_GATEWAY);
+    }
     if success && is_html(&response.headers) {
         route.events.report(RelayEvent::Refused {
             status,
@@ -155,7 +165,9 @@ async fn forward(route: Arc<RouteEntry>, request: UpstreamRequest) -> Response<R
         });
         return empty(StatusCode::BAD_GATEWAY);
     }
-    let declared = success && is_playlist(&response.headers, &path);
+    // The route's HLS entry is a playlist whatever it says: anything else there fails to rewrite.
+    let entry = route.hls_entry.as_deref() == Some(path.as_str());
+    let declared = success && (entry || is_playlist(&response.headers, &path));
     if method == StreamMethod::Head || !success {
         // A HEAD of a playlist gets no length: the rewritten one is not known without the body. A 304 and a 416 have none to give.
         let mut answer = Response::new(RelayBody::Empty);
@@ -265,6 +277,48 @@ async fn rewrite_playlist(
         .headers_mut()
         .insert(CONTENT_LENGTH, HeaderValue::from(length));
     answer
+}
+
+/// Whether a 206's `Content-Range` is the part `range` (the request's `Range`) asked for: a single range (`bytes=<first>-[<last>]`,
+/// or `bytes=-<suffix>` with a known length) whose answer starts where it asked. A 206 to a request without `Range`, or without a
+/// readable `Content-Range`, is not.
+fn is_part_asked(range: Option<&str>, headers: &HeaderMap) -> bool {
+    let Some(asked) = range.and_then(|range| range.trim().strip_prefix("bytes=")) else {
+        return false;
+    };
+    let Some((start, total)) = headers
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().strip_prefix("bytes "))
+        .and_then(|value| value.split_once('/'))
+        .and_then(|(span, total)| {
+            let (start, _) = span.split_once('-')?;
+            Some((
+                start.trim().parse::<u64>().ok()?,
+                total.trim().parse::<u64>().ok(),
+            ))
+        })
+    else {
+        return false;
+    };
+    if asked.contains(',') {
+        return false;
+    }
+    let Some((first, _)) = asked.split_once('-') else {
+        return false;
+    };
+    let first = first.trim();
+    if first.is_empty() {
+        // A suffix: the last <suffix> bytes.
+        let suffix = asked
+            .split_once('-')
+            .and_then(|(_, suffix)| suffix.trim().parse::<u64>().ok());
+        return match (suffix, total) {
+            (Some(suffix), Some(total)) => start == total.saturating_sub(suffix),
+            _ => false,
+        };
+    }
+    first.parse::<u64>().is_ok_and(|first| first == start)
 }
 
 /// Whether an answer's body starts at the resource's first byte: no `Content-Range`, or one from 0.

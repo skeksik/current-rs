@@ -101,12 +101,16 @@ impl MpvMapper {
             audio,
             subtitle,
             references,
+            hls,
         } = file;
         let mut request = FileRequest::new(url.expose().to_owned());
         request.start = (start > Duration::ZERO).then(|| seconds(start));
         request.secrets = auth.secrets;
         if !references {
             request = request.without_references();
+        }
+        if hls {
+            request = request.lavf_only();
         }
         // The guard: a playlist with credentials that nobody checked never reaches libmpv. The core gives none (ADR 0020).
         request
@@ -363,8 +367,9 @@ mod real {
             events: UnboundedSender<MpvEvent>,
         ) -> Result<Self, EngineError> {
             // Composition mode is Windows' D3D11 route (ADR 0007); elsewhere libmpv is for development only (ADR 0011's GTK
-            // route comes later) and plays without output.
-            let output = if cfg!(windows) {
+            // route comes later) and plays without output. So do this crate's live tests: CI's runner has no display or audio device
+            // to rely on, and the tests are about streams.
+            let output = if cfg!(windows) && !cfg!(test) {
                 Output::Composition { size, display }
             } else {
                 Output::Headless
@@ -479,6 +484,9 @@ mod real {
             if matches!(raw, MpvEvent::Terminated) {
                 self.gone = true;
             }
+            // The live tests record what libmpv reported (`live_tests`).
+            #[cfg(test)]
+            crate::player::live_tests::record(&raw);
             let mut commands = Vec::new();
             self.mapper.translate(raw, out, &mut commands);
             for command in commands {
@@ -528,6 +536,7 @@ mod tests {
             audio: EngineTrack::Stream(1),
             subtitle: EngineTrack::Stream(3),
             references: true,
+            hls: false,
         }
     }
 
@@ -591,6 +600,24 @@ mod tests {
         let request = mapper.file_request(relayed).unwrap();
         assert!(!request.has_credentials());
         assert!(format!("{request:?}").contains("no_references: true"));
+        assert!(format!("{request:?}").contains("lavf_only: false"));
+    }
+
+    #[test]
+    fn an_hls_file_is_opened_with_ffmpeg_demuxers_only() {
+        let mut mapper = MpvMapper::default();
+        let hls = EngineFile {
+            hls: true,
+            ..file(
+                "http://127.0.0.1:50123/route/videos/1/master.m3u8",
+                StreamAuth {
+                    secrets: vec!["route".into()],
+                },
+            )
+        };
+        let request = mapper.file_request(hls).unwrap();
+        assert!(format!("{request:?}").contains("no_references: false"));
+        assert!(format!("{request:?}").contains("lavf_only: true"));
     }
 
     #[test]

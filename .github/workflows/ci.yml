@@ -106,6 +106,10 @@ jobs:
       - run: cargo clippy -p current-mpv --all-targets --locked --features libmpv -- -D warnings
       # The TLS test makes its certificate with the image's OpenSSL.
       - run: cargo test -p current-mpv --locked --features libmpv
+      # The player through the loopback relay on this libmpv (ADR 0020 task 4). One at a time (one engine per process); `--nocapture`
+      # keeps each case's "observed:" lines (what libmpv reported, what the controller did) in the log.
+      - run: cargo clippy -p current-app --all-targets --locked --features libmpv -- -D warnings
+      - run: cargo test -p current-app --locked --features libmpv --lib player::live_tests -- --test-threads=1 --nocapture
 
   # The C# bindings and their adapters (bindings/csharp), from generated code that is not checked in (ADR 0004).
   bindings-windows:

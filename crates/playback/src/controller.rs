@@ -910,14 +910,6 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             }
         };
         let planned = planner::plan(&item, &request, answer, &own, &session.permissions, local);
-        let stream = match self.server.stream_url(&item, &planned.url) {
-            Ok(stream) => stream,
-            Err(problem) => {
-                session.planned = None;
-                return Err(problem);
-            }
-        };
-        // The relay rewrites HLS playlists only: any other relayed file opens no reference (ADR 0020).
         let hls = matches!(
             planned.plan.route,
             Route::ServerStream {
@@ -925,8 +917,17 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 ..
             }
         );
+        let stream = match self.server.stream_url(&item, &planned.url, hls) {
+            Ok(stream) => stream,
+            Err(problem) => {
+                session.planned = None;
+                return Err(problem);
+            }
+        };
+        // The relay rewrites HLS playlists only: any other relayed file opens no reference (ADR 0020).
         let file = EngineFile {
             references: hls || !stream.relayed,
+            hls,
             url: stream.url,
             auth: stream.auth,
             start,
