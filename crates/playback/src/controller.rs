@@ -321,9 +321,9 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     /// item playing is stopped first.
     pub async fn play(&mut self, item: ItemRef, kind: MediaKind, start: Duration) {
         if self.session.is_some() {
-            self.end_item(false).await;
             // Unloaded now, as a stop does: an end the old file reports while the new one is planned would read as the new one's.
             self.engine.stop();
+            self.end_item(false).await;
         }
         self.session = Some(Session::new(item.clone(), start, self.clock.now()));
         let permissions = self.server.permissions().await.unwrap_or_default();
@@ -477,8 +477,9 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         if self.session.is_none() {
             return;
         }
-        self.end_item(false).await;
+        // Silent at once: the stop report's answer can take seconds (seen through a gateway on a remux, 2026-10-26).
         self.engine.stop();
+        self.end_item(false).await;
         self.session = None;
         self.phase = Phase::Idle;
         self.publish(true);

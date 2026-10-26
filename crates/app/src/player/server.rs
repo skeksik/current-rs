@@ -99,12 +99,15 @@ impl JellyfinMedia {
     ) -> Result<EngineStream, PlaybackProblem> {
         let relay = self.relay.relay().ok_or(PlaybackProblem::LocalRelay)?;
         let number = self.last_route.fetch_add(1, Ordering::Relaxed) + 1;
-        let id = item.id.as_str();
         let route = relay
             .add_route(RouteConfig {
                 upstream: Arc::new(SessionUpstream(client)),
-                // Only the item's own streams: Jellyfin's stream, HLS and segment endpoints are under these (ADR 0020).
-                prefixes: vec![format!("/Videos/{id}/"), format!("/Audio/{id}/")],
+                // Only the item's own streams: Jellyfin's stream, HLS and segment endpoints are under these (ADR 0020), with the id
+                // in either spelling.
+                prefixes: path_ids(item.id.as_str())
+                    .iter()
+                    .flat_map(|id| [format!("/Videos/{id}/"), format!("/Audio/{id}/")])
+                    .collect(),
                 events: Arc::new(RouteEvents {
                     route: number,
                     sender: self.events.clone(),
@@ -128,6 +131,24 @@ impl JellyfinMedia {
         *lock(&self.route) = Some((number, route));
         Ok(stream)
     }
+}
+
+/// The spellings of item `id` in Jellyfin's stream paths: as the core holds it (32 hex digits), and as a GUID with dashes, which a
+/// real Jellyfin 12.3.0 server wrote in a `TranscodingUrl` (seen on the Windows relay check, 2026-10-26). Any other id is used as
+/// it is.
+fn path_ids(id: &str) -> Vec<String> {
+    let mut ids = vec![id.to_owned()];
+    if id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        ids.push(format!(
+            "{}-{}-{}-{}-{}",
+            &id[..8],
+            &id[8..12],
+            &id[12..16],
+            &id[16..20],
+            &id[20..]
+        ));
+    }
+    ids
 }
 
 /// Whether a stream on `address` goes through the relay. Fail-closed: only an address known to have no gateway gets the direct
@@ -381,6 +402,23 @@ impl MediaServer for JellyfinMedia {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_item_id_is_allowed_in_both_of_its_spellings() {
+        assert_eq!(
+            path_ids("57a2d1e0000000000000000000000011"),
+            [
+                "57a2d1e0000000000000000000000011",
+                "57a2d1e0-0000-0000-0000-000000000011"
+            ]
+        );
+        // Not 32 hex digits: no other spelling is made up.
+        assert_eq!(path_ids("not-an-id"), ["not-an-id"]);
+        assert_eq!(
+            path_ids("57a2d1e000000000000000000000001"),
+            ["57a2d1e000000000000000000000001"]
+        );
+    }
 
     #[test]
     fn only_an_address_known_to_have_no_gateway_gets_the_direct_url() {
