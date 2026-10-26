@@ -222,6 +222,8 @@ Done when: a Jellyfin library is browsable and playable on Windows every day, wi
       owner's choices
 - [ ] Seerr sign-in through the app's Jellyfin session; discover rows, browse, search merged with library results; title pages joined
       with Jellyfin; requests, my requests, approvals for managers; watchlist, issues
+- [ ] Browse by genre: a Genres tab and a Genres row on Home; Studios and Networks rows on Home (owner, 2026-10-26, from the Windows UI
+      pass)
 
 Done when: a title can be found, requested and followed to "available", then played, without leaving the app.
 
@@ -276,4 +278,12 @@ Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 whe
       an alternative; whether the App Store guidelines treat model weights as allowed downloaded data is not verified
 - [ ] Android (Compose, Media3 plus a fallback engine), iOS and iPadOS (SwiftUI from macOS), tvOS, the web (the core on WebAssembly)
 - [ ] Local files, downloads and offline playback; several servers and user switching; casting and watch-together
+- [ ] Reorder or hide the pane's items within their groups (Favourites, Recently added; the libraries), Home and Settings fixed, and
+      reorder Home's rows (owner, 2026-10-26); where the order is kept (locally or the user's Jellyfin library order) to be researched
+- [ ] Quality menu named by what the server will send for this file: model its bitrate rules in the core (audio share, codec, frame
+      rate, low-bitrate boost; the Windows UI pass's research); today's names assume H.264 at 30 fps
+- [ ] Settings: "Remember selected quality", off by default (owner, 2026-10-26); changes ADR 0019, choice 8 (always remembered)
+- [ ] Played marks between a series and its episodes: seven cases where the series, its episodes, their tiles, the details page or
+      Next up keep a stale mark until a refresh (owner's run, 2026-10-26; listed in the Windows UI pass's PR)
+- [ ] AV1 as a transcoding target where the server has an AV1 encoder (the device profile asks `hevc,h264` today; ADR 0019)
 - Not planned yet (ask to add): music, live TV, books, photos, other media servers.
