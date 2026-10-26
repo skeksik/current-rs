@@ -109,6 +109,14 @@ public sealed class Browse : IDisposable
         return new(_browse.OpenLibrary(MapBrowse.ToFfi(library), MapBrowse.ToFfi(query ?? ItemQuery.ForLibrary(library))));
     }
 
+    /// <summary>A grid of items from every library (the Favorites and Recently added tabs): <paramref name="query"/>, with no parent.
+    /// Starts loading at once.</summary>
+    public PagedItems OpenItems(ItemQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return new(_browse.OpenItems(MapBrowse.ToFfi(query)));
+    }
+
     /// <summary>Home's rows. Starts loading at once.</summary>
     public HomeFeed Home() => new(_browse.Home());
 

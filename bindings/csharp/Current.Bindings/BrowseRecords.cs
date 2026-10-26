@@ -175,6 +175,18 @@ public sealed record ItemQuery
         return MapBrowse.From(Ffi.CurrentFfiMethods.LibraryQuery(MapBrowse.ToFfi(library)));
     }
 
+    /// <summary>The Favorites tab (the core decides): the user's favourites in every library, by name; only <paramref name="kind"/>
+    /// (a media kind from <see cref="ViewKindChoices"/>) when given.</summary>
+    public static ItemQuery Favourites(string? kind = null) => MapBrowse.From(Ffi.CurrentFfiMethods.FavouritesQuery(kind));
+
+    /// <summary>The Recently added tab (the core decides): what was added to every library, the newest first; only
+    /// <paramref name="kind"/> when given.</summary>
+    public static ItemQuery RecentlyAddedEverywhere(string? kind = null) =>
+        MapBrowse.From(Ffi.CurrentFfiMethods.RecentlyAddedEverywhereQuery(kind));
+
+    /// <summary>The media kinds the Favorites and Recently added tabs can be narrowed to, in order, after every kind.</summary>
+    public static IReadOnlyList<string> ViewKindChoices { get; } = Ffi.CurrentFfiMethods.ViewKindChoices();
+
     /// <summary>What a Home row of <paramref name="library"/>'s latest items opens (the core decides): its grid, the newest added first.</summary>
     public static ItemQuery RecentlyAdded(Library library)
     {
@@ -220,6 +232,9 @@ public enum HomeRowKind
     ContinueWatching,
     NextUp,
     Latest,
+    RecentlyAdded,
+    Favourites,
+    SeenRecently,
 }
 
 /// <summary>
@@ -518,6 +533,9 @@ internal static class MapBrowse
         {
             Ffi.HomeRowKind.ContinueWatching => HomeRowKind.ContinueWatching,
             Ffi.HomeRowKind.NextUp => HomeRowKind.NextUp,
+            Ffi.HomeRowKind.RecentlyAdded => HomeRowKind.RecentlyAdded,
+            Ffi.HomeRowKind.Favourites => HomeRowKind.Favourites,
+            Ffi.HomeRowKind.SeenRecently => HomeRowKind.SeenRecently,
             _ => HomeRowKind.Latest,
         },
         row.Title,

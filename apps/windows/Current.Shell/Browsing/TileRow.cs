@@ -20,12 +20,15 @@ public sealed class TileRow(string key, string title, ListSubscription<ItemSumma
     /// <summary>The library a Latest row shows, whose grid its header opens; null for a row without a page of its own.</summary>
     public ItemRef? Library { get; } = library;
 
+    /// <summary>The view tab a row across every library opens from its header (<see cref="Pages.ViewArgs"/>); null for none.</summary>
+    public string? View { get; init; }
+
     /// <summary>Where the header link goes: the library's name and its order (BrowseText.LibraryLinkTip).</summary>
     public string HeaderLinkTip { get; init; } = "";
 
-    public Visibility HeaderLinkVisibility => Library is null ? Visibility.Collapsed : Visibility.Visible;
+    public Visibility HeaderLinkVisibility => Library is null && View is null ? Visibility.Collapsed : Visibility.Visible;
 
-    public Visibility HeaderTextVisibility => Library is null ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility HeaderTextVisibility => Library is null && View is null ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>The row's items as its tiles bind to them: a change to an item updates its card (TileList).</summary>
     public TileList Items { get; } = new(items.Items);
@@ -54,9 +57,10 @@ public sealed class HomeSection : INotifyPropertyChanged, IDisposable
     private readonly ListSubscription<HomeRow> _rows;
     private readonly ValueSubscription<HomeState> _state;
 
-    internal HomeSection(string header, HomeFeed feed, IUiDispatcher ui)
+    internal HomeSection(string header, ServerRef server, HomeFeed feed, IUiDispatcher ui)
     {
         Header = header;
+        Server = server;
         _feed = feed;
         _ui = ui;
         _rows = feed.ObserveRows(ui);
@@ -74,6 +78,9 @@ public sealed class HomeSection : INotifyPropertyChanged, IDisposable
     public Visibility HeaderVisibility => Header.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
     public ObservableCollection<TileRow> Rows { get; } = [];
+
+    /// <summary>The server whose rows these are: a view row's header opens that server's tab.</summary>
+    public ServerRef Server { get; }
 
     public HomeState State => _state.Value;
 
@@ -101,11 +108,19 @@ public sealed class HomeSection : INotifyPropertyChanged, IDisposable
                 {
                     continue;
                 }
+                // Wide tiles for the rows of episodes (continue watching, next up); posters for the rest.
+                var view = row.Kind switch
+                {
+                    HomeRowKind.RecentlyAdded => Pages.ViewArgs.RecentlyAdded,
+                    HomeRowKind.Favourites => Pages.ViewArgs.Favourites,
+                    _ => null,
+                };
                 existing = new TileRow(
-                    row.Key, BrowseText.RowTitle(row), items, row.Kind != HomeRowKind.Latest,
+                    row.Key, BrowseText.RowTitle(row), items, row.Kind is HomeRowKind.ContinueWatching or HomeRowKind.NextUp,
                     row.Kind == HomeRowKind.Latest ? row.Library : null)
                 {
-                    HeaderLinkTip = BrowseText.RecentlyAddedLinkTip(row),
+                    View = view,
+                    HeaderLinkTip = view is null ? BrowseText.RecentlyAddedLinkTip(row) : BrowseText.ViewLinkTip(view),
                 };
                 Rows.Insert(position, existing);
             }

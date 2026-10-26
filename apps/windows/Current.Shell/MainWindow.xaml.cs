@@ -470,6 +470,10 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         {
             Navigate(typeof(SettingsPage), args.RecommendedNavigationTransitionInfo);
         }
+        else if (args.InvokedItemContainer?.Tag is ViewArgs view)
+        {
+            Navigate(typeof(LibraryPage), args.RecommendedNavigationTransitionInfo, view);
+        }
         else if (args.InvokedItemContainer?.Tag is LibraryArgs library)
         {
             Navigate(typeof(LibraryPage), args.RecommendedNavigationTransitionInfo, library);
@@ -531,6 +535,11 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         var top = new List<object>();
         wanted.Add((LibrariesItem.MenuItems, top));
         var all = new List<object>();
+        // The views across every library: above Libraries with one server, first inside each server's item with more.
+        var single = servers.Count == 1 ? servers[0].Server : null;
+        FavouritesItem.Tag = single is null ? null : new ViewArgs(single, ViewArgs.Favourites);
+        RecentItem.Tag = single is null ? null : new ViewArgs(single, ViewArgs.RecentlyAdded);
+        FavouritesItem.Visibility = RecentItem.Visibility = single is null ? Visibility.Collapsed : Visibility.Visible;
         foreach (var server in servers)
         {
             var into = top;
@@ -547,6 +556,14 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
                 all.Add(group);
                 into = [];
                 wanted.Add((group.MenuItems, into));
+                foreach (var (view, glyph) in new[] { (ViewArgs.Favourites, "\uEB51"), (ViewArgs.RecentlyAdded, "\uE823") })
+                {
+                    var tag = new ViewArgs(server.Server, view);
+                    var item = _libraryItems.OfType<NavigationViewItem>().FirstOrDefault(known => Equals(known.Tag, tag))
+                        ?? new NavigationViewItem { Tag = tag, Content = BrowseText.ViewTitle(view), Icon = new FontIcon { Glyph = glyph } };
+                    into.Add(item);
+                    all.Add(item);
+                }
             }
             foreach (var library in server.Libraries)
             {
@@ -574,7 +591,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
             }
         }
         // A server's item no longer shown lets go of its libraries too.
-        foreach (var gone in _libraryItems.OfType<NavigationViewItem>().Where(item => item.Tag is not LibraryArgs && !all.Contains(item)))
+        foreach (var gone in _libraryItems.OfType<NavigationViewItem>()
+            .Where(item => item.Tag is not (LibraryArgs or ViewArgs) && !all.Contains(item)))
         {
             gone.MenuItems.Clear();
         }
@@ -628,6 +646,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     private static ServerRef? ServerOf(object? parameter) => parameter switch
     {
         LibraryArgs library => library.Library.Item.Server,
+        ViewArgs view => view.Server,
         DetailsArgs details => details.Item.Server,
         _ => null,
     };
@@ -1003,8 +1022,11 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         }
         if (ContentFrame.SourcePageType == typeof(LibraryPage))
         {
-            NavView.SelectedItem = _libraryItems.OfType<NavigationViewItem>()
-                .FirstOrDefault(item => item.Tag is LibraryArgs library && library.Shows(_shownParameter));
+            NavView.SelectedItem = _shownParameter is ViewArgs
+                ? new[] { FavouritesItem, RecentItem }.Concat(_libraryItems.OfType<NavigationViewItem>())
+                    .FirstOrDefault(item => item.Visibility == Visibility.Visible && Equals(item.Tag, _shownParameter))
+                : _libraryItems.OfType<NavigationViewItem>()
+                    .FirstOrDefault(item => item.Tag is LibraryArgs library && library.Shows(_shownParameter));
             return;
         }
         // Each page shows its own title (App.xaml, PageTitleTextBlockStyle); the navigation view's header is not used.

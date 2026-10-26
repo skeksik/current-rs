@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use current_jellyfin::{AuthError, JellyfinClient};
 use current_model::{
-    CollectionKind, ItemQuery, ItemRef, ItemSummary, Library, MediaKind, Reachability, ServerRef,
-    ServerStatus, ServiceType, SortKey, SortOrder, UserState,
+    CollectionKind, ItemFilter, ItemQuery, ItemRef, ItemSummary, Library, MediaKind, Reachability,
+    ServerRef, ServerStatus, ServiceType, SortKey, SortOrder, UserState,
 };
 use current_net::RuntimeHandle;
 use tokio::sync::watch;
@@ -337,7 +337,7 @@ impl Context {
                     item_name: name,
                     problem,
                 }),
-                // A mark changes the lists chosen by marks (Home's rows, the Favorites tab, a filtered grid): they read again a moment
+                // A mark changes the lists chosen by marks (Home's rows, the Favourites tab, a filtered grid): they read again a moment
                 // later, with the item's parents for the played mark's (a series' unplayed count).
                 None => self.dependents_changed(answered.parents),
             }
@@ -389,6 +389,19 @@ impl Browse {
             ..query
         };
         PagedItems::open(self.ctx.clone(), query, Some(library.item.clone()))
+    }
+
+    /// A grid of items from every library: `query` with no parent (the Favorites and Recently added tabs, [`favourites_query`] and
+    /// [`recently_added_everywhere_query`]). Starts loading at once.
+    pub fn open_items(&self, query: ItemQuery) -> PagedItems {
+        PagedItems::open(
+            self.ctx.clone(),
+            ItemQuery {
+                parent: None,
+                ..query
+            },
+            None,
+        )
     }
 
     /// Home's rows. Start loading at once.
@@ -538,6 +551,73 @@ pub fn recently_added_query(library: &Library) -> ItemQuery {
     }
 }
 
+/// The kinds the views across every library list (owner, 2026-10-26): films and series as a library lists them, with other videos
+/// and music videos; never an episode on its own.
+const VIEW_KINDS: [MediaKind; 4] = [
+    MediaKind::MOVIE,
+    MediaKind::SERIES,
+    MediaKind::VIDEO,
+    MediaKind::MUSIC_VIDEO,
+];
+
+/// The media types a view across every library can be narrowed to, in the order the UI lists them after "every type" (owner,
+/// 2026-10-26).
+pub fn view_kinds() -> Vec<MediaKind> {
+    vec![MediaKind::MOVIE, MediaKind::SERIES]
+}
+
+fn view_kinds_for(kind: Option<MediaKind>) -> Vec<MediaKind> {
+    match kind {
+        Some(kind) => vec![kind],
+        None => VIEW_KINDS.to_vec(),
+    }
+}
+
+/// The Favorites tab and Home's Favourites row (owner, 2026-10-26): the user's favourites in every library, by name; only `kind` when
+/// given.
+pub fn favourites_query(kind: Option<MediaKind>) -> ItemQuery {
+    ItemQuery {
+        recursive: true,
+        kinds: view_kinds_for(kind),
+        filters: vec![ItemFilter::FAVOURITE],
+        sort: vec![SortKey::SORT_NAME],
+        ..ItemQuery::default()
+    }
+}
+
+/// The Recently added tab and Home's Recently added row (owner, 2026-10-26): what was added to every library, the newest first; only
+/// `kind` when given. A series counts from when it was added: one is not moved up when an episode is added to it (Jellyfin keeps that
+/// date for folders only, so sorting films and series together by it would put the films last; not verified on a server).
+pub fn recently_added_everywhere_query(kind: Option<MediaKind>) -> ItemQuery {
+    ItemQuery {
+        recursive: true,
+        kinds: view_kinds_for(kind),
+        sort: vec![SortKey::DATE_CREATED],
+        order: SortOrder::Descending,
+        ..ItemQuery::default()
+    }
+}
+
+/// What plays by itself, for Seen recently: films, episodes and other videos, each as it was watched.
+const PLAYABLE: [MediaKind; 4] = [
+    MediaKind::MOVIE,
+    MediaKind::EPISODE,
+    MediaKind::VIDEO,
+    MediaKind::MUSIC_VIDEO,
+];
+
+/// Home's Seen recently row (owner, 2026-10-26): what the user finished last, in every library, the latest first.
+pub fn seen_recently_query() -> ItemQuery {
+    ItemQuery {
+        recursive: true,
+        kinds: PLAYABLE.to_vec(),
+        filters: vec![ItemFilter::PLAYED],
+        sort: vec![SortKey::DATE_PLAYED],
+        order: SortOrder::Descending,
+        ..ItemQuery::default()
+    }
+}
+
 /// `query` searching for what the user typed in a library's own search box (owner, 2026-10-26): the text without the spaces round it,
 /// and no search at all when nothing is left.
 pub fn library_search(query: &ItemQuery, term: &str) -> ItemQuery {
@@ -551,6 +631,39 @@ pub fn library_search(query: &ItemQuery, term: &str) -> ItemQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_views_across_libraries_list_every_library_s_playable_items() {
+        let favourites = favourites_query(None);
+        assert!(favourites.parent.is_none());
+        assert!(favourites.recursive);
+        assert_eq!(favourites.filters, [ItemFilter::FAVOURITE]);
+        assert!(favourites.kinds.contains(&MediaKind::SERIES));
+        assert!(favourites.kinds.contains(&MediaKind::MOVIE));
+        // No episode on its own: its series shows.
+        assert!(!favourites.kinds.contains(&MediaKind::EPISODE));
+        assert_eq!(
+            favourites_query(Some(MediaKind::MOVIE)).kinds,
+            [MediaKind::MOVIE]
+        );
+
+        let recent = recently_added_everywhere_query(None);
+        assert!(recent.recursive);
+        assert_eq!(recent.sort, [SortKey::DATE_CREATED]);
+        assert_eq!(recent.order, SortOrder::Descending);
+        assert!(recent.kinds.contains(&MediaKind::SERIES));
+        assert!(!recent.kinds.contains(&MediaKind::EPISODE));
+        assert_eq!(
+            recently_added_everywhere_query(Some(MediaKind::SERIES)).kinds,
+            [MediaKind::SERIES]
+        );
+        assert_eq!(view_kinds(), [MediaKind::MOVIE, MediaKind::SERIES]);
+
+        let seen = seen_recently_query();
+        assert_eq!(seen.filters, [ItemFilter::PLAYED]);
+        assert_eq!(seen.sort, [SortKey::DATE_PLAYED]);
+        assert_eq!(seen.order, SortOrder::Descending);
+    }
 
     #[test]
     fn a_library_search_takes_the_typed_text_trimmed_and_nothing_when_blank() {

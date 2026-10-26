@@ -171,7 +171,7 @@ public sealed partial class HomePage : Page, IRefreshable
         foreach (var server in servers)
         {
             var header = servers.Count > 1 ? hub.ServerName(server.Server) : "";
-            _sections.Add(new HomeSection(header, server.Home, ui));
+            _sections.Add(new HomeSection(header, server.Server, server.Home, ui));
 
         }
     }
@@ -281,9 +281,17 @@ public sealed partial class HomePage : Page, IRefreshable
     /// <summary>A Latest row's header: its library's grid, the newest added first (the core's query).</summary>
     private void OnRowHeader(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.Tag is TileRow { Library: { } item } && App.Browsing?.FindLibrary(item) is { } library)
+        if ((sender as FrameworkElement)?.Tag is not TileRow row)
+        {
+            return;
+        }
+        if (row.Library is { } item && App.Browsing?.FindLibrary(item) is { } library)
         {
             Frame.Navigate(typeof(LibraryPage), new LibraryArgs(library, ItemQuery.RecentlyAdded(library)));
+        }
+        else if (row.View is { } view && _sections.FirstOrDefault(section => section.Rows.Contains(row)) is { } owner)
+        {
+            Frame.Navigate(typeof(LibraryPage), new ViewArgs(owner.Server, view));
         }
     }
 

@@ -39,8 +39,9 @@ pub use browse::{
     BACKLOG_PAGES, Browse, BrowseNotice, DEPENDENT_RELOAD_DELAY, DetailsView, HomeFeed, HomeRow,
     HomeRowKind, HomeState, ItemAction, LATEST_LIMIT, LoadState, MAX_PAGE_REQUESTS, NEXT_UP_LIMIT,
     NoticeKind, PAGE_SIZE, PagedItems, PagedState, REFRESH_WHEN_SHOWN_AFTER, RESUME_LIMIT,
-    SIMILAR_LIMIT, SearchResults, SeriesRun, Slot, SortChoice, TileShape, library_filters,
-    library_query, library_search, library_sorts, recently_added_query, series_run, tile_artwork,
+    SIMILAR_LIMIT, SearchResults, SeriesRun, Slot, SortChoice, TileShape, favourites_query,
+    library_filters, library_query, library_search, library_sorts, recently_added_everywhere_query,
+    recently_added_query, seen_recently_query, series_run, tile_artwork, view_kinds,
 };
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use formats::{

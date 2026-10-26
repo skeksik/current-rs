@@ -262,6 +262,9 @@ pub enum HomeRowKind {
     ContinueWatching,
     NextUp,
     Latest,
+    RecentlyAdded,
+    Favourites,
+    SeenRecently,
 }
 
 /// One row of Home. Debug leaves out the title, a library's name.
@@ -802,6 +805,9 @@ impl From<current_app::HomeRow> for HomeRow {
                 current_app::HomeRowKind::ContinueWatching => HomeRowKind::ContinueWatching,
                 current_app::HomeRowKind::NextUp => HomeRowKind::NextUp,
                 current_app::HomeRowKind::Latest => HomeRowKind::Latest,
+                current_app::HomeRowKind::RecentlyAdded => HomeRowKind::RecentlyAdded,
+                current_app::HomeRowKind::Favourites => HomeRowKind::Favourites,
+                current_app::HomeRowKind::SeenRecently => HomeRowKind::SeenRecently,
             },
             title: row.title,
             library: row.library.as_ref().map(Into::into),

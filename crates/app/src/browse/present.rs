@@ -89,15 +89,10 @@ pub fn library_sorts() -> Vec<SortChoice> {
     .collect()
 }
 
-/// The filters a library grid offers, in the order the UI lists them: everything first (`None`), then unplayed, played and
-/// favourites.
+/// The filters a library grid offers, in the order the UI lists them: everything first (`None`), then unplayed and played.
+/// Favourites have their own tab across every library, so a grid offers no favourites filter (owner, 2026-10-26).
 pub fn library_filters() -> Vec<Option<ItemFilter>> {
-    vec![
-        None,
-        Some(ItemFilter::UNPLAYED),
-        Some(ItemFilter::PLAYED),
-        Some(ItemFilter::FAVOURITE),
-    ]
+    vec![None, Some(ItemFilter::UNPLAYED), Some(ItemFilter::PLAYED)]
 }
 
 /// "The page is shown again after five minutes" refreshes a list (ADR 0018, section 3).
@@ -294,7 +289,8 @@ mod tests {
                 .all(|sort| sort.order == SortOrder::Descending)
         );
         assert_eq!(library_filters()[0], None);
-        assert_eq!(library_filters().len(), 4);
+        assert_eq!(library_filters().len(), 3);
+        assert!(!library_filters().contains(&Some(ItemFilter::FAVOURITE)));
     }
 
     #[test]

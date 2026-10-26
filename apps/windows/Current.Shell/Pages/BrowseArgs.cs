@@ -15,6 +15,20 @@ public sealed record LibraryArgs(Library Library, ItemQuery? Query = null)
     public bool Shows(object? other) => other is LibraryArgs args && args.Library.Item == Library.Item;
 }
 
+/// <summary>
+/// A view across every library of <c>Server</c>, as a grid on the library page: the Favorites or the Recently added tab (owner,
+/// 2026-10-26). Compares by value.
+/// </summary>
+public sealed record ViewArgs(ServerRef Server, string View)
+{
+    public const string Favourites = "favourites";
+    public const string RecentlyAdded = "recently_added";
+
+    /// <summary>The view's query from the core, narrowed to one media kind when given.</summary>
+    public static ItemQuery Query(string view, string? kind) =>
+        view == Favourites ? ItemQuery.Favourites(kind) : ItemQuery.RecentlyAddedEverywhere(kind);
+}
+
 /// <summary>An item's detail page.</summary>
 public sealed record DetailsArgs(ItemRef Item);
 

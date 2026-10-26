@@ -40,8 +40,9 @@ pub use browse::{
     LibraryMemorySettings, LibraryView, LoadState, LoadStateListener, MediaSummary, NoticeKind,
     PagedItems, PagedState, PagedStateListener, Person, SearchGroup, SearchGroupDiff,
     SearchGroupsListener, SearchResults, SeriesRun, Slot, SlotDiff, SlotsListener, SortChoice,
-    SortOrder, StreamSummary, UserState, library_filter_choices, library_query, library_search,
-    library_sort_choices, recently_added_query,
+    SortOrder, StreamSummary, UserState, favourites_query, library_filter_choices, library_query,
+    library_search, library_sort_choices, recently_added_everywhere_query, recently_added_query,
+    view_kind_choices,
 };
 pub use cancel::CancelToken;
 pub use error::CoreError;

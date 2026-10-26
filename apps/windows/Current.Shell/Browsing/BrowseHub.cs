@@ -285,6 +285,23 @@ internal sealed class ServerBrowse : IDisposable
         return grid;
     }
 
+    /// <summary>
+    /// The grid of a view across every library (<see cref="Pages.ViewArgs"/>): the Favorites or Recently added tab, opened on first use
+    /// and kept as a library's grid is.
+    /// </summary>
+    public LibraryGrid View(string view)
+    {
+        if (!_views.TryGetValue(view, out var grid))
+        {
+            var query = Pages.ViewArgs.Query(view, null);
+            grid = new LibraryGrid(Session.OpenItems(query), query);
+            _views[view] = grid;
+        }
+        return grid;
+    }
+
+    private readonly Dictionary<string, LibraryGrid> _views = [];
+
     /// <summary>Home's rows of this server, opened on first use and kept, as the grids are, so Home shows again without reloading.</summary>
     public HomeFeed Home => _home ??= Session.Home();
 
@@ -357,11 +374,12 @@ internal sealed class ServerBrowse : IDisposable
         _details.Clear();
         _home?.Dispose();
         _home = null;
-        foreach (var grid in _grids.Values)
+        foreach (var grid in _grids.Values.Concat(_views.Values))
         {
             grid.Retire();
         }
         _grids.Clear();
+        _views.Clear();
         Session.Dispose();
     }
 }

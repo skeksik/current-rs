@@ -80,6 +80,87 @@ public sealed partial class LibraryPage : Page, IRefreshable
     private SlotCollection? _slots;
     private ValueSubscription<PagedState>? _state;
 
+    /// <summary>The view across every library shown (<see cref="ViewArgs"/>), or null for a library.</summary>
+    private string? _view;
+
+    /// <summary>
+    /// The Filter menu's media types, for a view across every library (owner, 2026-10-26): every type, then the core's kinds, before
+    /// the menu's filters and a separator. Glyphs: Segoe Fluent Icons E8A9 "ViewAll", E8B2 "Movies" and E7F4 "TVMonitor", the films
+    /// and TV libraries' ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26).
+    /// </summary>
+    private readonly List<MenuFlyoutItemBase> _kindEntries = [];
+    private readonly List<(RadioMenuFlyoutItem Item, string? Kind)> _kindItems = [];
+
+    private static string KindName(string? kind) => kind switch
+    {
+        null => "All types",
+        "movie" => "Movies",
+        "series" => "Shows",
+        _ => kind,
+    };
+
+    private static string? KindGlyph(string? kind) => kind switch
+    {
+        null => "\uE8A9",
+        "movie" => "\uE8B2",
+        "series" => "\uE7F4",
+        _ => null,
+    };
+
+    /// <summary>Puts the media types at the top of the Filter menu, or takes them out (a library).</summary>
+    private void ShowKindItems(bool show)
+    {
+        foreach (var entry in _kindEntries)
+        {
+            FilterMenu.Items.Remove(entry);
+        }
+        if (!show)
+        {
+            return;
+        }
+        if (_kindEntries.Count == 0)
+        {
+            foreach (var kind in new string?[] { null }.Concat(ItemQuery.ViewKindChoices))
+            {
+                var item = MenuItem(KindName(kind), KindGlyph(kind), "kind");
+                var chosen = kind;
+                item.Click += (_, _) => ChooseKind(chosen);
+                _kindItems.Add((item, kind));
+                _kindEntries.Add(item);
+            }
+            _kindEntries.Add(new MenuFlyoutSeparator());
+        }
+        for (var i = 0; i < _kindEntries.Count; i++)
+        {
+            FilterMenu.Items.Insert(i, _kindEntries[i]);
+        }
+    }
+
+    /// <summary>Shows the Filter menu's played and favourite filters, or hides them with the separator before them.</summary>
+    private void ShowFilterItems(bool show)
+    {
+        var visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var item in _filterItems)
+        {
+            item.Visibility = visibility;
+        }
+        if (_kindEntries.LastOrDefault() is MenuFlyoutSeparator separator)
+        {
+            separator.Visibility = visibility;
+        }
+    }
+
+    /// <summary>The view narrowed to one media kind (or every kind), keeping its sort, filters and search.</summary>
+    private void ChooseKind(string? kind)
+    {
+        if (_view is not { } view)
+        {
+            return;
+        }
+        var narrowed = ViewArgs.Query(view, kind);
+        Choose(query => query with { Kinds = narrowed.Kinds });
+    }
+
     // The menus' radio items, in the order of Sorts, SortOrder and Filters.
     private readonly List<RadioMenuFlyoutItem> _sortItems = [];
     private readonly List<RadioMenuFlyoutItem> _orderItems = [];
@@ -119,6 +200,11 @@ public sealed partial class LibraryPage : Page, IRefreshable
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        if (e.Parameter is ViewArgs view)
+        {
+            ShowView(view, e.NavigationMode);
+            return;
+        }
         if (e.Parameter is not LibraryArgs args || App.Browsing?.Find(args.Library.Item.Server) is not { } server)
         {
             // The server was signed out of while this page was in the history.
@@ -126,6 +212,9 @@ public sealed partial class LibraryPage : Page, IRefreshable
             return;
         }
         var library = App.Browsing.FindLibrary(args.Library.Item) ?? args.Library;
+        _view = null;
+        ShowKindItems(false);
+        ShowFilterItems(true);
         TitleText.Text = library.Name;
         ShowSearchName(library.Name);
         _library = library.Item;
@@ -149,7 +238,8 @@ public sealed partial class LibraryPage : Page, IRefreshable
             {
                 first = first with { Sort = [sort.Key], Order = sort.Order };
             }
-            if (remembered?.Filters is { } filters)
+            // Only filters the menu still offers: one remembered from an older version (favourites) is dropped.
+            if (remembered?.Filters is { } filters && filters.All(filter => Filters.Contains(filter)))
             {
                 first = first with { Filters = filters };
             }
@@ -158,6 +248,16 @@ public sealed partial class LibraryPage : Page, IRefreshable
                 _grid.Query = first;
                 _grid.Items.SetQuery(first);
             }
+        }
+        Attach();
+    }
+
+    /// <summary>Shows the grid's query and view and binds its slots and state; the grid is stale-checked as it is shown again.</summary>
+    private void Attach()
+    {
+        if (_grid is null)
+        {
+            return;
         }
         ShowQuery(_grid.Query);
         ShowView();
@@ -170,6 +270,41 @@ public sealed partial class LibraryPage : Page, IRefreshable
         ShowState();
         // The core decides whether the grid is stale: shown again five minutes or more after it was left (ADR 0018, section 3).
         _grid.Items.Shown();
+    }
+
+    /// <summary>
+    /// A view across every library (the Favorites or Recently added tab) in the same grid: its own query from the core, nothing
+    /// remembered, and Back and Forward returning to where it was left, as a library's.
+    /// </summary>
+    private void ShowView(ViewArgs view, NavigationMode mode)
+    {
+        if (App.Browsing?.Find(view.Server) is not { } server)
+        {
+            EmptyText.Visibility = Visibility.Visible;
+            return;
+        }
+        var title = BrowseText.ViewTitle(view.View);
+        TitleText.Text = title;
+        _view = view.View;
+        ShowKindItems(true);
+        // Favourites are already a filter: its menu narrows by media type only (owner, 2026-10-26).
+        ShowFilterItems(view.View != ViewArgs.Favourites);
+        ShowSearchName(title);
+        _grid = server.View(view.View);
+        _grid.Bind();
+        if (mode is not (NavigationMode.Back or NavigationMode.Forward))
+        {
+            _grid.FirstVisible = 0;
+            _grid.Wide = false;
+            _grid.ShowsTitles = true;
+            var first = ViewArgs.Query(view.View, null);
+            if (!SameChoices(_grid.Query, first))
+            {
+                _grid.Query = first;
+                _grid.Items.SetQuery(first);
+            }
+        }
+        Attach();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -313,6 +448,12 @@ public sealed partial class LibraryPage : Page, IRefreshable
         for (var i = 0; i < _filterItems.Count; i++)
         {
             _filterItems[i].IsChecked = i == filter;
+        }
+        // A view narrowed to one kind lists that kind only; otherwise it is every type.
+        var single = query.Kinds.Count == 1 ? query.Kinds[0] : null;
+        foreach (var (item, kind) in _kindItems)
+        {
+            item.IsChecked = kind == single;
         }
     }
 

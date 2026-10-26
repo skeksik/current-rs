@@ -78,8 +78,21 @@ internal static class BrowseText
     {
         HomeRowKind.ContinueWatching => "Continue watching",
         HomeRowKind.NextUp => "Next up",
+        HomeRowKind.RecentlyAdded => "Recently added",
+        HomeRowKind.Favourites => "Favourites",
+        HomeRowKind.SeenRecently => "Seen recently",
         _ => row.Title.Length > 0 ? $"Recently added in {row.Title}" : "Recently added",
     };
+
+    /// <summary>A view tab's title, as its pane item names it.</summary>
+    public static string ViewTitle(string view) => view switch
+    {
+        Pages.ViewArgs.Favourites => "Favourites",
+        _ => "Recently added",
+    };
+
+    /// <summary>A row header's tooltip when it opens a view tab.</summary>
+    public static string ViewLinkTip(string view) => $"Open {ViewTitle(view)}";
 
     /// <summary>A Latest row header's tooltip: where the link goes.</summary>
     public static string RecentlyAddedLinkTip(HomeRow row) =>

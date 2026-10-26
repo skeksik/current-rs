@@ -423,19 +423,8 @@ async fn a_list_chosen_by_marks_reads_again_when_a_mark_changes() {
     let app = App::new();
     let server = signed_in(&stand_in, &app).await;
     let browse = app.browse(&server).unwrap();
-    // A grid of favourites: an item that becomes a favourite must join it, so the list reads again (the owner's run, 2026-10-26).
-    let libraries = browse.libraries().await.unwrap();
-    let films = libraries
-        .iter()
-        .find(|library| library.item.id.as_str() == FILMS_LIBRARY_ID)
-        .unwrap();
-    let favourites = browse.open_library(
-        films,
-        ItemQuery {
-            filters: vec![current_model::ItemFilter::FAVOURITE],
-            ..ItemQuery::default()
-        },
-    );
+    // The Favorites tab: an item that becomes a favourite must join it, so the list reads again (the owner's run, 2026-10-26).
+    let favourites = browse.open_items(current_app::favourites_query(None));
     eventually(|| favourites.state().borrow().total > 0).await;
     let reads = stand_in.count("/Items");
     browse.set_favourite(&item(&server, FILM_IDS[1]), true);
@@ -674,11 +663,19 @@ async fn rows_without_items_are_absent_and_a_failed_row_offers_retry() {
         .into_iter()
         .map(|row| row.key)
         .collect();
+    // The rows across every library come from the stand-in's item list, which takes no filter: here they only need to be in
+    // their places.
     assert_eq!(
         keys,
-        ["resume".to_owned(), format!("latest:{FILMS_LIBRARY_ID}")]
+        [
+            "resume".to_owned(),
+            "favourites".to_owned(),
+            "recently_added".to_owned(),
+            format!("latest:{FILMS_LIBRARY_ID}"),
+            "seen_recently".to_owned(),
+        ]
     );
-    let latest = &home.rows().snapshot()[1];
+    let latest = &home.rows().snapshot()[3];
     assert_eq!(latest.kind, HomeRowKind::Latest);
     assert_eq!(latest.title, "Example Films");
     assert_eq!(
@@ -687,10 +684,10 @@ async fn rows_without_items_are_absent_and_a_failed_row_offers_retry() {
         "the excluded library is not asked"
     );
 
-    // Retry: "next up" answers and takes its place, between "continue watching" and "latest".
+    // Retry: "next up" answers and takes its place, right after "continue watching".
     stand_in.unfail("/Shows/NextUp");
     home.retry();
-    eventually(|| home.rows().len() == 3).await;
+    eventually(|| home.rows().len() == 6).await;
     eventually(|| home.state().borrow().failed.is_none()).await;
     let kinds: Vec<HomeRowKind> = home
         .rows()
@@ -703,7 +700,10 @@ async fn rows_without_items_are_absent_and_a_failed_row_offers_retry() {
         [
             HomeRowKind::ContinueWatching,
             HomeRowKind::NextUp,
-            HomeRowKind::Latest
+            HomeRowKind::Favourites,
+            HomeRowKind::RecentlyAdded,
+            HomeRowKind::Latest,
+            HomeRowKind::SeenRecently,
         ]
     );
     assert_eq!(home.row("next_up").unwrap().len(), 1);

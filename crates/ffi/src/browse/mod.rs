@@ -259,6 +259,28 @@ pub fn library_query(library: Library) -> ItemQuery {
     (&current_app::library_query(&(&library).into())).into()
 }
 
+/// The Favorites tab's query: the user's favourites in every library, by name; only `kind` (a media kind, `movie` or `series`) when
+/// given.
+#[uniffi::export]
+pub fn favourites_query(kind: Option<String>) -> ItemQuery {
+    (&current_app::favourites_query(kind.map(current_model::MediaKind::new))).into()
+}
+
+/// The Recently added tab's query: what was added to every library, the newest first; only `kind` when given.
+#[uniffi::export]
+pub fn recently_added_everywhere_query(kind: Option<String>) -> ItemQuery {
+    (&current_app::recently_added_everywhere_query(kind.map(current_model::MediaKind::new))).into()
+}
+
+/// The media kinds the Favorites and Recently added tabs can be narrowed to, in order, after every kind.
+#[uniffi::export]
+pub fn view_kind_choices() -> Vec<String> {
+    current_app::view_kinds()
+        .into_iter()
+        .map(|kind| kind.as_str().to_owned())
+        .collect()
+}
+
 /// `query` searching for what the user typed in a library's search box: the text trimmed, no search when it is blank.
 #[uniffi::export]
 pub fn library_search(query: ItemQuery, term: String) -> ItemQuery {
@@ -337,6 +359,15 @@ impl Browse {
         let items = self
             .browse
             .open_library(&(&library).into(), (&query).into());
+        Arc::new(PagedItems {
+            items,
+            host: self.host.clone(),
+        })
+    }
+
+    /// A grid of items from every library (the Favorites and Recently added tabs): `query` with no parent. Starts loading at once.
+    pub fn open_items(&self, query: ItemQuery) -> Arc<PagedItems> {
+        let items = self.browse.open_items((&query).into());
         Arc::new(PagedItems {
             items,
             host: self.host.clone(),
