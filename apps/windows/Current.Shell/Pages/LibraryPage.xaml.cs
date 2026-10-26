@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using Current.Bindings;
 using Current.Shell.Browsing;
 using Microsoft.UI.Xaml;
@@ -135,9 +136,20 @@ public sealed partial class LibraryPage : Page, IRefreshable
         if (e.NavigationMode is not (NavigationMode.Back or NavigationMode.Forward))
         {
             _grid.FirstVisible = 0;
-            _grid.Wide = false;
-            _grid.ShowsTitles = true;
+            // What the library opens with: a Home row's own query as it is, else the library's first query with the sort, filter and
+            // view last chosen here, each while Settings remembers it (the core's rule).
+            var remembered = args.Query is null ? App.Core?.LibraryChoicesFor(library.Item) : null;
+            _grid.Wide = remembered?.View?.Tile == LibraryView.Wide;
+            _grid.ShowsTitles = remembered?.View?.ShowTitles ?? true;
             var first = args.Query ?? ItemQuery.ForLibrary(library);
+            if (remembered?.Sort is { } sort)
+            {
+                first = first with { Sort = [sort.Key], Order = sort.Order };
+            }
+            if (remembered?.Filters is { } filters)
+            {
+                first = first with { Filters = filters };
+            }
             if (!SameChoices(_grid.Query, first))
             {
                 _grid.Query = first;
@@ -309,6 +321,29 @@ public sealed partial class LibraryPage : Page, IRefreshable
         _grid.Query = query;
         _grid.FirstVisible = 0;
         _grid.Items.SetQuery(query);
+        Remember(new LibraryChoices(
+            Sort: query.Sort.FirstOrDefault() is { } key ? new SortChoice(key, query.Order) : null,
+            Filters: query.Filters));
+    }
+
+    /// <summary>
+    /// Tells the core what the user chose here; it keeps each part only while Settings remembers it. A failed save loses nothing the
+    /// grid shows, so it is only traced.
+    /// </summary>
+    private async void Remember(LibraryChoices choices)
+    {
+        if (_library is not { } library || App.Core is not { } core)
+        {
+            return;
+        }
+        try
+        {
+            await core.RememberLibraryChoicesAsync(library, choices);
+        }
+        catch (Exception error)
+        {
+            Trace.TraceWarning($"Current: a library's choices were not remembered: {error.GetType().Name}");
+        }
     }
 
     /// <summary>The tiles' template and the View menu's checks for the grid's view.</summary>
@@ -344,6 +379,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
         _grid.Wide = WideItem.IsChecked;
         _grid.ShowsTitles = TitlesItem.IsChecked;
         ShowView();
+        Remember(new LibraryChoices(View: new LibraryView(_grid.Wide ? LibraryView.Wide : LibraryView.Poster, _grid.ShowsTitles)));
     }
 
     /// <summary>The grid's slots now (the smoke run).</summary>

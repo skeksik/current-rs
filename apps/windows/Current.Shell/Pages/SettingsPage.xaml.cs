@@ -51,6 +51,8 @@ public sealed partial class SettingsPage : Page
             ThemeBox.IsEnabled = true;
             ShowAutoSkip(core.PlaybackSettings().SkipsIntrosAndCredits);
             AutoSkipSwitch.IsEnabled = true;
+            ShowLibraryMemory(core.LibraryMemory);
+            RememberSortSwitch.IsEnabled = RememberFilterSwitch.IsEnabled = RememberViewSwitch.IsEnabled = true;
             Servers ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
             Servers.Start();
             Bindings.Update();
@@ -151,6 +153,66 @@ public sealed partial class SettingsPage : Page
             ShowAutoSkip(core.PlaybackSettings().SkipsIntrosAndCredits);
             ShowPlaybackInfo(ProblemText.Unexpected);
         }
+    }
+
+    /// <summary>The remember switches are being set from the core: their Toggled is not a choice of the user's.</summary>
+    private bool _showingLibraryMemory;
+
+    private void ShowLibraryMemory(LibraryMemorySettings memory)
+    {
+        _showingLibraryMemory = true;
+        RememberSortSwitch.IsOn = memory.RememberSort;
+        RememberFilterSwitch.IsOn = memory.RememberFilter;
+        RememberViewSwitch.IsOn = memory.RememberView;
+        _showingLibraryMemory = false;
+    }
+
+    /// <summary>
+    /// Saves a remember switch at once (the core; off forgets that choice in every library). If it cannot be saved nothing changed, so
+    /// the switches show the core's again. async void, as event handlers are: it catches everything itself.
+    /// </summary>
+    private async void OnRememberToggled(object sender, RoutedEventArgs e)
+    {
+        if (_showingLibraryMemory || App.Core is not { } core)
+        {
+            return;
+        }
+        LibrariesInfo.IsOpen = false;
+        try
+        {
+            var on = ((ToggleSwitch)sender).IsOn;
+            if (ReferenceEquals(sender, RememberSortSwitch))
+            {
+                await core.SetRememberSortAsync(on);
+            }
+            else if (ReferenceEquals(sender, RememberFilterSwitch))
+            {
+                await core.SetRememberFilterAsync(on);
+            }
+            else
+            {
+                await core.SetRememberViewAsync(on);
+            }
+        }
+        catch (CoreStoreException error)
+        {
+            ShowLibraryMemory(core.LibraryMemory);
+            ShowLibrariesInfo(ProblemText.Store(error.Problem));
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing a remember switch failed: {error.GetType().Name}");
+            ShowLibraryMemory(core.LibraryMemory);
+            ShowLibrariesInfo(ProblemText.Unexpected);
+        }
+    }
+
+    private void ShowLibrariesInfo(string message)
+    {
+        LibrariesInfo.Severity = InfoBarSeverity.Error;
+        LibrariesInfo.Title = "Couldn't save this setting.";
+        LibrariesInfo.Message = message;
+        LibrariesInfo.IsOpen = true;
     }
 
     private void ShowPlaybackInfo(string message)
