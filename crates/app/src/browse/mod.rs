@@ -337,11 +337,9 @@ impl Context {
                     item_name: name,
                     problem,
                 }),
-                None if matches!(action, ItemAction::SetPlayed(_)) => {
-                    self.dependents_changed(answered.parents);
-                }
-                // A favourite changes no other list's content, only how the item shows.
-                None => {}
+                // A mark changes the lists chosen by marks (Home's rows, the Favorites tab, a filtered grid): they read again a moment
+                // later, with the item's parents for the played mark's (a series' unplayed count).
+                None => self.dependents_changed(answered.parents),
             }
         }
     }

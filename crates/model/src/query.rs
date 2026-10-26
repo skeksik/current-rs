@@ -58,6 +58,14 @@ pub struct ItemQuery {
     pub search_term: Option<String>,
 }
 
+impl ItemQuery {
+    /// Whether the user's marks decide which items the list holds or their order: a filter on played or favourite marks, or the date
+    /// played. Such a list must be read again when a mark changes, as an item can join or leave it.
+    pub fn depends_on_marks(&self) -> bool {
+        !self.filters.is_empty() || self.sort.contains(&SortKey::DATE_PLAYED)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,6 +77,26 @@ mod tests {
         assert!(!key.is_known());
         assert_eq!(key.as_str(), "SeriesDatePlayed");
         assert!(!ItemFilter::new("Likes").is_known());
+    }
+
+    #[test]
+    fn a_list_filtered_or_ordered_by_marks_depends_on_them() {
+        assert!(!ItemQuery::default().depends_on_marks());
+        let favourites = ItemQuery {
+            filters: vec![ItemFilter::FAVOURITE],
+            ..ItemQuery::default()
+        };
+        assert!(favourites.depends_on_marks());
+        let seen = ItemQuery {
+            sort: vec![SortKey::DATE_PLAYED],
+            ..ItemQuery::default()
+        };
+        assert!(seen.depends_on_marks());
+        let names = ItemQuery {
+            sort: vec![SortKey::SORT_NAME],
+            ..ItemQuery::default()
+        };
+        assert!(!names.depends_on_marks());
     }
 
     #[test]

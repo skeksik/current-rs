@@ -418,6 +418,31 @@ async fn an_optimistic_change_shows_in_every_live_list_and_rolls_back_on_failure
 }
 
 #[tokio::test]
+async fn a_list_chosen_by_marks_reads_again_when_a_mark_changes() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    // A grid of favourites: an item that becomes a favourite must join it, so the list reads again (the owner's run, 2026-10-26).
+    let libraries = browse.libraries().await.unwrap();
+    let films = libraries
+        .iter()
+        .find(|library| library.item.id.as_str() == FILMS_LIBRARY_ID)
+        .unwrap();
+    let favourites = browse.open_library(
+        films,
+        ItemQuery {
+            filters: vec![current_model::ItemFilter::FAVOURITE],
+            ..ItemQuery::default()
+        },
+    );
+    eventually(|| favourites.state().borrow().total > 0).await;
+    let reads = stand_in.count("/Items");
+    browse.set_favourite(&item(&server, FILM_IDS[1]), true);
+    eventually(|| stand_in.count("/Items") > reads).await;
+}
+
+#[tokio::test]
 async fn play_starts_the_item_or_the_series_next_episode() {
     let stand_in = StandIn::start().await.unwrap();
     let app = App::new();
