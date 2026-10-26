@@ -21,6 +21,7 @@ crates/net          current-net: HTTP client per server, typed errors, redacted 
 crates/store        current-store: settings file, secrets in the OS keyring, device id (ADR 0013)
 crates/jellyfin     current-jellyfin: Jellyfin client; so far server setup (ADR 0012), discovery (ADR 0016), sign-in (ADR 0015), gateway answers and header placement (ADR 0017), browse queries and images (ADR 0018), playback calls, the device profile and the HLS playlist origin check (ADR 0019)
 crates/mpv          current-mpv: the libmpv engine (ADR 0019): client API declarations, event thread, options, display facts, swap chain, capabilities, log redaction; the only crate with `unsafe`; links libmpv only with its `libmpv` feature
+crates/relay        current-relay: the loopback relay (ADR 0020): a 127.0.0.1 HTTP/1.1 server (hyper) that forwards a player's stream requests over an `Upstream` trait, with route tokens, refusals, HLS playlist rewriting and events; knows no service
 crates/app          current-app: composition root (App), capabilities state, observable lists, add-a-server and sign-in flows, sessions, local discovery, gateways (ADR 0017), image cache and browse state (ADR 0018), the player (ADR 0019; its `libmpv` feature builds the libmpv engine, `test-engine` a stand-in engine for the bridge tests only)
 crates/ffi          current-ffi: UniFFI surface over current-app (runtime, TaskHandle, CancelToken, CoreError; ADR 0004); opening, setup, sign-in, sessions, browse, the player
 tools/uniffi-bindgen  UniFFI's generator at the workspace's uniffi version, for Swift
@@ -30,7 +31,7 @@ bindings/swift      SwiftPM package: XCFramework + generated Swift (not checked 
 apps/windows        the WinUI 3 app (Current.Shell, builds Current.exe), its Inno Setup installer and install test (ADR 0009)
 docs/               architecture.md, roadmap.md, decisions/ (ADRs)
 ```
-Target layout (ADR 0002): `crates/{model,net,store,jellyfin,seerr,stash,playback,mpv,app,ffi}`, `apps/{windows,macos,linux}`. Each crate
+Target layout (ADR 0002): `crates/{model,net,store,jellyfin,seerr,stash,playback,mpv,relay,app,ffi}` (relay: ADR 0020), `apps/{windows,macos,linux}`. Each crate
 is created by the task that first needs it; a new crate copies the shape of `crates/model` (workspace version, edition, lints).
 
 ## Commands
