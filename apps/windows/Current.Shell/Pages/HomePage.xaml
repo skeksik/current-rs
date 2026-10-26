@@ -64,9 +64,12 @@
                                                 Text="{x:Bind Title}" />
                                             <!-- The right padding keeps the last tile off the window's edge, less the 4 each item
                                                  has on its right by default (LibraryPage.xaml). -->
+                                            <!-- The bottom padding keeps the scroll bar off the tiles: with the 4 each item has below it, 20, the bar's
+                                                 16 (ScrollBarSize, generic.xaml of Microsoft.WindowsAppSDK.WinUI 2.3.9) and a 4 gap (owner's run,
+                                                 2026-10-26). -->
                                             <!-- Its items and template are set from code once per row (StableSource), not by x:Bind. -->
                                             <GridView
-                                                Padding="0,0,20,0"
+                                                Padding="0,0,20,16"
                                                 AutomationProperties.Name="{x:Bind Title}"
                                                 ScrollViewer.HorizontalScrollMode="Enabled"
                                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
