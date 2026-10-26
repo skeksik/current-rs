@@ -3,6 +3,7 @@ using Current.Bindings;
 using Current.Shell.Browsing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
 
 namespace Current.Shell.Pages;
@@ -15,12 +16,12 @@ namespace Current.Shell.Pages;
 /// </summary>
 public sealed partial class LibraryPage : Page
 {
-    /// <summary>The sorts and filters the core offers, in its order (ItemQuery.SortChoices and FilterChoices); the boxes list them.</summary>
+    /// <summary>The sorts and filters the core offers, in its order (ItemQuery.SortChoices and FilterChoices); the menus list them.</summary>
     private static readonly IReadOnlyList<SortChoice> Sorts = ItemQuery.SortChoices;
 
     private static readonly IReadOnlyList<string?> Filters = ItemQuery.FilterChoices;
 
-    /// <summary>A sort's name in the box; a key Current has no name for shows as the core gave it.</summary>
+    /// <summary>A sort's name in the menu; a key Current has no name for shows as the core gave it.</summary>
     private static string SortName(string key) => key switch
     {
         "sort_name" => "Name",
@@ -39,21 +40,73 @@ public sealed partial class LibraryPage : Page
         _ => filter,
     };
 
+    // The menu items' icons, as Photos' sort menu has them (owner, 2026-10-26), from Segoe Fluent Icons ("Segoe Fluent Icons font",
+    // learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26): E8D2 Font, E787 Calendar, E8B2 Movies, E734 FavoriteStar, E74A Up,
+    // E74B Down, E71D AllApps, E768 Play, E73E CheckMark and EB51 Heart (the tiles' played mark and the details page's favourite).
+    // A key or filter Current has no icon for gets none.
+    private static string? SortGlyph(string key) => key switch
+    {
+        "sort_name" => "\uE8D2",
+        "date_created" => "\uE787",
+        "premiere_date" => "\uE8B2",
+        "community_rating" => "\uE734",
+        _ => null,
+    };
+
+    private static string? FilterGlyph(string? filter) => filter switch
+    {
+        null => "\uE71D",
+        "unplayed" => "\uE768",
+        "played" => "\uE73E",
+        "favourite" => "\uEB51",
+        _ => null,
+    };
+
+    // The arrows fill their whole em while the other glyphs leave space round them, so Ascending and Descending get a margin in the
+    // item's 16 x 16 icon box, which scales its content to fit (IconRoot, a Viewbox, in the menu items' template, generic.xaml of
+    // Microsoft.WindowsAppSDK.WinUI 2.3.9): 2 on each side draws them at 16/20 of the size, as small as Photos' (owner's run,
+    // 2026-10-26).
+    private static RadioMenuFlyoutItem MenuItem(string text, string? glyph, string group, bool small = false) => new()
+    {
+        Text = text,
+        GroupName = group,
+        Icon = glyph is null ? null : new FontIcon { Glyph = glyph, Margin = small ? new Thickness(2) : default },
+    };
+
     private LibraryGrid? _grid;
     private SlotCollection? _slots;
     private ValueSubscription<PagedState>? _state;
-    private bool _showingQuery;
+
+    // The menus' radio items, in the order of Sorts, SortOrder and Filters.
+    private readonly List<RadioMenuFlyoutItem> _sortItems = [];
+    private readonly List<RadioMenuFlyoutItem> _orderItems = [];
+    private readonly List<RadioMenuFlyoutItem> _filterItems = [];
 
     public LibraryPage()
     {
         InitializeComponent();
+        // A new field takes the order the core gives it (names A to Z, the newest first); Ascending or Descending then turns it.
         foreach (var sort in Sorts)
         {
-            SortBox.Items.Add(SortName(sort.Key));
+            var item = MenuItem(SortName(sort.Key), SortGlyph(sort.Key), "sort");
+            item.Click += (_, _) => Choose(query => query with { Sort = [sort.Key], Order = sort.Order });
+            _sortItems.Add(item);
+            SortMenu.Items.Add(item);
+        }
+        SortMenu.Items.Add(new MenuFlyoutSeparator());
+        foreach (var (order, name, glyph) in new[] { (SortOrder.Ascending, "Ascending", "\uE74A"), (SortOrder.Descending, "Descending", "\uE74B") })
+        {
+            var item = MenuItem(name, glyph, "order", small: true);
+            item.Click += (_, _) => Choose(query => query with { Order = order });
+            _orderItems.Add(item);
+            SortMenu.Items.Add(item);
         }
         foreach (var filter in Filters)
         {
-            FilterBox.Items.Add(FilterName(filter));
+            var item = MenuItem(FilterName(filter), FilterGlyph(filter), "filter");
+            item.Click += (_, _) => Choose(query => query with { Filters = filter is null ? [] : [filter] });
+            _filterItems.Add(item);
+            FilterMenu.Items.Add(item);
         }
         ItemActions.Attach(Items, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
         Loaded += (_, _) => _wasLoaded = true;
@@ -216,28 +269,36 @@ public sealed partial class LibraryPage : Page
         }
     }
 
+    /// <summary>Checks the menus' items for the query's field, order and filter.</summary>
     private void ShowQuery(ItemQuery query)
     {
-        _showingQuery = true;
-        SortBox.SelectedIndex = Math.Max(0, Sorts.ToList().FindIndex(sort => query.Sort.FirstOrDefault() == sort.Key));
-        FilterBox.SelectedIndex = Math.Max(0, Filters.ToList().IndexOf(query.Filters.FirstOrDefault()));
-        _showingQuery = false;
+        var sort = Math.Max(0, Sorts.ToList().FindIndex(sort => query.Sort.FirstOrDefault() == sort.Key));
+        var filter = Math.Max(0, Filters.ToList().IndexOf(query.Filters.FirstOrDefault()));
+        for (var i = 0; i < _sortItems.Count; i++)
+        {
+            _sortItems[i].IsChecked = i == sort;
+        }
+        _orderItems[0].IsChecked = query.Order == SortOrder.Ascending;
+        _orderItems[1].IsChecked = query.Order == SortOrder.Descending;
+        for (var i = 0; i < _filterItems.Count; i++)
+        {
+            _filterItems[i].IsChecked = i == filter;
+        }
     }
 
     /// <summary>Whether two queries sort and filter alike (the records compare their lists by reference).</summary>
     private static bool SameChoices(ItemQuery a, ItemQuery b) =>
         a.Sort.SequenceEqual(b.Sort) && a.Order == b.Order && a.Filters.SequenceEqual(b.Filters);
 
-    /// <summary>A new sort or filter: a new query, which resets the grid to the top.</summary>
-    private void OnQueryChanged(object sender, SelectionChangedEventArgs e)
+    /// <summary>A new field, order or filter: a new query, which resets the grid to the top.</summary>
+    private void Choose(Func<ItemQuery, ItemQuery> change)
     {
-        if (_showingQuery || _grid is null || SortBox.SelectedIndex < 0 || FilterBox.SelectedIndex < 0)
+        if (_grid is null)
         {
             return;
         }
-        var sort = Sorts[SortBox.SelectedIndex];
-        var filter = Filters[FilterBox.SelectedIndex];
-        var query = _grid.Query with { Sort = [sort.Key], Order = sort.Order, Filters = filter is null ? [] : [filter] };
+        var query = change(_grid.Query);
+        ShowQuery(query);
         if (SameChoices(query, _grid.Query))
         {
             return;
@@ -259,7 +320,11 @@ public sealed partial class LibraryPage : Page
         }
     }
 
-    private void OnRefresh(object sender, RoutedEventArgs e) => _grid?.Items.Refresh();
+    private void OnRefresh(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs e)
+    {
+        e.Handled = true;
+        _grid?.Items.Refresh();
+    }
 
     private void OnRetry(object sender, RoutedEventArgs e) => _grid?.Items.Retry();
 }
