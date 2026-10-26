@@ -69,12 +69,12 @@ internal static class BrowseText
 
     public const string FailedTileName = "Couldn't load. Use Retry above the grid.";
 
-    /// <summary>A Home row's title: the library's name for Latest.</summary>
+    /// <summary>A Home row's title: the library's name for Latest, which reads "Recently added in" (owner, 2026-10-26).</summary>
     public static string RowTitle(HomeRow row) => row.Kind switch
     {
         HomeRowKind.ContinueWatching => "Continue watching",
         HomeRowKind.NextUp => "Next up",
-        _ => row.Title.Length > 0 ? $"Latest in {row.Title}" : "Latest",
+        _ => row.Title.Length > 0 ? $"Recently added in {row.Title}" : "Recently added",
     };
 
     /// <summary>A search group's title, by media kind; a kind Current has no name for shows as the server named it.</summary>
