@@ -20,6 +20,7 @@ use current_model::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::browse::BrowseSettings;
 use crate::playback::PlaybackSettings;
 use crate::{DeviceId, StoreError};
 
@@ -59,6 +60,10 @@ pub struct Settings {
     pub playback: PlaybackSettings,
     /// A stored `playback` that is not an object, kept until playback settings are changed here.
     unknown_playback: Option<Value>,
+    /// Settings' "Remember sort", "Remember filter" and "Remember view", and what is remembered per library: open values.
+    pub browse: BrowseSettings,
+    /// A stored `browse` that is not an object, kept until browse settings are changed here.
+    unknown_browse: Option<Value>,
     /// Fields this version does not know, written back unchanged.
     extra: Map<String, Value>,
 }
@@ -73,6 +78,8 @@ impl Settings {
             unknown_app_theme: None,
             playback: PlaybackSettings::default(),
             unknown_playback: None,
+            browse: BrowseSettings::default(),
+            unknown_browse: None,
             extra: Map::new(),
         }
     }
@@ -111,6 +118,9 @@ struct Stored {
     /// Added with playback (ADR 0019, 2026-10-25); older files have none. Any JSON value, as `app_theme`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     playback: Option<Value>,
+    /// Added with the remembered library choices (2026-10-26); older files have none. Any JSON value, as `app_theme`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    browse: Option<Value>,
     #[serde(flatten)]
     extra: Map<String, Value>,
 }
@@ -358,6 +368,10 @@ impl SettingsStore {
             next.unknown_playback = None;
             next.playback.changed_from(&state.settings.playback);
         }
+        if next.browse != state.settings.browse {
+            next.unknown_browse = None;
+            next.browse.changed_from(&state.settings.browse);
+        }
         if next != state.settings {
             self.write(&next, SETTINGS_VERSION)?;
             state.settings = next;
@@ -381,6 +395,10 @@ impl SettingsStore {
                 .unknown_playback
                 .clone()
                 .or_else(|| settings.playback.write()),
+            browse: settings
+                .unknown_browse
+                .clone()
+                .or_else(|| settings.browse.write()),
             extra: settings.extra.clone(),
         };
         let mut object = Map::new();
@@ -451,6 +469,7 @@ fn from_stored(stored: Stored) -> Result<(Settings, bool), StoreError> {
         },
     };
     let (playback, unknown_playback) = PlaybackSettings::read(stored.playback);
+    let (browse, unknown_browse) = BrowseSettings::read(stored.browse);
     let settings = Settings {
         device_id,
         servers: stored.servers.into_iter().map(SavedServer::from).collect(),
@@ -459,6 +478,8 @@ fn from_stored(stored: Stored) -> Result<(Settings, bool), StoreError> {
         unknown_app_theme,
         playback,
         unknown_playback,
+        browse,
+        unknown_browse,
         extra: stored.extra,
     };
     Ok((settings, made))
@@ -932,6 +953,68 @@ mod tests {
         let (store, _) = SettingsStore::open(temp.path()).unwrap();
         store.update(|s| s.last_server_key = 2).unwrap();
         assert!(read_json(temp.path()).get("playback").is_none());
+    }
+
+    #[test]
+    fn browse_settings_round_trip_and_unknown_values_stay() {
+        use crate::LibraryChoices;
+        use current_model::{ItemFilter, ItemId, ItemRef};
+        let temp = tempfile::tempdir().unwrap();
+        write_file(
+            temp.path(),
+            r#"{"version": 1, "device_id": "abc", "browse": {"remember_view": "maybe", "later": true}}"#,
+        );
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        assert!(!store.get().browse.remember_view);
+        store.update(|s| s.last_server_key = 1).unwrap();
+        assert_eq!(read_json(temp.path())["browse"]["remember_view"], "maybe");
+        let library = ItemRef::new(saved_server().server, ItemId::new("abc"));
+        store
+            .update(|s| {
+                s.browse.remember_filter = true;
+                s.browse.libraries.insert(
+                    library.clone(),
+                    LibraryChoices {
+                        filters: Some(vec![ItemFilter::FAVOURITE]),
+                        ..LibraryChoices::default()
+                    },
+                );
+            })
+            .unwrap();
+        let file = read_json(temp.path());
+        assert_eq!(file["browse"]["remember_view"], "maybe");
+        assert_eq!(file["browse"]["remember_filter"], true);
+        assert_eq!(
+            file["browse"]["libraries"]["jellyfin/1/abc"]["filter"],
+            serde_json::json!(["favourite"])
+        );
+        assert_eq!(file["browse"]["later"], true);
+        let reopened = SettingsStore::open(temp.path()).unwrap().0.get().browse;
+        assert!(reopened.remember_filter);
+        assert_eq!(
+            reopened.libraries[&library].filters,
+            Some(vec![ItemFilter::FAVOURITE])
+        );
+        // A `browse` that is not an object is kept until browse settings are changed here.
+        let temp = tempfile::tempdir().unwrap();
+        write_file(
+            temp.path(),
+            r#"{"version": 1, "device_id": "abc", "browse": [1]}"#,
+        );
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        store.update(|s| s.last_server_key = 2).unwrap();
+        assert_eq!(read_json(temp.path())["browse"], serde_json::json!([1]));
+        store.update(|s| s.browse.remember_sort = true).unwrap();
+        assert_eq!(
+            read_json(temp.path())["browse"],
+            serde_json::json!({"remember_sort": true})
+        );
+        // An older file has none, and the defaults write none.
+        let temp = tempfile::tempdir().unwrap();
+        write_file(temp.path(), r#"{"version": 1, "device_id": "abc"}"#);
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        store.update(|s| s.last_server_key = 2).unwrap();
+        assert!(read_json(temp.path()).get("browse").is_none());
     }
 
     #[test]

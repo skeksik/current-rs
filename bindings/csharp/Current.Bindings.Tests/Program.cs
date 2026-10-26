@@ -23,6 +23,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("opening reports a folder it cannot use", FlowTests.OpenReportsAFolderItCannotUse),
     ("the app theme is saved and read at the next open", FlowTests.AppThemeIsSavedAndReadAtTheNextOpen),
     ("an app theme that cannot be saved is refused", FlowTests.AppThemeThatCannotBeSavedIsRefused),
+    ("library choices are remembered while their switch is on", FlowTests.LibraryChoicesAreRememberedWhileTheirSwitchIsOn),
+    ("a library choice that cannot be saved is refused", FlowTests.LibraryChoiceThatCannotBeSavedIsRefused),
     ("adding a server and signing in with a password", FlowTests.PasswordSignInEndToEnd),
     ("a wrong password fails and saves nothing", FlowTests.WrongPasswordFails),
     ("a bad address fails with its reason", FlowTests.BadAddressFailsWithItsReason),
