@@ -13,6 +13,7 @@ mod cancel;
 mod diff;
 mod error;
 mod flows;
+mod formats;
 mod player;
 mod player_records;
 mod problems;
@@ -48,6 +49,10 @@ pub use flows::{
     DiscoveryState, DiscoveryStateListener, GatewayCookie, GatewayHeader, GatewaySignInFlow,
     GatewaySignInState, GatewaySignInStateListener, LocalInterface, NewServerInfo, SignInFlow,
     SignInState, SignInStateListener,
+};
+pub use formats::{
+    DecoderProfileFact, FormatRow, FormatSupport, FormatTab, FormatTabKind, HardwareDecodeFacts,
+    SupportedFormats,
 };
 pub use player::{
     NowPlayingListener, Player, PlayerStateListener, SwapChainHandle, SwapChainListener,

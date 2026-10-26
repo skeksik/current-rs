@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 use tokio::time::Instant;
 
+use super::KnownCapabilities;
 use super::backend::{Backend, CompositionSize, DisplayFacts, Signal, SwapChain};
 use super::now_playing::{NowPlaying, TIMELINE_INTERVAL, now_playing};
 use super::prefs::PlaybackPrefs;
@@ -34,6 +35,8 @@ pub(crate) struct Context {
     pub(crate) browse: Arc<Hub>,
     pub(crate) prefs: Arc<PlaybackPrefs>,
     pub(crate) relay: Arc<RelaySlot>,
+    /// Where each engine's capabilities are kept for Settings (ADR 0021).
+    pub(crate) capabilities: Arc<KnownCapabilities>,
 }
 
 /// The controller's clock: tokio's, so the driver's sleeps and the controller's deadlines agree.
@@ -80,6 +83,9 @@ async fn start(
                 kind: EngineErrorKind::LOADING_FAILED,
             },
         })?;
+    context
+        .capabilities
+        .remember(current_playback::Engine::capabilities(&backend));
     Ok(spawn(context, backend, raw))
 }
 
@@ -98,6 +104,9 @@ async fn start(
     // libmpv takes both as options at start; the test engine records them.
     backend.set_composition_size(size);
     backend.set_display_facts(&display);
+    context
+        .capabilities
+        .remember(current_playback::Engine::capabilities(&backend));
     Ok(spawn(context, backend, raw))
 }
 

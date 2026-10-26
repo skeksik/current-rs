@@ -35,6 +35,8 @@ open_value! {
         VP8 = "vp8",
         MPEG2 = "mpeg2video",
         VC1 = "vc1",
+        /// MPEG-4 Part 2 (DivX, Xvid).
+        MPEG4 = "mpeg4",
         AAC = "aac",
         AC3 = "ac3",
         EAC3 = "eac3",

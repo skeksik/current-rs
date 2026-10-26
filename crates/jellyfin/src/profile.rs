@@ -135,6 +135,33 @@ fn transcoding_profiles(capabilities: &EngineCapabilities) -> Vec<TranscodingPro
     .collect()
 }
 
+/// What the server converts a stream to when this device cannot play it as it is (ADR 0021, the "Supported formats" page): the codecs
+/// of the transcoding profiles [`device_profile`] sends for `capabilities`, fMP4 first, each once. Empty when no transcoding profile
+/// is sent (the engine decodes none of the targets).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TranscodeTargets {
+    pub video: Vec<Codec>,
+    pub audio: Vec<Codec>,
+}
+
+/// The transcode targets for `capabilities`, read from the profiles themselves so they cannot drift from what the server is sent.
+pub fn transcode_targets(capabilities: &EngineCapabilities) -> TranscodeTargets {
+    let mut targets = TranscodeTargets::default();
+    let add = |list: &mut Vec<Codec>, names: &str| {
+        for name in names.split(',').filter(|name| !name.is_empty()) {
+            let codec = Codec::new(name);
+            if !list.contains(&codec) {
+                list.push(codec);
+            }
+        }
+    };
+    for profile in transcoding_profiles(capabilities) {
+        add(&mut targets.video, &profile.video_codec);
+        add(&mut targets.audio, &profile.audio_codec);
+    }
+    targets
+}
+
 #[derive(Clone, Copy)]
 enum Kind {
     Video,
@@ -343,6 +370,32 @@ mod tests {
         assert_eq!(profiles.len(), 2);
         assert_eq!(profiles[0]["VideoCodec"], "h264");
         assert_eq!(profiles[0]["AudioCodec"], "aac");
+    }
+
+    #[test]
+    fn transcode_targets_are_the_profiles_codecs() {
+        let targets = transcode_targets(&mpv_windows());
+        assert_eq!(targets.video, vec![Codec::HEVC, Codec::H264]);
+        assert_eq!(
+            targets.audio,
+            vec![
+                Codec::AAC,
+                Codec::AC3,
+                Codec::EAC3,
+                Codec::OPUS,
+                Codec::FLAC,
+                Codec::MP3
+            ]
+        );
+        let mut h264_only = mpv_windows();
+        h264_only
+            .video
+            .retain(|support| support.codec == Codec::H264);
+        assert_eq!(transcode_targets(&h264_only).video, vec![Codec::H264]);
+        assert_eq!(
+            transcode_targets(&EngineCapabilities::default()),
+            TranscodeTargets::default()
+        );
     }
 
     #[test]
