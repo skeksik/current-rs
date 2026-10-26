@@ -208,11 +208,14 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
 ## Next: the loopback relay (before M4 and M3; owner, 2026-10-26)
-- [ ] A loopback relay in the core for streams with gateway credentials: the player talks to 127.0.0.1 without credentials and the
+- [x] A loopback relay in the core for streams with gateway credentials: the player talks to 127.0.0.1 without credentials and the
       relay adds them only for same-origin requests. It closes AVPlayer's header gap (ADR 0017) and enforces the same-origin rule for
       libmpv's HLS sub-requests on Windows too, replacing the playlist check (ADR 0019, "Playlists and headers", owner 2026-10-25)
-- [ ] Spike first (spike/loopback-relay): research and design, ending in an ADR with the choices for the owner; then the
+- [x] Spike first (spike/loopback-relay): research and design, ending in an ADR with the choices for the owner; then the
       implementation tasks it lists
+- ADR 0020 tasks 1 to 5 are done: PRs 74, 75, 78, 79 and test/relay-windows-check (the Windows check on the owner's PC,
+  docs/notes/relay-windows-check.md)
+- ADR 0020 task 6 (AVPlayer through the relay) moves with M3
 
 ## M4: Seerr: discover and request (Windows first, before M3; macOS with M3) (order changed by the owner, 2026-10-26)
 - [ ] Spike first: Seerr's API, sign-in through the Jellyfin session, permissions for users and managers; an ADR with the
