@@ -59,16 +59,20 @@
             </StackPanel>
             <ProgressBar x:Name="Progress" Visibility="Collapsed" Margin="8" VerticalAlignment="Bottom" Maximum="1" />
         </Grid>
-        <TextBlock
-            x:Name="TitleText"
-            Style="{StaticResource BodyTextBlockStyle}"
-            TextTrimming="CharacterEllipsis"
-            TextWrapping="NoWrap" />
-        <TextBlock
-            x:Name="SubtitleText"
-            Style="{StaticResource CaptionTextBlockStyle}"
-            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-            TextTrimming="CharacterEllipsis"
-            TextWrapping="NoWrap" />
+        <!-- The text 8 in from the item's highlight on the left, right and below; the picture stays flush with it (owner,
+             2026-10-26). -->
+        <StackPanel Margin="8,0,8,8" Spacing="4">
+            <TextBlock
+                x:Name="TitleText"
+                Style="{StaticResource BodyTextBlockStyle}"
+                TextTrimming="CharacterEllipsis"
+                TextWrapping="NoWrap" />
+            <TextBlock
+                x:Name="SubtitleText"
+                Style="{StaticResource CaptionTextBlockStyle}"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                TextTrimming="CharacterEllipsis"
+                TextWrapping="NoWrap" />
+        </StackPanel>
     </StackPanel>
 </UserControl>
