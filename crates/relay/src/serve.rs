@@ -3,11 +3,11 @@
 
 use std::sync::Arc;
 
-use current_net::GatewayShape;
 use current_net::header::{
     ACCEPT_RANGES, CONNECTION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, HOST, HeaderMap,
     HeaderValue, ORIGIN, TRANSFER_ENCODING,
 };
+use current_net::{GatewayShape, STREAM_REQUEST_HEADERS, STREAM_RESPONSE_HEADERS, StreamError};
 use hyper::body::{Body, Bytes, Incoming};
 use hyper::{Method, Request, Response, StatusCode};
 
@@ -17,10 +17,7 @@ use crate::playlist::{
     MAX_PLAYLIST_BYTES, PlaylistError, Rewriter, is_api_key, is_playlist, starts_like_playlist,
 };
 use crate::relay::{Bind, Conn, RouteEntry};
-use crate::upstream::{
-    REQUEST_HEADERS, RESPONSE_HEADERS, StreamMethod, UpstreamBody, UpstreamError, UpstreamRequest,
-    UpstreamResponse,
-};
+use crate::upstream::{StreamMethod, UpstreamBody, UpstreamRequest, UpstreamResponse};
 
 pub(crate) async fn handle(request: Request<Incoming>, conn: &Conn) -> Response<RelayBody> {
     conn.saw_request();
@@ -91,7 +88,7 @@ fn admit(
         None => Vec::new(),
     };
     let mut headers = HeaderMap::new();
-    for name in &REQUEST_HEADERS {
+    for name in &STREAM_REQUEST_HEADERS {
         for value in request.headers().get_all(name) {
             headers.append(name.clone(), value.clone());
         }
@@ -312,36 +309,36 @@ async fn read_playlist(
 
 /// The answer to a failed upstream request, after reporting it. The player sees the server's status only where it means something
 /// to a player (404, 416 and 5xx); every other failure is a 502.
-fn failed(route: &RouteEntry, error: &UpstreamError) -> Response<RelayBody> {
+fn failed(route: &RouteEntry, error: &StreamError) -> Response<RelayBody> {
     let status = match error {
-        UpstreamError::Refused { shape, .. } => {
+        StreamError::Refused { shape, .. } => {
             route.events.report(RelayEvent::Refused {
                 shape: shape.clone(),
             });
             StatusCode::BAD_GATEWAY
         }
-        UpstreamError::Status { status: 404 } => {
+        StreamError::Status { status: 404 } => {
             route.events.report(RelayEvent::NotFound);
             StatusCode::NOT_FOUND
         }
         // A range past the end: the player's own business (it probes the end of a file), not a failure of the stream.
-        UpstreamError::Status { status: 416 } => StatusCode::RANGE_NOT_SATISFIABLE,
-        UpstreamError::Status { status } => {
+        StreamError::Status { status: 416 } => StatusCode::RANGE_NOT_SATISFIABLE,
+        StreamError::Status { status } => {
             route.events.report(RelayEvent::Server { status: *status });
             StatusCode::from_u16(*status)
                 .ok()
                 .filter(StatusCode::is_server_error)
                 .unwrap_or(StatusCode::BAD_GATEWAY)
         }
-        UpstreamError::Unreachable | UpstreamError::Tls => {
+        StreamError::Unreachable | StreamError::Tls => {
             route.events.report(RelayEvent::Network);
             StatusCode::BAD_GATEWAY
         }
-        UpstreamError::Timeout => {
+        StreamError::Timeout => {
             route.events.report(RelayEvent::Network);
             StatusCode::GATEWAY_TIMEOUT
         }
-        UpstreamError::InvalidRequest => {
+        StreamError::InvalidRequest => {
             route.events.report(RelayEvent::InvalidRequest);
             StatusCode::BAD_GATEWAY
         }
@@ -362,9 +359,9 @@ fn is_html(headers: &HeaderMap) -> bool {
         })
 }
 
-/// Copies [`RESPONSE_HEADERS`]. For a playlist, without the length, entity tag and ranges of the text before rewriting.
+/// Copies [`STREAM_RESPONSE_HEADERS`]. For a playlist, without the length, entity tag and ranges of the text before rewriting.
 fn copy_headers(from: &HeaderMap, to: &mut HeaderMap, playlist: bool) {
-    for name in &RESPONSE_HEADERS {
+    for name in &STREAM_RESPONSE_HEADERS {
         if playlist
             && (name == CONTENT_LENGTH
                 || name == ETAG

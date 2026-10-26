@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use current_net::header::{HeaderMap, HeaderName, HeaderValue};
-use current_net::{GatewayShape, Url};
+use current_net::{GatewayShape, StreamError, Url};
 use current_relay::{
     Bytes, Relay, RelayEvent, Route, RouteConfig, StreamMethod, Upstream, UpstreamBody,
-    UpstreamError, UpstreamFuture, UpstreamRequest, UpstreamResponse,
+    UpstreamFuture, UpstreamRequest, UpstreamResponse,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -19,7 +19,7 @@ use tokio::time::{sleep, timeout};
 const BASE: &str = "https://media.example.com/jf/";
 const WAIT: Duration = Duration::from_secs(10);
 
-type Answer = dyn Fn(&UpstreamRequest) -> Result<UpstreamResponse, UpstreamError> + Send + Sync;
+type Answer = dyn Fn(&UpstreamRequest) -> Result<UpstreamResponse, StreamError> + Send + Sync;
 
 /// An upstream that records what it was sent and answers with a closure.
 struct Fake {
@@ -29,7 +29,7 @@ struct Fake {
 
 impl Fake {
     fn new(
-        answer: impl Fn(&UpstreamRequest) -> Result<UpstreamResponse, UpstreamError>
+        answer: impl Fn(&UpstreamRequest) -> Result<UpstreamResponse, StreamError>
         + Send
         + Sync
         + 'static,
@@ -519,22 +519,22 @@ async fn refusals_and_failures_upstream_are_reported_once_per_route() {
     let upstream = Fake::new(|request| {
         let kind = request.path.rsplit('/').next().unwrap_or("");
         match kind {
-            "basic" => Err(UpstreamError::Refused {
+            "basic" => Err(StreamError::Refused {
                 status: 401,
                 shape: GatewayShape::Password {
                     realm: Some("a gateway".into()),
                 },
             }),
-            "forbidden" => Err(UpstreamError::Refused {
+            "forbidden" => Err(StreamError::Refused {
                 status: 403,
                 shape: GatewayShape::Refused,
             }),
-            "redirect" => Err(UpstreamError::Refused {
+            "redirect" => Err(StreamError::Refused {
                 status: 302,
                 shape: GatewayShape::SignIn,
             }),
             "ok-redirect" => Ok(answer(302, &[("location", "https://192.168.1.10/")], "")),
-            "proxy" => Err(UpstreamError::Status { status: 407 }),
+            "proxy" => Err(StreamError::Status { status: 407 }),
             "unsatisfiable" => Ok(answer(
                 416,
                 &[("content-range", "bytes */10"), ("content-length", "0")],
@@ -545,12 +545,12 @@ async fn refusals_and_failures_upstream_are_reported_once_per_route() {
                 &[("content-type", "text/html; charset=utf-8")],
                 "<html>",
             )),
-            "missing" => Err(UpstreamError::Status { status: 404 }),
-            "past-the-end" => Err(UpstreamError::Status { status: 416 }),
-            "broken" => Err(UpstreamError::Status { status: 500 }),
-            "offline" => Err(UpstreamError::Unreachable),
-            "unbuildable" => Err(UpstreamError::InvalidRequest),
-            _ => Err(UpstreamError::Timeout),
+            "missing" => Err(StreamError::Status { status: 404 }),
+            "past-the-end" => Err(StreamError::Status { status: 416 }),
+            "broken" => Err(StreamError::Status { status: 500 }),
+            "offline" => Err(StreamError::Unreachable),
+            "unbuildable" => Err(StreamError::InvalidRequest),
+            _ => Err(StreamError::Timeout),
         }
     });
     let mut setup = setup(upstream.clone());

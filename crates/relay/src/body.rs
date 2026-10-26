@@ -9,7 +9,9 @@ use std::task::{Context, Poll};
 use hyper::body::{Body, Bytes, Frame};
 
 use crate::events::{RelayEvent, RouteEvents};
-use crate::upstream::{UpstreamBody, UpstreamError};
+use current_net::StreamError;
+
+use crate::upstream::UpstreamBody;
 
 /// The upstream body broke off; the player's connection is closed. No detail: it could name the server.
 #[derive(Debug, thiserror::Error)]
@@ -17,7 +19,7 @@ use crate::upstream::{UpstreamBody, UpstreamError};
 pub(crate) struct BodyError;
 
 type Next = Pin<
-    Box<dyn Future<Output = (Box<dyn UpstreamBody>, Result<Option<Bytes>, UpstreamError>)> + Send>,
+    Box<dyn Future<Output = (Box<dyn UpstreamBody>, Result<Option<Bytes>, StreamError>)> + Send>,
 >;
 
 pub(crate) enum RelayBody {
