@@ -47,7 +47,7 @@ public sealed partial class ItemTile : UserControl
             }
             _placeholder.Recycle();
             _artwork.Recycle();
-            if (Artwork.Source is null)
+            if (Artwork.ImageSource is null)
             {
                 _shown = null;
             }
@@ -163,8 +163,8 @@ public sealed partial class ItemTile : UserControl
         _shown = null;
         _placeholder.Recycle();
         _artwork.Recycle();
-        Placeholder.Source = null;
-        Artwork.Source = null;
+        Placeholder.ImageSource = null;
+        Artwork.ImageSource = null;
         // Before the tile is in a window there is no scale to size the request by: Loaded binds again.
         if (art is null || XamlRoot is null || double.IsNaN(Root.Width))
         {
@@ -181,14 +181,14 @@ public sealed partial class ItemTile : UserControl
         _ = LoadAsync(_artwork, Artwork, new ImageRequest(new ImageSource.Server(art.Image), width, height), art.Image);
     }
 
-    private async Task LoadAsync(TileImage loader, Image target, ImageRequest request, ImageRef image)
+    private async Task LoadAsync(TileImage loader, Microsoft.UI.Xaml.Media.ImageBrush target, ImageRequest request, ImageRef image)
     {
         try
         {
             var bitmap = await loader.LoadAsync(request);
             if (bitmap is not null && _shown == image)
             {
-                target.Source = bitmap;
+                target.ImageSource = bitmap;
             }
         }
         catch (ImageLoadException)

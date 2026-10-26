@@ -14,8 +14,20 @@
             Background="{ThemeResource ControlFillColorSecondaryBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="1">
-            <Image x:Name="Placeholder" Stretch="UniformToFill" />
-            <Image x:Name="Artwork" Stretch="UniformToFill" />
+            <!-- The pictures as image brushes of rounded borders: a panel's CornerRadius rounds its own background and border but
+                 does not clip an Image in it, whose corners stayed square (owner's run, 2026-10-26). 4 px: "In-page elements such as
+                 buttons and list backplates are rounded using a 4px corner radius" ("Geometry in Windows 11", learn.microsoft.com,
+                 ms.date 2021-06-24, read 2026-10-26), ControlCornerRadius. -->
+            <Border CornerRadius="{StaticResource ControlCornerRadius}">
+                <Border.Background>
+                    <ImageBrush x:Name="Placeholder" Stretch="UniformToFill" />
+                </Border.Background>
+            </Border>
+            <Border CornerRadius="{StaticResource ControlCornerRadius}">
+                <Border.Background>
+                    <ImageBrush x:Name="Artwork" Stretch="UniformToFill" />
+                </Border.Background>
+            </Border>
             <!-- A slot whose page failed: the grid's message above offers Retry. -->
             <FontIcon
                 x:Name="FailedGlyph"
