@@ -63,8 +63,8 @@ pub use player::{
 /// `current-playback`'s values that the player publishes.
 pub mod playback {
     pub use current_playback::{
-        AutoSkip, NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, QualityMemory,
-        QualityOption, Track, quality_options,
+        AutoSkip, NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, QualityOption,
+        QualityPreference, Track, quality_options, snap_quality,
     };
 }
 pub use sign_in::{SignIn, SignInError, SignInState};
@@ -463,6 +463,22 @@ impl App {
     /// The settings could not be saved; the setting stands for this run.
     pub fn set_auto_skip(&self, kinds: Vec<String>) -> Result<(), StoreError> {
         self.playback.set_auto_skip(&self.shared, kinds)
+    }
+
+    /// Settings → Playback's "Preferred quality": the most each item plays at, on local and internet addresses alike; "Maximum" by
+    /// default. Each item plays at the highest entry of its quality menu that is not above it (`current_playback::snap_quality`); a
+    /// quality picked in the player changes only the item playing (owner, 2026-10-27).
+    pub fn preferred_quality(&self) -> playback::Quality {
+        self.playback.preferred_quality()
+    }
+
+    /// Sets the preferred quality and saves it; it applies from the next item played. Blocking file I/O: call it off the async
+    /// runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved; the setting stands for this run.
+    pub fn set_preferred_quality(&self, preferred: playback::Quality) -> Result<(), StoreError> {
+        self.playback.set_preferred_quality(&self.shared, preferred)
     }
 
     /// Settings → Playback's "Show resolution in quality menu": whether the quality menu names the resolution each choice gives

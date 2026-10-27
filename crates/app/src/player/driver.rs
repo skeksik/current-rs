@@ -141,7 +141,7 @@ fn spawn<B: Backend>(context: Context, backend: B, raw: mpsc::UnboundedReceiver<
         backend,
         JellyfinMedia::new(context.shared.clone(), context.relay.clone(), relay_events),
         clock,
-        context.prefs.quality(),
+        context.prefs.quality_preference(),
         initial_skip,
     );
     let driver = Driver {
@@ -245,6 +245,10 @@ impl<B: Backend> Driver<B> {
                 Some(command) => Wake::Command(command),
                 None => self.wait(&mut commands).await,
             };
+            // Settings' quality choices as they are now, for the next item played (by the user or the autoplay countdown); the item
+            // playing keeps its quality.
+            self.controller
+                .set_quality_preference(self.context.prefs.quality_preference());
             match wake {
                 Wake::Command(Command::Close(done)) => {
                     self.close().await;
@@ -529,11 +533,6 @@ impl<B: Backend> Driver<B> {
             match event {
                 PlayerEvent::State(status) => self.publish_status(*status),
                 PlayerEvent::Stopped { item, .. } => self.context.browse.playback_stopped(&item),
-                PlayerEvent::QualityChanged { local, quality } => {
-                    self.context
-                        .prefs
-                        .save_quality(&self.context.shared, local, quality);
-                }
             }
         }
         // A play of the next episode (by the user or the countdown) replaced the item: its details and artwork load in the background,

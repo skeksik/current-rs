@@ -17,7 +17,7 @@ use current_model::{
 use crate::clock::Clock;
 use crate::engine::{EndReason, Engine, EngineEvent, EngineFile, EngineTrack, ExternalSubtitle};
 use crate::planner::{self, Planned};
-use crate::quality::{Quality, QualityMemory};
+use crate::quality::{Quality, QualityPreference, snap_quality};
 use crate::server::{MediaServer, ProgressReport, StopReport, TranscodePermissions};
 use crate::status::{AutoSkip, NextEpisode, PlaybackDetails, PlayerEvent, PlayerStatus, Track};
 
@@ -51,6 +51,9 @@ enum Phase {
 #[derive(Debug)]
 struct Session {
     item: ItemRef,
+    /// The quality limit in use: the preferred quality until the first plan, then the entry of the item's quality menu it snapped to
+    /// ([`snap_quality`]), or the user's pick, which only this item keeps.
+    quality: Quality,
     planned: Option<Planned>,
     /// Notes when no plan came out.
     notes: Vec<crate::planner::PlanNote>,
@@ -91,9 +94,10 @@ struct Session {
 }
 
 impl Session {
-    fn new(item: ItemRef, start: Duration, now: Duration) -> Self {
+    fn new(item: ItemRef, quality: Quality, start: Duration, now: Duration) -> Self {
         Self {
             item,
+            quality,
             planned: None,
             notes: Vec::new(),
             position: start,
@@ -185,7 +189,7 @@ pub struct Controller<E, S, C> {
     engine: E,
     server: S,
     clock: C,
-    quality: QualityMemory,
+    quality: QualityPreference,
     auto_skip: AutoSkip,
     phase: Phase,
     session: Option<Session>,
@@ -198,12 +202,12 @@ pub struct Controller<E, S, C> {
 }
 
 impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
-    /// A controller with the remembered quality and the auto-skip setting, both loaded by the composition root.
+    /// A controller with Settings' quality choices and the auto-skip setting, both loaded by the composition root.
     pub fn new(
         engine: E,
         server: S,
         clock: C,
-        quality: QualityMemory,
+        quality: QualityPreference,
         auto_skip: AutoSkip,
     ) -> Self {
         Self {
@@ -240,8 +244,13 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         std::mem::take(&mut self.events)
     }
 
-    pub fn quality_memory(&self) -> QualityMemory {
+    pub fn quality_preference(&self) -> QualityPreference {
         self.quality
+    }
+
+    /// Settings' quality choices changed: they apply from the next item played, not to the one playing.
+    pub fn set_quality_preference(&mut self, quality: QualityPreference) {
+        self.quality = quality;
     }
 
     pub fn set_auto_skip(&mut self, auto_skip: AutoSkip) {
@@ -325,13 +334,18 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             self.engine.stop();
             self.end_item(false).await;
         }
-        self.session = Some(Session::new(item.clone(), start, self.clock.now()));
+        self.session = Some(Session::new(
+            item.clone(),
+            self.quality.preferred,
+            start,
+            self.clock.now(),
+        ));
         let permissions = self.server.permissions().await.unwrap_or_default();
         if let Some(session) = &mut self.session {
             session.permissions = permissions;
         }
         if let Err(problem) = self
-            .plan_and_load(None, start, TrackChoice::default(), true, Vec::new())
+            .plan_and_load(None, start, TrackChoice::default(), true, Vec::new(), true)
             .await
         {
             self.fail(problem).await;
@@ -601,15 +615,16 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         true
     }
 
-    /// Sets the quality for the kind of address in use, remembers it, and plays on at the position with it.
+    /// Sets the quality of the item playing, as picked (no snapping), and plays on at the position with it. Only this item keeps it:
+    /// the next plays at the preferred quality again (owner, 2026-10-27).
     pub async fn set_quality(&mut self, quality: Quality) {
-        let local = self.server.is_local_address();
-        if self.quality.for_address(local) == quality {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        if session.quality == quality {
             return;
         }
-        self.quality.set(local, quality);
-        self.events
-            .push(PlayerEvent::QualityChanged { local, quality });
+        session.quality = quality;
         if self.phase == Phase::Active {
             let tracks = self
                 .session
@@ -856,8 +871,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         self.fail(PlaybackProblem::Network).await;
     }
 
+    /// The item's quality in use, else the preferred one.
     fn current_quality(&self) -> Quality {
-        self.quality.for_address(self.server.is_local_address())
+        self.session
+            .as_ref()
+            .map_or(self.quality.preferred, |session| session.quality)
     }
 
     fn countdown(&self, session: &Session) -> Option<u32> {
@@ -869,14 +887,20 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         )
     }
 
-    /// Asks the server for a plan for the session's item and loads it. On a problem the caller fails.
+    /// Asks the server for a plan for the session's item at its quality and loads it. On a problem the caller fails.
+    ///
+    /// `snap`: the session's quality is the preferred one, which becomes the entry of the planned version's quality menu that is not
+    /// above it ([`snap_quality`]); the version's bitrate is known only from the server's answer. When that entry has the server send
+    /// something else ([`Quality::sends_same`]), the plan is asked for once more, for the same version, at the entry; else the plan
+    /// stands. Either way the engine loads once.
     async fn plan_and_load(
         &mut self,
-        media_source: Option<String>,
+        mut media_source: Option<String>,
         start: Duration,
         tracks: TrackChoice,
         direct_play: bool,
         own: Vec<RouteReason>,
+        mut snap: bool,
     ) -> Result<(), PlaybackProblem> {
         self.phase = Phase::Preparing;
         self.publish(true);
@@ -884,33 +908,46 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             return Ok(());
         };
         let item = session.item.clone();
+        let mut quality = session.quality;
         let local = self.server.is_local_address();
-        let request = planner::request(
-            media_source,
-            start,
-            tracks,
-            self.quality.for_address(local),
-            direct_play,
-        );
         let capabilities = self.engine.capabilities();
-        let answer = self
-            .server
-            .playback_info(&item, &request, &capabilities)
-            .await;
+        let planned = loop {
+            let request =
+                planner::request(media_source.clone(), start, tracks, quality, direct_play);
+            let answer = self
+                .server
+                .playback_info(&item, &request, &capabilities)
+                .await;
+            let Some(session) = &mut self.session else {
+                return Ok(());
+            };
+            let answer = match answer {
+                Ok(answer) => answer,
+                Err(problem) => {
+                    if matches!(problem, PlaybackProblem::NotPlayable { .. }) {
+                        session.notes = planner::not_playable_notes(&session.permissions);
+                    }
+                    session.planned = None;
+                    return Err(problem);
+                }
+            };
+            let planned = planner::plan(&item, &request, answer, &own, &session.permissions, local);
+            if !snap {
+                break planned;
+            }
+            snap = false;
+            let source = &planned.plan.source;
+            let snapped = snap_quality(quality, Some(source), self.quality.all);
+            session.quality = snapped;
+            if snapped.sends_same(quality, source.bitrate) {
+                break planned;
+            }
+            quality = snapped;
+            media_source = Some(source.id.clone());
+        };
         let Some(session) = &mut self.session else {
             return Ok(());
         };
-        let answer = match answer {
-            Ok(answer) => answer,
-            Err(problem) => {
-                if matches!(problem, PlaybackProblem::NotPlayable { .. }) {
-                    session.notes = planner::not_playable_notes(&session.permissions);
-                }
-                session.planned = None;
-                return Err(problem);
-            }
-        };
-        let planned = planner::plan(&item, &request, answer, &own, &session.permissions, local);
         let hls = matches!(
             planned.plan.route,
             Route::ServerStream {
@@ -989,7 +1026,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             Vec::new()
         };
         if let Err(problem) = self
-            .plan_and_load(media_source, start, tracks, !fallback, own)
+            .plan_and_load(media_source, start, tracks, !fallback, own, false)
             .await
         {
             self.fail(problem).await;
@@ -1025,6 +1062,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 tracks,
                 false,
                 vec![RouteReason::FALLBACK_AFTER_ENGINE_ERROR],
+                false,
             )
             .await
         {

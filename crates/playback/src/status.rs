@@ -1,5 +1,5 @@
-//! What the controller publishes: the player's state for the UI, the "stopped" event for the rest of the app, the remembered quality
-//! and the playback information. No URL, token, cookie or header value is in any of these.
+//! What the controller publishes: the player's state for the UI, the "stopped" event for the rest of the app, and the playback
+//! information. No URL, token, cookie or header value is in any of these.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -107,7 +107,8 @@ pub struct PlayerStatus {
     /// The segment under the position, for its skip button.
     pub segment: Option<Segment>,
     pub next: Option<NextEpisode>,
-    /// The quality limit for the address in use.
+    /// The quality limit in use: the entry of the item's quality menu it plays at, or the user's pick for it; the preferred quality
+    /// while no item is playing.
     pub quality: Quality,
     pub volume: u8,
     pub muted: bool,
@@ -123,11 +124,6 @@ pub enum PlayerEvent {
         item: ItemRef,
         position: Duration,
         failed: bool,
-    },
-    /// The user picked a quality; the composition root saves it for that kind of address.
-    QualityChanged {
-        local: bool,
-        quality: Quality,
     },
 }
 

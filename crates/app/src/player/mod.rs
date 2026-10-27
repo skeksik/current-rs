@@ -8,7 +8,8 @@
 //!   stream's relay route (ADR 0020; a refusal after the 401 rule has run in the background), and sleeps until the controller's next
 //!   deadline otherwise;
 //! - it publishes the state (at most 4 a second for the position, at once on any other change: the controller's rate), the media
-//!   controls' value and the swap chain to watch channels, tells browse when an item stopped, and saves a picked quality.
+//!   controls' value and the swap chain to watch channels, and tells browse when an item stopped;
+//! - it gives the controller Settings' quality choices for each item played (a quality picked in the player is not saved).
 //!
 //! Closing (or dropping the handle) stops the item, which reports it stopped (best effort, with `current-jellyfin`'s short timeout),
 //! gives the swap chain back and shuts the engine down on the blocking pool (ADR 0007's order).
@@ -273,7 +274,8 @@ impl Player {
         self.act(PlayerAction::SelectSubtitle(choice)).await
     }
 
-    /// The quality for the kind of address in use; remembered for that kind (local or internet) in the settings.
+    /// The quality of the item playing, as picked; plays on at the position with it. Not saved: the next item plays at the preferred
+    /// quality ([`crate::App::preferred_quality`]).
     pub async fn set_quality(&self, quality: Quality) -> Result<(), PlayerError> {
         self.act(PlayerAction::SetQuality(quality)).await
     }
