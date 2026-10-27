@@ -459,7 +459,8 @@ public sealed partial class LibraryPage : Page, IRefreshable
 
     /// <summary>Whether two queries sort and filter alike (the records compare their lists by reference).</summary>
     private static bool SameChoices(ItemQuery a, ItemQuery b) =>
-        a.Sort.SequenceEqual(b.Sort) && a.Order == b.Order && a.Filters.SequenceEqual(b.Filters) && a.SearchTerm == b.SearchTerm;
+        a.Kinds.SequenceEqual(b.Kinds) && a.Sort.SequenceEqual(b.Sort) && a.Order == b.Order && a.Filters.SequenceEqual(b.Filters)
+        && a.SearchTerm == b.SearchTerm;
 
     /// <summary>A new field, order or filter: a new query, which resets the grid to the top.</summary>
     private void Choose(Func<ItemQuery, ItemQuery> change)
