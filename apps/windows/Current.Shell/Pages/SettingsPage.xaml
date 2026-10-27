@@ -146,6 +146,56 @@
                             Click="OnAddServer" />
                         <InfoBar x:Name="AccountsInfo" Margin="0,8,0,0" IsOpen="False" />
 
+                        <!-- Libraries: whether each library opens with the sort, filter and view last chosen there, each off by default
+                             (owner, 2026-10-26); the core keeps the choices and the rule. Switches in SettingsCards, as Playback's. Icons:
+                             the library page's own, Segoe Fluent Icons E8CB "Sort", E71C "Filter" and F0E2 "GridView" ("Segoe Fluent
+                             Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26). -->
+                        <TextBlock
+                            Style="{StaticResource BodyStrongTextBlockStyle}"
+                            Margin="0,24,0,4"
+                            AutomationProperties.HeadingLevel="Level2"
+                            Text="Libraries" />
+                        <toolkit:SettingsCard
+                            Header="Remember sort"
+                            Description="Each library opens sorted as you last sorted it"
+                            AutomationProperties.Name="Remember sort">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xE8CB;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <ToggleSwitch
+                                x:Name="RememberSortSwitch"
+                                AutomationProperties.Name="Remember sort"
+                                IsEnabled="False"
+                                Toggled="OnRememberToggled" />
+                        </toolkit:SettingsCard>
+                        <toolkit:SettingsCard
+                            Header="Remember filter"
+                            Description="Each library opens with the filter you last chose there"
+                            AutomationProperties.Name="Remember filter">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xE71C;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <ToggleSwitch
+                                x:Name="RememberFilterSwitch"
+                                AutomationProperties.Name="Remember filter"
+                                IsEnabled="False"
+                                Toggled="OnRememberToggled" />
+                        </toolkit:SettingsCard>
+                        <toolkit:SettingsCard
+                            Header="Remember view"
+                            Description="Each library opens with the view you last chose there"
+                            AutomationProperties.Name="Remember view">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xF0E2;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <ToggleSwitch
+                                x:Name="RememberViewSwitch"
+                                AutomationProperties.Name="Remember view"
+                                IsEnabled="False"
+                                Toggled="OnRememberToggled" />
+                        </toolkit:SettingsCard>
+                        <InfoBar x:Name="LibrariesInfo" Margin="0,8,0,0" IsOpen="False" />
+
                         <!-- Playback (ADR 0019, owner's choice 8): skip intros and credits automatically, off by default, a switch in a
                              SettingsCard as Personalization's combo is ("Guidelines for app settings", learn.microsoft.com, ms.date
                              2026-04-08, read 2026-10-23). The core saves it and open players follow at once. It only acts where the server
@@ -168,6 +218,56 @@
                                 AutomationProperties.Name="Skip intros and credits automatically"
                                 IsEnabled="False"
                                 Toggled="OnAutoSkipToggled" />
+                        </toolkit:SettingsCard>
+                        <!-- Preferred quality (owner, 2026-10-27; ADR 0019, choice 10 as amended): Original or a step of the quality
+                             menu; each item plays at the highest entry of its own menu not above it. The two switches below decide
+                             which entries the list shows and how they are named, as they do for the player's menu. A ComboBox in a
+                             SettingsCard, as the theme's above. Icon: Segoe Fluent Icons E713 "Settings", the player's Quality
+                             button's ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-25). -->
+                        <toolkit:SettingsCard
+                            Header="Preferred quality"
+                            Description="The most each video plays at; Original plays every file as it is"
+                            AutomationProperties.Name="Preferred quality">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xE713;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <ComboBox
+                                x:Name="PreferredQualityBox"
+                                AutomationProperties.Name="Preferred quality"
+                                IsEnabled="False"
+                                SelectionChanged="OnPreferredQualityChanged" />
+                        </toolkit:SettingsCard>
+                        <!-- The quality menu names each choice's resolution as well as its bitrate ("1080p · 20 Mbit/s"), on
+                             by default (owner, 2026-10-26). Icon: Segoe Fluent Icons E713 "Settings", the player's Quality button's
+                             ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-25). -->
+                        <toolkit:SettingsCard
+                            Header="Show resolution in quality menu"
+                            Description="For example 1080p · 20 Mbit/s"
+                            AutomationProperties.Name="Show resolution in quality menu">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xE713;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <ToggleSwitch
+                                x:Name="QualityResolutionSwitch"
+                                AutomationProperties.Name="Show resolution in quality menu"
+                                IsEnabled="False"
+                                Toggled="OnQualityResolutionToggled" />
+                        </toolkit:SettingsCard>
+                        <!-- Every step below the original's bitrate, not only the common resolutions; off by default (owner,
+                             2026-10-26). Icon: Segoe Fluent Icons EA37 "List" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date
+                             2026-10-13, read 2026-10-26). -->
+                        <toolkit:SettingsCard
+                            Header="Show all quality options"
+                            Description="Every bitrate below the original's, not only 4K, 1080p, 720p and 480p"
+                            AutomationProperties.Name="Show all quality options">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xEA37;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <ToggleSwitch
+                                x:Name="AllQualitiesSwitch"
+                                AutomationProperties.Name="Show all quality options"
+                                IsEnabled="False"
+                                Toggled="OnAllQualitiesToggled" />
                         </toolkit:SettingsCard>
                         <!-- Supported formats (ADR 0021, owner's decision 2026-10-26): a page inside Settings, opened from a clickable
                              card with the chevron, as Windows Settings opens its nested pages. "Setting the IsClickEnabled property to true

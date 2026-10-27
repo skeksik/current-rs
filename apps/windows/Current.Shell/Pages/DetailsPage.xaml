@@ -126,8 +126,10 @@
 
                 <StackPanel x:Name="PeoplePart" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="Cast and crew" />
+                    <!-- The bottom padding keeps the scroll bar 4 below the cards, as on Home (HomePage.xaml). -->
                     <GridView
                         x:Name="People"
+                        Padding="0,0,0,16"
                         SelectionMode="None"
                         ItemTemplate="{StaticResource PersonTemplate}"
                         ItemsPanel="{StaticResource RowPanel}"
@@ -140,8 +142,10 @@
 
                 <StackPanel x:Name="SimilarPart" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="More like this" />
+                    <!-- The bottom padding keeps the scroll bar 4 below the cards, as on Home (HomePage.xaml). -->
                     <GridView
                         x:Name="Similar"
+                        Padding="0,0,0,16"
                         ItemTemplate="{StaticResource PosterTileTemplate}"
                         ItemsPanel="{StaticResource RowPanel}"
                         ScrollViewer.HorizontalScrollMode="Enabled"

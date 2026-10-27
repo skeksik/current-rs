@@ -9,6 +9,37 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+            <!-- The shade under a tile's progress (ItemTile.xaml): clear at its top, 60 % black just above the glyphs' top (0.45 of
+                 its 44; the time's glyphs start at about 0.48) and 80 % at the bottom: SystemAltMediumColor and
+                 SystemAltMediumHighColor in the dark theme the tile shows it in (generic.xaml of Microsoft.WindowsAppSDK.WinUI 2.3.9).
+                 Text needs "a minimum luminance contrast ratio of 4.5:1" ("Accessible text requirements", learn.microsoft.com,
+                 ms.date 2026-08-21, read 2026-10-26). Measured where it is lowest, at the lightest background pixel beside the time's
+                 glyphs at their top row (WCAG relative luminance of the pixel, white text; a 150 % capture of the owner's run on a
+                 light poster, 2026-10-27): 6.6:1; over a pure white poster the shade's 61 % there gives about 6.0:1 (computed). The
+                 first shade (30 % black throughout) left about 2.1:1; 40 % at 0.36 measured 4.7:1 at the shade's middle but only
+                 about 3.6:1 at the glyphs' top. The clear end is transparent black (SystemControlTransparentColor, #00000000):
+                 "Transparent" is transparent white, and the fade from it to black passed through a see-through grey that lightened
+                 the picture in a line above the bar. High contrast uses the system's window colour (SystemColorWindowColorBrush),
+                 whole, under the window text colour: its alt and smoke colours are not meant for this there. -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <LinearGradientBrush x:Key="TileScrimBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Offset="0" Color="{ThemeResource SystemControlTransparentColor}" />
+                        <GradientStop Offset="0.45" Color="{ThemeResource SystemAltMediumColor}" />
+                        <GradientStop Offset="1" Color="{ThemeResource SystemAltMediumHighColor}" />
+                    </LinearGradientBrush>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Light">
+                    <LinearGradientBrush x:Key="TileScrimBrush" StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Offset="0" Color="{ThemeResource SystemControlTransparentColor}" />
+                        <GradientStop Offset="0.45" Color="{ThemeResource SystemAltMediumColor}" />
+                        <GradientStop Offset="1" Color="{ThemeResource SystemAltMediumHighColor}" />
+                    </LinearGradientBrush>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <StaticResource x:Key="TileScrimBrush" ResourceKey="SystemColorWindowColorBrush" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
 
             <!-- Every page: its title over one column, centred, up to PageMaxWidth, as the WinUI Gallery's settings page lays out its
                  title and column (docs/notes/windows-shell.md, "Page layout"). Each page puts the column in a plain Border inside its
@@ -64,6 +95,13 @@
             </DataTemplate>
             <DataTemplate x:Key="WideTileTemplate">
                 <browsing:ItemTile Shape="Wide" TileWidth="{StaticResource WideTileWidth}" />
+            </DataTemplate>
+            <!-- The picture only: a library's View menu with Show titles off. -->
+            <DataTemplate x:Key="PosterPictureTemplate">
+                <browsing:ItemTile Shape="Poster" ShowsText="False" TileWidth="{StaticResource PosterTileWidth}" />
+            </DataTemplate>
+            <DataTemplate x:Key="WidePictureTemplate">
+                <browsing:ItemTile Shape="Wide" ShowsText="False" TileWidth="{StaticResource WideTileWidth}" />
             </DataTemplate>
             <DataTemplate x:Key="EpisodeTileTemplate">
                 <browsing:ItemTile Shape="Wide" ShowsSeries="False" TileWidth="{StaticResource WideTileWidth}" />

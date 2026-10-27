@@ -170,6 +170,6 @@ pub trait MediaServer {
     /// if any, is removed, which closes the engine's open connections to it.
     fn end_stream(&self);
 
-    /// Whether the address in use is a local one, for the remembered quality.
+    /// Whether the address in use is a local one, for the plan's notes (the server's limit for remote addresses).
     fn is_local_address(&self) -> bool;
 }

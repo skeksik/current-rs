@@ -418,6 +418,80 @@ async fn an_optimistic_change_shows_in_every_live_list_and_rolls_back_on_failure
 }
 
 #[tokio::test]
+async fn a_list_chosen_by_marks_reads_again_when_a_mark_changes() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    // The Favorites tab: an item that becomes a favourite must join it, so the list reads again (the owner's run, 2026-10-26).
+    let favourites = browse.open_items(current_app::favourites_query(None));
+    eventually(|| favourites.state().borrow().total > 0).await;
+    let reads = stand_in.count("/Items");
+    browse.set_favourite(&item(&server, FILM_IDS[1]), true);
+    eventually(|| stand_in.count("/Items") > reads).await;
+}
+
+#[tokio::test]
+async fn a_list_not_chosen_by_marks_does_not_read_again_on_a_favourite() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    // Every film by name: a favourite changes how one shows, not which are listed. A Favourites list beside it reads again, so the
+    // reload a second after the mark has happened when the count is checked.
+    let films = browse.open_items(current_app::kind_query(MediaKind::MOVIE));
+    let favourites = browse.open_items(current_app::favourites_query(Some(MediaKind::MOVIE)));
+    eventually(|| films.state().borrow().total > 0 && favourites.state().borrow().total > 0).await;
+    let reads = stand_in.count("/Items");
+    browse.set_favourite(&item(&server, FILM_IDS[1]), true);
+    eventually(|| stand_in.count("/Items") > reads).await;
+    // Past the one-second wait for more marks, and then some: only the Favourites list read again.
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert_eq!(stand_in.count("/Items"), reads + 1);
+}
+
+#[tokio::test]
+async fn the_favourites_tab_is_a_row_per_kind_read_again_when_a_mark_changes() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let favourites = browse.favourites();
+    // The stand-in's item list takes no filter: every film, series and episode is in its row here, in the rows' order.
+    eventually(|| favourites.groups().len() == 3 && !favourites.state().borrow().loading).await;
+    assert_eq!(
+        favourites.groups().snapshot(),
+        [MediaKind::MOVIE, MediaKind::SERIES, MediaKind::EPISODE]
+    );
+    assert_eq!(favourites.group(&MediaKind::MOVIE).unwrap().len(), 3);
+    assert_eq!(favourites.group(&MediaKind::SERIES).unwrap().len(), 1);
+    let episodes = favourites.group(&MediaKind::EPISODE).unwrap();
+    assert_eq!(episodes.len(), 2);
+    assert!(favourites.group(&MediaKind::BOX_SET).is_none());
+
+    // A favourite mark, then a played one: each reads the rows again (one request per row), a second later.
+    for played in [false, true] {
+        let reads = stand_in.count("/Items");
+        if played {
+            browse.set_played(&item(&server, EPISODE_IDS[0]), true);
+        } else {
+            browse.set_favourite(&item(&server, FILM_IDS[1]), true);
+        }
+        eventually(|| stand_in.count("/Items") >= reads + 3).await;
+    }
+    // The rows kept their lists: a UI's subscriptions go on.
+    eventually(|| !favourites.state().borrow().loading).await;
+    assert!(Arc::ptr_eq(
+        &episodes,
+        &favourites.group(&MediaKind::EPISODE).unwrap()
+    ));
+    assert_eq!(
+        played(&episodes, &item(&server, EPISODE_IDS[0])),
+        Some(true)
+    );
+}
+
+#[tokio::test]
 async fn play_starts_the_item_or_the_series_next_episode() {
     let stand_in = StandIn::start().await.unwrap();
     let app = App::new();
@@ -649,11 +723,19 @@ async fn rows_without_items_are_absent_and_a_failed_row_offers_retry() {
         .into_iter()
         .map(|row| row.key)
         .collect();
+    // The rows across every library come from the stand-in's item list, which takes no filter: here they only need to be in
+    // their places.
     assert_eq!(
         keys,
-        ["resume".to_owned(), format!("latest:{FILMS_LIBRARY_ID}")]
+        [
+            "resume".to_owned(),
+            "favourites".to_owned(),
+            "recently_added".to_owned(),
+            format!("latest:{FILMS_LIBRARY_ID}"),
+            "seen_recently".to_owned(),
+        ]
     );
-    let latest = &home.rows().snapshot()[1];
+    let latest = &home.rows().snapshot()[3];
     assert_eq!(latest.kind, HomeRowKind::Latest);
     assert_eq!(latest.title, "Example Films");
     assert_eq!(
@@ -662,10 +744,10 @@ async fn rows_without_items_are_absent_and_a_failed_row_offers_retry() {
         "the excluded library is not asked"
     );
 
-    // Retry: "next up" answers and takes its place, between "continue watching" and "latest".
+    // Retry: "next up" answers and takes its place, right after "continue watching".
     stand_in.unfail("/Shows/NextUp");
     home.retry();
-    eventually(|| home.rows().len() == 3).await;
+    eventually(|| home.rows().len() == 6).await;
     eventually(|| home.state().borrow().failed.is_none()).await;
     let kinds: Vec<HomeRowKind> = home
         .rows()
@@ -678,7 +760,10 @@ async fn rows_without_items_are_absent_and_a_failed_row_offers_retry() {
         [
             HomeRowKind::ContinueWatching,
             HomeRowKind::NextUp,
-            HomeRowKind::Latest
+            HomeRowKind::Favourites,
+            HomeRowKind::RecentlyAdded,
+            HomeRowKind::Latest,
+            HomeRowKind::SeenRecently,
         ]
     );
     assert_eq!(home.row("next_up").unwrap().len(), 1);

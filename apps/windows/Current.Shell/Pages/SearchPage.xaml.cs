@@ -8,10 +8,18 @@ namespace Current.Shell.Pages;
 
 /// <summary>
 /// The results of a search from the navigation's search box: every signed-in server's best matches, grouped by kind (ADR 0018). The
-/// searches are the core's, kept with the page's history entry (BrowseHub.Search): Back shows the results the page had.
+/// searches are the core's, kept with the page's history entry (BrowseHub.Search): Back shows the results the page had. The
+/// Favourites tab (a <see cref="ViewArgs"/>) shows its rows the same way, a row per kind whose header opens that kind's whole list
+/// (owner, 2026-10-27); they are kept with the server's browse, as Home's rows are.
 /// </summary>
-public sealed partial class SearchPage : Page
+public sealed partial class SearchPage : Page, IRefreshable
 {
+    /// <summary>How many rows the page shows now (the smoke run).</summary>
+    internal int RowCount => _sections.Sum(section => section.Rows.Count);
+
+    /// <summary>The Favourites tab shown, or null for a search.</summary>
+    private ViewArgs? _view;
+
     private readonly ObservableCollection<SearchSection> _sections = [];
 
     public SearchPage()
@@ -26,6 +34,18 @@ public sealed partial class SearchPage : Page
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        if (e.Parameter is ViewArgs view)
+        {
+            _view = view;
+            TitleText.Text = BrowseText.ViewTitle(view.View);
+            if (App.Browsing?.Find(view.Server) is { } server)
+            {
+                Add(server.Favourites);
+            }
+            ShowStatus();
+            return;
+        }
+        _view = null;
         var term = (e.Parameter as SearchArgs)?.Term ?? "";
         TitleText.Text = $"Results for “{term}”";
         if (App.Browsing is not { } hub || term.Length == 0)
@@ -34,11 +54,16 @@ public sealed partial class SearchPage : Page
         }
         foreach (var section in hub.Search(e.Parameter!, term))
         {
-            section.PropertyChanged += OnSectionChanged;
-            section.Rows.CollectionChanged += OnRowsChanged;
-            _sections.Add(section);
+            Add(section);
         }
         ShowStatus();
+    }
+
+    private void Add(SearchSection section)
+    {
+        section.PropertyChanged += OnSectionChanged;
+        section.Rows.CollectionChanged += OnRowsChanged;
+        _sections.Add(section);
     }
 
     private void OnSectionChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => ShowStatus();
@@ -76,7 +101,9 @@ public sealed partial class SearchPage : Page
         var found = _sections.Sum(section => section.Rows.Count);
         var failed = _sections.Select(section => section.State.Failed).FirstOrDefault(problem => problem is not null);
         LoadingRing.IsActive = loading && found == 0;
-        var text = found > 0 ? ""
+        var text = _view is not null
+            ? (found > 0 || loading ? "" : failed is not null ? $"Couldn't load favourites. {BrowseText.Problem(failed)}" : "No favourites yet")
+            : found > 0 ? ""
             : loading ? "Searching…"
             : failed is not null ? $"Couldn't search. {BrowseText.Problem(failed)}"
             : "No results";
@@ -93,15 +120,31 @@ public sealed partial class SearchPage : Page
         }
     }
 
-    /// <summary>F5 and Ctrl+R: every server's search runs again, keeping its results until the answers arrive.</summary>
+    /// <summary>F5 and Ctrl+R: every server's search (or the favourites) runs again, keeping its results until the answers arrive.</summary>
     private void OnRefreshAccelerator(Microsoft.UI.Xaml.Input.KeyboardAccelerator sender,
         Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
+    {
+        Refresh();
+        args.Handled = _sections.Count > 0;
+    }
+
+    /// <summary>The title bar's Refresh button, as F5.</summary>
+    public void Refresh()
     {
         foreach (var section in _sections)
         {
             section.Refresh();
         }
-        args.Handled = _sections.Count > 0;
+    }
+
+    /// <summary>A Favourites row's header: every item of its kind, a grid with its own view, sort and filter, favourites ticked.</summary>
+    private void OnRowHeader(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is TileRow { View: { } view } row && _view is { } shown)
+        {
+            var args = new ViewArgs(shown.Server, view, row.Kind, Favourite: true);
+            Frame.Navigate(args.Page, args);
+        }
     }
 
     private void OnSectionRowsLoaded(object sender, RoutedEventArgs e) =>

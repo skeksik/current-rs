@@ -109,6 +109,14 @@ public sealed class Browse : IDisposable
         return new(_browse.OpenLibrary(MapBrowse.ToFfi(library), MapBrowse.ToFfi(query ?? ItemQuery.ForLibrary(library))));
     }
 
+    /// <summary>A grid of items from every library (a Favourites row's whole list, the Recently added tab): <paramref name="query"/>, with no parent.
+    /// Starts loading at once.</summary>
+    public PagedItems OpenItems(ItemQuery query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return new(_browse.OpenItems(MapBrowse.ToFfi(query)));
+    }
+
     /// <summary>Home's rows. Starts loading at once.</summary>
     public HomeFeed Home() => new(_browse.Home());
 
@@ -117,6 +125,13 @@ public sealed class Browse : IDisposable
 
     /// <summary>The best matches for <paramref name="term"/>, one group per kind. Starts loading at once.</summary>
     public SearchResults Search(string term) => new(_browse.Search(term));
+
+    /// <summary>
+    /// The Favourites tab: the user's favourite films, series and episodes, a group each, in that order, each only while it has items.
+    /// They read again a moment after a mark changes. A group's header opens <see cref="ItemQuery.Favourites"/> with its kind in
+    /// <see cref="OpenItems"/>. Starts loading at once.
+    /// </summary>
+    public SearchResults Favourites() => new(_browse.Favourites());
 
     /// <summary>
     /// Marks <paramref name="item"/> played or unplayed: every live list shows it at once, the server is told, and on failure the

@@ -5,6 +5,7 @@
 //! Everything here is blocking file or keyring I/O behind a sync API. Callers on an async path run it on a blocking thread
 //! (`spawn_blocking`); the store never blocks a runtime thread itself (ADR 0002, portability).
 
+mod browse;
 mod device;
 mod error;
 mod gateway;
@@ -12,6 +13,7 @@ mod playback;
 mod secrets;
 mod settings;
 
+pub use browse::{BrowseSettings, LibraryChoices, RememberedSort, RememberedView};
 pub use device::DeviceId;
 pub use error::StoreError;
 pub use gateway::{

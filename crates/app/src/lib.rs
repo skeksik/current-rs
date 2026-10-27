@@ -12,6 +12,7 @@ mod formats;
 mod gateway;
 mod gateway_sign_in;
 mod images;
+mod library_choices;
 mod list;
 mod player;
 mod session;
@@ -24,22 +25,26 @@ use current_jellyfin::{
     AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, platform_name,
 };
 use current_model::{
-    AppTheme, Capabilities, NetworkFacts, SavedServer, ServerAddress, ServerId, ServerRef,
+    AppTheme, Capabilities, ItemRef, NetworkFacts, SavedServer, ServerAddress, ServerId, ServerRef,
 };
 use current_net::{
     Gateway, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError, RuntimeHandle,
     Url,
 };
-use current_store::{DeviceId, LoadReport, Secrets, SettingsStore, StoreError};
+use current_store::{DeviceId, LibraryChoices, LoadReport, Secrets, SettingsStore, StoreError};
 use tokio::sync::watch;
 
 pub use add_server::{AddServer, AddServerState, NewServer};
 pub use browse::{
-    BACKLOG_PAGES, Browse, BrowseNotice, DEPENDENT_RELOAD_DELAY, DetailsView, HomeFeed, HomeRow,
-    HomeRowKind, HomeState, ItemAction, LATEST_LIMIT, LoadState, MAX_PAGE_REQUESTS, NEXT_UP_LIMIT,
-    NoticeKind, PAGE_SIZE, PagedItems, PagedState, REFRESH_WHEN_SHOWN_AFTER, RESUME_LIMIT,
-    SIMILAR_LIMIT, SearchResults, SeriesRun, Slot, SortChoice, TileShape, library_filters,
-    library_query, library_sorts, series_run, tile_artwork,
+    BACKLOG_PAGES, Browse, BrowseNotice, DEPENDENT_RELOAD_DELAY, DetailsView, FAVOURITE_ROW_KINDS,
+    FAVOURITE_ROW_LIMIT, FILTERS_OFF_WHILE_SEARCHING, GridTools, HomeFeed, HomeRow, HomeRowKind,
+    HomeState, ItemAction, LATEST_LIMIT, LIBRARY_SEARCH_WINDOW, LoadState, MAX_PAGE_REQUESTS,
+    NEXT_UP_LIMIT, NoticeKind, PAGE_SIZE, PagedItems, PagedState, REFRESH_WHEN_SHOWN_AFTER,
+    RESUME_LIMIT, SIMILAR_LIMIT, SORT_OFF_WHILE_SEARCHING, SearchResults, SeriesRun, Slot,
+    SortChoice, TileShape, favourites_query, grid_tools, kind_query, library_filters,
+    library_query, library_search, library_search_note, library_sorts, library_toggle_filters,
+    recently_added_everywhere_query, recently_added_query, seen_recently_query, series_run,
+    tile_artwork, view_kinds, with_filter_choice, with_filter_toggle,
 };
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use formats::{
@@ -49,6 +54,7 @@ pub use formats::{
 pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
 pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState};
 pub use images::{ImageError, ImageLoad, ImageSource, WIDTH_BUCKETS, bucket};
+pub use library_choices::LibraryMemory;
 pub use list::{ListSubscription, ObservableList, VectorDiff};
 #[cfg(any(test, feature = "test-engine"))]
 pub use player::test_engine;
@@ -60,8 +66,8 @@ pub use player::{
 /// `current-playback`'s values that the player publishes.
 pub mod playback {
     pub use current_playback::{
-        AutoSkip, NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, QualityMemory,
-        Track,
+        AutoSkip, NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, QualityOption,
+        QualityPreference, Track, preferred_quality_options, quality_options, snap_quality,
     };
 }
 pub use sign_in::{SignIn, SignInError, SignInState};
@@ -98,6 +104,8 @@ pub struct App {
     images: ImageCache,
     browse: Arc<browse::Hub>,
     playback: Arc<player::PlaybackPrefs>,
+    /// Settings' "Remember sort", "Remember filter" and "Remember view", and the choices remembered per library.
+    libraries: library_choices::LibraryPrefs,
     /// The loopback relay for streams on addresses with a gateway (ADR 0020): one per app.
     relay: Arc<player::RelaySlot>,
     /// What the engine plays, kept from its last start or read once from a headless one (ADR 0021).
@@ -143,6 +151,7 @@ impl App {
             images: ImageCache::in_memory(),
             browse: Arc::default(),
             playback: Arc::new(player::PlaybackPrefs::load(None)),
+            libraries: library_choices::LibraryPrefs::new(),
             relay: Arc::default(),
             engine_capabilities: Arc::default(),
         }
@@ -181,6 +190,7 @@ impl App {
             images,
             browse: Arc::default(),
             playback,
+            libraries: library_choices::LibraryPrefs::new(),
             relay: Arc::default(),
             engine_capabilities: Arc::default(),
         };
@@ -373,6 +383,7 @@ impl App {
     /// signed in as before.
     pub async fn remove_server(&self, server: &ServerRef) -> Result<Removal, StoreError> {
         let removal = self.shared.remove_server(server).await?;
+        self.libraries.server_removed(self.settings(), server);
         self.images.forget_server(server).await;
         Ok(removal)
     }
@@ -455,6 +466,102 @@ impl App {
     /// The settings could not be saved; the setting stands for this run.
     pub fn set_auto_skip(&self, kinds: Vec<String>) -> Result<(), StoreError> {
         self.playback.set_auto_skip(&self.shared, kinds)
+    }
+
+    /// Settings → Playback's "Preferred quality": the most each item plays at, on local and internet addresses alike; "Maximum" by
+    /// default. Each item plays at the highest entry of its quality menu that is not above it (`current_playback::snap_quality`); a
+    /// quality picked in the player changes only the item playing (owner, 2026-10-27).
+    pub fn preferred_quality(&self) -> playback::Quality {
+        self.playback.preferred_quality()
+    }
+
+    /// Sets the preferred quality and saves it; it applies from the next item played. Blocking file I/O: call it off the async
+    /// runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved; the setting stands for this run.
+    pub fn set_preferred_quality(&self, preferred: playback::Quality) -> Result<(), StoreError> {
+        self.playback.set_preferred_quality(&self.shared, preferred)
+    }
+
+    /// Settings → Playback's "Show resolution in quality menu": whether the quality menu names the resolution each choice gives
+    /// (`current_playback::quality_options`); on by default.
+    pub fn quality_resolution(&self) -> bool {
+        self.playback.quality_resolution()
+    }
+
+    /// Turns "Show resolution in quality menu" on or off and saves it. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved; the setting stands for this run.
+    pub fn set_quality_resolution(&self, on: bool) -> Result<(), StoreError> {
+        self.playback.set_quality_resolution(&self.shared, on)
+    }
+
+    /// Settings → Playback's "Show all quality options": whether the quality menu lists every step below the original's bitrate, not
+    /// only the common ones (`current_playback::quality_options`); off by default.
+    pub fn quality_all(&self) -> bool {
+        self.playback.quality_all()
+    }
+
+    /// Turns "Show all quality options" on or off and saves it. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved; the setting stands for this run.
+    pub fn set_quality_all(&self, all: bool) -> Result<(), StoreError> {
+        self.playback.set_quality_all(&self.shared, all)
+    }
+
+    /// Settings' "Remember sort", "Remember filter" and "Remember view" now: all off by default.
+    pub fn library_memory(&self) -> LibraryMemory {
+        self.libraries.switches(self.settings())
+    }
+
+    /// Turns "Remember sort" on or off and saves it; off forgets every library's sort in the same save, so on again starts afresh.
+    /// Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved (a newer version's file, a failed write): nothing changed.
+    pub fn set_remember_sort(&self, on: bool) -> Result<(), StoreError> {
+        self.libraries
+            .set(self.settings(), library_choices::Part::Sort, on)
+    }
+
+    /// Turns "Remember filter" on or off, as [`App::set_remember_sort`].
+    ///
+    /// # Errors
+    /// As [`App::set_remember_sort`].
+    pub fn set_remember_filter(&self, on: bool) -> Result<(), StoreError> {
+        self.libraries
+            .set(self.settings(), library_choices::Part::Filter, on)
+    }
+
+    /// Turns "Remember view" on or off, as [`App::set_remember_sort`].
+    ///
+    /// # Errors
+    /// As [`App::set_remember_sort`].
+    pub fn set_remember_view(&self, on: bool) -> Result<(), StoreError> {
+        self.libraries
+            .set(self.settings(), library_choices::Part::View, on)
+    }
+
+    /// What `library` opens with: the last sort, filter and view chosen there, each only while its switch is on; `None` for a part
+    /// with nothing remembered, which opens with the library's first choice.
+    pub fn library_choices(&self, library: &ItemRef) -> LibraryChoices {
+        self.libraries.choices(self.settings(), library)
+    }
+
+    /// Remembers the user's choices in `library`: each part given (`Some`) whose switch is on; the others stay as they were. Saved at
+    /// once; nothing is written when nothing changed. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved (a newer version's file, a failed write): nothing changed.
+    pub fn remember_library_choices(
+        &self,
+        library: &ItemRef,
+        choices: LibraryChoices,
+    ) -> Result<(), StoreError> {
+        self.libraries.remember(self.settings(), library, &choices)
     }
 
     /// The platform's report of the network, on start and on every change (ADR 0014). Every server's address provider hears it, and

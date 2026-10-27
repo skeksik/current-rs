@@ -9,35 +9,95 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <StackPanel>
-            <TextBlock x:Name="TitleText" Style="{StaticResource WidePageTitleTextBlockStyle}" AutomationProperties.HeadingLevel="Level1" />
-            <!-- How many items the library holds, as File Explorer's status bar counts a folder's items. -->
-            <TextBlock
-                x:Name="CountText"
-                Margin="24,4,24,0"
-                Style="{StaticResource BodyTextBlockStyle}"
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-        </StackPanel>
+        <!-- F5 and Ctrl+R re-read the grid in place, as File Explorer and Edge do; no Microsoft guideline read so far states it (not
+             verified). The Refresh button is gone (owner, 2026-10-26); the keys stay. -->
+        <!-- Ctrl+F goes to the library's search box: "Find content in a focused control or Window | Ctrl + F" (Keyboard
+             accelerators page, learn.microsoft.com, ms.date 2026-08-28, read 2026-10-26). -->
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="F5" Invoked="OnRefresh" />
+            <KeyboardAccelerator Key="R" Modifiers="Control" Invoked="OnRefresh" />
+            <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="OnFindAccelerator" />
+        </Grid.KeyboardAccelerators>
 
-        <!-- Sort and show: the core's ItemQuery takes both; a new choice is a new query, which starts at the top (ADR 0018, section
-             3). Refresh re-reads the grid in place. F5 and Ctrl+R for it are what File Explorer and Edge use; no Microsoft guideline read so
-             far states it (not verified). -->
-        <StackPanel Grid.Row="1" Margin="24,12,24,0" Orientation="Horizontal" Spacing="8">
-            <!-- Their items are the core's choices, named in LibraryPage.xaml.cs. -->
-            <ComboBox x:Name="SortBox" Header="Sort by" SelectionChanged="OnQueryChanged" />
-            <ComboBox x:Name="FilterBox" Header="Show" SelectionChanged="OnQueryChanged" />
-            <Button
-                VerticalAlignment="Bottom"
-                AutomationProperties.Name="Refresh"
-                ToolTipService.ToolTip="Refresh (F5)"
-                Click="OnRefresh">
-                <Button.KeyboardAccelerators>
-                    <KeyboardAccelerator Key="F5" />
-                    <KeyboardAccelerator Key="R" Modifiers="Control" />
-                </Button.KeyboardAccelerators>
-                <FontIcon Glyph="&#xE72C;" FontSize="16" />
-            </Button>
-        </StackPanel>
+        <!-- The title with Sort and Filter on its right, as Photos lays out its gallery's title and commands (owner, 2026-10-26). -->
+        <Grid Margin="24,24,24,0" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock
+                x:Name="TitleText"
+                Margin="0"
+                Style="{StaticResource WidePageTitleTextBlockStyle}"
+                AutomationProperties.HeadingLevel="Level1" />
+            <!-- Sort, Filter and View as File Explorer's command bar has them (owner, 2026-10-26): an icon button with a menu of radio
+                 items, the sort's fields and its order in two groups. The core's ItemQuery takes both; a new choice is a new query,
+                 which starts at the top (ADR 0018, section 3). The items are the core's choices, named and given icons in
+                 LibraryPage.xaml.cs. View switches the tiles between posters and wide pictures, with or without their titles (owner,
+                 2026-10-26), as Photos' View menu switches its layout. Glyphs: Segoe Fluent Icons E8CB "Sort", E71C "Filter", F0E2
+                 "GridView", E7C3 "Page", EF6B "LandscapeOrientation" and E8BA "Caption" ("Segoe Fluent Icons font",
+                 learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26). -->
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                <!-- The library's own search, beside its commands; the title bar's box searches everything (owner, 2026-10-26). It
+                     searches as the user types, a moment after the last key, or at once on Enter; the server finds the items (the
+                     core's library_search). 240 wide is not from a guideline (not verified). -->
+                <AutoSuggestBox
+                    x:Name="LibrarySearch"
+                    Width="240"
+                    QueryIcon="Find"
+                    TextChanged="OnSearchTextChanged"
+                    QuerySubmitted="OnSearchSubmitted" />
+                <!-- Sort and Filter are off while the box has text (the core's grid tools); their tooltip sits on a clear area
+                     around each, as a disabled button gets no pointer input. -->
+                <Grid x:Name="SortTip" Background="Transparent" ToolTipService.ToolTip="Sort">
+                    <DropDownButton x:Name="SortButton" AutomationProperties.Name="Sort">
+                        <FontIcon Glyph="&#xE8CB;" FontSize="16" />
+                        <DropDownButton.Flyout>
+                            <MenuFlyout x:Name="SortMenu" Placement="BottomEdgeAlignedRight" />
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
+                </Grid>
+                <Grid x:Name="FilterTip" Background="Transparent" ToolTipService.ToolTip="Filter">
+                    <DropDownButton x:Name="FilterButton" AutomationProperties.Name="Filter">
+                        <FontIcon Glyph="&#xE71C;" FontSize="16" />
+                        <DropDownButton.Flyout>
+                            <MenuFlyout x:Name="FilterMenu" Placement="BottomEdgeAlignedRight" />
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
+                </Grid>
+                <DropDownButton x:Name="ViewButton" AutomationProperties.Name="View" ToolTipService.ToolTip="View">
+                    <FontIcon Glyph="&#xF0E2;" FontSize="16" />
+                    <DropDownButton.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedRight">
+                            <RadioMenuFlyoutItem x:Name="PosterItem" Text="Posters" GroupName="shape" Click="OnViewChosen">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE7C3;" />
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <RadioMenuFlyoutItem x:Name="WideItem" Text="Wide" GroupName="shape" Click="OnViewChosen">
+                                <RadioMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xEF6B;" />
+                                </RadioMenuFlyoutItem.Icon>
+                            </RadioMenuFlyoutItem>
+                            <MenuFlyoutSeparator />
+                            <ToggleMenuFlyoutItem x:Name="TitlesItem" Text="Show titles" Click="OnViewChosen">
+                                <ToggleMenuFlyoutItem.Icon>
+                                    <FontIcon Glyph="&#xE8BA;" />
+                                </ToggleMenuFlyoutItem.Icon>
+                            </ToggleMenuFlyoutItem>
+                        </MenuFlyout>
+                    </DropDownButton.Flyout>
+                </DropDownButton>
+            </StackPanel>
+        </Grid>
+
+        <!-- How many items the library holds, as File Explorer's status bar counts a folder's items. -->
+        <TextBlock
+            x:Name="CountText"
+            Grid.Row="1"
+            Margin="24,4,24,0"
+            Style="{StaticResource BodyTextBlockStyle}"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
         <InfoBar x:Name="StateInfo" Grid.Row="2" Margin="24,12,24,0" IsClosable="False" IsOpen="False">
             <InfoBar.ActionButton>

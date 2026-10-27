@@ -2,7 +2,9 @@
 
 Status: proposed (2026-10-25), from the browse spike; accepted when its PR merges; open choices decided by the owner 2026-10-25
 (see "Decided by the owner"). Amended 2026-10-25 (fix/library-changes): the navigation's libraries follow the server, below under
-"Libraries that follow the server".
+"Libraries that follow the server". Amended 2026-10-27 (owner, fix/windows-ui-polish): library search (sections 2 and 3), the
+filters (section 3), lists chosen by marks (section 5), Home's rows (section 6), the Favourites and Recently added views and
+remembered choices (section 7).
 Research, quotes and sources: `docs/notes/jellyfin-browse.md`. Playback, media sources and streams are ADR 0019's (spike/playback-design);
 section 6 of the notes lists what is left to it.
 
@@ -16,7 +18,8 @@ What the research found:
 - **Jellyfin 12.2 serves everything we need from a handful of endpoints**, and list answers can be trimmed: `fields`,
   `enableImageTypes`, `imageTypeLimit` and `enableUserData` control what each item carries; `Items/{id}` always returns all fields.
 - **Paging is by index** (`startIndex`, `limit`) with a `TotalRecordCount` for the whole query. **Search is not pageable**: 12.2 asks
-  its search providers for `3 × limit` candidates and pages within those.
+  its search providers for `3 × limit` candidates and pages within those. (Amended 2026-10-27: a library's own search box lives with
+  this: see section 3, "Library search".)
 - **An image's tag is its version**: with `tag`, Jellyfin answers `Cache-Control: ... immutable` and an `ETag`. A cache keyed by
   item, image type, index, tag and size never needs revalidation.
 - **`fillWidth`/`fillHeight`** return an image that covers the box at the source's aspect ratio, never upscaled.
@@ -83,6 +86,7 @@ Wire types stay private; each method returns model types. Every list query sends
 | `episodes(series, season)` | `GET Shows/{id}/Episodes` | `seasonId` |
 | `similar(item, limit)` | `GET Items/{id}/Similar` | `fields` as summary |
 | `search(term, kinds, limit)` | `GET Items?searchTerm=` | one request per result group (movies, series, episodes, ...), `recursive=true`, one page of up to 24 each; not paged (see Context) |
+| `items(query)` with `search_term` (amended 2026-10-27) | `GET Items?searchTerm=` | a library grid's search: the grid's `parentId` and kinds, `searchTerm`, **no `sortBy`, `sortOrder` or `filters`**, so the server's relevance order comes back; paged as any grid, within the `3 × limit` window (section 3) |
 | `details(item)` | `GET Items/{id}` | |
 | `set_played(item, bool)` | `POST`/`DELETE UserPlayedItems/{id}` | answers the item's user data |
 | `set_favourite(item, bool)` | `POST`/`DELETE UserFavoriteItems/{id}` | answers the item's user data |
@@ -115,6 +119,20 @@ records anyway, so a tile template always has a slot to bind to.)
   every failed page; the next scroll that reaches a failed page retries it once by itself.
 - **Short lists** (home rows, seasons, episodes, similar, search groups, details) are plain `ObservableList<ItemSummary>` or a value,
   loaded in one request.
+- **Library search (amended 2026-10-27, owner).** A grid's own search box loads `library_search(query, term)`: from the query the grid
+  showed before searching, the text trimmed, with no sort and no filters, so the best matches come first; blank text gives that query
+  back, its sort and filters with it. `library_grid_tools(query)` says Sort and Filter are unavailable while a query searches, with
+  their tooltips ("Sorted by relevance while searching", "Filters are off while searching"); the UI only greys them out. Once a
+  search's total reaches the server's window (`LIBRARY_SEARCH_WINDOW`, 3 × `PAGE_SIZE` = 300), `library_search_note(query, total)`
+  gives the line "Showing the best 300 matches. Type more to narrow it." A search is a new query, so it starts at the top.
+- **Filters (amended 2026-10-27, owner).** A grid offers one choice of everything, unplayed or played (`library_filters`), and
+  favourites as a tick beside it, on or off whatever the choice (`library_toggle_filters`); `with_filter_choice` and
+  `with_filter_toggle` change one and keep the other, and a grid with both gets the items that match both: `ItemsController` calls
+  `query.ApplyFilters(filters)`, which sets `IsPlayed` (true for played, false for unplayed) and `IsFavorite = true` on one query,
+  and the repository applies each as its own `Where` (`Jellyfin.Api/Controllers/ItemsController.cs`,
+  `MediaBrowser.Controller/Entities/InternalItemsQuery.cs`, `Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs`;
+  jellyfin/jellyfin master, read 2026-10-27). Played and unplayed together throw "Conflicting filters"; the single choice never
+  sends both.
 
 ### 4. Images
 **The core fetches every image** through the server's `RoamingAddresses`, so the current address and its gateway credentials apply
@@ -155,6 +173,9 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
 3. The request goes out; requests for one item are sent one at a time, and only the last wanted state is sent after one in flight.
 4. Success: the server's answer becomes the item's state. Then the lists whose content depends on it reload in the background, a
    second after the last change: "continue watching", "next up", and the parent series and season (their unplayed count).
+   (Amended 2026-10-27, owner: **every list chosen by marks** reloads too, after a played or a favourite change alike: Home's
+   Favourites and Seen recently, the Favourites view, and a grid filtered by a mark or sorted by date played
+   (`ItemQuery::depends_on_marks`). Before, a new favourite did not appear in them until a manual refresh.)
 5. Failure: the store rolls back to the state before the change, broadcasts it, and raises one notice (`ActionFailed { action, problem }`)
    that the UI shows as a message. The item's name may appear in the message; it never goes to the log.
 
@@ -176,6 +197,16 @@ Home is a **`HomeFeed`**: a list of rows, each with its own item list.
 - Refresh: on start, on return to the foreground (the existing session hook), after played or favourite changes (the dependent rows),
   after playback stops (an event ADR 0019 provides), and on request.
 - Libraries are reached from the app's navigation (one entry per library), not from a tile row on Home (open choice 6).
+- **Amended 2026-10-27 (owner): the rows, in order**: Continue watching, Next up, **Favourites** (the user's favourites in every
+  library, by name), **Recently added** (every library, newest first), **Recently added in X** per library (the old "Latest in X",
+  renamed; the user's library order, the same skips), then **Seen recently** (played items, by date played). Favourites and Seen
+  recently reload when a mark changes (section 5). A row header links to the full list: Favourites and Recently added to their
+  views, "Recently added in X" to library X's grid sorted newest first. **The Favourites view is rows**, not a grid: favourite films,
+  series and episodes, a row each in that order, each only while it has items (`Browse::favourites`, the search results' shape,
+  read again when a mark changes); a row's header opens every item of its kind across the libraries (`kind_query`) with the
+  favourites tick on (`favourites_query(Some(kind))`). A series stands for its episodes in the rows chosen across
+  libraries (Favourites, Recently added); Seen recently shows films, episodes and other videos. `HomeRowKind` gains `Favourites`,
+  `RecentlyAdded` and `SeenRecently`; `Latest` keeps its name on the bridge.
 
 ### Libraries that follow the server (amended 2026-10-25)
 On the owner's server, a library added while the app ran showed on Home but not in the navigation until a restart, and a removed one
@@ -197,6 +228,17 @@ item ids and image tags cross, addresses and paths never do.
   `refresh()`, `retry()`.
 - `HomeFeed`: `subscribe_rows` (a diff list of `HomeRow { key, kind, title }`), `subscribe_row(key, listener)` (a diff list of items).
 - `set_played(item, bool)`, `set_favourite(item, bool)` on `Browse`; notices through a value on `Core`.
+- (Amended 2026-10-27, owner.) **Lists that are not a library**: `Browse::open_items(query) -> PagedItems`, with the queries the core
+  builds: `favourites_query(kind)` and `recently_added_everywhere_query(kind)` (every library; `kind` narrows to one media type, and
+  an episode stands as its series), `seen_recently_query()`, `recently_added_query(library)` (a library newest first, for a Home
+  row's header) and `library_search(query, term)` (section 2's search). `ItemQuery` gains `search_term: Option<String>`.
+  `ItemSummary` gains `time_left_ms: Option<u64>` (runtime less the resume point, counted by the core). **Remembered choices**
+  (Settings → Libraries, each off by default, kept per library in `settings.json` and forgotten with the server):
+  `Core::library_memory()`, `set_remember_sort`, `set_remember_filter`, `set_remember_view`, `library_choices(library)` and
+  `remember_library_choices(library, choices)` (`LibraryChoices`: the sort with its order, the filters and the view).
+  Searching and filtering: `library_grid_tools(query) -> GridTools`, `library_search_note(query, total)`,
+  `library_filter_choices()`, `library_toggle_filter_choices()`, `library_with_filter_choice(query, choice)`,
+  `library_with_filter_toggle(query, toggle, on)`, `kind_query(kind)`; the Favourites rows: `Browse::favourites() -> SearchResults`.
 - `load_image(request, cancel) -> bytes` (async, `CancelToken`, ADR 0004).
 - C#: a `PagedCollection<T>` over `DiffObservableCollection<T>` that implements `IItemsRangeInfo` and forwards the visible range;
   `ImageLoader` as above; one `ListSubscription<T>` per row.

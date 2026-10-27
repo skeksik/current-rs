@@ -64,7 +64,10 @@
             </InfoBar.ActionButton>
         </InfoBar>
 
-        <!-- Playback info: what the core's playback_info() says, never a URL. On the right, over the video, in the panel's acrylic. -->
+        <!-- Playback info: what the core's playback_info() says, never a URL. On the right, over the video, in the panel's acrylic. The
+             acrylic shows its tint only, not the video blurred: "It's not possible to have compositor content sample from external
+             content", and a SwapChainPanel is external content ("Visual layer overview", Differences from UWP, learn.microsoft.com,
+             ms.date 2026-03-16, read 2026-10-26; owner's run, 2026-10-26). -->
         <Border
             x:Name="InfoPanel"
             Width="360"

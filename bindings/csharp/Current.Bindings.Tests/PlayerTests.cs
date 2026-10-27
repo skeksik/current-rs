@@ -224,6 +224,22 @@ internal static class PlayerTests
     {
         using var core = CoreHost.Create();
         Check(!core.PlaybackSettings().SkipsIntrosAndCredits && core.PlaybackSettings().AutoSkip.Count == 0, "off by default");
+        Check(core.PlaybackSettings().ShowsQualityResolution, "resolutions shown by default");
+        Check(core.PlaybackSettings().PreferredQuality == new QualityChoice.Maximum(), "Maximum preferred by default");
+        await core.SetPreferredQualityAsync(new QualityChoice.Bitrate(20_000_000));
+        Check(core.PlaybackSettings().PreferredQuality == new QualityChoice.Bitrate(20_000_000), "20 Mbit/s preferred");
+        await core.SetPreferredQualityAsync(new QualityChoice.Bitrate(10_000_000));
+        Check(core.PlaybackSettings().PreferredQuality == new QualityChoice.Bitrate(4_000_000),
+            "10 Mbit/s, which the short list lacks, stored as the nearest listed step not above it");
+        await core.SetPreferredQualityAsync(new QualityChoice.Maximum());
+        Check(core.PlaybackSettings().PreferredQuality == new QualityChoice.Maximum(), "Maximum preferred again");
+        await core.SetShowQualityResolutionAsync(false);
+        Check(!core.PlaybackSettings().ShowsQualityResolution, "resolutions hidden");
+        await core.SetShowQualityResolutionAsync(true);
+        Check(!core.PlaybackSettings().ShowsAllQualities, "common qualities by default");
+        await core.SetShowAllQualitiesAsync(true);
+        Check(core.PlaybackSettings().ShowsAllQualities, "all qualities");
+        await core.SetShowAllQualitiesAsync(false);
         await core.SetSkipIntrosAndCreditsAsync(true);
         Check(core.PlaybackSettings().SkipsIntrosAndCredits, "on");
         Check(core.PlaybackSettings().AutoSkip.SequenceEqual(new[] { "intro", "outro" }), "intro and outro");

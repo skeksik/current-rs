@@ -51,6 +51,14 @@ public sealed partial class SettingsPage : Page
             ThemeBox.IsEnabled = true;
             ShowAutoSkip(core.PlaybackSettings().SkipsIntrosAndCredits);
             AutoSkipSwitch.IsEnabled = true;
+            ShowQualityResolution(core.PlaybackSettings().ShowsQualityResolution);
+            QualityResolutionSwitch.IsEnabled = true;
+            ShowAllQualities(core.PlaybackSettings().ShowsAllQualities);
+            AllQualitiesSwitch.IsEnabled = true;
+            ShowPreferredQuality(core);
+            PreferredQualityBox.IsEnabled = true;
+            ShowLibraryMemory(core.LibraryMemory);
+            RememberSortSwitch.IsEnabled = RememberFilterSwitch.IsEnabled = RememberViewSwitch.IsEnabled = true;
             Servers ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
             Servers.Start();
             Bindings.Update();
@@ -151,6 +159,186 @@ public sealed partial class SettingsPage : Page
             ShowAutoSkip(core.PlaybackSettings().SkipsIntrosAndCredits);
             ShowPlaybackInfo(ProblemText.Unexpected);
         }
+    }
+
+    /// <summary>The remember switches are being set from the core: their Toggled is not a choice of the user's.</summary>
+    private bool _showingLibraryMemory;
+
+    private void ShowLibraryMemory(LibraryMemorySettings memory)
+    {
+        _showingLibraryMemory = true;
+        RememberSortSwitch.IsOn = memory.RememberSort;
+        RememberFilterSwitch.IsOn = memory.RememberFilter;
+        RememberViewSwitch.IsOn = memory.RememberView;
+        _showingLibraryMemory = false;
+    }
+
+    /// <summary>
+    /// Saves a remember switch at once (the core; off forgets that choice in every library). If it cannot be saved nothing changed, so
+    /// the switches show the core's again. async void, as event handlers are: it catches everything itself.
+    /// </summary>
+    private async void OnRememberToggled(object sender, RoutedEventArgs e)
+    {
+        if (_showingLibraryMemory || App.Core is not { } core)
+        {
+            return;
+        }
+        LibrariesInfo.IsOpen = false;
+        try
+        {
+            var on = ((ToggleSwitch)sender).IsOn;
+            if (ReferenceEquals(sender, RememberSortSwitch))
+            {
+                await core.SetRememberSortAsync(on);
+            }
+            else if (ReferenceEquals(sender, RememberFilterSwitch))
+            {
+                await core.SetRememberFilterAsync(on);
+            }
+            else
+            {
+                await core.SetRememberViewAsync(on);
+            }
+        }
+        catch (CoreStoreException error)
+        {
+            ShowLibraryMemory(core.LibraryMemory);
+            ShowLibrariesInfo(ProblemText.Store(error.Problem));
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing a remember switch failed: {error.GetType().Name}");
+            ShowLibraryMemory(core.LibraryMemory);
+            ShowLibrariesInfo(ProblemText.Unexpected);
+        }
+    }
+
+    private void ShowLibrariesInfo(string message)
+    {
+        LibrariesInfo.Severity = InfoBarSeverity.Error;
+        LibrariesInfo.Title = "Couldn't save this setting.";
+        LibrariesInfo.Message = message;
+        LibrariesInfo.IsOpen = true;
+    }
+
+    /// <summary>The quality resolution switch is being set from the core: its Toggled is not a choice of the user's.</summary>
+    private bool _showingQualityResolution;
+
+    private void ShowQualityResolution(bool on)
+    {
+        _showingQualityResolution = true;
+        QualityResolutionSwitch.IsOn = on;
+        _showingQualityResolution = false;
+    }
+
+    /// <summary>Saves "Show resolution in quality menu" at once; if it cannot be saved it still stands for this run (the core's rule).</summary>
+    private async void OnQualityResolutionToggled(object sender, RoutedEventArgs e)
+    {
+        if (_showingQualityResolution || App.Core is not { } core)
+        {
+            return;
+        }
+        PlaybackInfo.IsOpen = false;
+        try
+        {
+            await core.SetShowQualityResolutionAsync(QualityResolutionSwitch.IsOn);
+        }
+        catch (CoreStoreException error)
+        {
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing the quality menu's resolutions failed: {error.GetType().Name}");
+            ShowQualityResolution(core.PlaybackSettings().ShowsQualityResolution);
+            ShowPlaybackInfo(ProblemText.Unexpected);
+        }
+        // Its entries follow the switch: which steps it lists, and how they are named.
+        ShowPreferredQuality(core);
+    }
+
+    /// <summary>The preferred quality's list is being filled from the core: its SelectionChanged is not a choice of the user's.</summary>
+    private bool _showingPreferredQuality;
+
+    /// <summary>The entries of the preferred quality's list, as the core lists them (index for index).</summary>
+    private IReadOnlyList<QualityOption> _preferredOptions = [];
+
+    /// <summary>Fills the preferred quality's list as the core lists it, named as the two switches say, and selects the preferred one.</summary>
+    private void ShowPreferredQuality(CoreHost core)
+    {
+        var settings = core.PlaybackSettings();
+        _showingPreferredQuality = true;
+        _preferredOptions = core.PreferredQualityOptions();
+        PreferredQualityBox.Items.Clear();
+        foreach (var option in _preferredOptions)
+        {
+            PreferredQualityBox.Items.Add(Player.PlayerText.Quality(option, settings.ShowsQualityResolution));
+        }
+        PreferredQualityBox.SelectedIndex = _preferredOptions
+            .Select((option, index) => (option, index))
+            .FirstOrDefault(entry => entry.option.Quality == settings.PreferredQuality, (null!, -1)).index;
+        _showingPreferredQuality = false;
+    }
+
+    /// <summary>Saves "Preferred quality" at once; if it cannot be saved it still stands for this run (the core's rule).</summary>
+    private async void OnPreferredQualityChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var index = PreferredQualityBox.SelectedIndex;
+        if (_showingPreferredQuality || App.Core is not { } core || index < 0 || index >= _preferredOptions.Count)
+        {
+            return;
+        }
+        PlaybackInfo.IsOpen = false;
+        try
+        {
+            await core.SetPreferredQualityAsync(_preferredOptions[index].Quality);
+        }
+        catch (CoreStoreException error)
+        {
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing the preferred quality failed: {error.GetType().Name}");
+            ShowPreferredQuality(core);
+            ShowPlaybackInfo(ProblemText.Unexpected);
+        }
+    }
+
+    /// <summary>The all-qualities switch is being set from the core: its Toggled is not a choice of the user's.</summary>
+    private bool _showingAllQualities;
+
+    private void ShowAllQualities(bool all)
+    {
+        _showingAllQualities = true;
+        AllQualitiesSwitch.IsOn = all;
+        _showingAllQualities = false;
+    }
+
+    /// <summary>Saves "Show all quality options" at once; if it cannot be saved it still stands for this run (the core's rule).</summary>
+    private async void OnAllQualitiesToggled(object sender, RoutedEventArgs e)
+    {
+        if (_showingAllQualities || App.Core is not { } core)
+        {
+            return;
+        }
+        PlaybackInfo.IsOpen = false;
+        try
+        {
+            await core.SetShowAllQualitiesAsync(AllQualitiesSwitch.IsOn);
+        }
+        catch (CoreStoreException error)
+        {
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing the quality menu's list failed: {error.GetType().Name}");
+            ShowAllQualities(core.PlaybackSettings().ShowsAllQualities);
+            ShowPlaybackInfo(ProblemText.Unexpected);
+        }
+        // Its entries follow the switch: which steps it lists, and how they are named.
+        ShowPreferredQuality(core);
     }
 
     private void ShowPlaybackInfo(string message)

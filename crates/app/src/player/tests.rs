@@ -1,5 +1,5 @@
 //! The player through `App`, with the test engine, against the Jellyfin stand-in on 127.0.0.1: start and reports, the state and the
-//! media controls, the swap chain and its release, cancellation, one engine per process, the remembered quality, automatic skipping,
+//! media controls, the swap chain and its release, cancellation, one engine per process, the preferred quality, automatic skipping,
 //! and that no URL or token shows in anything the player publishes.
 
 use std::path::Path;
@@ -430,39 +430,52 @@ fn open_stored(dir: &Path) -> App {
 }
 
 #[tokio::test]
-async fn a_picked_quality_is_saved_for_the_kind_of_address() {
+async fn items_play_at_the_preferred_quality_and_a_picked_one_is_not_saved() {
     let _engine = ENGINE.lock().await;
     let stand_in = StandIn::start().await.unwrap();
     let temp = tempfile::tempdir().unwrap();
     let app = open_stored(temp.path());
     let server = signed_in(&stand_in, &app).await;
+    // 1.2 Mbit/s is no step Settings lists: it is stored as the nearest listed one not above it, 1 Mbit/s, which the stand-in's menu
+    // has below its 1.4 Mbit/s original (480p).
+    app.set_preferred_quality(Quality::Bitrate(1_200_000))
+        .unwrap();
+    assert_eq!(app.preferred_quality(), Quality::Bitrate(1_000_000));
     let (player, _) = open(&app).await;
     player
         .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
         .await
         .unwrap();
-    until(&player.state(), playing).await;
-    player
-        .set_quality(Quality::Bitrate(4_000_000))
-        .await
-        .unwrap();
-    // A re-plan at the position, with the new limit, and the old play session reported stopped.
+    // That entry, which the menu ticks.
+    let status = until(&player.state(), playing).await;
+    assert_eq!(status.quality, Quality::Bitrate(1_000_000));
+    // A pick re-plans at the position and changes only the item playing.
+    player.set_quality(Quality::Maximum).await.unwrap();
     until(&player.state(), |status| {
-        playing(status) && status.quality == Quality::Bitrate(4_000_000)
+        playing(status) && status.quality == Quality::Maximum
     })
     .await;
     let settings = || app.settings().unwrap().get().playback;
-    eventually(|| {
-        // 127.0.0.1 is this device: a local address.
-        settings().quality_local == StreamQuality::Bitrate(4_000_000)
+    assert_eq!(
+        settings().quality_preferred,
+        StreamQuality::Bitrate(1_000_000)
+    );
+    assert_eq!(settings().quality_local, StreamQuality::Maximum);
+    assert_eq!(settings().quality_internet, StreamQuality::Maximum);
+    // The next item plays at the preferred quality again.
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    until(&player.state(), |status| {
+        playing(status) && status.quality == Quality::Bitrate(1_000_000)
     })
     .await;
-    assert_eq!(settings().quality_internet, StreamQuality::Maximum);
     player.close().await;
     drop(app);
     // Read again at the next start.
     let app = open_stored(temp.path());
-    assert_eq!(app.playback.quality().local, Quality::Bitrate(4_000_000));
+    assert_eq!(app.preferred_quality(), Quality::Bitrate(1_000_000));
 }
 
 #[tokio::test]

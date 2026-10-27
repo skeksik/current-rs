@@ -16,7 +16,7 @@ use crate::cancel::{self, CancelToken};
 use crate::player_records::{
     CompositionSize, DisplayFacts, NowPlayingSnapshot, PlaybackInfoSnapshot,
     PlaybackSettingsSnapshot, PlayerEngineKind, PlayerStateSnapshot, QualityChoice,
-    SubtitleSelection,
+    QualityOptionInfo, SubtitleSelection,
 };
 use crate::subscribe::{self, LiveListeners};
 use crate::{Core, CoreError, TaskHandle};
@@ -161,7 +161,8 @@ impl Player {
             .select_subtitle(subtitle.into()))
     }
 
-    /// The quality for the kind of address in use, remembered for it (local or internet); plays on at the position with it.
+    /// The quality of the item playing, as picked; plays on at the position with it. Not saved: the next item plays at the preferred
+    /// quality ([`Core::set_preferred_quality`]).
     ///
     /// # Errors
     /// As [`Player::select_audio`].
@@ -282,6 +283,33 @@ impl Player {
             .map_err(|error| player_error(&error))
     }
 
+    /// The quality menu for the version playing (`current_playback::quality_options`): "Maximum" (the original) first, then the common
+    /// steps, or every step when `all`, below the original's bitrate, each with the resolution the server would send it at and its
+    /// bitrate. Before a version is planned, every step of the list by its width cap.
+    ///
+    /// # Errors
+    /// [`CoreError::Player`] with `Closed`.
+    pub async fn quality_options(&self, all: bool) -> Result<Vec<QualityOptionInfo>, CoreError> {
+        let player = self.player.clone();
+        let info = self
+            .runtime
+            .spawn(async move { player.playback_info().await })
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| player_error(&error))?;
+        let source = info
+            .details
+            .as_ref()
+            .and_then(|details| details.plan.as_ref())
+            .map(|plan| &plan.source);
+        Ok(current_app::playback::quality_options(source, all)
+            .iter()
+            .map(Into::into)
+            .collect())
+    }
+
     /// Stops the item (reported to the server, best effort with a short timeout), gives the swap chain back and shuts the engine down;
     /// returns once it is gone, so the next player can open. Detach the panel and release the swap chain first. Not cancellable.
     pub async fn close(&self) {
@@ -324,7 +352,12 @@ impl Core {
 
     /// Settings → Playback now.
     pub fn playback_settings(&self) -> PlaybackSettingsSnapshot {
-        PlaybackSettingsSnapshot::new(self.app.auto_skip().borrow().clone())
+        PlaybackSettingsSnapshot::new(
+            self.app.preferred_quality().into(),
+            self.app.auto_skip().borrow().clone(),
+            self.app.quality_resolution(),
+            self.app.quality_all(),
+        )
     }
 
     /// The Settings switch: skip intros and credits (`intro` and `outro` segments) automatically, or not. Saved at once on the core's
@@ -339,6 +372,68 @@ impl Core {
             Vec::new()
         };
         self.set_auto_skip(kinds).await
+    }
+
+    /// Settings' "Preferred quality" list (`current_playback::preferred_quality_options`): Original, then the steps the quality menu
+    /// lists ("Show all quality options" as set), each named by the resolution its width cap gives at 16:9. The preferred quality is
+    /// always one of them.
+    pub fn preferred_quality_options(&self) -> Vec<QualityOptionInfo> {
+        current_app::playback::preferred_quality_options(self.app.quality_all())
+            .iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    /// The Settings choice "Preferred quality": each item plays at the highest entry of its quality menu that is not above it, on local
+    /// and internet addresses alike. Saved at once on the core's blocking pool; it applies from the next item played.
+    ///
+    /// # Errors
+    /// [`CoreError::Store`] if the settings could not be saved: the setting stands for this run.
+    pub async fn set_preferred_quality(&self, quality: QualityChoice) -> Result<(), CoreError> {
+        let app = self.app.clone();
+        self.runtime
+            .spawn_blocking(move || app.set_preferred_quality(quality.into()))
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| CoreError::Store {
+                problem: (&error).into(),
+            })
+    }
+
+    /// The Settings switch "Show resolution in quality menu". Saved at once on the core's blocking pool.
+    ///
+    /// # Errors
+    /// [`CoreError::Store`] if the settings could not be saved: the setting stands for this run.
+    pub async fn set_show_quality_resolution(&self, on: bool) -> Result<(), CoreError> {
+        let app = self.app.clone();
+        self.runtime
+            .spawn_blocking(move || app.set_quality_resolution(on))
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| CoreError::Store {
+                problem: (&error).into(),
+            })
+    }
+
+    /// The Settings switch "Show all quality options". Saved at once on the core's blocking pool.
+    ///
+    /// # Errors
+    /// [`CoreError::Store`] if the settings could not be saved: the setting stands for this run.
+    pub async fn set_show_all_qualities(&self, all: bool) -> Result<(), CoreError> {
+        let app = self.app.clone();
+        self.runtime
+            .spawn_blocking(move || app.set_quality_all(all))
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| CoreError::Store {
+                problem: (&error).into(),
+            })
     }
 
     /// The segment kinds skipped automatically, by open name; empty turns it off. Saved as [`Core::set_skip_intros_and_credits`].

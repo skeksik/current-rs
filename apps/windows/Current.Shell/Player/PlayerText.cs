@@ -109,15 +109,32 @@ internal static class PlayerText
         _ => "The server converts every stream from a remote source.",
     };
 
-    /// <summary>"40 Mbit/s", "1.5 Mbit/s".</summary>
-    public static string Bitrate(uint bitsPerSecond) =>
-        $"{(bitsPerSecond / 1_000_000.0).ToString("0.#", CultureInfo.CurrentCulture)} Mbit/s";
+    /// <summary>"40 Mbit/s", "1.5 Mbit/s"; below 1 Mbit/s in kbit/s, "720 kbit/s", which one decimal of Mbit/s rounded to "0.7".</summary>
+    public static string Bitrate(uint bitsPerSecond) => bitsPerSecond < 1_000_000
+        ? $"{(bitsPerSecond / 1_000.0).ToString("0", CultureInfo.CurrentCulture)} kbit/s"
+        : $"{(bitsPerSecond / 1_000_000.0).ToString("0.#", CultureInfo.CurrentCulture)} Mbit/s";
 
-    public static string Quality(QualityChoice quality) => quality switch
+    /// <summary>
+    /// A quality menu entry: "Original · 1080p · 5.2 Mbit/s", "720p · 4 Mbit/s", or without the resolution when Settings hides it ("Show
+    /// resolution in quality menu"); the parts the core does not know are left out.
+    /// </summary>
+    public static string Quality(QualityOption option, bool withResolution)
     {
-        QualityChoice.Bitrate bitrate => Bitrate(bitrate.BitsPerSecond),
-        _ => "Maximum",
-    };
+        var parts = new List<string>();
+        if (option.Quality is QualityChoice.Maximum)
+        {
+            parts.Add("Original");
+        }
+        if (withResolution && option.Resolution is { Length: > 0 } resolution)
+        {
+            parts.Add(resolution);
+        }
+        if (option.Bitrate is { } bitrate)
+        {
+            parts.Add(Bitrate(bitrate));
+        }
+        return string.Join(" · ", parts);
+    }
 
     /// <summary>A track as the server names it (its display title), else by its language and codec, else its number.</summary>
     public static string Track(TrackInfo track)

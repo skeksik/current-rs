@@ -75,7 +75,9 @@ impl JellyfinClient {
     }
 
     /// A page of `query`'s items (`GET Items`), from `start`, at most `limit`. With `with_total`, the answer carries the total, which
-    /// costs the server a count: ask for it on a first page and a refresh only.
+    /// costs the server a count: ask for it on a first page and a refresh only. A query with a search term and no sort keys sends no
+    /// sort, so the best matches come first; a search answers at most three times `limit` items, and its total counts only those
+    /// (`docs/notes/jellyfin-browse.md`, "Search").
     pub async fn items(
         &self,
         query: &ItemQuery,
@@ -94,9 +96,13 @@ impl JellyfinClient {
         if !query.kinds.is_empty() {
             request = request.query("includeItemTypes", join(query.kinds.iter().map(kind_wire)));
         }
-        request = request
-            .query("sortBy", sort_by(&query.sort))
-            .query("sortOrder", sort_order(query.order));
+        // A search without sort keys keeps the server's order, the best matches first ("ordered by score then `SortName`",
+        // `docs/notes/jellyfin-browse.md`, "Search"): no `sortBy`, and no `sortOrder` with it.
+        if query.search_term.is_none() || !query.sort.is_empty() {
+            request = request
+                .query("sortBy", sort_by(&query.sort))
+                .query("sortOrder", sort_order(query.order));
+        }
         if !query.filters.is_empty() {
             request = request.query("filters", join(query.filters.iter().map(filter_wire)));
         }
@@ -109,6 +115,9 @@ impl JellyfinClient {
         }
         if let Some(prefix) = &query.name_starts_with {
             request = request.query("nameStartsWith", prefix.as_str());
+        }
+        if let Some(term) = &query.search_term {
+            request = request.query("searchTerm", term.as_str());
         }
         let result: ItemsResult = self.get_json(request).await?;
         let total = with_total

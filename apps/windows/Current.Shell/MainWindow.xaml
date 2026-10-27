@@ -59,11 +59,15 @@
                     </ResourceDictionary.ThemeDictionaries>
                     <!-- The tall title bar, 48 px like Windows Settings' (owner's run, 2026-10-24). The
                          guideline's standard is 32 px, and 48 only with a search box or a person picture ("Windows app title bar",
-                         learn.microsoft.com, ms.date 2024-07-31, read 2026-10-24); 48 here is the owner's choice (2026-10-24); the caption buttons are as tall (MainWindow.xaml.cs). The control's
+                         learn.microsoft.com, ms.date 2024-07-31, read 2026-10-24); 48 here is the owner's choice (2026-10-24); the caption buttons are as tall (MainWindow.xaml.cs). The
+                         control's
                          layout root takes TitleBarCompactHeight (32) and switches to TitleBarExpandedHeight (48) only when Content,
                          LeftHeader or RightHeader is set (TitleBar.xaml, UpdateHeight in TitleBar.cpp, microsoft-ui-xaml, tag
-                         winui3/release/2.5.1, read 2026-10-24). This one has none, so the compact height itself is raised. -->
+                         winui3/release/2.5.1, read 2026-10-24). It had none then, so the compact height itself was raised; now the
+                         search box (Content) and Refresh (LeftHeader) are set, which the guideline's 48 is for, and the raised compact
+                         height keeps the bar at 48 either way. -->
                     <x:Double x:Key="TitleBarCompactHeight">48</x:Double>
+                    <HorizontalAlignment x:Key="TitleBarContentHorizontalAlignment">Stretch</HorizontalAlignment>
                     <!-- The back and pane buttons 40 × 36 with 6 px above and below, as Windows Settings' back button in its 48 px title
                          bar (measured on the owner's PC, 2026-10-24; owner's finding: a gap to the window's border). The control's
                          styles stretch them to the bar's height less a 2 px margin (TitleBarBackButtonStyle and
@@ -75,8 +79,113 @@
                     <Style x:Key="TitleBarPaneToggleButtonStyle" TargetType="Button" BasedOn="{StaticResource TitleBarPaneToggleButtonStyle}">
                         <Setter Property="Margin" Value="2,6" />
                     </Style>
+                    <!-- Refresh beside them, looking and sized as they do: the back button's colours, width and states
+                         (TitleBarBackButtonStyle, TitleBar_themeresources.xaml, microsoft-ui-xaml, tag winui3/release/2.5.1, as in
+                         generic.xaml of Microsoft.WindowsAppSDK.WinUI 2.3.9), with a glyph in place of its animated arrow. -->
+                    <Style x:Key="TitleBarCommandButtonStyle" TargetType="Button">
+                        <Setter Property="Background" Value="{ThemeResource TitleBarBackButtonBackground}" />
+                        <Setter Property="Foreground" Value="{ThemeResource TitleBarBackButtonForeground}" />
+                        <Setter Property="Width" Value="{ThemeResource TitleBarBackButtonWidth}" />
+                        <!-- 36, as tall as the back and pane buttons (the bar's 48 less 6 above and below): the title bar centres its
+                             left header (TitleBarLeftHeaderVerticalAlignment), so Stretch left it as tall as its glyph and its hover
+                             backplate smaller than theirs (owner's run, 2026-10-26). -->
+                        <Setter Property="Height" Value="36" />
+                        <Setter Property="UseSystemFocusVisuals" Value="{StaticResource UseSystemFocusVisuals}" />
+                        <Setter Property="Margin" Value="2,0" />
+                        <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="Button">
+                                    <Grid x:Name="RootGrid" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}">
+                                        <VisualStateManager.VisualStateGroups>
+                                            <VisualStateGroup x:Name="CommonStates">
+                                                <VisualState x:Name="Normal" />
+                                                <VisualState x:Name="PointerOver">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RootGrid.Background" Value="{ThemeResource TitleBarBackButtonBackgroundPointerOver}" />
+                                                        <Setter Target="Content.Foreground" Value="{ThemeResource TitleBarBackButtonForegroundPointerOver}" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                                <VisualState x:Name="Pressed">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RootGrid.Background" Value="{ThemeResource TitleBarBackButtonBackgroundPressed}" />
+                                                        <Setter Target="Content.Foreground" Value="{ThemeResource TitleBarBackButtonForegroundPressed}" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                                <VisualState x:Name="Disabled">
+                                                    <VisualState.Setters>
+                                                        <Setter Target="RootGrid.Background" Value="{ThemeResource TitleBarBackButtonBackgroundDisabled}" />
+                                                        <Setter Target="Content.Foreground" Value="{ThemeResource TitleBarBackButtonForegroundDisabled}" />
+                                                    </VisualState.Setters>
+                                                </VisualState>
+                                            </VisualStateGroup>
+                                        </VisualStateManager.VisualStateGroups>
+                                        <ContentPresenter
+                                            x:Name="Content"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            Foreground="{TemplateBinding Foreground}"
+                                            Content="{TemplateBinding Content}" />
+                                    </Grid>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
                 </ResourceDictionary>
             </TitleBar.Resources>
+            <!-- Refresh for the page shown, after the back and pane buttons, where File Explorer and Edge have it: refresh must not
+                 need the keyboard, "we recommend that you also have a refresh button available for users who don't have a touch
+                 interface" (Pull-to-refresh page, learn.microsoft.com, ms.date 2025-02-26, read 2026-10-26; title bar placement:
+                 owner, 2026-10-26). Enabled on pages that refresh (IRefreshable). F5 and Ctrl+R are the pages' own keys ("Refresh |
+                 F5 or Ctrl + R", Keyboard accelerators page, learn.microsoft.com, ms.date 2026-08-28, read 2026-10-26), named in the
+                 tooltip as the Tooltips page asks. Glyph: Segoe Fluent Icons E72C "Refresh" ("Segoe Fluent Icons font",
+                 learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26), at 14: at the buttons' 16 it drew larger than their
+                 animated arrow and lines (owner's run and a capture of the window, 2026-10-26). -->
+            <TitleBar.LeftHeader>
+                <Button
+                    x:Name="RefreshButton"
+                    Style="{StaticResource TitleBarCommandButtonStyle}"
+                    IsEnabled="False"
+                    AutomationProperties.Name="Refresh"
+                    ToolTipService.ToolTip="Refresh (F5)"
+                    Click="OnRefreshClick">
+                    <FontIcon Glyph="&#xE72C;" FontSize="14" />
+                </Button>
+            </TitleBar.LeftHeader>
+            <!-- App-level search in the title bar, with a library's own search on its page (owner, 2026-10-26): "If global search
+                 functionality is present, a searchbox should be added to the title bar, centered to the window. Increase the size of
+                 the title bar to 48px when you include a searchbox. ... The search box needs to be responsive to react to window size
+                 changes." ("Windows app title bar", learn.microsoft.com, ms.date 2024-07-31, read 2026-10-26). Sized and placed as
+                 Windows Settings' box (measured on the owner's PC at 150 %, 2026-10-26; MainWindow.xaml.cs, LayoutSearch): 500 wide,
+                 centred on the window, keeping as much room on its right as the title bar's buttons and title take on its left.
+                 Shown only while a Jellyfin server is signed in. -->
+            <!-- While the pane is not expanded (the window narrower than the navigation view's 1008, its default
+                 ExpandedModeThresholdWidth) the box gives way to a Search button after the title, which opens a box over the page, as
+                 Windows Settings does (owner's run, 2026-10-26). Glyph: Segoe Fluent
+                 Icons E721 "Search" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26). -->
+            <TitleBar.Content>
+                <Grid x:Name="SearchHost" SizeChanged="OnSearchHostSizeChanged">
+                    <AutoSuggestBox
+                        x:Name="SearchBox"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Center"
+                        Visibility="Collapsed"
+                        PlaceholderText="Search"
+                        AutomationProperties.Name="Search"
+                        QueryIcon="Find"
+                        QuerySubmitted="OnSearchSubmitted" />
+                    <Button
+                        x:Name="SearchButton"
+                        HorizontalAlignment="Left"
+                        Style="{StaticResource TitleBarCommandButtonStyle}"
+                        Visibility="Collapsed"
+                        AutomationProperties.Name="Search"
+                        ToolTipService.ToolTip="Search (Ctrl+E)"
+                        Click="OnSearchButtonClick">
+                        <FontIcon Glyph="&#xE721;" FontSize="14" />
+                    </Button>
+                </Grid>
+            </TitleBar.Content>
         </TitleBar>
 
         <!-- The navigation view's "Compact" adaptive pattern, so the pane is never hidden (owner, 2026-10-24): "an expanded left pane
@@ -113,22 +222,43 @@
                 <Thickness x:Key="NavigationViewPaneContentGridMargin">-1,51,-1,3</Thickness>
                 <Thickness x:Key="NavigationViewContentMargin">0,48,0,0</Thickness>
             </NavigationView.Resources>
-            <!-- App-level search: "An optional AutoSuggestBox control to allow for app-level search. Assign the control to the
-                 NavigationView.AutoSuggestBox property." (NavigationView page, learn.microsoft.com, ms.date 2026-10-02, read
-                 2026-10-25). Shown only while a Jellyfin server is signed in. -->
-            <NavigationView.AutoSuggestBox>
-                <AutoSuggestBox
-                    x:Name="SearchBox"
-                    Visibility="Collapsed"
-                    PlaceholderText="Search"
-                    AutomationProperties.Name="Search"
-                    QueryIcon="Find"
-                    QuerySubmitted="OnSearchSubmitted" />
-            </NavigationView.AutoSuggestBox>
             <!-- Home, then one item per library of each signed-in server, in the user's order (ADR 0018, section 6), added in code
-                 ("You can also add items in code", same page); a header names each server when there is more than one. -->
+                 ("You can also add items in code", same page) under Libraries; an item per server holds its libraries when there is
+                 more than one (ShowLibraries). -->
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
+                <!-- Between Home and the libraries (owner, 2026-10-26); shown only while there are libraries (ShowLibraries). -->
+                <NavigationViewItemSeparator x:Name="LibrariesSeparator" Visibility="Collapsed" />
+                <!-- Views across every library, under the separator and above Libraries (owner, 2026-10-26): with one server signed in here; with more, inside each
+                     server's item under Libraries (ShowLibraries). Glyphs: Segoe Fluent Icons EB51 "Heart", as the tiles' and the
+                     details page's favourite, and E823 "Recent" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read
+                     2026-10-26). -->
+                <NavigationViewItem x:Name="FavouritesItem" Content="Favourites" Visibility="Collapsed">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xEB51;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="RecentItem" Content="Recently added" Visibility="Collapsed">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE823;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <!-- Libraries: one item that expands to every library, and with more than one server to each server's, below an
+                 item per server (owner, 2026-10-26). Hierarchical items as the NavigationView page describes them: "Nested items
+                 are shown when the parent is expanded", and in the icon rail its children open in a flyout (NavigationView page,
+                 learn.microsoft.com, ms.date 2026-10-02, not re-read for this; the flyout seen on the owner's run). Open at start.
+                 Choosing it only opens or closes it (SelectsOnInvoked). Glyph: Segoe Fluent Icons E8F1 "Library" ("Segoe Fluent
+                 Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26). -->
+                <NavigationViewItem
+                    x:Name="LibrariesItem"
+                    Content="Libraries"
+                    Visibility="Collapsed"
+                    IsExpanded="True"
+                    SelectsOnInvoked="False">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8F1;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
             </NavigationView.MenuItems>
             <Grid>
                 <Grid.RowDefinitions>
@@ -144,6 +274,47 @@
 
         <!-- The player, over the pages in the same window, as Media Player plays a video in its own window (owner's PC, 2026-10-25); in
              full screen it spans the title bar's row too (MainWindow.xaml.cs). -->
+        <!-- While the small-window search box is open, nothing under it takes a click, the title bar's buttons included (owner,
+             2026-10-26): a clear layer over the whole window (a Transparent background is hit-tested), above the title bar (its
+             ZIndex 1). A click on it closes the box, as a click elsewhere closes Windows Settings'. The title bar's drag area and the
+             caption buttons are the system's, outside XAML, and still work. -->
+        <Border
+            x:Name="SearchDismissLayer"
+            Grid.RowSpan="2"
+            Canvas.ZIndex="2"
+            Visibility="Collapsed"
+            Background="Transparent"
+            PointerPressed="OnSearchDismissPressed" />
+
+        <!-- The search box the title bar's Search button opens while the pane is not expanded: just under the title bar (4 into it,
+             as Windows Settings' box, measured on the owner's PC at 150 %, 2026-10-26), across the window 12 from its sides, the page
+             margin in a narrow window (Minimal NavigationView, "12px margins", NavigationView page, learn.microsoft.com, ms.date
+             2026-10-02, read 2026-10-25), over the page and the icon rail (owner, 2026-10-26). On a solid fill of the window's colour
+             with a shadow below, as Settings': the box's own fill is see-through (TextControlBackground), and the page showed
+             through it. Closed again when it is used, left, Esc is pressed, or the layer above is clicked. -->
+        <Border
+            x:Name="NarrowSearchPlate"
+            Grid.Row="1"
+            Canvas.ZIndex="3"
+            Margin="12,-4,12,0"
+            VerticalAlignment="Top"
+            Visibility="Collapsed"
+            CornerRadius="{StaticResource ControlCornerRadius}"
+            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+            Translation="0,0,16">
+            <Border.Shadow>
+                <ThemeShadow />
+            </Border.Shadow>
+            <AutoSuggestBox
+                x:Name="NarrowSearchBox"
+                PlaceholderText="Search"
+                AutomationProperties.Name="Search"
+                QueryIcon="Find"
+                QuerySubmitted="OnNarrowSearchSubmitted"
+                PreviewKeyDown="OnNarrowSearchKeyDown"
+                LostFocus="OnNarrowSearchLostFocus" />
+        </Border>
+
         <player:PlayerView x:Name="Player" Grid.Row="1" />
     </Grid>
 </Window>

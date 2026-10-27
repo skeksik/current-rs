@@ -314,10 +314,53 @@ fn the_playback_settings_switch_skipping() {
     assert_eq!(
         core.playback_settings(),
         PlaybackSettingsSnapshot {
+            preferred_quality: QualityChoice::Maximum,
             auto_skip: Vec::new(),
-            skips_intros_and_credits: false
+            skips_intros_and_credits: false,
+            shows_quality_resolution: true,
+            shows_all_qualities: false,
         }
     );
+    let preferred = QualityChoice::Bitrate {
+        bits_per_second: 20_000_000,
+    };
+    block_on(core.set_preferred_quality(preferred)).unwrap();
+    assert_eq!(core.playback_settings().preferred_quality, preferred);
+    // A step the short list does not offer is stored as the nearest it does, so Settings always has one selected.
+    block_on(core.set_preferred_quality(QualityChoice::Bitrate {
+        bits_per_second: 10_000_000,
+    }))
+    .unwrap();
+    assert_eq!(
+        core.playback_settings().preferred_quality,
+        QualityChoice::Bitrate {
+            bits_per_second: 4_000_000
+        }
+    );
+    // No bitrate is no limit: "Maximum", as the settings file reads it.
+    block_on(core.set_preferred_quality(QualityChoice::Bitrate { bits_per_second: 0 })).unwrap();
+    assert_eq!(
+        core.playback_settings().preferred_quality,
+        QualityChoice::Maximum
+    );
+    block_on(core.set_show_all_qualities(true)).unwrap();
+    assert!(core.playback_settings().shows_all_qualities);
+    // A step only "Show all" lists, then the switch off: the nearest listed step not above it, 4 Mbit/s.
+    block_on(core.set_preferred_quality(QualityChoice::Bitrate {
+        bits_per_second: 10_000_000,
+    }))
+    .unwrap();
+    block_on(core.set_show_all_qualities(false)).unwrap();
+    assert_eq!(
+        core.playback_settings().preferred_quality,
+        QualityChoice::Bitrate {
+            bits_per_second: 4_000_000
+        }
+    );
+    block_on(core.set_show_quality_resolution(false)).unwrap();
+    assert!(!core.playback_settings().shows_quality_resolution);
+    block_on(core.set_show_quality_resolution(true)).unwrap();
+    assert!(core.playback_settings().shows_quality_resolution);
     block_on(core.set_skip_intros_and_credits(true)).unwrap();
     assert!(core.playback_settings().skips_intros_and_credits);
     assert_eq!(core.playback_settings().auto_skip, ["intro", "outro"]);
@@ -360,6 +403,7 @@ const RECORD_TYPES: &[&str] = &[
     "EngineOutputInfo",
     "PlaybackInfoSnapshot",
     "PlaybackSettingsSnapshot",
+    "QualityOptionInfo",
 ];
 
 #[test]

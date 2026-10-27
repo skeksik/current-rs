@@ -47,7 +47,7 @@ public sealed partial class ItemTile : UserControl
             }
             _placeholder.Recycle();
             _artwork.Recycle();
-            if (Artwork.Source is null)
+            if (Artwork.ImageSource is null)
             {
                 _shown = null;
             }
@@ -81,6 +81,13 @@ public sealed partial class ItemTile : UserControl
 
     private double PictureHeight(double width) =>
         double.IsNaN(width) ? double.NaN : Math.Round(_shape == TileShape.Poster ? width * 3 / 2 : width * 9 / 16);
+
+    /// <summary>False for the picture only, without the title and year under it (a library's View menu).</summary>
+    public bool ShowsText
+    {
+        get => TextPart.Visibility == Visibility.Visible;
+        set => TextPart.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     /// <summary>False on a series' own page: an episode's tile names the episode, not its series again.</summary>
     public bool ShowsSeries { get; set; } = true;
@@ -125,20 +132,19 @@ public sealed partial class ItemTile : UserControl
         {
             TitleText.Text = "";
             SubtitleText.Text = "";
-            ShowMarks(null);
+            ShowMarks(null, null);
             ShowPicture(null);
             AutomationProperties.SetName(this, slot is Slot.Failed ? BrowseText.FailedTileName : BrowseText.LoadingTileName);
             return;
         }
         TitleText.Text = BrowseText.Title(item, ShowsSeries);
         SubtitleText.Text = BrowseText.Subtitle(item, ShowsSeries);
-        SubtitleText.Visibility = SubtitleText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
-        ShowMarks(item.User);
+        ShowMarks(item.User, item.TimeLeft);
         ShowPicture(item);
         AutomationProperties.SetName(this, BrowseText.TileName(item, ShowsSeries));
     }
 
-    private void ShowMarks(UserState? user)
+    private void ShowMarks(UserState? user, TimeSpan? timeLeft)
     {
         FavouriteBadge.Visibility = user?.Favourite == true ? Visibility.Visible : Visibility.Collapsed;
         PlayedBadge.Visibility = user?.Played == true ? Visibility.Visible : Visibility.Collapsed;
@@ -146,8 +152,9 @@ public sealed partial class ItemTile : UserControl
         UnplayedBadge.Visibility = unplayed is null ? Visibility.Collapsed : Visibility.Visible;
         UnplayedCount.Text = unplayed?.ToString(System.Globalization.CultureInfo.CurrentCulture) ?? "";
         var progress = user is { Played: false, Progress: > 0 and < 1 } ? user.Progress : null;
-        Progress.Visibility = progress is null ? Visibility.Collapsed : Visibility.Visible;
+        ProgressPart.Visibility = progress is null ? Visibility.Collapsed : Visibility.Visible;
         Progress.Value = progress ?? 0;
+        TimeLeftText.Text = timeLeft is { } left ? BrowseText.ShortTime(left) : "";
     }
 
     /// <summary>The artwork for the tile's shape, as the core picks it (ItemSummary.Poster and Wide).</summary>
@@ -163,8 +170,8 @@ public sealed partial class ItemTile : UserControl
         _shown = null;
         _placeholder.Recycle();
         _artwork.Recycle();
-        Placeholder.Source = null;
-        Artwork.Source = null;
+        Placeholder.ImageSource = null;
+        Artwork.ImageSource = null;
         // Before the tile is in a window there is no scale to size the request by: Loaded binds again.
         if (art is null || XamlRoot is null || double.IsNaN(Root.Width))
         {
@@ -181,14 +188,14 @@ public sealed partial class ItemTile : UserControl
         _ = LoadAsync(_artwork, Artwork, new ImageRequest(new ImageSource.Server(art.Image), width, height), art.Image);
     }
 
-    private async Task LoadAsync(TileImage loader, Image target, ImageRequest request, ImageRef image)
+    private async Task LoadAsync(TileImage loader, Microsoft.UI.Xaml.Media.ImageBrush target, ImageRequest request, ImageRef image)
     {
         try
         {
             var bitmap = await loader.LoadAsync(request);
             if (bitmap is not null && _shown == image)
             {
-                target.Source = bitmap;
+                target.ImageSource = bitmap;
             }
         }
         catch (ImageLoadException)

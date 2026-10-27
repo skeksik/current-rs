@@ -1,6 +1,6 @@
 //! Browsing a signed-in Jellyfin server (ADR 0018, sections 3, 5 and 6): library grids as paged lists ([`PagedItems`]), Home
-//! ([`HomeFeed`]), detail pages ([`DetailsView`]), search ([`SearchResults`]), and played and favourite marks shown at once in
-//! every live list and sent to the server one at a time per item.
+//! ([`HomeFeed`]), detail pages ([`DetailsView`]), search and the Favourites tab's rows ([`SearchResults`]), and played and
+//! favourite marks shown at once in every live list and sent to the server one at a time per item.
 //!
 //! A [`Browse`] belongs to one session of one server: once that session ends (sign-out, removal, a new sign-in), its lists stop
 //! loading and its requests fail with [`AuthError::NotSignedIn`] without reaching the network. A new session needs a new
@@ -26,8 +26,8 @@ use std::time::Duration;
 
 use current_jellyfin::{AuthError, JellyfinClient};
 use current_model::{
-    CollectionKind, ItemQuery, ItemRef, ItemSummary, Library, MediaKind, Reachability, ServerRef,
-    ServerStatus, ServiceType, SortKey, UserState,
+    CollectionKind, ItemFilter, ItemQuery, ItemRef, ItemSummary, Library, MediaKind, Reachability,
+    ServerRef, ServerStatus, ServiceType, SortKey, SortOrder, UserState,
 };
 use current_net::RuntimeHandle;
 use tokio::sync::watch;
@@ -43,10 +43,12 @@ pub use home::{
 pub use paged::{BACKLOG_PAGES, MAX_PAGE_REQUESTS, PAGE_SIZE, PagedItems, PagedState, Slot};
 pub(crate) use present::ShownAgain;
 pub use present::{
-    REFRESH_WHEN_SHOWN_AFTER, SeriesRun, SortChoice, TileShape, library_filters, library_sorts,
-    series_run, tile_artwork,
+    FILTERS_OFF_WHILE_SEARCHING, GridTools, LIBRARY_SEARCH_WINDOW, REFRESH_WHEN_SHOWN_AFTER,
+    SORT_OFF_WHILE_SEARCHING, SeriesRun, SortChoice, TileShape, grid_tools, library_filters,
+    library_search_note, library_sorts, library_toggle_filters, series_run, tile_artwork,
+    with_filter_choice, with_filter_toggle,
 };
-pub use search::SearchResults;
+pub use search::{FAVOURITE_ROW_KINDS, FAVOURITE_ROW_LIMIT, SearchResults};
 pub use states::{BrowseNotice, ItemAction, NoticeKind};
 
 use libraries::Libraries;
@@ -337,11 +339,9 @@ impl Context {
                     item_name: name,
                     problem,
                 }),
-                None if matches!(action, ItemAction::SetPlayed(_)) => {
-                    self.dependents_changed(answered.parents);
-                }
-                // A favourite changes no other list's content, only how the item shows.
-                None => {}
+                // A mark changes the lists chosen by marks (Home's rows, the Favourites tab, a filtered grid): they read again a moment
+                // later, with the item's parents for the played mark's (a series' unplayed count).
+                None => self.dependents_changed(answered.parents),
             }
         }
     }
@@ -393,6 +393,19 @@ impl Browse {
         PagedItems::open(self.ctx.clone(), query, Some(library.item.clone()))
     }
 
+    /// A grid of items from every library: `query` with no parent (a Favourites row's whole list and the Recently added tab,
+    /// [`favourites_query`] and [`recently_added_everywhere_query`]). Starts loading at once.
+    pub fn open_items(&self, query: ItemQuery) -> PagedItems {
+        PagedItems::open(
+            self.ctx.clone(),
+            ItemQuery {
+                parent: None,
+                ..query
+            },
+            None,
+        )
+    }
+
     /// Home's rows. Start loading at once.
     pub fn home(&self) -> HomeFeed {
         HomeFeed::open(self.ctx.clone())
@@ -406,6 +419,14 @@ impl Browse {
     /// The best matches for `term`, one group per kind. Starts loading at once.
     pub fn search(&self, term: &str) -> SearchResults {
         SearchResults::open(self.ctx.clone(), term.to_owned())
+    }
+
+    /// The Favourites tab (owner, 2026-10-27): the user's favourite films, series and episodes, a row each ([`FAVOURITE_ROW_KINDS`]),
+    /// as many as [`FAVOURITE_ROW_LIMIT`] in each, by name; a row only while it has items. They read again a moment after a played or
+    /// favourite mark changes. A row's header opens the whole list: [`Browse::open_items`] with [`favourites_query`] for its kind.
+    /// Starts loading at once.
+    pub fn favourites(&self) -> SearchResults {
+        SearchResults::favourites(self.ctx.clone())
     }
 
     /// Marks `item` played or unplayed: every live list shows it at once, the server is told, and on failure the change rolls
@@ -530,13 +551,214 @@ pub fn library_query(library: &Library) -> ItemQuery {
     }
 }
 
+/// What a Home row of `library`'s latest items opens when its header is chosen (owner, 2026-10-26): the library's grid, the newest
+/// added first.
+pub fn recently_added_query(library: &Library) -> ItemQuery {
+    ItemQuery {
+        sort: vec![SortKey::DATE_CREATED],
+        order: SortOrder::Descending,
+        ..library_query(library)
+    }
+}
+
+/// The kinds the views across every library list (owner, 2026-10-26): films and series as a library lists them, with other videos
+/// and music videos; never an episode on its own.
+const VIEW_KINDS: [MediaKind; 4] = [
+    MediaKind::MOVIE,
+    MediaKind::SERIES,
+    MediaKind::VIDEO,
+    MediaKind::MUSIC_VIDEO,
+];
+
+/// The media types a view across every library can be narrowed to, in the order the UI lists them after "every type" (owner,
+/// 2026-10-26).
+pub fn view_kinds() -> Vec<MediaKind> {
+    vec![MediaKind::MOVIE, MediaKind::SERIES]
+}
+
+fn view_kinds_for(kind: Option<MediaKind>) -> Vec<MediaKind> {
+    match kind {
+        Some(kind) => vec![kind],
+        None => VIEW_KINDS.to_vec(),
+    }
+}
+
+/// Every item of `kind` in every library, by name (owner, 2026-10-27): the Movies, Series or Episodes page a Favourites row's header
+/// opens, with the favourites tick on ([`favourites_query`]).
+pub fn kind_query(kind: MediaKind) -> ItemQuery {
+    ItemQuery {
+        recursive: true,
+        kinds: vec![kind],
+        sort: vec![SortKey::SORT_NAME],
+        ..ItemQuery::default()
+    }
+}
+
+/// The user's favourites in every library, by name (owner, 2026-10-26 and 2026-10-27): with `kind`, [`kind_query`] with the
+/// favourites tick on, as a Favourites row's header opens it (episodes too, [`FAVOURITE_ROW_KINDS`]); without, Home's Favourites
+/// row, of the kinds the views across every library list, with no episode on its own.
+pub fn favourites_query(kind: Option<MediaKind>) -> ItemQuery {
+    let query = match kind {
+        Some(kind) => kind_query(kind),
+        None => ItemQuery {
+            recursive: true,
+            kinds: view_kinds_for(None),
+            sort: vec![SortKey::SORT_NAME],
+            ..ItemQuery::default()
+        },
+    };
+    with_filter_toggle(&query, &ItemFilter::FAVOURITE, true)
+}
+
+/// The Recently added tab and Home's Recently added row (owner, 2026-10-26): what was added to every library, the newest first; only
+/// `kind` when given. A series counts from when it was added: one is not moved up when an episode is added to it (Jellyfin keeps that
+/// date for folders only, so sorting films and series together by it would put the films last; not verified on a server).
+pub fn recently_added_everywhere_query(kind: Option<MediaKind>) -> ItemQuery {
+    ItemQuery {
+        recursive: true,
+        kinds: view_kinds_for(kind),
+        sort: vec![SortKey::DATE_CREATED],
+        order: SortOrder::Descending,
+        ..ItemQuery::default()
+    }
+}
+
+/// What plays by itself, for Seen recently: films, episodes and other videos, each as it was watched.
+const PLAYABLE: [MediaKind; 4] = [
+    MediaKind::MOVIE,
+    MediaKind::EPISODE,
+    MediaKind::VIDEO,
+    MediaKind::MUSIC_VIDEO,
+];
+
+/// Home's Seen recently row (owner, 2026-10-26): what the user finished last, in every library, the latest first.
+pub fn seen_recently_query() -> ItemQuery {
+    ItemQuery {
+        recursive: true,
+        kinds: PLAYABLE.to_vec(),
+        filters: vec![ItemFilter::PLAYED],
+        sort: vec![SortKey::DATE_PLAYED],
+        order: SortOrder::Descending,
+        ..ItemQuery::default()
+    }
+}
+
+/// What a library grid loads for the text in its own search box (owner, 2026-10-26 and 2026-10-27), from `base`, the query it showed
+/// before searching, which the UI keeps: the text without the spaces round it, searched for in `base`'s items (its library, kinds and
+/// depth) with no sort and no filter, so the best matches come first; when no text is left, `base` itself, with its sort and filters
+/// back.
+pub fn library_search(base: &ItemQuery, term: &str) -> ItemQuery {
+    let term = term.trim();
+    if term.is_empty() {
+        return ItemQuery {
+            search_term: None,
+            ..base.clone()
+        };
+    }
+    ItemQuery {
+        parent: base.parent.clone(),
+        kinds: base.kinds.clone(),
+        recursive: base.recursive,
+        search_term: Some(term.to_owned()),
+        ..ItemQuery::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn the_views_across_libraries_list_every_library_s_playable_items() {
+        let favourites = favourites_query(None);
+        assert!(favourites.parent.is_none());
+        assert!(favourites.recursive);
+        assert_eq!(favourites.filters, [ItemFilter::FAVOURITE]);
+        assert!(favourites.kinds.contains(&MediaKind::SERIES));
+        assert!(favourites.kinds.contains(&MediaKind::MOVIE));
+        // No episode on its own: its series shows.
+        assert!(!favourites.kinds.contains(&MediaKind::EPISODE));
+        assert_eq!(
+            favourites_query(Some(MediaKind::MOVIE)).kinds,
+            [MediaKind::MOVIE]
+        );
+        // Each Favourites row's header opens its kind, episodes included.
+        for kind in FAVOURITE_ROW_KINDS {
+            let row = favourites_query(Some(kind.clone()));
+            assert_eq!(row.kinds, [kind]);
+            assert_eq!(row.filters, [ItemFilter::FAVOURITE]);
+            assert!(row.recursive && row.depends_on_marks());
+        }
+        assert_eq!(
+            FAVOURITE_ROW_KINDS,
+            [MediaKind::MOVIE, MediaKind::SERIES, MediaKind::EPISODE]
+        );
+
+        let recent = recently_added_everywhere_query(None);
+        assert!(recent.recursive);
+        assert_eq!(recent.sort, [SortKey::DATE_CREATED]);
+        assert_eq!(recent.order, SortOrder::Descending);
+        assert!(recent.kinds.contains(&MediaKind::SERIES));
+        assert!(!recent.kinds.contains(&MediaKind::EPISODE));
+        assert_eq!(
+            recently_added_everywhere_query(Some(MediaKind::SERIES)).kinds,
+            [MediaKind::SERIES]
+        );
+        assert_eq!(view_kinds(), [MediaKind::MOVIE, MediaKind::SERIES]);
+
+        let seen = seen_recently_query();
+        assert_eq!(seen.filters, [ItemFilter::PLAYED]);
+        assert_eq!(seen.sort, [SortKey::DATE_PLAYED]);
+        assert_eq!(seen.order, SortOrder::Descending);
+    }
+
+    #[test]
+    fn a_library_search_takes_the_typed_text_trimmed_and_nothing_when_blank() {
+        use current_model::{ItemId, ServerKey};
+        let library = ItemRef::new(
+            ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+            ItemId::new("57a2d1e0000000000000000000001001"),
+        );
+        let base = ItemQuery {
+            parent: Some(library),
+            kinds: vec![MediaKind::MOVIE],
+            recursive: true,
+            sort: vec![SortKey::DATE_CREATED],
+            order: SortOrder::Descending,
+            filters: vec![ItemFilter::UNPLAYED],
+            genres: vec!["Drama".into()],
+            years: vec![2010],
+            name_starts_with: Some("E".into()),
+            search_term: None,
+        };
+        let searching = library_search(&base, "  Example  ");
+        assert_eq!(searching.search_term.as_deref(), Some("Example"));
+        // The library's items, by the server's relevance: no sort, no filter.
+        assert_eq!(searching.parent, base.parent);
+        assert_eq!(searching.kinds, base.kinds);
+        assert!(searching.recursive);
+        assert!(searching.sort.is_empty());
+        assert_eq!(searching.order, SortOrder::Ascending);
+        assert!(searching.filters.is_empty());
+        assert!(searching.genres.is_empty() && searching.years.is_empty());
+        assert_eq!(searching.name_starts_with, None);
+        assert!(!searching.depends_on_marks());
+        // Cleared: the sort and filters come back.
+        assert_eq!(library_search(&base, "   "), base);
+        assert_eq!(library_search(&base, ""), base);
+        // A base that still searches (a UI that kept the searching query) loses its search.
+        assert_eq!(
+            library_search(&searching, ""),
+            ItemQuery {
+                search_term: None,
+                ..searching.clone()
+            }
+        );
+    }
+
+    #[test]
     fn a_library_s_first_query_follows_what_it_holds() {
-        use current_model::{ItemId, ServerKey, SortOrder};
+        use current_model::{ItemId, ServerKey};
         let library = |collection: Option<CollectionKind>| Library {
             item: ItemRef::new(
                 ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
@@ -565,6 +787,19 @@ mod tests {
             assert!(!query.recursive);
             assert_eq!(query.sort, [SortKey::SORT_NAME]);
         }
+
+        // A Latest row's header: the same items, the newest added first.
+        let recent = recently_added_query(&library(Some(CollectionKind::MOVIES)));
+        assert_eq!(recent.sort, [SortKey::DATE_CREATED]);
+        assert_eq!(recent.order, SortOrder::Descending);
+        assert_eq!(
+            ItemQuery {
+                sort: films.sort.clone(),
+                order: films.order,
+                ..recent
+            },
+            films
+        );
     }
 
     #[tokio::test]

@@ -1,8 +1,9 @@
 //! Home (ADR 0018, section 6): rows, each with its own list. Home's layout is provisional and will be redesigned; the shape (a list
 //! of rows, a list of items per row) is meant to stay.
 //!
-//! Rows, in order: Continue watching, Next up, then Latest in each library in the user's order, skipping the libraries the user
-//! keeps out of "latest" and the kinds without a meaningful "latest". A row exists only while it has items, so no row assumes a
+//! Rows, in order: Continue watching, Next up, Favourites and Recently added across every library, then Latest in each library in
+//! the user's order, skipping the libraries the user keeps out of "latest" and the kinds without a meaningful "latest", then Seen
+//! recently (owner, 2026-10-26). A row exists only while it has items, so no row assumes a
 //! library type exists. Rows load in parallel and each appears in its place as soon as it has items. A row that fails keeps what
 //! it showed from the last load (none the first time) and the state carries one failure for a Retry message.
 
@@ -11,7 +12,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::SystemTime;
 
 use current_jellyfin::{AuthError, JellyfinClient, NEXT_UP_CUTOFF};
-use current_model::{CollectionKind, ItemRef, ItemSummary, Library, UserState};
+use current_model::{CollectionKind, ItemQuery, ItemRef, ItemSummary, Library, UserState};
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 
@@ -22,6 +23,8 @@ use crate::list::ObservableList;
 pub const RESUME_LIMIT: u32 = 12;
 pub const NEXT_UP_LIMIT: u32 = 24;
 pub const LATEST_LIMIT: u32 = 16;
+/// The rows across every library ask for as many as a library's Latest row.
+pub const VIEW_ROW_LIMIT: u32 = 16;
 
 /// Collection kinds without a meaningful "latest": the open values Current names, and the Jellyfin collection types jellyfin-web
 /// also skips (`docs/notes/jellyfin-browse.md`, "Latest per library").
@@ -32,6 +35,12 @@ pub enum HomeRowKind {
     ContinueWatching,
     NextUp,
     Latest,
+    /// What was added to every library, the newest first ([`super::recently_added_everywhere_query`]).
+    RecentlyAdded,
+    /// The user's favourites in every library ([`super::favourites_query`]).
+    Favourites,
+    /// What the user finished last ([`super::seen_recently_query`]).
+    SeenRecently,
 }
 
 /// One row of Home. Debug leaves out the title, a library's name.
@@ -69,7 +78,10 @@ pub struct HomeState {
 enum Spec {
     Resume,
     NextUp,
+    RecentlyAdded,
+    Favourites,
     Latest(Library),
+    SeenRecently,
 }
 
 impl Spec {
@@ -77,6 +89,9 @@ impl Spec {
         match self {
             Self::Resume => "resume".to_owned(),
             Self::NextUp => "next_up".to_owned(),
+            Self::RecentlyAdded => "recently_added".to_owned(),
+            Self::Favourites => "favourites".to_owned(),
+            Self::SeenRecently => "seen_recently".to_owned(),
             Self::Latest(library) => format!("latest:{}", library.item.id.as_str()),
         }
     }
@@ -85,6 +100,9 @@ impl Spec {
         let (kind, title, library) = match self {
             Self::Resume => (HomeRowKind::ContinueWatching, String::new(), None),
             Self::NextUp => (HomeRowKind::NextUp, String::new(), None),
+            Self::RecentlyAdded => (HomeRowKind::RecentlyAdded, String::new(), None),
+            Self::Favourites => (HomeRowKind::Favourites, String::new(), None),
+            Self::SeenRecently => (HomeRowKind::SeenRecently, String::new(), None),
             Self::Latest(library) => (
                 HomeRowKind::Latest,
                 library.name.clone(),
@@ -109,9 +127,27 @@ impl Spec {
                 client.next_up(NEXT_UP_LIMIT, cutoff).await
             }
             Self::Latest(library) => client.latest(&library.item, LATEST_LIMIT).await,
+            Self::RecentlyAdded => {
+                view(client, &super::recently_added_everywhere_query(None)).await
+            }
+            Self::Favourites => view(client, &super::favourites_query(None)).await,
+            Self::SeenRecently => view(client, &super::seen_recently_query()).await,
         }
     }
 }
+
+/// The first items of a view across every library, for its row.
+async fn view(client: &JellyfinClient, query: &ItemQuery) -> Result<Vec<ItemSummary>, AuthError> {
+    Ok(client.items(query, 0, VIEW_ROW_LIMIT, false).await?.items)
+}
+
+/// The rows that follow the user's played and favourite marks, loaded again when they change ([`Live::dependents_changed`]).
+const DEPENDENT: [Spec; 4] = [
+    Spec::Resume,
+    Spec::NextUp,
+    Spec::Favourites,
+    Spec::SeenRecently,
+];
 
 /// Whether `library` gets a Latest row.
 fn has_latest(library: &Library, excludes: &[ItemRef]) -> bool {
@@ -197,7 +233,13 @@ impl HomeFeed {
             ctx,
             rows: ObservableList::new(),
             lists: Mutex::new(Rows {
-                order: vec![Spec::Resume.key(), Spec::NextUp.key()],
+                order: vec![
+                    Spec::Resume.key(),
+                    Spec::NextUp.key(),
+                    Spec::Favourites.key(),
+                    Spec::RecentlyAdded.key(),
+                    Spec::SeenRecently.key(),
+                ],
                 lists: HashMap::new(),
             }),
             state: watch::Sender::new(HomeState::default()),
@@ -275,15 +317,21 @@ impl Home {
             match ctx.client() {
                 Ok(client) => {
                     let mut rows = JoinSet::new();
-                    for spec in [Spec::Resume, Spec::NextUp] {
+                    for spec in DEPENDENT {
                         spawn_row(&mut rows, &client, spec);
                     }
                     if full {
+                        spawn_row(&mut rows, &client, Spec::RecentlyAdded);
                         // The navigation's list takes them too, so the navigation follows what Home shows.
                         match ctx.libraries_joined().await {
                             Ok(libraries) => {
                                 let excludes = client.latest_excludes();
-                                let mut keys = vec![Spec::Resume.key(), Spec::NextUp.key()];
+                                let mut keys = vec![
+                                    Spec::Resume.key(),
+                                    Spec::NextUp.key(),
+                                    Spec::Favourites.key(),
+                                    Spec::RecentlyAdded.key(),
+                                ];
                                 for library in libraries
                                     .into_iter()
                                     .filter(|library| has_latest(library, &excludes))
@@ -292,6 +340,7 @@ impl Home {
                                     keys.push(spec.key());
                                     spawn_row(&mut rows, &client, spec);
                                 }
+                                keys.push(Spec::SeenRecently.key());
                                 if let Some(home) = me.upgrade() {
                                     lock(&home.lists).order = keys.clone();
                                 }
@@ -450,7 +499,7 @@ impl Live for Home {
     }
 
     fn dependents_changed(&self, _items: &HashSet<ItemRef>) {
-        // "Continue watching" and "next up" depend on every played mark.
+        // "Continue watching", "next up", Favourites and Seen recently depend on every played or favourite mark.
         self.load(false);
     }
 

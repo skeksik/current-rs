@@ -1,8 +1,12 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using Current.Bindings;
 using Current.Shell.Browsing;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
 
 namespace Current.Shell.Pages;
@@ -13,14 +17,17 @@ namespace Current.Shell.Pages;
 /// coming back to the page binds to the slots already loaded: Back and Forward scroll to where the user left, opened from the
 /// navigation it starts at the top. A refresh only replaces slots, so the scroll position stays.
 /// </summary>
-public sealed partial class LibraryPage : Page
+public sealed partial class LibraryPage : Page, IRefreshable
 {
-    /// <summary>The sorts and filters the core offers, in its order (ItemQuery.SortChoices and FilterChoices); the boxes list them.</summary>
+    /// <summary>The sorts and filters the core offers, in its order (ItemQuery.SortChoices and FilterChoices); the menus list them.</summary>
     private static readonly IReadOnlyList<SortChoice> Sorts = ItemQuery.SortChoices;
 
     private static readonly IReadOnlyList<string?> Filters = ItemQuery.FilterChoices;
 
-    /// <summary>A sort's name in the box; a key Current has no name for shows as the core gave it.</summary>
+    /// <summary>The filters ticked on or off beside that choice (ItemQuery.ToggleFilterChoices): favourites.</summary>
+    private static readonly IReadOnlyList<string> Toggles = ItemQuery.ToggleFilterChoices;
+
+    /// <summary>A sort's name in the menu; a key Current has no name for shows as the core gave it.</summary>
     private static string SortName(string key) => key switch
     {
         "sort_name" => "Name",
@@ -39,21 +46,173 @@ public sealed partial class LibraryPage : Page
         _ => filter,
     };
 
+    // The menu items' icons, as Photos' sort menu has them (owner, 2026-10-26), from Segoe Fluent Icons ("Segoe Fluent Icons font",
+    // learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26): E8D2 Font, E787 Calendar, E8B2 Movies, E734 FavoriteStar, E74A Up,
+    // E74B Down, E71D AllApps, E768 Play, E73E CheckMark and EB51 Heart (the tiles' played mark and the details page's favourite).
+    // A key or filter Current has no icon for gets none.
+    private static string? SortGlyph(string key) => key switch
+    {
+        "sort_name" => "\uE8D2",
+        "date_created" => "\uE787",
+        "premiere_date" => "\uE8B2",
+        "community_rating" => "\uE734",
+        _ => null,
+    };
+
+    private static string? FilterGlyph(string? filter) => filter switch
+    {
+        null => "\uE71D",
+        "unplayed" => "\uE768",
+        "played" => "\uE73E",
+        "favourite" => "\uEB51",
+        _ => null,
+    };
+
+    // The arrows fill their whole em while the other glyphs leave space round them, so Ascending and Descending get a margin in the
+    // item's 16 x 16 icon box, which scales its content to fit (IconRoot, a Viewbox, in the menu items' template, generic.xaml of
+    // Microsoft.WindowsAppSDK.WinUI 2.3.9): 2 on each side draws them at 16/20 of the size, as small as Photos' (owner's run,
+    // 2026-10-26).
+    private static RadioMenuFlyoutItem MenuItem(string text, string? glyph, string group, bool small = false) => new()
+    {
+        Text = text,
+        GroupName = group,
+        Icon = glyph is null ? null : new FontIcon { Glyph = glyph, Margin = small ? new Thickness(2) : default },
+    };
+
     private LibraryGrid? _grid;
     private SlotCollection? _slots;
     private ValueSubscription<PagedState>? _state;
-    private bool _showingQuery;
+
+    /// <summary>The view across every library shown (<see cref="ViewArgs"/>), or null for a library.</summary>
+    private string? _view;
+
+
+    /// <summary>
+    /// The Filter menu's media types, for a view across every library (owner, 2026-10-26): every type, then the core's kinds, before
+    /// the menu's filters and a separator. Glyphs: Segoe Fluent Icons E8A9 "ViewAll", E8B2 "Movies" and E7F4 "TVMonitor", the films
+    /// and TV libraries' ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26).
+    /// </summary>
+    private readonly List<MenuFlyoutItemBase> _kindEntries = [];
+    private readonly List<(RadioMenuFlyoutItem Item, string? Kind)> _kindItems = [];
+
+    private static string KindName(string? kind) => kind switch
+    {
+        null => "All types",
+        "movie" => "Movies",
+        "series" => "Series",
+        _ => kind,
+    };
+
+    private static string? KindGlyph(string? kind) => kind switch
+    {
+        null => "\uE8A9",
+        "movie" => "\uE8B2",
+        "series" => "\uE7F4",
+        _ => null,
+    };
+
+    /// <summary>Puts the media types at the top of the Filter menu, or takes them out (a library).</summary>
+    private void ShowKindItems(bool show)
+    {
+        foreach (var entry in _kindEntries)
+        {
+            FilterMenu.Items.Remove(entry);
+        }
+        if (!show)
+        {
+            return;
+        }
+        if (_kindEntries.Count == 0)
+        {
+            foreach (var kind in new string?[] { null }.Concat(ItemQuery.ViewKindChoices))
+            {
+                var item = MenuItem(KindName(kind), KindGlyph(kind), "kind");
+                var chosen = kind;
+                item.Click += (_, _) => ChooseKind(chosen);
+                _kindItems.Add((item, kind));
+                _kindEntries.Add(item);
+            }
+            _kindEntries.Add(new MenuFlyoutSeparator());
+        }
+        for (var i = 0; i < _kindEntries.Count; i++)
+        {
+            FilterMenu.Items.Insert(i, _kindEntries[i]);
+        }
+    }
+
+    /// <summary>Shows the Filter menu's played choice and favourites tick, or hides them with the separator before them.</summary>
+    private void ShowFilterItems(bool show)
+    {
+        var visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var item in _filterItems.Concat<MenuFlyoutItemBase>(_toggleItems.Select(toggle => toggle.Item)).Append(_toggleSeparator))
+        {
+            item.Visibility = visibility;
+        }
+        if (_kindEntries.LastOrDefault() is MenuFlyoutSeparator separator)
+        {
+            separator.Visibility = visibility;
+        }
+    }
+
+    /// <summary>The view narrowed to one media kind (or every kind), keeping its sort, filters and search.</summary>
+    private void ChooseKind(string? kind)
+    {
+        if (_view is not { } view)
+        {
+            return;
+        }
+        var narrowed = ViewArgs.Query(view, kind);
+        Choose(query => query with { Kinds = narrowed.Kinds });
+    }
+
+    // The menus' radio items, in the order of Sorts, SortOrder and Filters.
+    private readonly List<RadioMenuFlyoutItem> _sortItems = [];
+    private readonly List<RadioMenuFlyoutItem> _orderItems = [];
+    private readonly List<RadioMenuFlyoutItem> _filterItems = [];
+
+    /// <summary>The Filter menu's ticks after the played choice (owner, 2026-10-27), and the separator between them.</summary>
+    private readonly List<(ToggleMenuFlyoutItem Item, string Filter)> _toggleItems = [];
+    private readonly MenuFlyoutSeparator _toggleSeparator = new();
 
     public LibraryPage()
     {
         InitializeComponent();
+        // A new field takes the order the core gives it (names A to Z, the newest first); Ascending or Descending then turns it.
         foreach (var sort in Sorts)
         {
-            SortBox.Items.Add(SortName(sort.Key));
+            var item = MenuItem(SortName(sort.Key), SortGlyph(sort.Key), "sort");
+            item.Click += (_, _) => Choose(query => query with { Sort = [sort.Key], Order = sort.Order });
+            _sortItems.Add(item);
+            SortMenu.Items.Add(item);
+        }
+        SortMenu.Items.Add(new MenuFlyoutSeparator());
+        foreach (var (order, name, glyph) in new[] { (SortOrder.Ascending, "Ascending", "\uE74A"), (SortOrder.Descending, "Descending", "\uE74B") })
+        {
+            var item = MenuItem(name, glyph, "order", small: true);
+            item.Click += (_, _) => Choose(query => query with { Order = order });
+            _orderItems.Add(item);
+            SortMenu.Items.Add(item);
         }
         foreach (var filter in Filters)
         {
-            FilterBox.Items.Add(FilterName(filter));
+            var item = MenuItem(FilterName(filter), FilterGlyph(filter), "filter");
+            item.Click += (_, _) => Choose(query => query.WithFilter(filter));
+            _filterItems.Add(item);
+            FilterMenu.Items.Add(item);
+        }
+        // Favourites as a tick of their own, on or off whatever the choice above: a ToggleMenuFlyoutItem, "Switching an option on or
+        // off" ("Menu flyout and menu bar", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-27).
+        FilterMenu.Items.Add(_toggleSeparator);
+        foreach (var toggle in Toggles)
+        {
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = FilterName(toggle),
+                Icon = FilterGlyph(toggle) is { } glyph ? new FontIcon { Glyph = glyph } : null,
+            };
+            item.Click += (_, _) => Choose(query => query.WithToggle(toggle, item.IsChecked));
+            _toggleItems.Add((item, toggle));
+            FilterMenu.Items.Add(item);
         }
         ItemActions.Attach(Items, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
         Loaded += (_, _) => _wasLoaded = true;
@@ -63,6 +222,11 @@ public sealed partial class LibraryPage : Page
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        if (e.Parameter is ViewArgs view)
+        {
+            ShowView(view, e.NavigationMode);
+            return;
+        }
         if (e.Parameter is not LibraryArgs args || App.Browsing?.Find(args.Library.Item.Server) is not { } server)
         {
             // The server was signed out of while this page was in the history.
@@ -70,7 +234,11 @@ public sealed partial class LibraryPage : Page
             return;
         }
         var library = App.Browsing.FindLibrary(args.Library.Item) ?? args.Library;
+        _view = null;
+        ShowKindItems(false);
+        ShowFilterItems(true);
         TitleText.Text = library.Name;
+        ShowSearchName(library.Name);
         _library = library.Item;
         _hub = App.Browsing;
         _hub.Changed += OnLibrariesChanged;
@@ -82,14 +250,41 @@ public sealed partial class LibraryPage : Page
         if (e.NavigationMode is not (NavigationMode.Back or NavigationMode.Forward))
         {
             _grid.FirstVisible = 0;
-            var first = ItemQuery.ForLibrary(library);
+            // What the library opens with: a Home row's own query as it is, else the library's first query with the sort, filter and
+            // view last chosen here, each while Settings remembers it (the core's rule).
+            var remembered = args.Query is null ? App.Core?.LibraryChoicesFor(library.Item) : null;
+            _grid.Wide = remembered?.View?.Tile == LibraryView.Wide;
+            _grid.ShowsTitles = remembered?.View?.ShowTitles ?? true;
+            var first = args.Query ?? ItemQuery.ForLibrary(library);
+            if (remembered?.Sort is { } sort)
+            {
+                first = first with { Sort = [sort.Key], Order = sort.Order };
+            }
+            // Only filters the menu still offers: one remembered from an older version is dropped.
+            if (remembered?.Filters is { } filters && filters.All(filter => Filters.Contains(filter) || Toggles.Contains(filter)))
+            {
+                first = first with { Filters = filters };
+            }
+            // Opened anew: a search left in this grid is over, so a later one starts from the query shown now (review 2, S1).
+            _grid.Browsing = null;
             if (!SameChoices(_grid.Query, first))
             {
                 _grid.Query = first;
                 _grid.Items.SetQuery(first);
             }
         }
+        Attach();
+    }
+
+    /// <summary>Shows the grid's query and view and binds its slots and state; the grid is stale-checked as it is shown again.</summary>
+    private void Attach()
+    {
+        if (_grid is null)
+        {
+            return;
+        }
         ShowQuery(_grid.Query);
+        ShowView();
         var ui = new DispatcherQueueUi(DispatcherQueue);
         _state = _grid.Items.ObserveState(ui);
         _state.PropertyChanged += OnStateChanged;
@@ -99,6 +294,43 @@ public sealed partial class LibraryPage : Page
         ShowState();
         // The core decides whether the grid is stale: shown again five minutes or more after it was left (ADR 0018, section 3).
         _grid.Items.Shown();
+    }
+
+    /// <summary>
+    /// A view across every library (the Favorites or Recently added tab) in the same grid: its own query from the core, nothing
+    /// remembered, and Back and Forward returning to where it was left, as a library's.
+    /// </summary>
+    private void ShowView(ViewArgs view, NavigationMode mode)
+    {
+        if (App.Browsing?.Find(view.Server) is not { } server)
+        {
+            EmptyText.Visibility = Visibility.Visible;
+            return;
+        }
+        var title = BrowseText.ViewTitle(view.View, view.Kind);
+        TitleText.Text = title;
+        _view = view.View;
+        // A Favourites row's header opens its kind's page with the favourites tick on (owner, 2026-10-27).
+        var first = view.Favourite && view.Kind is { } favouriteKind ? ItemQuery.Favourites(favouriteKind) : ViewArgs.Query(view.View, view.Kind);
+        // Recently added narrows by media type in its Filter menu; a kind's page is one type already.
+        ShowKindItems(view.Kind is null);
+        ShowFilterItems(true);
+        ShowSearchName(title);
+        _grid = server.View(view.View, view.Kind);
+        _grid.Bind();
+        if (mode is not (NavigationMode.Back or NavigationMode.Forward))
+        {
+            _grid.FirstVisible = 0;
+            _grid.Wide = false;
+            _grid.ShowsTitles = true;
+            _grid.Browsing = null;
+            if (!SameChoices(_grid.Query, first))
+            {
+                _grid.Query = first;
+                _grid.Items.SetQuery(first);
+            }
+        }
+        Attach();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -134,6 +366,7 @@ public sealed partial class LibraryPage : Page
         if (_library is { } shown && _hub?.FindLibrary(shown) is { } library && TitleText.Text != library.Name)
         {
             TitleText.Text = library.Name;
+            ShowSearchName(library.Name);
         }
     }
 
@@ -181,7 +414,14 @@ public sealed partial class LibraryPage : Page
         }
     }
 
-    private void OnStateChanged(object? sender, PropertyChangedEventArgs e) => ShowState();
+    /// <summary>A search was just started: the state shown is still the previous query's until the grid's next state arrives.</summary>
+    private bool _stateBeforeSearch;
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        _stateBeforeSearch = false;
+        ShowState();
+    }
 
     private void ShowState()
     {
@@ -190,9 +430,12 @@ public sealed partial class LibraryPage : Page
             return;
         }
         LoadingRing.IsActive = state.Loading && state.Total == 0;
-        CountText.Text = state.Total > 0
+        // A search that fills the server's window says so instead of a count that would only be the window's size (the core decides).
+        // Only from the searched query's own state: the previous query's total (a big library's) would flash the note (review 2).
+        var note = _stateBeforeSearch ? null : _grid?.Query.SearchNote(state.Total);
+        CountText.Text = note ?? (state.Total > 0
             ? (state.Total == 1 ? "1 item" : $"{state.Total.ToString("N0", System.Globalization.CultureInfo.CurrentCulture)} items")
-            : "";
+            : "");
         EmptyText.Visibility = !state.Loading && state.Total == 0 && state.Failed is null ? Visibility.Visible : Visibility.Collapsed;
         if (state.Failed is { } failed)
         {
@@ -216,28 +459,127 @@ public sealed partial class LibraryPage : Page
         }
     }
 
+    /// <summary>The search box names the library it searches.</summary>
+    private void ShowSearchName(string name)
+    {
+        LibrarySearch.PlaceholderText = $"Search {name}";
+        AutomationProperties.SetName(LibrarySearch, $"Search {name}");
+    }
+
+    /// <summary>Checks the menus' items for the query's field, order and filter, and shows its search.</summary>
     private void ShowQuery(ItemQuery query)
     {
-        _showingQuery = true;
-        SortBox.SelectedIndex = Math.Max(0, Sorts.ToList().FindIndex(sort => query.Sort.FirstOrDefault() == sort.Key));
-        FilterBox.SelectedIndex = Math.Max(0, Filters.ToList().IndexOf(query.Filters.FirstOrDefault()));
-        _showingQuery = false;
+        if (LibrarySearch.Text != (query.SearchTerm ?? "") && FocusManager.GetFocusedElement(XamlRoot) is not TextBox)
+        {
+            LibrarySearch.Text = query.SearchTerm ?? "";
+        }
+        var sort = Math.Max(0, Sorts.ToList().FindIndex(sort => query.Sort.FirstOrDefault() == sort.Key));
+        var filter = Math.Max(0, Filters.ToList().IndexOf(query.Filters.FirstOrDefault(Filters.Contains)));
+        for (var i = 0; i < _sortItems.Count; i++)
+        {
+            _sortItems[i].IsChecked = i == sort;
+        }
+        _orderItems[0].IsChecked = query.Order == SortOrder.Ascending;
+        _orderItems[1].IsChecked = query.Order == SortOrder.Descending;
+        for (var i = 0; i < _filterItems.Count; i++)
+        {
+            _filterItems[i].IsChecked = i == filter;
+        }
+        foreach (var (item, toggle) in _toggleItems)
+        {
+            item.IsChecked = query.Filters.Contains(toggle);
+        }
+        // A view narrowed to one kind lists that kind only; otherwise it is every type.
+        var single = query.Kinds.Count == 1 ? query.Kinds[0] : null;
+        foreach (var (item, kind) in _kindItems)
+        {
+            item.IsChecked = kind == single;
+        }
+        // While it searches the results come by relevance, unfiltered: Sort and Filter are off, and say why (the core decides).
+        var tools = query.Tools();
+        ShowTool(SortButton, SortTip, tools.SortAvailable, tools.SortTooltip ?? "Sort");
+        ShowTool(FilterButton, FilterTip, tools.FilterAvailable, tools.FilterTooltip ?? "Filter");
+    }
+
+    /// <summary>
+    /// A command button on or off, its tooltip on the area around it: a disabled control gets no pointer input, so its own tooltip would
+    /// not show (not verified in the docs; seen in the app, 2026-10-27). Narrator reads the reason as the button's help text.
+    /// </summary>
+    private static void ShowTool(Control button, FrameworkElement area, bool available, string tip)
+    {
+        button.IsEnabled = available;
+        ToolTipService.SetToolTip(area, tip);
+        AutomationProperties.SetHelpText(button, available ? "" : tip);
     }
 
     /// <summary>Whether two queries sort and filter alike (the records compare their lists by reference).</summary>
     private static bool SameChoices(ItemQuery a, ItemQuery b) =>
-        a.Sort.SequenceEqual(b.Sort) && a.Order == b.Order && a.Filters.SequenceEqual(b.Filters);
+        a.Kinds.SequenceEqual(b.Kinds) && a.Sort.SequenceEqual(b.Sort) && a.Order == b.Order && a.Filters.SequenceEqual(b.Filters)
+        && a.SearchTerm == b.SearchTerm;
 
-    /// <summary>A new sort or filter: a new query, which resets the grid to the top.</summary>
-    private void OnQueryChanged(object sender, SelectionChangedEventArgs e)
+    /// <summary>A new field, order or filter: a new query, which resets the grid to the top.</summary>
+    private void Choose(Func<ItemQuery, ItemQuery> change)
     {
-        if (_showingQuery || _grid is null || SortBox.SelectedIndex < 0 || FilterBox.SelectedIndex < 0)
+        if (_grid is null)
         {
             return;
         }
-        var sort = Sorts[SortBox.SelectedIndex];
-        var filter = Filters[FilterBox.SelectedIndex];
-        var query = _grid.Query with { Sort = [sort.Key], Order = sort.Order, Filters = filter is null ? [] : [filter] };
+        var query = change(_grid.Query);
+        ShowQuery(query);
+        if (SameChoices(query, _grid.Query))
+        {
+            return;
+        }
+        _grid.Query = query;
+        _grid.Browsing = null;
+        _grid.FirstVisible = 0;
+        _grid.Items.SetQuery(query);
+        Remember(new LibraryChoices(
+            Sort: query.Sort.FirstOrDefault() is { } key ? new SortChoice(key, query.Order) : null,
+            Filters: query.Filters));
+    }
+
+    /// <summary>Waits for a pause in typing before searching, so each key does not start a query.</summary>
+    private DispatcherQueueTimer? _searchTimer;
+
+    /// <summary>How long after the last key the box searches; not from a guideline (not verified).</summary>
+    private static readonly TimeSpan SearchPause = TimeSpan.FromMilliseconds(400);
+
+    private void OnSearchTextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+    {
+        if (args.Reason != AutoSuggestionBoxTextChangeReason.UserInput)
+        {
+            return;
+        }
+        if (_searchTimer is null)
+        {
+            _searchTimer = DispatcherQueue.CreateTimer();
+            _searchTimer.IsRepeating = false;
+            _searchTimer.Tick += (_, _) => Search(LibrarySearch.Text);
+        }
+        _searchTimer.Interval = SearchPause;
+        _searchTimer.Start();
+    }
+
+    private void OnSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
+    {
+        _searchTimer?.Stop();
+        Search(args.QueryText);
+    }
+
+    /// <summary>
+    /// The grid searching for <paramref name="text"/> from the query it showed before searching (the core's rule: trimmed, by relevance,
+    /// no filter; that query back when blank), from the top.
+    /// </summary>
+    private void Search(string text)
+    {
+        if (_grid is null)
+        {
+            return;
+        }
+        var browsing = _grid.Browsing ?? _grid.Query;
+        var query = browsing.Searching(text);
+        _grid.Browsing = query.SearchTerm is null ? null : browsing;
         if (SameChoices(query, _grid.Query))
         {
             return;
@@ -245,10 +587,82 @@ public sealed partial class LibraryPage : Page
         _grid.Query = query;
         _grid.FirstVisible = 0;
         _grid.Items.SetQuery(query);
+        _stateBeforeSearch = true;
+        ShowQuery(query);
+        ShowState();
+    }
+
+    private void OnFindAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs e) =>
+        e.Handled = LibrarySearch.Focus(FocusState.Keyboard);
+
+    /// <summary>
+    /// Tells the core what the user chose here; it keeps each part only while Settings remembers it. A failed save loses nothing the
+    /// grid shows, so it is only traced.
+    /// </summary>
+    private async void Remember(LibraryChoices choices)
+    {
+        if (_library is not { } library || App.Core is not { } core)
+        {
+            return;
+        }
+        try
+        {
+            await core.RememberLibraryChoicesAsync(library, choices);
+        }
+        catch (Exception error)
+        {
+            Trace.TraceWarning($"Current: a library's choices were not remembered: {error.GetType().Name}");
+        }
+    }
+
+    /// <summary>The tiles' template and the View menu's checks for the grid's view.</summary>
+    private void ShowView()
+    {
+        if (_grid is null)
+        {
+            return;
+        }
+        PosterItem.IsChecked = !_grid.Wide;
+        WideItem.IsChecked = _grid.Wide;
+        TitlesItem.IsChecked = _grid.ShowsTitles;
+        var key = (_grid.Wide, _grid.ShowsTitles) switch
+        {
+            (false, true) => "PosterTileTemplate",
+            (true, true) => "WideTileTemplate",
+            (false, false) => "PosterPictureTemplate",
+            (true, false) => "WidePictureTemplate",
+        };
+        var template = (DataTemplate)Application.Current.Resources[key];
+        if (!ReferenceEquals(Items.ItemTemplate, template))
+        {
+            Items.ItemTemplate = template;
+        }
+    }
+
+    private void OnViewChosen(object sender, RoutedEventArgs e)
+    {
+        if (_grid is null)
+        {
+            return;
+        }
+        _grid.Wide = WideItem.IsChecked;
+        _grid.ShowsTitles = TitlesItem.IsChecked;
+        ShowView();
+        Remember(new LibraryChoices(View: new LibraryView(_grid.Wide ? LibraryView.Wide : LibraryView.Poster, _grid.ShowsTitles)));
     }
 
     /// <summary>The grid's slots now (the smoke run).</summary>
     internal SlotCollection? Slots => _slots;
+
+    /// <summary>Types <paramref name="text"/> into the library's search box and searches at once, as Enter does (the smoke run).</summary>
+    internal void SearchFor(string text)
+    {
+        LibrarySearch.Text = text;
+        Search(text);
+    }
+
+    /// <summary>Whether the Sort and Filter buttons are on now (the smoke run).</summary>
+    internal bool SortAndFilterAvailable => SortButton.IsEnabled && FilterButton.IsEnabled;
 
     /// <summary>Scrolls the grid to a slot, as the scroll bar would (the smoke run).</summary>
     internal void ScrollTo(int index)
@@ -259,7 +673,14 @@ public sealed partial class LibraryPage : Page
         }
     }
 
-    private void OnRefresh(object sender, RoutedEventArgs e) => _grid?.Items.Refresh();
+    private void OnRefresh(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs e)
+    {
+        e.Handled = true;
+        Refresh();
+    }
+
+    /// <summary>The grid's items again, in place.</summary>
+    public void Refresh() => _grid?.Items.Refresh();
 
     private void OnRetry(object sender, RoutedEventArgs e) => _grid?.Items.Retry();
 }

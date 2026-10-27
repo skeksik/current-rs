@@ -33,14 +33,17 @@ use tokio::task::JoinHandle;
 
 pub use browse::{
     Artwork, AspectRatio, Browse, BrowseNotice, BrowseNoticeListener, BrowseProblem, CalendarDate,
-    Chapter, DetailsView, EpisodeLinks, HomeFeed, HomeRow, HomeRowDiff, HomeRowKind,
+    Chapter, DetailsView, EpisodeLinks, GridTools, HomeFeed, HomeRow, HomeRowDiff, HomeRowKind,
     HomeRowsListener, HomeState, HomeStateListener, ImageProblem, ImageRef, ImageRequest,
     ImageSource, ItemAction, ItemDetails, ItemDetailsListener, ItemQuery, ItemRef, ItemSummary,
-    ItemSummaryDiff, ItemsListener, LibrariesListener, Library, LoadState, LoadStateListener,
-    MediaSummary, NoticeKind, PagedItems, PagedState, PagedStateListener, Person, SearchGroup,
-    SearchGroupDiff, SearchGroupsListener, SearchResults, SeriesRun, Slot, SlotDiff, SlotsListener,
-    SortChoice, SortOrder, StreamSummary, UserState, library_filter_choices, library_query,
-    library_sort_choices,
+    ItemSummaryDiff, ItemsListener, LibrariesListener, Library, LibraryChoices,
+    LibraryMemorySettings, LibraryView, LoadState, LoadStateListener, MediaSummary, NoticeKind,
+    PagedItems, PagedState, PagedStateListener, Person, SearchGroup, SearchGroupDiff,
+    SearchGroupsListener, SearchResults, SeriesRun, Slot, SlotDiff, SlotsListener, SortChoice,
+    SortOrder, StreamSummary, UserState, favourites_query, kind_query, library_filter_choices,
+    library_grid_tools, library_query, library_search, library_search_note, library_sort_choices,
+    library_toggle_filter_choices, library_with_filter_choice, library_with_filter_toggle,
+    recently_added_everywhere_query, recently_added_query, view_kind_choices,
 };
 pub use cancel::CancelToken;
 pub use error::CoreError;
@@ -62,8 +65,9 @@ pub use player_records::{
     CompositionSize, DisplayFacts, EngineOutputInfo, MediaStatusKind, NextEpisodeInfo,
     NowPlayingSnapshot, PlanNoteInfo, PlaybackInfoSnapshot, PlaybackProblem,
     PlaybackSettingsSnapshot, PlayerEngineKind, PlayerProblem, PlayerStateKind,
-    PlayerStateSnapshot, QualityChoice, RouteInfo, RouteKind, SegmentInfo, SourceInfo, StreamInfo,
-    StreamProtocolKind, SubtitleSelection, TrackInfo, TranscodingInfo, quality_steps,
+    PlayerStateSnapshot, QualityChoice, QualityOptionInfo, RouteInfo, RouteKind, SegmentInfo,
+    SourceInfo, StreamInfo, StreamProtocolKind, SubtitleSelection, TrackInfo, TranscodingInfo,
+    quality_steps,
 };
 pub use problems::{
     AddressProblem, DiscoveryProblem, GatewayInputProblem, GatewayProblem, GatewaySignInProblem,

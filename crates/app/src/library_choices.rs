@@ -1,0 +1,399 @@
+//! Settings' "Remember sort", "Remember filter" and "Remember view" (all off by default), and the choices remembered per library: a
+//! library opens with the last sort, filter and view chosen there for each part whose switch is on. A part whose switch is off is
+//! neither saved nor given back, and turning a switch off forgets that part for every library, so turning it on again starts afresh.
+//! Saved in `settings.json` (`current-store`'s `browse`, open values) when the app has a data folder, else kept for the run only.
+
+use std::sync::{Mutex, PoisonError};
+
+use current_model::{ItemRef, ServerRef};
+use current_store::{BrowseSettings, LibraryChoices, SettingsStore, StoreError};
+
+/// The three switches.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LibraryMemory {
+    pub remember_sort: bool,
+    pub remember_filter: bool,
+    pub remember_view: bool,
+}
+
+/// One part of a library's choices, each with its switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Part {
+    Sort,
+    Filter,
+    View,
+}
+
+impl Part {
+    fn switch(self, browse: &mut BrowseSettings) -> &mut bool {
+        match self {
+            Self::Sort => &mut browse.remember_sort,
+            Self::Filter => &mut browse.remember_filter,
+            Self::View => &mut browse.remember_view,
+        }
+    }
+}
+
+pub(crate) struct LibraryPrefs {
+    /// The settings of an app that stores nothing; unused when there is a settings store, which is then the only copy.
+    memory: Mutex<BrowseSettings>,
+}
+
+impl LibraryPrefs {
+    pub(crate) fn new() -> Self {
+        Self {
+            memory: Mutex::new(BrowseSettings::default()),
+        }
+    }
+
+    fn read(&self, store: Option<&SettingsStore>) -> BrowseSettings {
+        match store {
+            Some(store) => store.get().browse,
+            None => self.lock().clone(),
+        }
+    }
+
+    fn change(
+        &self,
+        store: Option<&SettingsStore>,
+        change: impl FnOnce(&mut BrowseSettings),
+    ) -> Result<(), StoreError> {
+        match store {
+            Some(store) => store.update(|settings| change(&mut settings.browse)),
+            None => {
+                change(&mut self.lock());
+                Ok(())
+            }
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BrowseSettings> {
+        // A panic while holding the lock leaves usable settings behind (each change is a few assignments), so poisoning is safe to
+        // ignore.
+        self.memory.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn switches(&self, store: Option<&SettingsStore>) -> LibraryMemory {
+        let browse = self.read(store);
+        LibraryMemory {
+            remember_sort: browse.remember_sort,
+            remember_filter: browse.remember_filter,
+            remember_view: browse.remember_view,
+        }
+    }
+
+    /// Turns a part's switch on or off and saves it; off forgets that part for every library in the same save. An unchanged switch
+    /// writes nothing.
+    pub(crate) fn set(
+        &self,
+        store: Option<&SettingsStore>,
+        part: Part,
+        on: bool,
+    ) -> Result<(), StoreError> {
+        if *part.switch(&mut self.read(store)) == on {
+            return Ok(());
+        }
+        self.change(store, |browse| {
+            *part.switch(browse) = on;
+            if !on {
+                match part {
+                    Part::Sort => browse.forget_sorts(),
+                    Part::Filter => browse.forget_filters(),
+                    Part::View => browse.forget_views(),
+                }
+            }
+        })
+    }
+
+    /// What `library` opens with: the remembered parts whose switch is on.
+    pub(crate) fn choices(
+        &self,
+        store: Option<&SettingsStore>,
+        library: &ItemRef,
+    ) -> LibraryChoices {
+        let browse = self.read(store);
+        let Some(remembered) = browse.libraries.get(library) else {
+            return LibraryChoices::default();
+        };
+        LibraryChoices {
+            sort: remembered.sort.clone().filter(|_| browse.remember_sort),
+            filters: remembered
+                .filters
+                .clone()
+                .filter(|_| browse.remember_filter),
+            view: remembered.view.clone().filter(|_| browse.remember_view),
+        }
+    }
+
+    /// Remembers the parts of `choices` that are given and whose switch is on; the others stay as they were. Writes nothing when
+    /// that changes nothing.
+    pub(crate) fn remember(
+        &self,
+        store: Option<&SettingsStore>,
+        library: &ItemRef,
+        choices: &LibraryChoices,
+    ) -> Result<(), StoreError> {
+        let apply = |browse: &mut BrowseSettings| {
+            let current = browse.libraries.get(library).cloned().unwrap_or_default();
+            let mut next = current.clone();
+            if browse.remember_sort && choices.sort.is_some() {
+                next.sort.clone_from(&choices.sort);
+            }
+            if browse.remember_filter && choices.filters.is_some() {
+                next.filters.clone_from(&choices.filters);
+            }
+            if browse.remember_view && choices.view.is_some() {
+                next.view.clone_from(&choices.view);
+            }
+            if next == current {
+                return false;
+            }
+            browse.libraries.insert(library.clone(), next);
+            true
+        };
+        // Checked on a copy first, so that nothing to save never writes, nor fails on a file this version must not write.
+        if !apply(&mut self.read(store)) {
+            return Ok(());
+        }
+        self.change(store, |browse| {
+            apply(browse);
+        })
+    }
+
+    /// The server was removed: its libraries go. A settings store forgets them in the removal's own save (`Shared::remove_server`);
+    /// this is for an app that stores nothing.
+    pub(crate) fn server_removed(&self, store: Option<&SettingsStore>, server: &ServerRef) {
+        if store.is_none() {
+            self.lock().forget_server(server);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use current_model::{ItemFilter, ItemId, ServerKey, ServiceType, SortKey, SortOrder};
+    use current_store::{LoadReport, MemorySecrets, RememberedSort, RememberedView, SETTINGS_FILE};
+
+    use crate::{App, Removal};
+
+    use super::*;
+
+    fn library(id: &str) -> ItemRef {
+        ItemRef::new(
+            ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")),
+            ItemId::new(id),
+        )
+    }
+
+    fn everything() -> LibraryChoices {
+        LibraryChoices {
+            sort: Some(RememberedSort {
+                key: SortKey::DATE_CREATED,
+                order: SortOrder::Descending,
+            }),
+            filters: Some(vec![ItemFilter::UNPLAYED]),
+            view: Some(RememberedView {
+                tile: "wide".into(),
+                titles: false,
+            }),
+        }
+    }
+
+    fn open(dir: &std::path::Path) -> App {
+        App::open(dir, &dir.join("cache"), Arc::new(MemorySecrets::new()), "")
+            .unwrap()
+            .0
+    }
+
+    fn file(dir: &std::path::Path) -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(dir.join(SETTINGS_FILE)).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn nothing_is_remembered_while_the_switches_are_off() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = open(temp.path());
+        assert_eq!(app.library_memory(), LibraryMemory::default());
+        app.remember_library_choices(&library("a"), everything())
+            .unwrap();
+        assert_eq!(
+            app.library_choices(&library("a")),
+            LibraryChoices::default()
+        );
+        assert!(file(temp.path()).get("browse").is_none());
+    }
+
+    #[test]
+    fn only_the_parts_switched_on_are_saved_and_given_back() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = open(temp.path());
+        app.set_remember_sort(true).unwrap();
+        app.set_remember_view(true).unwrap();
+        app.remember_library_choices(&library("a"), everything())
+            .unwrap();
+        let expected = LibraryChoices {
+            filters: None,
+            ..everything()
+        };
+        assert_eq!(app.library_choices(&library("a")), expected);
+        // Another library has its own choices: none yet.
+        assert_eq!(
+            app.library_choices(&library("b")),
+            LibraryChoices::default()
+        );
+        // A part not given stays as it was.
+        app.remember_library_choices(
+            &library("a"),
+            LibraryChoices {
+                view: Some(RememberedView {
+                    tile: "poster".into(),
+                    titles: true,
+                }),
+                ..LibraryChoices::default()
+            },
+        )
+        .unwrap();
+        let choices = app.library_choices(&library("a"));
+        assert_eq!(choices.sort, expected.sort);
+        assert_eq!(choices.view.unwrap().tile, "poster");
+        drop(app);
+
+        // Kept for the next start.
+        let app = open(temp.path());
+        assert_eq!(
+            app.library_memory(),
+            LibraryMemory {
+                remember_sort: true,
+                remember_filter: false,
+                remember_view: true
+            }
+        );
+        assert_eq!(app.library_choices(&library("a")).sort, expected.sort);
+        let json = file(temp.path());
+        assert!(
+            json["browse"]["libraries"]["jellyfin/1/a"]
+                .get("filter")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn turning_a_switch_off_forgets_that_part_for_every_library() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = open(temp.path());
+        app.set_remember_sort(true).unwrap();
+        app.set_remember_filter(true).unwrap();
+        for id in ["a", "b"] {
+            app.remember_library_choices(&library(id), everything())
+                .unwrap();
+        }
+        app.set_remember_sort(false).unwrap();
+        assert_eq!(app.library_choices(&library("a")).sort, None);
+        // On again: it starts afresh.
+        app.set_remember_sort(true).unwrap();
+        for id in ["a", "b"] {
+            let choices = app.library_choices(&library(id));
+            assert_eq!(choices.sort, None);
+            assert_eq!(choices.filters, everything().filters);
+        }
+        let json = file(temp.path());
+        assert!(
+            json["browse"]["libraries"]["jellyfin/1/b"]
+                .get("sort")
+                .is_none()
+        );
+        assert_eq!(json["browse"]["remember_sort"], true);
+    }
+
+    #[test]
+    fn nothing_changed_writes_nothing() {
+        // A newer version's file refuses every write: what reaches it fails.
+        let temp = tempfile::tempdir().unwrap();
+        let text = r#"{"version": 99, "device_id": "abc", "browse": {"remember_sort": true, "libraries": {"jellyfin/1/a": {"sort": {"key": "date_created", "order": "descending"}}}}}"#;
+        std::fs::write(temp.path().join(SETTINGS_FILE), text).unwrap();
+        let (app, report) = App::open(
+            temp.path(),
+            &temp.path().join("cache"),
+            Arc::new(MemorySecrets::new()),
+            "",
+        )
+        .unwrap();
+        assert_eq!(report, LoadReport::NewerVersion { found: 99 });
+        // The same sort again, a part whose switch is off, and the switch as it is: nothing to save.
+        app.remember_library_choices(&library("a"), everything())
+            .unwrap();
+        app.set_remember_sort(true).unwrap();
+        app.set_remember_view(false).unwrap();
+        // A change is refused.
+        let other = LibraryChoices {
+            sort: Some(RememberedSort {
+                key: SortKey::SORT_NAME,
+                order: SortOrder::Ascending,
+            }),
+            ..LibraryChoices::default()
+        };
+        assert_eq!(
+            app.remember_library_choices(&library("a"), other),
+            Err(StoreError::NewerVersion { found: 99 })
+        );
+        assert_eq!(
+            app.set_remember_filter(true),
+            Err(StoreError::NewerVersion { found: 99 })
+        );
+        assert_eq!(app.library_choices(&library("a")).sort, everything().sort);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join(SETTINGS_FILE)).unwrap(),
+            text
+        );
+    }
+
+    #[test]
+    fn an_app_that_stores_nothing_remembers_for_the_run() {
+        let app = App::new();
+        app.set_remember_filter(true).unwrap();
+        app.remember_library_choices(&library("a"), everything())
+            .unwrap();
+        assert_eq!(
+            app.library_choices(&library("a")),
+            LibraryChoices {
+                filters: everything().filters,
+                ..LibraryChoices::default()
+            }
+        );
+        app.set_remember_filter(false).unwrap();
+        app.set_remember_filter(true).unwrap();
+        assert_eq!(
+            app.library_choices(&library("a")),
+            LibraryChoices::default()
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_a_server_forgets_its_libraries() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join(SETTINGS_FILE),
+            r#"{"version": 1, "device_id": "abc", "servers": [{"service": "jellyfin", "key": "1"}, {"service": "jellyfin", "key": "2"}],
+                "browse": {"remember_filter": true, "libraries": {"jellyfin/1/a": {"filter": []}, "jellyfin/2/a": {"filter": []}}}}"#,
+        )
+        .unwrap();
+        let app = open(temp.path());
+        let other = ItemRef::new(
+            ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("2")),
+            ItemId::new("a"),
+        );
+        assert_eq!(app.library_choices(&library("a")).filters, Some(Vec::new()));
+        let removed = app.remove_server(&library("a").server).await.unwrap();
+        assert!(matches!(removed, Removal::Removed { .. }));
+        assert_eq!(
+            app.library_choices(&library("a")),
+            LibraryChoices::default()
+        );
+        assert_eq!(app.library_choices(&other).filters, Some(Vec::new()));
+        let json = file(temp.path());
+        assert!(json["browse"]["libraries"].get("jellyfin/1/a").is_none());
+        assert!(json["browse"]["libraries"].get("jellyfin/2/a").is_some());
+    }
+}

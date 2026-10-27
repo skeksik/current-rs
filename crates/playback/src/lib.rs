@@ -22,7 +22,10 @@ pub use controller::{
 };
 pub use engine::{EndReason, Engine, EngineEvent, EngineFile, EngineTrack, ExternalSubtitle};
 pub use planner::{PlanNote, Planned};
-pub use quality::{Quality, QualityMemory};
+pub use quality::{
+    Quality, QualityOption, QualityPreference, listed_quality, preferred_quality_options,
+    quality_options, resolution_name, snap_quality,
+};
 pub use server::{
     MediaServer, PlanRequest, ProgressReport, ServerAnswer, StopReport, TranscodePermissions,
 };

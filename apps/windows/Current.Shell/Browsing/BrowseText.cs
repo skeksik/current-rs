@@ -50,6 +50,10 @@ internal static class BrowseText
         {
             parts.Add("played");
         }
+        else if (item.TimeLeft is { } left)
+        {
+            parts.Add($"in progress, {TimeLeft(left)}");
+        }
         else if (item.User.Progress is > 0)
         {
             parts.Add("in progress");
@@ -69,19 +73,38 @@ internal static class BrowseText
 
     public const string FailedTileName = "Couldn't load. Use Retry above the grid.";
 
-    /// <summary>A Home row's title: the library's name for Latest.</summary>
+    /// <summary>A Home row's title: the library's name for Latest, which reads "Recently added in" (owner, 2026-10-26).</summary>
     public static string RowTitle(HomeRow row) => row.Kind switch
     {
         HomeRowKind.ContinueWatching => "Continue watching",
         HomeRowKind.NextUp => "Next up",
-        _ => row.Title.Length > 0 ? $"Latest in {row.Title}" : "Latest",
+        HomeRowKind.RecentlyAdded => "Recently added",
+        HomeRowKind.Favourites => "Favourites",
+        HomeRowKind.SeenRecently => "Seen recently",
+        _ => row.Title.Length > 0 ? $"Recently added in {row.Title}" : "Recently added",
     };
+
+    /// <summary>A view tab's title, as its pane item names it.</summary>
+    public static string ViewTitle(string view, string? kind = null) => (view, kind) switch
+    {
+        (Pages.ViewArgs.Favourites, _) => "Favourites",
+        (Pages.ViewArgs.Everything, { } every) => KindGroup(every),
+        _ => "Recently added",
+    };
+
+    /// <summary>A row header's tooltip when it opens a view tab, or a kind's page (a Favourites row's, with its favourites ticked).</summary>
+    public static string ViewLinkTip(string view, string? kind = null) =>
+        view == Pages.ViewArgs.Everything ? $"Open {ViewTitle(view, kind)}, favourites ticked" : $"Open {ViewTitle(view, kind)}";
+
+    /// <summary>A Latest row header's tooltip: where the link goes.</summary>
+    public static string RecentlyAddedLinkTip(HomeRow row) =>
+        row.Title.Length > 0 ? $"Open {row.Title}, newest first" : "Open the library, newest first";
 
     /// <summary>A search group's title, by media kind; a kind Current has no name for shows as the server named it.</summary>
     public static string KindGroup(string kind) => kind switch
     {
         "movie" => "Movies",
-        "series" => "Shows",
+        "series" => "Series",
         "season" => "Seasons",
         "episode" => "Episodes",
         "person" => "People",
@@ -112,6 +135,16 @@ internal static class BrowseText
         var minutes = (int)Math.Round(runtime.TotalMinutes);
         return minutes >= 60 ? $"{minutes / 60} h {minutes % 60} min" : $"{minutes} min";
     }
+
+    /// <summary>"1h 12m", "45m": the time left on a tile; under a minute counts as one.</summary>
+    public static string ShortTime(TimeSpan time)
+    {
+        var minutes = Math.Max(1, (int)Math.Round(time.TotalMinutes));
+        return minutes >= 60 ? $"{minutes / 60}h {minutes % 60}m" : $"{minutes}m";
+    }
+
+    /// <summary>"1 h 12 min left", "45 min left", as Narrator reads it; under a minute counts as one.</summary>
+    public static string TimeLeft(TimeSpan left) => $"{Runtime(left < TimeSpan.FromMinutes(1) ? TimeSpan.FromMinutes(1) : left)} left";
 
     public static string ActionFailedTitle(BrowseNotice.ActionFailed failed)
     {

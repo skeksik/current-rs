@@ -1,13 +1,15 @@
 //! Browsing across the bridge (ADR 0018, section 7): [`Core::browse`] gives a [`Browse`] for a signed-in Jellyfin server, with library
 //! grids ([`PagedItems`]), Home ([`HomeFeed`]), detail pages ([`DetailsView`]) and search ([`SearchResults`]); played and favourite
 //! changes go through it, and their notices through [`Core::subscribe_browse_notices`]. [`Core::load_image`] hands the UI an
-//! image's encoded bytes; [`Core::image_cache_size`] and [`Core::clear_image_cache`] serve Settings → Storage. Lists and values use the shapes of `subscribe` (ADR 0004).
+//! image's encoded bytes; [`Core::image_cache_size`] and [`Core::clear_image_cache`] serve Settings → Storage. Settings' switches
+//! that remember each library's sort, filter and view, and the choices remembered, are in `remember`. Lists and values use the shapes of `subscribe` (ADR 0004).
 //!
 //! Each object holds its `current-app` counterpart: dropping it (every foreign reference, and every subscription it started)
 //! stops its requests.
 
 mod problems;
 mod records;
+mod remember;
 
 use std::sync::Arc;
 
@@ -18,12 +20,13 @@ use crate::{CancelToken, Core, CoreError, ServerRef, TaskHandle, cancel};
 
 pub use problems::{BrowseProblem, ImageProblem};
 pub use records::{
-    Artwork, AspectRatio, BrowseNotice, CalendarDate, Chapter, EpisodeLinks, HomeRow, HomeRowDiff,
-    HomeRowKind, HomeState, ImageRef, ImageRequest, ImageSource, ItemAction, ItemDetails,
-    ItemQuery, ItemRef, ItemSummary, ItemSummaryDiff, Library, LoadState, MediaSummary, NoticeKind,
-    PagedState, Person, PlayTarget, SearchGroup, SearchGroupDiff, SeriesRun, Slot, SlotDiff,
-    SortChoice, SortOrder, StreamSummary, UserState,
+    Artwork, AspectRatio, BrowseNotice, CalendarDate, Chapter, EpisodeLinks, GridTools, HomeRow,
+    HomeRowDiff, HomeRowKind, HomeState, ImageRef, ImageRequest, ImageSource, ItemAction,
+    ItemDetails, ItemQuery, ItemRef, ItemSummary, ItemSummaryDiff, Library, LoadState,
+    MediaSummary, NoticeKind, PagedState, Person, PlayTarget, SearchGroup, SearchGroupDiff,
+    SeriesRun, Slot, SlotDiff, SortChoice, SortOrder, StreamSummary, UserState,
 };
+pub use remember::{LibraryChoices, LibraryMemorySettings, LibraryView};
 
 /// Receives a grid's slots: `[Reset]` first, then batches of diffs, on a core thread. Apply each batch in order. It must only hand
 /// the batch to the UI thread and return, and must never throw.
@@ -239,8 +242,8 @@ pub fn library_sort_choices() -> Vec<SortChoice> {
         .collect()
 }
 
-/// The filters a library grid offers, in the order to list them: everything first (`None`), then `unplayed`, `played` and
-/// `favourite`. The UI names each.
+/// The filters a library grid offers as one choice, in the order to list them: everything first (`None`), then `unplayed` and
+/// `played`. The UI names each.
 #[uniffi::export]
 pub fn library_filter_choices() -> Vec<Option<String>> {
     current_app::library_filters()
@@ -249,11 +252,94 @@ pub fn library_filter_choices() -> Vec<Option<String>> {
         .collect()
 }
 
+/// The filters a library grid offers as ticks beside that choice, each on or off: `favourite`. The UI names each.
+#[uniffi::export]
+pub fn library_toggle_filter_choices() -> Vec<String> {
+    current_app::library_toggle_filters()
+        .into_iter()
+        .map(|filter| filter.as_str().to_owned())
+        .collect()
+}
+
+/// `query` with `choice` as its filter choice (`None`: everything), its ticks kept.
+#[uniffi::export]
+pub fn library_with_filter_choice(query: ItemQuery, choice: Option<String>) -> ItemQuery {
+    (&current_app::with_filter_choice(&(&query).into(), choice.map(current_model::ItemFilter::new)))
+        .into()
+}
+
+/// `query` with the tick `toggle` on or off, its filter choice kept.
+#[uniffi::export]
+pub fn library_with_filter_toggle(query: ItemQuery, toggle: String, on: bool) -> ItemQuery {
+    (&current_app::with_filter_toggle(
+        &(&query).into(),
+        &current_model::ItemFilter::new(toggle),
+        on,
+    ))
+        .into()
+}
+
+/// Every item of `kind` in every library, by name: the Movies, Series or Episodes page a Favourites row's header opens (with the
+/// favourites tick on: [`favourites_query`] with the kind).
+#[uniffi::export]
+pub fn kind_query(kind: String) -> ItemQuery {
+    (&current_app::kind_query(current_model::MediaKind::new(kind))).into()
+}
+
 /// What `library`'s grid shows before the user sorts or filters it, by name: a film library its films and a TV library its series,
 /// wherever they sit below it; any other library its top level.
 #[uniffi::export]
 pub fn library_query(library: Library) -> ItemQuery {
     (&current_app::library_query(&(&library).into())).into()
+}
+
+/// The user's favourites in every library, by name: with `kind` (a media kind: `movie`, `series` or `episode`, as a Favourites row
+/// names it), that kind only, the whole list a row's header opens; without, Home's Favourites row, with no episode on its own.
+#[uniffi::export]
+pub fn favourites_query(kind: Option<String>) -> ItemQuery {
+    (&current_app::favourites_query(kind.map(current_model::MediaKind::new))).into()
+}
+
+/// The Recently added tab's query: what was added to every library, the newest first; only `kind` when given.
+#[uniffi::export]
+pub fn recently_added_everywhere_query(kind: Option<String>) -> ItemQuery {
+    (&current_app::recently_added_everywhere_query(kind.map(current_model::MediaKind::new))).into()
+}
+
+/// The media kinds the Favorites and Recently added tabs can be narrowed to, in order, after every kind.
+#[uniffi::export]
+pub fn view_kind_choices() -> Vec<String> {
+    current_app::view_kinds()
+        .into_iter()
+        .map(|kind| kind.as_str().to_owned())
+        .collect()
+}
+
+/// What a library grid loads for the text in its search box, from `query`, the query it showed before searching (keep it while the
+/// user searches): the text trimmed, searched for in the grid's items with no sort and no filter, so the best matches come first;
+/// when the text is blank, `query` itself, its sort and filters back.
+#[uniffi::export]
+pub fn library_search(query: ItemQuery, term: String) -> ItemQuery {
+    (&current_app::library_search(&(&query).into(), &term)).into()
+}
+
+/// What the Sort and Filter buttons of a grid showing `query` offer: neither while it searches, with a tooltip saying why.
+#[uniffi::export]
+pub fn library_grid_tools(query: ItemQuery) -> GridTools {
+    current_app::grid_tools(&(&query).into()).into()
+}
+
+/// The line a grid showing `query` shows above its items once its state's total is `total`: while it searches and the server's
+/// search window is full, that only the best matches show and more text narrows them; `None` otherwise.
+#[uniffi::export]
+pub fn library_search_note(query: ItemQuery, total: u32) -> Option<String> {
+    current_app::library_search_note(&(&query).into(), total)
+}
+
+/// What a Home row of `library`'s latest items opens when its header is chosen: the library's grid, the newest added first.
+#[uniffi::export]
+pub fn recently_added_query(library: Library) -> ItemQuery {
+    (&current_app::recently_added_query(&(&library).into())).into()
 }
 
 /// What Play on a tile's item starts: the item from its resume point, unless played; `None` for a kind that does not play by itself
@@ -328,6 +414,16 @@ impl Browse {
         })
     }
 
+    /// A grid of items from every library (a Favourites row's whole list, the Recently added tab): `query` with no parent. Starts
+    /// loading at once.
+    pub fn open_items(&self, query: ItemQuery) -> Arc<PagedItems> {
+        let items = self.browse.open_items((&query).into());
+        Arc::new(PagedItems {
+            items,
+            host: self.host.clone(),
+        })
+    }
+
     /// Home's rows. Starts loading at once.
     pub fn home(&self) -> Arc<HomeFeed> {
         Arc::new(HomeFeed {
@@ -348,6 +444,16 @@ impl Browse {
     pub fn search(&self, term: String) -> Arc<SearchResults> {
         Arc::new(SearchResults {
             results: self.browse.search(&term),
+            host: self.host.clone(),
+        })
+    }
+
+    /// The Favourites tab: the user's favourite films, series and episodes, a group each, in that order, each only while it has
+    /// items and holding the first few by name. They read again a moment after a played or favourite mark changes. A group's header
+    /// opens [`favourites_query`] with its kind in [`Browse::open_items`]. Starts loading at once.
+    pub fn favourites(&self) -> Arc<SearchResults> {
+        Arc::new(SearchResults {
+            results: self.browse.favourites(),
             host: self.host.clone(),
         })
     }
@@ -571,7 +677,7 @@ impl DetailsView {
     }
 }
 
-/// The results of one search: one group per kind.
+/// The results of one search, or the Favourites tab's rows ([`Browse::favourites`]): one group per kind.
 #[derive(uniffi::Object)]
 pub struct SearchResults {
     results: current_app::SearchResults,

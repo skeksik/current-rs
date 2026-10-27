@@ -97,6 +97,9 @@ pub struct ItemSummary {
     /// The artwork a wide tile shows (16:9), as the core picks it from `artwork`.
     #[uniffi(default = None)]
     pub wide: Option<Artwork>,
+    /// What is left to watch from the resume point, in milliseconds (`ItemSummary::time_left`). Ignored on the way in.
+    #[uniffi(default = None)]
+    pub time_left_ms: Option<u64>,
 }
 
 /// One of the user's libraries, for the app's navigation.
@@ -196,6 +199,27 @@ pub struct SortChoice {
     pub order: SortOrder,
 }
 
+/// What a library grid's Sort and Filter buttons offer for the query it shows: neither while it searches, its results then coming in
+/// the server's relevance order, unfiltered. Each tooltip says why its button is unavailable; `None` while it is available.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct GridTools {
+    pub sort_available: bool,
+    pub sort_tooltip: Option<String>,
+    pub filter_available: bool,
+    pub filter_tooltip: Option<String>,
+}
+
+impl From<current_app::GridTools> for GridTools {
+    fn from(tools: current_app::GridTools) -> Self {
+        Self {
+            sort_available: tools.sort_available,
+            sort_tooltip: tools.sort_tooltip,
+            filter_available: tools.filter_available,
+            filter_tooltip: tools.filter_tooltip,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Enum)]
 pub enum SortOrder {
     #[default]
@@ -218,6 +242,9 @@ pub struct ItemQuery {
     pub genres: Vec<String>,
     pub years: Vec<i32>,
     pub name_starts_with: Option<String>,
+    /// Only items the server finds for this, as its search does.
+    #[uniffi(default = None)]
+    pub search_term: Option<String>,
 }
 
 /// One place in a grid. Never null across the bridge: WinUI 3 does not take null placeholders.
@@ -256,6 +283,9 @@ pub enum HomeRowKind {
     ContinueWatching,
     NextUp,
     Latest,
+    RecentlyAdded,
+    Favourites,
+    SeenRecently,
 }
 
 /// One row of Home. Debug leaves out the title, a library's name.
@@ -500,6 +530,7 @@ impl From<&model::ItemSummary> for ItemSummary {
             poster: current_app::tile_artwork(summary, current_app::TileShape::Poster)
                 .map(Into::into),
             wide: current_app::tile_artwork(summary, current_app::TileShape::Wide).map(Into::into),
+            time_left_ms: summary.time_left().map(millis),
         }
     }
 }
@@ -709,6 +740,7 @@ impl From<&model::ItemQuery> for ItemQuery {
             genres: query.genres.clone(),
             years: query.years.clone(),
             name_starts_with: query.name_starts_with.clone(),
+            search_term: query.search_term.clone(),
         }
     }
 }
@@ -740,6 +772,7 @@ impl From<&ItemQuery> for model::ItemQuery {
             genres: query.genres.clone(),
             years: query.years.clone(),
             name_starts_with: query.name_starts_with.clone(),
+            search_term: query.search_term.clone(),
         }
     }
 }
@@ -793,6 +826,9 @@ impl From<current_app::HomeRow> for HomeRow {
                 current_app::HomeRowKind::ContinueWatching => HomeRowKind::ContinueWatching,
                 current_app::HomeRowKind::NextUp => HomeRowKind::NextUp,
                 current_app::HomeRowKind::Latest => HomeRowKind::Latest,
+                current_app::HomeRowKind::RecentlyAdded => HomeRowKind::RecentlyAdded,
+                current_app::HomeRowKind::Favourites => HomeRowKind::Favourites,
+                current_app::HomeRowKind::SeenRecently => HomeRowKind::SeenRecently,
             },
             title: row.title,
             library: row.library.as_ref().map(Into::into),

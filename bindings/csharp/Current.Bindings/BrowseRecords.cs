@@ -46,7 +46,8 @@ public sealed record EpisodeLinks(
 
 /// <summary>
 /// An item as a tile or a row shows it. <c>Kind</c> is the media kind: movie, series, episode..., or one the server named.
-/// <c>Poster</c> and <c>Wide</c> are the artwork a poster (2:3) and a wide (16:9) tile show, as the core picks them.
+/// <c>Poster</c> and <c>Wide</c> are the artwork a poster (2:3) and a wide (16:9) tile show, as the core picks them. <c>TimeLeft</c>
+/// is what is left to watch from the resume point, as the core counts it; ignored on the way in.
 /// </summary>
 public sealed record ItemSummary(
     ItemRef Item,
@@ -59,7 +60,8 @@ public sealed record ItemSummary(
     EpisodeLinks? Episode,
     int? ChildCount,
     Artwork? Poster = null,
-    Artwork? Wide = null);
+    Artwork? Wide = null,
+    TimeSpan? TimeLeft = null);
 
 /// <summary>
 /// What a Play button starts (ADR 0019): <c>Item</c> (on a series' page, its next episode) from <c>Start</c>. When <c>Resumes</c>, the
@@ -124,6 +126,12 @@ public sealed record ItemDetails(
     MediaSummary? Media,
     SeriesRun? Run = null);
 
+/// <summary>
+/// What a library grid's Sort and Filter buttons offer for the query it shows (<see cref="ItemQuery.Tools"/>): each tooltip says why
+/// its button is unavailable, null while it is available.
+/// </summary>
+public sealed record GridTools(bool SortAvailable, string? SortTooltip, bool FilterAvailable, string? FilterTooltip);
+
 public enum SortOrder
 {
     Ascending,
@@ -153,6 +161,34 @@ public sealed record ItemQuery
 
     public string? NameStartsWith { get; init; }
 
+    /// <summary>Only items the server finds for this, as its search does: a library's own search box (<see cref="Searching"/>).</summary>
+    public string? SearchTerm { get; init; }
+
+    /// <summary>
+    /// What a grid loads for the text in its search box, from this query, the one it showed before searching (keep it while the user
+    /// searches; the core decides): the text trimmed, searched for with no sort and no filter, so the best matches come first; when the
+    /// text is blank, this query itself, its sort and filters back.
+    /// </summary>
+    public ItemQuery Searching(string term)
+    {
+        ArgumentNullException.ThrowIfNull(term);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.LibrarySearch(MapBrowse.ToFfi(this), term));
+    }
+
+    /// <summary>What the Sort and Filter buttons of a grid showing this query offer (the core decides): neither while it searches.</summary>
+    public GridTools Tools()
+    {
+        var tools = Ffi.CurrentFfiMethods.LibraryGridTools(MapBrowse.ToFfi(this));
+        return new(tools.SortAvailable, tools.SortTooltip, tools.FilterAvailable, tools.FilterTooltip);
+    }
+
+    /// <summary>
+    /// The line a grid showing this query shows above its items once its total is <paramref name="total"/> (the core decides): while it
+    /// searches and the server's search window is full, that only the best matches show; null otherwise.
+    /// </summary>
+    public string? SearchNote(int total) =>
+        Ffi.CurrentFfiMethods.LibrarySearchNote(MapBrowse.ToFfi(this), (uint)Math.Max(total, 0));
+
     /// <summary>
     /// What <paramref name="library"/>'s grid shows before the user sorts or filters it, by name (the core decides): a film library
     /// its films and a TV library its series, wherever they sit below it; any other library its top level.
@@ -163,13 +199,53 @@ public sealed record ItemQuery
         return MapBrowse.From(Ffi.CurrentFfiMethods.LibraryQuery(MapBrowse.ToFfi(library)));
     }
 
+    /// <summary>The user's favourites in every library, by name (the core decides): with <paramref name="kind"/> (movie, series or
+    /// episode, as a Favourites row names it), that kind only, the list a row's header opens; without, Home's Favourites row.</summary>
+    public static ItemQuery Favourites(string? kind = null) => MapBrowse.From(Ffi.CurrentFfiMethods.FavouritesQuery(kind));
+
+    /// <summary>The Recently added tab (the core decides): what was added to every library, the newest first; only
+    /// <paramref name="kind"/> when given.</summary>
+    public static ItemQuery RecentlyAddedEverywhere(string? kind = null) =>
+        MapBrowse.From(Ffi.CurrentFfiMethods.RecentlyAddedEverywhereQuery(kind));
+
+    /// <summary>The media kinds the Favorites and Recently added tabs can be narrowed to, in order, after every kind.</summary>
+    public static IReadOnlyList<string> ViewKindChoices { get; } = Ffi.CurrentFfiMethods.ViewKindChoices();
+
+    /// <summary>What a Home row of <paramref name="library"/>'s latest items opens (the core decides): its grid, the newest added first.</summary>
+    public static ItemQuery RecentlyAdded(Library library)
+    {
+        ArgumentNullException.ThrowIfNull(library);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.RecentlyAddedQuery(MapBrowse.ToFfi(library)));
+    }
+
     /// <summary>The sorts a library grid offers, in the order to list them, each with its order (the core decides). The UI names each key.</summary>
     public static IReadOnlyList<SortChoice> SortChoices { get; } = Array.ConvertAll(
         Ffi.CurrentFfiMethods.LibrarySortChoices(),
         choice => new SortChoice(choice.Key, choice.Order == Ffi.SortOrder.Descending ? SortOrder.Descending : SortOrder.Ascending));
 
-    /// <summary>The filters a library grid offers, in the order to list them: null (everything) first. The UI names each.</summary>
+    /// <summary>The filters a library grid offers as one choice, everything (null) first, then unplayed and played (the core decides).</summary>
     public static IReadOnlyList<string?> FilterChoices { get; } = Ffi.CurrentFfiMethods.LibraryFilterChoices();
+
+    /// <summary>The filters a library grid offers as ticks beside that choice, each on or off: favourite (the core decides).</summary>
+    public static IReadOnlyList<string> ToggleFilterChoices { get; } = Ffi.CurrentFfiMethods.LibraryToggleFilterChoices();
+
+    /// <summary>This query with <paramref name="choice"/> as its filter choice (null: everything), its ticks kept (the core decides).</summary>
+    public ItemQuery WithFilter(string? choice) =>
+        MapBrowse.From(Ffi.CurrentFfiMethods.LibraryWithFilterChoice(MapBrowse.ToFfi(this), choice));
+
+    /// <summary>This query with the tick <paramref name="toggle"/> on or off, its filter choice kept (the core decides).</summary>
+    public ItemQuery WithToggle(string toggle, bool on)
+    {
+        ArgumentNullException.ThrowIfNull(toggle);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.LibraryWithFilterToggle(MapBrowse.ToFfi(this), toggle, on));
+    }
+
+    /// <summary>Every item of <paramref name="kind"/> in every library, by name (the core decides): the page a Favourites row opens.</summary>
+    public static ItemQuery OfKind(string kind)
+    {
+        ArgumentNullException.ThrowIfNull(kind);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.KindQuery(kind));
+    }
 }
 
 /// <summary>
@@ -201,6 +277,9 @@ public enum HomeRowKind
     ContinueWatching,
     NextUp,
     Latest,
+    RecentlyAdded,
+    Favourites,
+    SeenRecently,
 }
 
 /// <summary>
@@ -359,7 +438,8 @@ internal static class MapBrowse
         summary.Episode is { } episode ? From(episode) : null,
         Count(summary.ChildCount),
         summary.Poster is { } poster ? From(poster) : null,
-        summary.Wide is { } wide ? From(wide) : null);
+        summary.Wide is { } wide ? From(wide) : null,
+        Millis(summary.TimeLeftMs));
 
     private static ulong? ToMillis(TimeSpan? time) => time is { } value ? (ulong)Math.Max(0, value.TotalMilliseconds) : null;
 
@@ -394,7 +474,8 @@ internal static class MapBrowse
         summary.Episode is { } episode ? ToFfi(episode) : null,
         Size(summary.ChildCount, nameof(summary.ChildCount)),
         summary.Poster is { } poster ? ToFfi(poster) : null,
-        summary.Wide is { } wide ? ToFfi(wide) : null);
+        summary.Wide is { } wide ? ToFfi(wide) : null,
+        null);
 
     public static PlayTarget From(Ffi.PlayTarget target) =>
         new(From(target.Item), Millis(target.StartMs) ?? TimeSpan.Zero, target.Resumes);
@@ -458,7 +539,8 @@ internal static class MapBrowse
         query.Filters.ToArray(),
         query.Genres.ToArray(),
         query.Years.ToArray(),
-        query.NameStartsWith);
+        query.NameStartsWith,
+        query.SearchTerm);
 
     public static ItemQuery From(Ffi.ItemQuery query) => new()
     {
@@ -470,6 +552,7 @@ internal static class MapBrowse
         Genres = query.Genres,
         Years = query.Years,
         NameStartsWith = query.NameStartsWith,
+        SearchTerm = query.SearchTerm,
     };
 
     public static Slot From(Ffi.Slot slot) => slot switch
@@ -495,6 +578,9 @@ internal static class MapBrowse
         {
             Ffi.HomeRowKind.ContinueWatching => HomeRowKind.ContinueWatching,
             Ffi.HomeRowKind.NextUp => HomeRowKind.NextUp,
+            Ffi.HomeRowKind.RecentlyAdded => HomeRowKind.RecentlyAdded,
+            Ffi.HomeRowKind.Favourites => HomeRowKind.Favourites,
+            Ffi.HomeRowKind.SeenRecently => HomeRowKind.SeenRecently,
             _ => HomeRowKind.Latest,
         },
         row.Title,

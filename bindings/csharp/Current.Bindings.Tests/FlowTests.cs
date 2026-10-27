@@ -116,6 +116,55 @@ internal static class FlowTests
         }
     }
 
+    public static async Task LibraryChoicesAreRememberedWhileTheirSwitchIsOn()
+    {
+        using var folder = new DataFolder();
+        var library = new ItemRef(new ServerRef("jellyfin", "1"), "abc");
+        var everything = new LibraryChoices(
+            new SortChoice("date_created", SortOrder.Descending), ["unplayed"], new LibraryView(LibraryView.Wide, ShowTitles: false));
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory))
+        {
+            Check(core.LibraryMemory == new LibraryMemorySettings(false, false, false), "all off by default");
+            await core.RememberLibraryChoicesAsync(library, everything);
+            Check(core.LibraryChoicesFor(library) == new LibraryChoices(), "nothing remembered while off");
+            await core.SetRememberSortAsync(true);
+            await core.SetRememberFilterAsync(true);
+            await core.SetRememberViewAsync(true);
+            await core.RememberLibraryChoicesAsync(library, everything);
+            var choices = core.LibraryChoicesFor(library);
+            Check(choices.Sort == everything.Sort && choices.View == everything.View, "sort and view given back");
+            Check(choices.Filters is ["unplayed"], "filters given back");
+            // "All" is an empty list; a part not given stays.
+            await core.RememberLibraryChoicesAsync(library, new LibraryChoices(Filters: []));
+            choices = core.LibraryChoicesFor(library);
+            Check(choices.Filters is [] && choices.Sort == everything.Sort, "All, and the sort kept");
+            await core.SetRememberViewAsync(false);
+            Check(core.LibraryChoicesFor(library).View is null, "off forgets the view");
+        }
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory))
+        {
+            Check(core.LibraryMemory == new LibraryMemorySettings(true, true, false), "the switches kept for the next open");
+            Check(core.LibraryChoicesFor(library).Sort == everything.Sort, "the sort kept for the next open");
+        }
+    }
+
+    public static async Task LibraryChoiceThatCannotBeSavedIsRefused()
+    {
+        using var folder = new DataFolder();
+        File.WriteAllText(Path.Combine(folder.Path, "settings.json"), "{\"version\": 99, \"device_id\": \"abc\"}");
+        using var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory);
+        try
+        {
+            await core.SetRememberSortAsync(true);
+            Check(false, "saving fails");
+        }
+        catch (CoreStoreException error)
+        {
+            Check(error.Problem is StoreProblem.NewerVersion { Found: 99 }, $"a newer version, not {error.Problem}");
+        }
+        Check(!core.LibraryMemory.RememberSort, "unchanged");
+    }
+
     public static async Task AppThemeThatCannotBeSavedIsRefused()
     {
         using var folder = new DataFolder();

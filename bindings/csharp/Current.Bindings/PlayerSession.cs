@@ -122,7 +122,10 @@ public sealed class PlayerSession : IAsyncDisposable
     public Task SelectSubtitleAsync(SubtitleSelection subtitle, CancellationToken ct = default) =>
         CoreCall.RunVoidAsync(token => Open.SelectSubtitle(PlayerMap.ToFfi(subtitle), token), ct);
 
-    /// <summary>The quality for the kind of address in use, remembered for it (local or internet).</summary>
+    /// <summary>
+    /// The quality of the item playing, as picked; plays on at the position with it. Not saved: the next item plays at the preferred
+    /// quality (<see cref="PlaybackExtensions.SetPreferredQualityAsync"/>).
+    /// </summary>
     public Task SetQualityAsync(QualityChoice quality, CancellationToken ct = default) =>
         CoreCall.RunVoidAsync(token => Open.SetQuality(PlayerMap.ToFfi(quality), token), ct);
 
@@ -158,6 +161,16 @@ public sealed class PlayerSession : IAsyncDisposable
 
     /// <summary>The panel's new size in physical pixels.</summary>
     public void SetCompositionSize(CompositionSize size) => Quick(() => Open.SetCompositionSize(PlayerMap.ToFfi(size)));
+
+    /// <summary>
+    /// The quality menu for the version playing, as the core names it: Maximum (the original) first, then the common steps, or every
+    /// step when <paramref name="all"/>, below the original's bitrate, each with the resolution the server would send it at and its
+    /// bitrate.
+    /// </summary>
+    public async Task<IReadOnlyList<QualityOption>> QualityOptionsAsync(bool all) =>
+        Array.ConvertAll(
+            await CoreCall.RunUncancellableAsync(() => Open.QualityOptions(all)).ConfigureAwait(false),
+            option => PlayerMap.From(option));
 
     /// <summary>The playback information view's content. No URL.</summary>
     public async Task<PlaybackInfo> PlaybackInfoAsync() =>
@@ -220,6 +233,44 @@ public static class PlaybackExtensions
             await core.Core.SetSkipIntrosAndCredits(skip).ConfigureAwait(false);
             return true;
         });
+
+    /// <summary>
+    /// The Settings choice "Preferred quality": each item plays at the highest entry of its quality menu that is not above it, on local
+    /// and internet addresses alike. Saved at once; it applies from the next item played.
+    /// </summary>
+    /// <exception cref="CoreStoreException">The settings could not be saved: the setting stands for this run.</exception>
+    public static Task SetPreferredQualityAsync(this CoreHost core, QualityChoice quality) =>
+        CoreCall.RunUncancellableAsync(async () =>
+        {
+            await core.Core.SetPreferredQuality(PlayerMap.ToFfi(quality)).ConfigureAwait(false);
+            return true;
+        });
+
+    /// <summary>The Settings switch: show each quality's resolution in the quality menu. Saved at once.</summary>
+    /// <exception cref="CoreStoreException">The settings could not be saved: the setting stands for this run.</exception>
+    public static Task SetShowQualityResolutionAsync(this CoreHost core, bool on) =>
+        CoreCall.RunUncancellableAsync(async () =>
+        {
+            await core.Core.SetShowQualityResolution(on).ConfigureAwait(false);
+            return true;
+        });
+
+    /// <summary>The Settings switch: list every quality step in the quality menu, not only the common ones. Saved at once.</summary>
+    /// <exception cref="CoreStoreException">The settings could not be saved: the setting stands for this run.</exception>
+    public static Task SetShowAllQualitiesAsync(this CoreHost core, bool all) =>
+        CoreCall.RunUncancellableAsync(async () =>
+        {
+            await core.Core.SetShowAllQualities(all).ConfigureAwait(false);
+            return true;
+        });
+
+    /// <summary>
+    /// Settings' "Preferred quality" list (the core decides): Original, then the steps the quality menu lists ("Show all quality
+    /// options" as set), each named by its usual resolution. The preferred quality is always one of them: switching "Show all" off
+    /// moves a step only it listed to the nearest listed one not above it.
+    /// </summary>
+    public static IReadOnlyList<QualityOption> PreferredQualityOptions(this CoreHost core) =>
+        Array.ConvertAll(core.Core.PreferredQualityOptions(), option => PlayerMap.From(option));
 
     /// <summary>The steps of the quality menu after "Maximum", highest first.</summary>
     public static IReadOnlyList<QualityChoice> QualitySteps(this CoreHost core) =>

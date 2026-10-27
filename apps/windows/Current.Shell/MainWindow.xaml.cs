@@ -55,10 +55,19 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     public MainWindow()
     {
         InitializeComponent();
-        // The search box joins the navigation view once a Jellyfin server is signed in (ShowBrowsing).
-        NavView.AutoSuggestBox = null;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+        // Ours again after the title bar sets its own click-through areas, which it does as it resizes or a button changes
+        // (QueueTitleBarRegions); not on every layout pass in the window, which a scrolling grid makes many of (review, 2026-10-27).
+        AppTitleBar.SizeChanged += (_, _) => QueueTitleBarRegions();
+        AppTitleBar.Loaded += (_, _) =>
+        {
+            if (AppTitleBar.XamlRoot is { } root)
+            {
+                root.Changed += (_, _) => QueueTitleBarRegions();
+            }
+            QueueTitleBarRegions();
+        };
         // Caption buttons as tall as the 48 px title bar (owner's finding, 2026-10-24; Photos' are 48 × 48, measured on the owner's PC,
         // 2026-10-24): "Set PreferredHeightOption to Tall so the caption buttons are the same height as the title bar" ("Title bar
         // customization", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-24), as the WinUI Gallery does after
@@ -76,6 +85,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         Activated += OnActivated;
         Closed += (_, _) =>
         {
+            _closed = true;
             _appTheme?.Dispose();
             _appTheme = null;
         };
@@ -151,6 +161,9 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     internal void ShowLibrary(Library library) =>
         Navigate(typeof(LibraryPage), new SuppressNavigationTransitionInfo(), new LibraryArgs(library));
 
+    /// <summary>Opens a view tab, as its item in the pane does (the smoke run).</summary>
+    internal void ShowView(ViewArgs view) => Navigate(view.Page, new SuppressNavigationTransitionInfo(), view);
+
     /// <summary>The page shown now (the smoke run).</summary>
     internal Page? ShownPage => ContentFrame.Content as Page;
 
@@ -163,8 +176,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>The titles of the notices above the pages now (the smoke run).</summary>
     internal IReadOnlyList<string> NoticeTitles => [.. Notices.Children.OfType<InfoBar>().Select(notice => notice.Title)];
 
-    /// <summary>The navigation's library items now, headers left out (the smoke run).</summary>
-    internal int LibraryItemCount => _libraryItems.OfType<NavigationViewItem>().Count();
+    /// <summary>The navigation's library items now, servers' items left out (the smoke run).</summary>
+    internal int LibraryItemCount => _libraryItems.OfType<NavigationViewItem>().Count(item => item.Tag is LibraryArgs);
 
     /// <summary>Opens Settings, as its item in the pane does (the smoke run).</summary>
     internal void ShowSettings() => Navigate(typeof(SettingsPage), new SuppressNavigationTransitionInfo());
@@ -262,7 +275,17 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// (owner's recording, 2026-10-24), not once its animation has ended.</summary>
     private void OnPaneOpenedOrClosed(NavigationView sender, object args) => QueuePaneStateUpdate();
 
-    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args) => QueuePaneStateUpdate();
+    private void OnDisplayModeChanged(NavigationView sender, NavigationViewDisplayModeChangedEventArgs args)
+    {
+        QueuePaneStateUpdate();
+        // The title bar's box gives way to its Search button when the pane does to the icon rail (owner, 2026-10-26).
+        var narrow = args.DisplayMode != NavigationViewDisplayMode.Expanded;
+        if (narrow != _narrow)
+        {
+            _narrow = narrow;
+            PlaceSearch();
+        }
+    }
 
     /// <summary>
     /// Updates the pane button's name and Back once the navigation view has finished the change. Crossing 1008 px, it raises
@@ -283,8 +306,11 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     /// <summary>The title bar's Back button is enabled while there is a page to go back to, the pane overlays the page, or the player is
     /// open (Back closes it).</summary>
-    private void UpdateBackButton() =>
+    private void UpdateBackButton()
+    {
         AppTitleBar.IsBackButtonEnabled = ContentFrame.CanGoBack || PaneOverlaysPage || Player.IsOpen;
+        QueueTitleBarRegions();
+    }
 
     // The player ----------------------------------------------------------------------------------------------------------------------
 
@@ -457,6 +483,10 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         {
             Navigate(typeof(SettingsPage), args.RecommendedNavigationTransitionInfo);
         }
+        else if (args.InvokedItemContainer?.Tag is ViewArgs view)
+        {
+            Navigate(view.Page, args.RecommendedNavigationTransitionInfo, view);
+        }
         else if (args.InvokedItemContainer?.Tag is LibraryArgs library)
         {
             Navigate(typeof(LibraryPage), args.RecommendedNavigationTransitionInfo, library);
@@ -495,10 +525,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     private void ShowBrowsing(BrowseHub hub)
     {
-        // Taken out of the navigation view, not only hidden: a hidden box still kept its place in the pane, a gap above Home (the
-        // owner's run, 2026-10-25).
-        SearchBox.Visibility = hub.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
-        NavView.AutoSuggestBox = hub.IsAvailable ? SearchBox : null;
+        _searchAvailable = hub.IsAvailable;
+        PlaceSearch();
         ShowLibraries(hub);
         DropGoneHistory(hub);
         SelectShownPage();
@@ -507,24 +535,48 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>
     /// The library items follow the core's lists in place: an item for a library still listed is kept (and renamed), a new library's
     /// item is inserted where the user's order puts it, a gone library's item is removed, and the rest stay as they are, so the
-    /// selection and keyboard focus stay on what they were on. The library items always end the pane's list, after Home.
+    /// selection and keyboard focus stay on what they were on. They sit inside the Libraries item, inside an item per server when
+    /// more than one is signed in.
     /// </summary>
     private void ShowLibraries(BrowseHub hub)
     {
-        var wanted = new List<object>();
         var servers = hub.Servers;
+        var grouped = servers.Count > 1;
+        // Each container's items as they should be, the Libraries item's first; an item that moves (one server more or less) is taken
+        // out of every container before any is filled, as an item can have one parent only.
+        var wanted = new List<(IList<object> Items, List<object> Want)>();
+        var top = new List<object>();
+        wanted.Add((LibrariesItem.MenuItems, top));
+        var all = new List<object>();
+        // The views across every library: above Libraries with one server, first inside each server's item with more.
+        var single = servers.Count == 1 ? servers[0].Server : null;
+        FavouritesItem.Tag = single is null ? null : new ViewArgs(single, ViewArgs.Favourites);
+        RecentItem.Tag = single is null ? null : new ViewArgs(single, ViewArgs.RecentlyAdded);
+        FavouritesItem.Visibility = RecentItem.Visibility = single is null ? Visibility.Collapsed : Visibility.Visible;
         foreach (var server in servers)
         {
-            if (servers.Count > 1)
+            var into = top;
+            if (grouped)
             {
-                var header = _libraryItems.OfType<NavigationViewItemHeader>().FirstOrDefault(known => Equals(known.Tag, server.Server))
-                    ?? new NavigationViewItemHeader { Tag = server.Server };
+                var group = _libraryItems.OfType<NavigationViewItem>().FirstOrDefault(known => Equals(known.Tag, server.Server))
+                    ?? new NavigationViewItem { Tag = server.Server, SelectsOnInvoked = false, IsExpanded = true };
                 var name = hub.ServerName(server.Server);
-                if (!Equals(header.Content, name))
+                if (!Equals(group.Content, name))
                 {
-                    header.Content = name;
+                    group.Content = name;
                 }
-                wanted.Add(header);
+                top.Add(group);
+                all.Add(group);
+                into = [];
+                wanted.Add((group.MenuItems, into));
+                foreach (var (view, glyph) in new[] { (ViewArgs.Favourites, "\uEB51"), (ViewArgs.RecentlyAdded, "\uE823") })
+                {
+                    var tag = new ViewArgs(server.Server, view);
+                    var item = _libraryItems.OfType<NavigationViewItem>().FirstOrDefault(known => Equals(known.Tag, tag))
+                        ?? new NavigationViewItem { Tag = tag, Content = BrowseText.ViewTitle(view), Icon = new FontIcon { Glyph = glyph } };
+                    into.Add(item);
+                    all.Add(item);
+                }
             }
             foreach (var library in server.Libraries)
             {
@@ -547,27 +599,44 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
                     }
                 }
                 item.Tag = new LibraryArgs(library);
-                wanted.Add(item);
+                into.Add(item);
+                all.Add(item);
             }
         }
-        var start = NavView.MenuItems.Count - _libraryItems.Count;
-        for (var i = 0; i < wanted.Count; i++)
+        // A server's item no longer shown lets go of its libraries too.
+        foreach (var gone in _libraryItems.OfType<NavigationViewItem>()
+            .Where(item => item.Tag is not (LibraryArgs or ViewArgs) && !all.Contains(item)))
         {
-            var at = start + i;
-            if (at < NavView.MenuItems.Count && ReferenceEquals(NavView.MenuItems[at], wanted[i]))
+            gone.MenuItems.Clear();
+        }
+        foreach (var (items, want) in wanted)
+        {
+            for (var i = items.Count - 1; i >= 0; i--)
             {
-                continue;
+                if (!want.Contains(items[i]))
+                {
+                    items.RemoveAt(i);
+                }
             }
-            // Moved (the user's order changed) or new: every item before it is already in place.
-            NavView.MenuItems.Remove(wanted[i]);
-            NavView.MenuItems.Insert(at, wanted[i]);
         }
-        while (NavView.MenuItems.Count > start + wanted.Count)
+        foreach (var (items, want) in wanted)
         {
-            NavView.MenuItems.RemoveAt(NavView.MenuItems.Count - 1);
+            for (var i = 0; i < want.Count; i++)
+            {
+                if (i < items.Count && ReferenceEquals(items[i], want[i]))
+                {
+                    continue;
+                }
+                // Moved (the user's order changed) or new: every item before it is already in place.
+                items.Remove(want[i]);
+                items.Insert(i, want[i]);
+            }
         }
         _libraryItems.Clear();
-        _libraryItems.AddRange(wanted);
+        _libraryItems.AddRange(all);
+        var any = top.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        LibrariesSeparator.Visibility = any;
+        LibrariesItem.Visibility = any;
     }
 
     /// <summary>
@@ -590,6 +659,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     private static ServerRef? ServerOf(object? parameter) => parameter switch
     {
         LibraryArgs library => library.Library.Item.Server,
+        ViewArgs view => view.Server,
         DetailsArgs details => details.Item.Server,
         _ => null,
     };
@@ -690,9 +760,242 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     {
         if (SearchBox.Visibility == Visibility.Visible)
         {
-            // In the icon rail the box shows as a search button; whether focusing it there opens the pane is not verified.
             args.Handled = SearchBox.Focus(FocusState.Keyboard);
         }
+        else if (SearchButton.Visibility == Visibility.Visible || NarrowSearchPlate.Visibility == Visibility.Visible)
+        {
+            OpenNarrowSearch(FocusState.Keyboard);
+            args.Handled = true;
+        }
+    }
+
+    /// <summary>Whether a Jellyfin server is signed in, so search has something to search.</summary>
+    private bool _searchAvailable;
+
+    /// <summary>Whether the pane is not expanded, so the title bar's box gives way to the Search button (OnDisplayModeChanged).</summary>
+    private bool _narrow;
+
+    // Windows Settings' title bar search, measured on the owner's PC at 150 % (2026-10-26): 500 wide at most, centred on the window,
+    // narrowing with the window while keeping the room on its left mirrored on its right.
+    private const double SearchMaxWidth = 500;
+
+    private void OnSearchHostSizeChanged(object sender, SizeChangedEventArgs e) => LayoutSearch();
+
+    private bool _titleBarRegionsQueued;
+
+    /// <summary>
+    /// Sets the title bar's click-through areas (the non-client "passthrough" regions) to its buttons and search as they show,
+    /// once the title bar has laid out and set its own. Everything else there is caption: a double-click on it maximizes the window.
+    /// The title bar's own list (UpdateInteractableElementsList and GetBounds in TitleBar.cpp, microsoft-ui-xaml, tag
+    /// winui3/release/2.5.1, read 2026-10-26) leaves out a disabled Back button and takes the search box where layout put it, not
+    /// where its render transform moves it (LayoutSearch); a double-click on either maximized the window (owner's run, 2026-10-26).
+    /// The title bar only sets its regions again when its own list's rects change, so these stay until then, and are set again after
+    /// its layout passes.
+    /// </summary>
+    private void QueueTitleBarRegions()
+    {
+        if (_titleBarRegionsQueued || _closed)
+        {
+            return;
+        }
+        _titleBarRegionsQueued = true;
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            _titleBarRegionsQueued = false;
+            if (_closed)
+            {
+                return;
+            }
+            try
+            {
+                SetTitleBarRegions();
+            }
+            catch (Exception error)
+            {
+                // A layout pass as the window closes can queue this after its AppWindow is gone: an exception here, unhandled on the
+                // UI thread, ended the process with 0xC000027B after a passing smoke run (CI's install test, 2026-10-26).
+                Trace.TraceWarning($"Current: the title bar's click-through areas were not set: {error.GetType().Name}");
+            }
+        });
+    }
+
+    /// <summary>The window has closed: nothing touches its AppWindow any more.</summary>
+    private bool _closed;
+
+    private void SetTitleBarRegions()
+    {
+        if (AppTitleBar.XamlRoot is not { } root)
+        {
+            return;
+        }
+        var scale = root.RasterizationScale;
+        var rects = new List<Windows.Graphics.RectInt32>();
+        void Add(FrameworkElement? element)
+        {
+            if (element is null || element.Visibility != Visibility.Visible || element.ActualWidth <= 0 || !IsShown(element))
+            {
+                return;
+            }
+            var bounds = element.TransformToVisual(null).TransformBounds(
+                new Windows.Foundation.Rect(0, 0, element.ActualWidth, element.ActualHeight));
+            rects.Add(new Windows.Graphics.RectInt32(
+                (int)Math.Round(bounds.X * scale), (int)Math.Round(bounds.Y * scale),
+                (int)Math.Round(bounds.Width * scale), (int)Math.Round(bounds.Height * scale)));
+        }
+        _backPart ??= FindNamed(AppTitleBar, "PART_BackButton");
+        _panePart ??= FindNamed(AppTitleBar, "PART_PaneToggleButton");
+        Add(_backPart);
+        Add(_panePart);
+        Add(RefreshButton);
+        Add(SearchBox);
+        Add(SearchButton);
+        // The small-window search box's top reaches 4 into the title bar: a click there is the box's, not a drag (review, 2026-10-27).
+        Add(NarrowSearchPlate);
+        // Only when they differ from what is set: setting them again on every layout pass (pressing the search box lays it out again)
+        // turned the text cursor over it into the arrow while the button was held (owner's run, 2026-10-26). Compared with what the
+        // window has, not with our last value: the title bar sets its own when Back is enabled, and ours must replace them then
+        // (review, 2026-10-27).
+        var source = Microsoft.UI.Input.InputNonClientPointerSource.GetForWindowId(AppWindow.Id);
+        if (source.GetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Passthrough).SequenceEqual(rects))
+        {
+            return;
+        }
+        source.SetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Passthrough, [.. rects]);
+    }
+
+    /// <summary>The title bar's own Back and pane buttons, parts of its template, found once.</summary>
+    private FrameworkElement? _backPart;
+
+    private FrameworkElement? _panePart;
+
+    /// <summary>Whether every element from <paramref name="element"/> up is visible: a collapsed parent hides it too.</summary>
+    private static bool IsShown(FrameworkElement element)
+    {
+        for (DependencyObject? at = element; at is not null; at = VisualTreeHelper.GetParent(at))
+        {
+            if (at is UIElement { Visibility: Visibility.Collapsed })
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>A named part of a control's template, found by walking its visual tree.</summary>
+    private static FrameworkElement? FindNamed(DependencyObject parent, string name)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is FrameworkElement element && element.Name == name)
+            {
+                return element;
+            }
+            if (FindNamed(child, name) is { } found)
+            {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The title bar's box, as Settings sizes and places it: at most <see cref="SearchMaxWidth"/> wide and centred on the window, with
+    /// the room the back, pane and Refresh buttons and the title take on its left (where the title bar's content column, SearchHost,
+    /// starts) kept on its right too. It also stays inside that column, which ends well before the caption buttons: the title bar
+    /// keeps a 48 wide drag region (TitleBarMinDragRegionWidth) and pads for the caption buttons (RightPaddingColumn); at 150 % that
+    /// padding measured 216, the caption buttons' inset in physical pixels, where the buttons take 144 (owner's PC, 2026-10-26). So a
+    /// box that would cross into it moves left, or narrows.
+    /// </summary>
+    private void LayoutSearch()
+    {
+        var window = Root.ActualWidth;
+        var host = SearchHost.ActualWidth;
+        if (host <= 0 || window <= 0)
+        {
+            return;
+        }
+        var left = SearchHost.TransformToVisual(Root).TransformPoint(new Windows.Foundation.Point(0, 0)).X;
+        var width = Math.Max(0, Math.Min(Math.Min(SearchMaxWidth, window - 2 * left), host));
+        // Moved by a render transform, not a margin: a margin adds to what the content asks of the title bar, which then hid its title
+        // to make room (owner's run, 2026-10-26).
+        SearchBox.Width = width;
+        SearchBox.RenderTransform = new TranslateTransform { X = Math.Min((window - width) / 2 - left, host - width) };
+        QueueTitleBarRegions();
+    }
+
+    /// <summary>The title bar's box in a wider window, its Search button in a small one, nothing without a server.</summary>
+    private void PlaceSearch()
+    {
+        _narrow = NavView.DisplayMode != NavigationViewDisplayMode.Expanded;
+        SearchBox.Visibility = _searchAvailable && !_narrow ? Visibility.Visible : Visibility.Collapsed;
+        SearchButton.Visibility = _searchAvailable && _narrow ? Visibility.Visible : Visibility.Collapsed;
+        QueueTitleBarRegions();
+        if (!_searchAvailable || !_narrow)
+        {
+            CloseNarrowSearch();
+        }
+    }
+
+    private void OnSearchButtonClick(object sender, RoutedEventArgs e) => OpenNarrowSearch(FocusState.Programmatic);
+
+    private void OpenNarrowSearch(FocusState focus)
+    {
+        NarrowSearchBox.Text = SearchBox.Text;
+        SearchDismissLayer.Visibility = Visibility.Visible;
+        NarrowSearchPlate.Visibility = Visibility.Visible;
+        QueueTitleBarRegions();
+        // Once it has been laid out: focused in the same pass as it is shown, it did not take the focus (owner's run, 2026-10-26).
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => NarrowSearchBox.Focus(focus));
+    }
+
+    private void CloseNarrowSearch()
+    {
+        if (NarrowSearchPlate.Visibility == Visibility.Visible)
+        {
+            SearchBox.Text = NarrowSearchBox.Text;
+            NarrowSearchPlate.Visibility = Visibility.Collapsed;
+            SearchDismissLayer.Visibility = Visibility.Collapsed;
+            QueueTitleBarRegions();
+        }
+    }
+
+    /// <summary>A click outside the open small-window search box only closes it.</summary>
+    private void OnSearchDismissPressed(object sender, PointerRoutedEventArgs e)
+    {
+        CloseNarrowSearch();
+        e.Handled = true;
+    }
+
+    private void OnNarrowSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
+    {
+        OnSearchSubmitted(sender, args);
+        CloseNarrowSearch();
+    }
+
+    /// <summary>Esc closes the box. Seen before the box's text field, which takes Esc itself (KeyDown never came; owner's run, 2026-10-26).</summary>
+    private void OnNarrowSearchKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Escape)
+        {
+            CloseNarrowSearch();
+            SearchButton.Focus(FocusState.Keyboard);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>Focus went elsewhere in the window: the box closes, as Settings' does. Inside it (its text box) it stays.</summary>
+    private void OnNarrowSearchLostFocus(object sender, RoutedEventArgs e)
+    {
+        var focused = FocusManager.GetFocusedElement(Root.XamlRoot) as DependencyObject;
+        for (var element = focused; element is not null; element = VisualTreeHelper.GetParent(element))
+        {
+            if (ReferenceEquals(element, NarrowSearchBox))
+            {
+                return;
+            }
+        }
+        CloseNarrowSearch();
     }
 
     /// <summary>Announces from the navigation view, which every page is shown in, so a page that was just left can still be heard.</summary>
@@ -735,7 +1038,10 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         }
         UpdateBackButton();
         SelectShownPage();
+        RefreshButton.IsEnabled = ContentFrame.Content is IRefreshable;
     }
+
+    private void OnRefreshClick(object sender, RoutedEventArgs e) => (ContentFrame.Content as IRefreshable)?.Refresh();
 
     /// <summary>
     /// The navigation's selection follows the page shown: its item, Home for Home's steps, none for search results; a detail page
@@ -745,6 +1051,17 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     {
         if (ContentFrame.SourcePageType == typeof(DetailsPage))
         {
+            return;
+        }
+        // A view's page selects its tab: the Favourites tab's rows (on the search page), and a kind's page that a Favourites row's
+        // header opened, under Favourites (review 2, S2).
+        if (_shownParameter is ViewArgs shownView)
+        {
+            var tab = shownView is { View: ViewArgs.Everything, Favourite: true }
+                ? new ViewArgs(shownView.Server, ViewArgs.Favourites)
+                : shownView with { Kind = null };
+            NavView.SelectedItem = new[] { FavouritesItem, RecentItem }.Concat(_libraryItems.OfType<NavigationViewItem>())
+                .FirstOrDefault(item => item.Visibility == Visibility.Visible && Equals(item.Tag, tab));
             return;
         }
         if (ContentFrame.SourcePageType == typeof(SearchPage))

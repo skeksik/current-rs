@@ -590,11 +590,14 @@ impl Live for Paged {
     }
 
     fn dependents_changed(&self, items: &HashSet<ItemRef>) {
-        let shows = {
+        // A list chosen by the user's marks (favourites, unplayed, ...) reads again on any mark: an item can join it as well as leave
+        // it (the owner's run, 2026-10-26: a new favourite did not show in the Favourites tab).
+        let reload = {
             let control = lock(&self.control);
-            items.iter().any(|item| control.index.contains_key(item))
+            control.query.depends_on_marks()
+                || items.iter().any(|item| control.index.contains_key(item))
         };
-        if shows {
+        if reload {
             self.refresh();
         }
     }

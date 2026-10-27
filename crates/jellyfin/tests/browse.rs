@@ -171,6 +171,7 @@ async fn items_send_the_query_and_page() {
         genres: vec!["Drama".into(), "Action, Adventure".into()],
         years: vec![2009, 2010],
         name_starts_with: Some("E".into()),
+        search_term: Some("Example".into()),
     };
     let page = client.items(&query, 100, 100, true).await.unwrap();
 
@@ -188,6 +189,7 @@ async fn items_send_the_query_and_page() {
     assert_eq!(q["genres"], "Drama|Action, Adventure");
     assert_eq!(q["years"], "2009,2010");
     assert_eq!(q["nameStartsWith"], "E");
+    assert_eq!(q["searchTerm"], "Example");
     assert_eq!(q["startIndex"], "100");
     assert_eq!(q["limit"], "100");
     assert_eq!(q["enableTotalRecordCount"], "true");
@@ -283,6 +285,34 @@ async fn later_pages_skip_the_total_and_defaults_stay_out() {
     ] {
         assert!(!q.contains_key(absent), "{absent}");
     }
+}
+
+#[tokio::test]
+async fn a_search_without_sort_keys_keeps_the_server_s_relevance_order() {
+    let stand_in = StandIn::answering(r#"{"Items":[],"TotalRecordCount":0,"StartIndex":0}"#).await;
+    let client = client(&stand_in);
+    let searching = ItemQuery {
+        parent: Some(item(LIBRARY)),
+        search_term: Some("Example".into()),
+        ..ItemQuery::default()
+    };
+    client.items(&searching, 0, 100, true).await.unwrap();
+    // A search with sort keys is sorted as asked.
+    let sorted = ItemQuery {
+        sort: vec![SortKey::DATE_CREATED],
+        order: SortOrder::Descending,
+        ..searching.clone()
+    };
+    client.items(&sorted, 0, 100, true).await.unwrap();
+
+    let received = stand_in.received();
+    let relevance = &received[0].query;
+    assert_eq!(relevance["searchTerm"], "Example");
+    assert!(!relevance.contains_key("sortBy"), "{relevance:?}");
+    assert!(!relevance.contains_key("sortOrder"), "{relevance:?}");
+    let ordered = &received[1].query;
+    assert_eq!(ordered["sortBy"], "DateCreated,SortName");
+    assert_eq!(ordered["sortOrder"], "Descending");
 }
 
 #[tokio::test]
