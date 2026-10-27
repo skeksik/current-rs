@@ -57,12 +57,13 @@ jobs:
           echo "code=$code"
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
+  # The docs-only condition is on the steps, not the job: a matrix job skipped at job level reports one unexpanded name,
+  # "Rust (${{ matrix.os }})", instead of the three per-OS checks (seen on a throwaway PR, 2026-10-27). Run this way, the three
+  # report "success" with their steps skipped. Fail-safe as in the jobs below: only an explicit code=false skips.
   rust:
     name: Rust (${{ matrix.os }})
     needs: changes
-    # Fail-safe: only an explicit code=false skips. If the changes job failed, its dependents would otherwise be skipped and could
-    # pass as required checks, so a missing answer runs everything.
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -71,11 +72,14 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code != 'false'
       # Installs the toolchain pinned in rust-toolchain.toml.
       - run: rustup toolchain install
+        if: needs.changes.outputs.code != 'false'
       # Cargo's downloads and this job's target folder, per OS and job (their features and profiles differ). A miss or a stale
       # target only means more to build.
       - name: Cache Cargo
+        if: needs.changes.outputs.code != 'false'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -86,9 +90,11 @@ jobs:
           key: cargo-${{ runner.os }}-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-${{ github.job }}-
       - run: cargo fmt --all --check
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && needs.changes.outputs.code != 'false'
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        if: needs.changes.outputs.code != 'false'
       - run: cargo test --workspace --locked
+        if: needs.changes.outputs.code != 'false'
 
   licences:
     name: Licences and sources (cargo-deny)
