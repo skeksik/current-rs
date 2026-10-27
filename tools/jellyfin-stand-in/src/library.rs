@@ -9,14 +9,16 @@
 //! one of its episodes was played (`NextUpService.GetNextUpSeriesKeys`: `LastPlayedDate != null && LastPlayedDate >= dateCutoff`);
 //! and a stop report near the end marks the item played (`UserDataManager.UpdatePlayState`: "mark as completed close to the end").
 //!
-//! A single-item read of an episode or film answers from the server's cached instance of it, which a folder's sweep does not update
-//! (Jellyfin v12.3, tag 06de749d, read 2026-10-27): `GET Items/{id}` and `GET UserItems/{id}/UserData` take the item from
+//! Models an upstream Jellyfin bug, which `JellyfinClient::details` works around (`docs/notes/jellyfin-browse.md`, "Upstream bugs and
+//! our workarounds"): a single-item read of an episode or film answers from the server's cached instance of it, which a folder's sweep
+//! does not update (Jellyfin v12.3, tag 06de749, read 2026-10-27; v12.2 at ca0f16eb has the same lines): `GET Items/{id}` and `GET UserItems/{id}/UserData` take the item from
 //! `LibraryManager.GetItemById` ("`if (_cache.TryGet(id, out var item))`", an LRU of `BaseItem`s) and read its user data from that
 //! instance (`UserDataManager.GetUserData`: "`ResolveUserDataRow(item, item.UserData?.Where(...))`"); `SaveUserData` reloads only the
 //! instance it was given ("`// rehydrate the cached userdata`"), and `Folder.MarkUnplayed` saves the instances `GetItemList` loads. A
 //! list (`GET Items`, `Shows/{id}/Episodes`) reads every item's user data fresh, through `GetUserDataBatch`, which reads the per-user
 //! cache every save updates. The stand-in caches an instance on its first single-item read or a mark or stop on its own id; Jellyfin
-//! also caches items as a scan creates them (`RegisterItem` from `CreateItems`), and evicts some: not modelled.
+//! also caches items as a scan creates them (`RegisterItem` from `CreateItems`), and evicts some: not modelled. The model can go with
+//! the workaround, once the server's single-item read no longer serves the cached item's stale user data.
 
 use std::collections::{HashMap, HashSet};
 

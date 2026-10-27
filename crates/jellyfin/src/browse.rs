@@ -336,14 +336,18 @@ impl JellyfinClient {
     /// Everything a detail page shows of `item` (`GET Items/{id}`, which returns every field), with its marks as a list reads them
     /// (`GET Items?ids={id}`), sent at the same time.
     ///
-    /// The single-item read answers the user data of the server's cached instance of the item, which a played mark on its series or
-    /// season does not save: Jellyfin v12.3 (tag 06de749d, read 2026-10-27) takes it from `LibraryManager.GetItemById` ("`if
-    /// (_cache.TryGet(id, out var item))`") and reads the instance's own rows (`UserDataManager.GetUserData`: "`ResolveUserDataRow(item,
-    /// item.UserData?.Where(...))`"); `SaveUserData` reloads only the instance it saved through ("`// rehydrate the cached userdata`"),
-    /// and `Folder.MarkUnplayed` saves the instances `GetItemList` loads. So an episode marked on its own, then through its series,
-    /// kept the first mark on its page (the owner's run, 2026-10-27). A list builds its items' user data with `GetUserDataBatch`,
-    /// which reads the per-user cache every save updates (`DtoService.GetBaseItemDtos`; `Folder.GetItems` answers `ids` with
-    /// `LibraryManager.GetItemsResult`). If the list fails or leaves the item out, the single-item read's marks stand.
+    /// Workaround for an upstream Jellyfin bug: the single-item read answers the user data of the server's cached instance of the
+    /// item, which a played mark on its series or season does not save (`docs/notes/jellyfin-browse.md`, "Upstream bugs and our
+    /// workarounds"). Jellyfin v12.3 (tag 06de749, read 2026-10-27; v12.2 at ca0f16eb has the same lines) takes the item from
+    /// `LibraryManager.GetItemById` ("`if (_cache.TryGet(id, out var item))`") and reads the instance's own rows
+    /// (`UserDataManager.GetUserData`: "`ResolveUserDataRow(item, item.UserData?.Where(e => e.UserId.Equals(user.Id)))`");
+    /// `SaveUserData` reloads only the instance it saved through ("`// rehydrate the cached userdata`"), and `Folder.MarkPlayed` and
+    /// `MarkUnplayed` save the instances `GetItemList` loads. What goes stale: an episode's played state, play count and resume point
+    /// on its own read, once it was marked on its own and then through its series or season (the owner's run, 2026-10-27). A list
+    /// builds its items' user data with `GetUserDataBatch`, which reads the per-user cache every save updates
+    /// (`DtoService.GetBaseItemDtos`; `Folder.GetItems` answers `ids` with `LibraryManager.GetItemsResult`). If the list fails or
+    /// leaves the item out, the single-item read's marks stand. The list read can go once the server's single-item read no longer
+    /// serves the cached item's stale user data.
     pub async fn details(&self, item: &ItemRef) -> Result<ItemDetails, AuthError> {
         let whole = Request::get(format!("/Items/{}", item.id.as_str()));
         let listed = Request::get("/Items")

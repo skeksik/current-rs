@@ -207,14 +207,16 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    state.
 
    **Proposed, for the owner** (fix/episode-mark-after-series-unmark, 2026-10-27; not decided): a wording note under this point.
-   *An item's own read (`GET Items/{id}`) is not trusted for its marks after a folder's sweep.* Jellyfin v12.3 (tag 06de749d, read
-   2026-10-27) answers it from its cached instance of the item (`LibraryManager.GetItemById`: "`if (_cache.TryGet(id, out var
+   *A workaround for an upstream Jellyfin bug: an item's own read (`GET Items/{id}`) is not trusted for its marks after a folder's
+   sweep* (`docs/notes/jellyfin-browse.md`, "Upstream bugs and our workarounds"). Jellyfin v12.3 (tag 06de749, read 2026-10-27;
+   v12.2 at ca0f16eb has the same lines) answers it from its cached instance of the item (`LibraryManager.GetItemById`: "`if (_cache.TryGet(id, out var
    item))`"), whose user data only a mark on the item's own id saves (`SaveUserData`: "`// rehydrate the cached userdata`"), while
    `Folder.MarkUnplayed` saves the instances `GetItemList` loads. So a detail page takes the item's marks from a list read of it
    (`GET Items?ids={id}`, whose user data `GetUserDataBatch` reads fresh), sent with the item's own read; and where two live lists'
    copies of an item differ, the one read or patched last is the item's state for the UI's actions (`Browse::user_state`). The
    series' and season's own read-backs (`GET UserItems/{id}/UserData`) stay: their played state, unplayed count and percentage are
-   derived from their episodes by count queries (`Folder.FillUserDataDtoValues`), not from the cached instance.
+   derived from their episodes by count queries (`Folder.FillUserDataDtoValues`), not from the cached instance. The workaround goes
+   once the server's single-item read no longer serves the cached item's stale user data.
 
 ### 6. Home
 Home's layout is **provisional**: the owner accepted it for now and will have it redesigned later (2026-10-25). The `HomeFeed`
