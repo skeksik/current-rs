@@ -288,6 +288,34 @@ async fn later_pages_skip_the_total_and_defaults_stay_out() {
 }
 
 #[tokio::test]
+async fn a_search_without_sort_keys_keeps_the_server_s_relevance_order() {
+    let stand_in = StandIn::answering(r#"{"Items":[],"TotalRecordCount":0,"StartIndex":0}"#).await;
+    let client = client(&stand_in);
+    let searching = ItemQuery {
+        parent: Some(item(LIBRARY)),
+        search_term: Some("Example".into()),
+        ..ItemQuery::default()
+    };
+    client.items(&searching, 0, 100, true).await.unwrap();
+    // A search with sort keys is sorted as asked.
+    let sorted = ItemQuery {
+        sort: vec![SortKey::DATE_CREATED],
+        order: SortOrder::Descending,
+        ..searching.clone()
+    };
+    client.items(&sorted, 0, 100, true).await.unwrap();
+
+    let received = stand_in.received();
+    let relevance = &received[0].query;
+    assert_eq!(relevance["searchTerm"], "Example");
+    assert!(!relevance.contains_key("sortBy"), "{relevance:?}");
+    assert!(!relevance.contains_key("sortOrder"), "{relevance:?}");
+    let ordered = &received[1].query;
+    assert_eq!(ordered["sortBy"], "DateCreated,SortName");
+    assert_eq!(ordered["sortOrder"], "Descending");
+}
+
+#[tokio::test]
 async fn missing_fields_are_not_errors() {
     let stand_in =
         StandIn::answering(r#"{"Items":[{"Id":"f11m0000000000000000000000000001"}]}"#).await;
