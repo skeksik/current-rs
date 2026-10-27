@@ -2,6 +2,8 @@
 
 Status: accepted when its PR merges; open choices decided by the owner 2026-10-25 (see "Decided by the owner"). From the playback
 spike. Amended 2026-10-26 (ADR 0020): gateway streams go through the loopback relay; see "Gateways, tokens and the player".
+Amended 2026-10-27 (owner, fix/windows-ui-polish): choice 10's quality menu and a preferred quality in place of remembering; see
+"Decided by the owner", choice 10.
 Research, quotes and sources: `docs/notes/playback.md`. No code was written.
 
 ## Context
@@ -273,6 +275,27 @@ address without a gateway, which has none to pass.
 9. Fallback: **A**, one automatic re-plan with direct play off.
 10. Quality: **A**, "Maximum" by default, plus a per-playback quality menu remembered separately for local and internet addresses;
     no automatic bandwidth test now.
+    **Amended 2026-10-27 (owner):**
+    - **The menu** (`current-playback`, `quality_options`): "Original" first (the stream as the planner chooses it, the old
+      "Maximum"), named with the source's resolution and bitrate ("Original · 4K · 26.1 Mbit/s"), then the steps **40, 20, 4 and
+      1 Mbit/s**. Only steps below the source's bitrate are listed: a step at or above it changes nothing.
+    - **Names**: each step is named by the resolution Jellyfin would scale to at that bitrate, from the server's own tables
+      (`ResolutionNormalizer` widths; `MediaStream.GetResolutionText` names, under which anything up to 2560 × 1440 is "1080p";
+      jellyfin/jellyfin master, read 2026-10-26), **assuming H.264 at 30 fps**, with no audio share and no low-bitrate boost. The
+      names are an estimate for other codecs and frame rates; naming by the file is on the roadmap.
+    - **Settings → Playback**: "Show resolution in quality menu" (on by default) and "Show all quality options" (off; on, the menu
+      lists every step from 120 Mbit/s down to 420 kbit/s that is below the source's bitrate). Both decide the player's menu and the
+      preferred quality's list alike.
+    - **A preferred quality replaces remembering.** Settings → Playback → "Preferred quality": Original or a step, one value for
+      local and internet addresses alike (`quality_preferred` in `settings.json`; Original by default). Each item plays at the
+      highest entry of its own menu not above the preferred one (Original counts at its bitrate: preferred 20 Mbit/s on a 5.6 Mbit/s
+      source plays Original); preferred Original always plays Original, whatever its bitrate. When every entry is above the preferred
+      one, or the source's bitrate is unknown, the preferred bitrate is the limit as it is, so an item never plays above it
+      (`snap_quality`). The preferred quality is always an entry of Settings' list: switching "Show all quality options" off with a
+      step only it lists as the preferred one moves the setting to the nearest listed step not above it (the lowest when none is),
+      and a value the list lacks reads that way at start (`listed_quality`). A pick in the player's menu applies to that playback
+      only and is not saved. The old `quality_local` and `quality_internet` are read and written back unchanged for
+      older versions, and used for nothing.
 11. Refresh-rate switching: **A**, not in M2; `display-fps-override` and the `display-resample` check on the device.
 12. Recorded, not a choice (D6's settled items).
 13. libmpv binding: **A**, hand-written `extern "C"` declarations, no new dependency.
@@ -346,6 +369,7 @@ The options as they were put to the owner follow.
     Mbit/s) that re-plans at the position; remembered per server address kind (local or internet) in settings. B: an automatic bitrate
     test (`/Playback/BitrateTest`) before each internet playback. **Recommendation: A**; B later if users on slow links ask.
     Consequence: on a slow internet link the user picks a lower quality by hand.
+    (Amended 2026-10-27, owner: the steps and the remembering changed; see "Decided by the owner", choice 10.)
 
 11. **Refresh-rate switching.** A (recommended): not in M2; mpv gets the display's refresh rate (`display-fps-override`) and
     `display-resample` is evaluated on the owner's displays. B: switch the monitor's mode to the content's rate in full screen
