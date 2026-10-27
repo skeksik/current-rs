@@ -33,11 +33,6 @@ public sealed partial class ItemTile : UserControl
     public ItemTile()
     {
         InitializeComponent();
-        // The subtitle's line is kept when an item has none (no year), so every tile is as tall as its neighbours (owner, 2026-10-26).
-        SubtitleText.Text = "0";
-        SubtitleText.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
-        SubtitleText.MinHeight = SubtitleText.DesiredSize.Height;
-        SubtitleText.Text = "";
         _placeholder = new TileImage(App.Core!);
         _artwork = new TileImage(App.Core!);
         DataContextChanged += (_, _) => Follow();

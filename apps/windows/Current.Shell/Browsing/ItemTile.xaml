@@ -100,12 +100,21 @@
                 Style="{StaticResource BodyTextBlockStyle}"
                 TextTrimming="CharacterEllipsis"
                 TextWrapping="NoWrap" />
-            <TextBlock
-                x:Name="SubtitleText"
-                Style="{StaticResource CaptionTextBlockStyle}"
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                TextTrimming="CharacterEllipsis"
-                TextWrapping="NoWrap" />
+            <!-- The subtitle's line is kept when an item has none (no year), so every tile is as tall as its neighbours (owner,
+                 2026-10-26): an unseen line in the same style holds it, and follows a text-size change as the subtitle does. -->
+            <Grid>
+                <TextBlock
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Text="0"
+                    Opacity="0"
+                    AutomationProperties.AccessibilityView="Raw" />
+                <TextBlock
+                    x:Name="SubtitleText"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    TextTrimming="CharacterEllipsis"
+                    TextWrapping="NoWrap" />
+            </Grid>
         </StackPanel>
     </StackPanel>
 </UserControl>
