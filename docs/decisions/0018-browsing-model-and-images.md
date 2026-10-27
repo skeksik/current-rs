@@ -178,7 +178,7 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    (`ItemQuery::depends_on_marks`). Before, a new favourite did not appear in them until a manual refresh.)
 5. Failure: the store rolls back to the state before the change, broadcasts it, and raises one notice (`ActionFailed { action, problem }`)
    that the UI shows as a message. The item's name may appear in the message; it never goes to the log.
-6. (Amendment **proposed, for the owner**, fix/series-episode-marks, 2026-10-27; not decided.) **A series and its episodes.** Jellyfin
+6. (**Amended 2026-10-27 (owner)**, fix/series-episode-marks.) **A series and its episodes.** Jellyfin
    marks a series or season by marking every episode below it, not the folder, and derives the folder's played state, unplayed count
    and played percentage from its episodes: `Folder.MarkPlayed` ("Sweep through recursively and update status", over `Recursive =
    true, IsFolder = false`) and `Folder.FillUserDataDtoValues` (`dto.UnplayedItemCount = unplayedCount; dto.PlayedPercentage =
