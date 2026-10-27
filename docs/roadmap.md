@@ -260,6 +260,9 @@ Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 whe
 - [ ] Store policies checked before any store submission (adult content, M6)
 
 ## Later
+- [ ] VR playback (owner, 2026-10-27): 180° and 360° video and stereoscopic 3D (side by side, top and bottom) in our own player, with
+      a view you can turn on the desktop and headsets later. Spike first: what libmpv and FFmpeg offer for projection (not verified),
+      how Jellyfin and Stash mark such files, and what each platform offers for headsets; an ADR with the owner's choices
 - [ ] Generated subtitles for videos without any (owner, 2026-10-25): speech to text on the device, with translation into English
       (for example Japanese audio to English subtitles). The first candidate is Whisper through whisper.cpp: MIT code and weights;
       Whisper's `translate` task targets English only, and its turbo model does not translate; models are 1.5 GiB (medium) to 2.9 GiB
