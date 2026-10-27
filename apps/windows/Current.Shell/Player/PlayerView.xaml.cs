@@ -246,6 +246,7 @@ public sealed partial class PlayerView : UserControl
         display.Changed += OnDisplayChanged;
         _compositionSize = size;
         _session = session;
+        _qualityOptions = null;
         session.State.PropertyChanged += OnState;
         session.NowPlaying.PropertyChanged += OnNowPlaying;
         session.SwapChain.PropertyChanged += OnSwapChain;
@@ -340,6 +341,12 @@ public sealed partial class PlayerView : UserControl
         if (_session?.NowPlaying.Value is not { } now)
         {
             return;
+        }
+        // Another item (the next episode) has its own quality menu: the last one's names are not shown first.
+        if (!Equals(now.Item, _qualityItem))
+        {
+            _qualityItem = now.Item;
+            _qualityOptions = null;
         }
         _media?.Show(now);
         _host?.ShowPlaying(now.Title);
@@ -882,6 +889,9 @@ public sealed partial class PlayerView : UserControl
     /// <summary>The quality menu's entries as the core last named them for the version playing; null before the first.</summary>
     private IReadOnlyList<QualityOption>? _qualityOptions;
 
+    /// <summary>The item <see cref="_qualityOptions"/> were named for.</summary>
+    private object? _qualityItem;
+
     /// <summary>
     /// Fills the menu at once with the entries last named (or the bare steps the first time), then asks the core for the version
     /// playing and fills it again if they changed. async void, as event handlers are: it catches everything itself.
@@ -1072,6 +1082,7 @@ public sealed partial class PlayerView : UserControl
         _attached = IntPtr.Zero;
         var session = _session;
         _session = null;
+        _qualityOptions = null;
         if (session is not null)
         {
             session.SwapChain.Value?.Release();
