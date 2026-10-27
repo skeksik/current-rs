@@ -9,12 +9,14 @@ publish.workspace = true
 [dependencies]
 bytes.workspace = true
 current-model.workspace = true
+futures-util.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "sync"] }
+tokio-tungstenite.workspace = true
 tracing.workspace = true
 url.workspace = true
 
