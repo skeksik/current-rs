@@ -360,3 +360,47 @@ async fn a_page_shown_again_shows_a_change_made_elsewhere() {
     })
     .await;
 }
+
+/// D2 for an item no list holds when the server answers: a film favourited on its page, the page left (and the film dropped from the
+/// store by a later read) before the answer, then a grid read before the change answers after it. The grid shows the favourite.
+#[tokio::test]
+async fn an_answer_read_before_a_change_to_an_item_no_list_held_does_not_undo_it() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let session = Session::open(&stand_in, &app).await;
+    let film = session.item(FILM_IDS[0]);
+    let page = session.details(FILM_IDS[0]).await;
+
+    // A grid's read, before the change, answers last.
+    stand_in.hold_answer("/Items");
+    let before = stand_in.count("/Items");
+    let grid = session
+        .browse
+        .open_library(&session.library(FILMS_LIBRARY_ID), ItemQuery::default());
+    eventually("the grid's request", || stand_in.count("/Items") > before).await;
+    let favourite = format!("/UserFavoriteItems/{}", FILM_IDS[0]);
+    stand_in.hold_answer(&favourite);
+    session.browse.set_favourite(&film, true);
+    eventually("the favourite's request", || {
+        stand_in.count(&favourite) == 1
+    })
+    .await;
+    // Back: no list holds the film. Home's rows that answer drop it from the store; those that could hold it wait.
+    drop(page);
+    stand_in.hold_answer("/Items/Latest");
+    let home = session.browse.home();
+    eventually("Home's Continue watching", || home.row("resume").is_some()).await;
+    // Home left too, so no reload a second after the change reads the film again.
+    drop(home);
+    stand_in.release(&favourite);
+    settle().await;
+    stand_in.release("/Items");
+    eventually("the grid", || in_grid(&grid, &film).is_some()).await;
+    settle().await;
+    assert_eq!(
+        in_grid(&grid, &film).map(|state| state.favourite),
+        Some(true),
+        "the grid keeps the confirmed change"
+    );
+    stand_in.release("/Items/Latest");
+}

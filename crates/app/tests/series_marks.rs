@@ -809,3 +809,61 @@ async fn a_favourite_after_a_series_unmark_keeps_the_episode_unplayed_on_the_ser
     );
     assert!(lists.episodes_played(false));
 }
+
+/// The write-back workaround puts right an episode only: a favourite on a season of a series marked played, one of whose episodes
+/// was then unmarked, sends no played mark on the season (a sweep that would unmark the episode the user watched).
+#[tokio::test]
+async fn a_favourite_on_a_season_sends_no_mark_on_it() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    lists.toggle(SERIES_ID);
+    settle().await;
+    lists.toggle(EPISODE_IDS[0]);
+    settle().await;
+    lists.browse.set_favourite(&lists.item(SEASON_ID), true);
+    settle().await;
+    lists.series.refresh();
+    settle().await;
+    let played: Vec<bool> = lists
+        .series
+        .episodes()
+        .snapshot()
+        .iter()
+        .map(|episode| episode.user.played)
+        .collect();
+    assert_eq!(played, [false, true]);
+    assert_eq!(stand_in.count(&format!("/UserPlayedItems/{SEASON_ID}")), 0);
+}
+
+/// The write-back workaround waits for a played change on the episode's series still in flight: the episode is read after it, and
+/// the mark sent on its own id does not undo the series' unmark.
+#[tokio::test]
+async fn a_favourite_while_its_series_unmark_is_in_flight_keeps_the_unmark() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    let first = lists.item(EPISODE_IDS[0]);
+    lists.toggle(EPISODE_IDS[0]);
+    settle().await;
+    lists.toggle(SERIES_ID);
+    settle().await;
+    // The unmark waits before the server takes it; a mark on the episode's own id waits too.
+    let series = format!("/UserPlayedItems/{SERIES_ID}");
+    let episode = format!("/UserPlayedItems/{}", EPISODE_IDS[0]);
+    stand_in.hold(&series);
+    stand_in.hold(&episode);
+    lists.toggle(SERIES_ID);
+    eventually("the unmark's request", || stand_in.count(&series) == 2).await;
+    lists.browse.set_favourite(&first, true);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    stand_in.release(&series);
+    settle().await;
+    stand_in.release(&episode);
+    settle().await;
+    lists.series.refresh();
+    settle().await;
+    let episode = lists.series.episodes().snapshot()[0].clone();
+    assert!(episode.user.favourite);
+    assert!(!episode.user.played, "the series' unmark stays");
+}
