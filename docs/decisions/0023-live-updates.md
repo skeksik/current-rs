@@ -1,7 +1,6 @@
 # 0023: Live updates of user state from Jellyfin
 
-Status: **Proposed, for the owner** (feat/live-user-data, 2026-10-27). The owner approved the two crates on 2026-10-27; the record
-goes to the owner with the PR.
+Status: Accepted (owner, 2026-10-27), from feat/live-user-data. The owner approved the two crates and this record on 2026-10-27.
 
 ## Context
 ADR 0018 section 5 (amended 2026-10-27) keeps one store of each item's user state per session, which every page shows. A change

@@ -1,4 +1,4 @@
-//! Live updates of the items' user state (ADR 0023, proposed): one WebSocket per browse session, whose `UserDataChanged` go into
+//! Live updates of the items' user state (ADR 0023): one WebSocket per browse session, whose `UserDataChanged` go into
 //! the session's store like any server answer ([`super::store::ItemStore::answer`], newest wins, wanted changes on top), so a mark
 //! made on another device, by playback or by the server shows on every page without a refresh.
 //!

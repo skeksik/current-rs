@@ -237,7 +237,7 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    - **Resync on focus**: Home or a grid shown again within `REFRESH_WHEN_SHOWN_AFTER` reads again the marks of what it shows
      (`RESYNC_LIMIT`, 200, at most: a grid's visible items first; the rest wait for the next time), so a change made on another
      device shows; after that time they refresh, and the foreground refresh reads every
-     list again, as before. Jellyfin's WebSocket `UserDataChanged` pushes such changes too (ADR 0023, proposed).
+     list again, as before. Jellyfin's WebSocket `UserDataChanged` pushes such changes too (ADR 0023).
    - An estimate made before a confirmed played change, of the item or of what is below it, is dropped when the server answers.
    - *Workaround for an upstream Jellyfin bug* (`docs/notes/jellyfin-browse.md`, "Upstream bugs and our workarounds"): Jellyfin saves
      a favourite or a playback report on an episode with the user data its cached instance holds, which a series' sweep leaves
