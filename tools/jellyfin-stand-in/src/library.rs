@@ -176,6 +176,8 @@ pub(crate) struct Marks {
     clock: u64,
     /// The cached instances of items that are not folders: their user data as last loaded or saved through them.
     instances: HashMap<String, Instance>,
+    /// The items whose user data was saved since the last `UserDataChanged` went out, and their parents ([`Marks::saved`]).
+    changed: Vec<String>,
 }
 
 /// What a cached instance holds of an item's user data.
@@ -186,6 +188,28 @@ struct Instance {
 }
 
 impl Marks {
+    /// `id`'s user data was saved: it goes out in the next `UserDataChanged`, with its parent. Jellyfin's `UserDataChangeNotifier`
+    /// takes every save but a progress report's, and adds the item's parent ("`// Go up one level`": `GetOwner() ?? GetParent()`);
+    /// v12.3, tag 06de749, `Emby.Server.Implementations/EntryPoints/UserDataChangeNotifier.cs`, read 2026-10-27.
+    fn saved(&mut self, id: &str) {
+        for id in std::iter::once(id).chain(find(id).map(|item| item.parent)) {
+            if find(id).is_some() && !self.changed.iter().any(|known| known == id) {
+                self.changed.push(id.to_owned());
+            }
+        }
+    }
+
+    /// Takes the items saved since the last call ([`Marks::saved`]), as `UserDataChanged`'s `UserDataList` holds them: each one's
+    /// `UserItemDataDto` with its `ItemId`. `None` when nothing was saved.
+    pub(crate) fn take_changed(&mut self) -> Option<String> {
+        if self.changed.is_empty() {
+            return None;
+        }
+        let changed = std::mem::take(&mut self.changed);
+        let list: Vec<String> = changed.iter().map(|id| user_data(id, self)).collect();
+        Some(format!("[{}]", list.join(",")))
+    }
+
     /// Marks `id` played or unplayed as `POST`/`DELETE UserPlayedItems` does: a series or season through every episode below it
     /// (`Folder.MarkPlayed`). Played keeps an earlier last-played date ("`datePlayed ?? data.LastPlayedDate ?? DateTime.UtcNow`",
     /// `BaseItem.MarkPlayed`); unplayed clears it (`ResetPlayedState`).
@@ -212,6 +236,7 @@ impl Marks {
             if rehydrate {
                 self.rehydrate(id);
             }
+            self.saved(id);
         }
     }
 
@@ -249,6 +274,7 @@ impl Marks {
             self.clock += 1;
             self.last_played.insert(id.to_owned(), self.clock);
         }
+        self.saved(id);
     }
 }
 
@@ -258,6 +284,7 @@ impl Marks {
     pub(crate) fn started(&mut self, id: &str) {
         self.write_back(id);
         self.rehydrate(id);
+        self.saved(id);
     }
 
     /// A mark saved through `id`'s own instance, which `GetItemById` caches if it was not: it holds the saved state.
@@ -284,6 +311,7 @@ impl Marks {
         let Some(instance) = self.instances.get(id).copied() else {
             return;
         };
+        self.saved(id);
         if instance.played {
             self.played.insert(id.to_owned());
         } else {
@@ -742,10 +770,12 @@ fn mark(marks: &mut Marks, which: Mark, id: &str, method: &str) -> (u16, String)
         Mark::Favourite if on => {
             marks.write_back(id);
             marks.favourite.insert(id.to_owned());
+            marks.saved(id);
         }
         Mark::Favourite => {
             marks.write_back(id);
             marks.favourite.remove(id);
+            marks.saved(id);
         }
     }
     // Saved through the item's own instance (`PlaystateController` and `UserLibraryController` take it from `GetItemById`).

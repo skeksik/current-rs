@@ -442,6 +442,9 @@ async fn a_list_not_chosen_by_marks_does_not_read_again_on_a_favourite() {
     let films = browse.open_items(current_app::kind_query(MediaKind::MOVIE));
     let favourites = browse.open_items(current_app::favourites_query(Some(MediaKind::MOVIE)));
     eventually(|| films.state().borrow().total > 0 && favourites.state().borrow().total > 0).await;
+    // The live updates' socket is open and its first resync (`GET Items?ids=`) done.
+    eventually(|| stand_in.socket_count() == 1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let reads = stand_in.count("/Items");
     browse.set_favourite(&item(&server, FILM_IDS[1]), true);
     eventually(|| stand_in.count("/Items") > reads).await;
@@ -677,10 +680,11 @@ async fn a_late_answer_after_a_stop_does_not_undo_a_newer_mark() {
     };
     assert!(!played());
 
-    // The stop asks for the film's marks; the answer is slow.
+    // The stop asks for the film's marks; the answers, read before the mark, are slow.
     let details = format!("/Items/{}", FILM_IDS[1]);
     let asked = stand_in.count(&details);
-    stand_in.hold(&details);
+    stand_in.hold_answer(&details);
+    stand_in.hold_answer("/Items");
     browse.playback_stopped(&film);
     eventually(|| stand_in.count(&details) > asked).await;
     // Meanwhile the user marks it played, and the server confirms that.
@@ -688,9 +692,9 @@ async fn a_late_answer_after_a_stop_does_not_undo_a_newer_mark() {
     browse.set_played(&film, true);
     eventually(|| stand_in.count(&marked) == 1 && played()).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
-    // The answer, as the server held it before the mark, arrives last.
-    stand_in.set_played_on_server(FILM_IDS[1], false);
+    // The answers, as the server held them before the mark, arrive last.
     stand_in.release(&details);
+    stand_in.release("/Items");
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(played());
 }

@@ -15,6 +15,7 @@ mod log;
 mod roaming;
 mod scope;
 mod shape;
+mod socket;
 mod stream;
 
 pub use address::{AddressOutcome, AddressProvider, FixedAddress, GatewayAddress, Selected};
@@ -34,6 +35,7 @@ pub use roaming::{
 };
 pub use scope::{HostScope, Transport, host_scope, transport};
 pub use shape::{GatewayShape, classify};
+pub use socket::{Socket, SocketClosed};
 pub use stream::{
     DEFAULT_READ_TIMEOUT, STREAM_REQUEST_HEADERS, STREAM_RESPONSE_HEADERS, StreamError,
     StreamResponse,

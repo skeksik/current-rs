@@ -23,6 +23,7 @@ jellyfin-stand-in = { path = "tools/jellyfin-stand-in" }
 
 apple-native-keyring-store = { version = "=1.0.2", features = ["keychain"] }
 bytes = "=1.12.1"
+futures-util = { version = "=0.3.34", default-features = false, features = ["sink"] }
 getrandom = "=0.4.3"
 hyper = { version = "=1.12.0", default-features = false, features = ["server", "http1"] }
 hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio"] }
@@ -34,6 +35,7 @@ serde_json = "=1.0.154"
 tempfile = "=3.27.0"
 thiserror = "=2.0.21"
 tokio = { version = "=1.54.1", default-features = false }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 tracing = "=0.1.44"
 uniffi = { version = "=0.31.0", default-features = false }
 url = "=2.5.8"

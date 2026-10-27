@@ -102,6 +102,8 @@ pub(crate) struct UserItemDataDto {
     pub play_count: Option<i64>,
     pub is_favorite: Option<bool>,
     pub played: Option<bool>,
+    /// The item, in `UserDataChanged`'s list (`UserDataChangeNotifier`: "`dto.ItemId = i.Id`"; v12.3, read 2026-10-27).
+    pub item_id: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

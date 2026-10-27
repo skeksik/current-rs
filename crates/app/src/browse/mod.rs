@@ -14,6 +14,7 @@ mod details;
 mod home;
 mod labels;
 mod libraries;
+mod live;
 mod paged;
 mod present;
 mod search;
@@ -169,6 +170,7 @@ impl Hub {
         ));
         contexts.insert(server.clone(), Arc::downgrade(&context));
         context.start_libraries(shared.capabilities.subscribe());
+        context.start_live();
         Some(Browse { ctx: context })
     }
 
@@ -201,6 +203,7 @@ impl Hub {
             .collect();
         for context in contexts.iter().filter(|context| context.is_current()) {
             context.refresh();
+            context.live_wake.notify_waiters();
         }
     }
 }
@@ -283,6 +286,10 @@ pub(crate) struct Context {
     sweeps: Mutex<Sweeps>,
     /// Told each time the server answers a wanted change ([`Context::mend`] waits on it).
     answered: tokio::sync::Notify,
+    /// Wakes the live updates' socket to try again at once ([`live`]): the app came back to the foreground.
+    live_wake: Arc<tokio::sync::Notify>,
+    /// The live updates' task, stopped with the context.
+    live: Mutex<Option<AbortHandle>>,
     libraries: Libraries,
     /// Orders the lists' reads and the server's answers ([`store::ItemStore`]).
     clock: AtomicU64,
@@ -292,6 +299,10 @@ impl Drop for Context {
     fn drop(&mut self) {
         if let Some(timer) = lock(&self.dependents).timer.take() {
             timer.abort();
+        }
+        // Closes the socket at once, not at its next message.
+        if let Some(live) = lock(&self.live).take() {
+            live.abort();
         }
     }
 }
@@ -318,6 +329,8 @@ impl Context {
             resync: Mutex::new(Resync::default()),
             sweeps: Mutex::new(Sweeps::default()),
             answered: tokio::sync::Notify::new(),
+            live_wake: Arc::new(tokio::sync::Notify::new()),
+            live: Mutex::new(None),
             libraries: Libraries::default(),
             clock: AtomicU64::new(0),
         }
