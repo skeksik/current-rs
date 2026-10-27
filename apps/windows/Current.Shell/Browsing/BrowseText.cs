@@ -102,7 +102,7 @@ internal static class BrowseText
     public static string KindGroup(string kind) => kind switch
     {
         "movie" => "Movies",
-        "series" => "Shows",
+        "series" => "Series",
         "season" => "Seasons",
         "episode" => "Episodes",
         "person" => "People",

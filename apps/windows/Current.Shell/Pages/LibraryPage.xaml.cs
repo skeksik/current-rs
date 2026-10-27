@@ -95,7 +95,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
     {
         null => "All types",
         "movie" => "Movies",
-        "series" => "Shows",
+        "series" => "Series",
         _ => kind,
     };
 
