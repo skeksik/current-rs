@@ -70,8 +70,8 @@ internal static class BrowseTests
         Check(first.Kinds.SequenceEqual(["movie"]) && first.Recursive && first.Sort.SequenceEqual(["sort_name"]),
             "a film library's first query lists its films by name");
         Check(ItemQuery.SortChoices[0] == new SortChoice("sort_name", SortOrder.Ascending), "the first sort choice is the first query's");
-        Check(ItemQuery.FilterChoices[0] is null && ItemQuery.FilterChoices.Contains("unplayed") && !ItemQuery.FilterChoices.Contains("favourite"),
-            "the filter choices: everything first, no favourites (a tab of its own)");
+        Check(ItemQuery.FilterChoices[0] is null && ItemQuery.FilterChoices.Contains("unplayed") && ItemQuery.FilterChoices.Contains("favourite"),
+            "the filter choices: everything first, favourites among them");
         var ui = new ManualDispatcher();
         using var items = browse.OpenLibrary(BigLibrary());
         using var grid = items.Collect(ui);

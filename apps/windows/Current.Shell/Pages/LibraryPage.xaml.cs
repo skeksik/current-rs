@@ -238,7 +238,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
             {
                 first = first with { Sort = [sort.Key], Order = sort.Order };
             }
-            // Only filters the menu still offers: one remembered from an older version (favourites) is dropped.
+            // Only filters the menu still offers: one remembered from an older version is dropped.
             if (remembered?.Filters is { } filters && filters.All(filter => Filters.Contains(filter)))
             {
                 first = first with { Filters = filters };
