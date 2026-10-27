@@ -65,9 +65,13 @@ to remove it. Do not assert API or platform facts without a source.
    Wait for the manager's reply before writing code.
 2. Implement in small commits, with tests as CLAUDE.md asks. Run the CLAUDE.md commands and fix what fails. Code this container cannot
    build (C#, Swift) is built by CI: say so in the PR, never mark it verified.
-3. Push, open a PR with the PR template filled in (say honestly what was not verified), and call subscribe_pr_activity for it. Fix red CI.
-4. Send the manager "PR ready: <url>" with a two-line summary and the head commit. Address the manager's findings when they arrive.
-5. Never merge, close the PR, or push to main. Ask the manager with send_message when blocked or unsure.
+3. Push, open a PR with the PR template filled in (say honestly what was not verified).
+4. Right after every push, send the manager "PR pushed: <url> (head <sha>)" with a two-line summary. Do not wait for CI: you get no
+   CI events and nothing wakes you when it finishes. The manager watches CI and sends you any failure. Address the manager's findings
+   when they arrive, push, and report again the same way.
+5. Never end a turn without a send_message to the manager saying where you stand (plan sent, pushed, blocked, waiting on what). A
+   summary written only in your own transcript never reaches the manager.
+6. Never merge, close the PR, or push to main. Ask the manager with send_message when blocked or unsure.
 ```
 
 ## 4. Local check card
@@ -91,15 +95,21 @@ Report
 - git -c user.name=skeksik -c user.email=personal@skeksik.com commit (no trailers); push to the branch; git pull --no-rebase if it
   moved; never force-push.
 - Clean up: stop stand-ins, git worktree remove the worktree; say what is left on disk.
-- Send the summary to the manager session <manager session id> (named "<manager session title>") with send_message.
+- Send the summary to the manager session <manager session id> (named "<manager session title>") yourself, with send_message (or
+  SendMessage to that name), as soon as you are done or blocked; do not wait for the owner to ask. A summary written only in the
+  chat never reaches the manager.
 ```
 
 ## 5. Answer plans and watch workers
+- Accessibility checks with the owner (Narrator or VoiceOver, high contrast, keyboard only) happen once at the end of each milestone,
+  not per PR (owner, 2026-10-27). Do not ask the owner for them before a merge; PRs list them as "deferred to the milestone pass".
 - Approve a plan that stays in its task and the decision records, adding overlap warnings and tightening. Send to the owner anything
   that adds a dependency, bumps a version, needs or changes a decision record, or departs from native behaviour.
 - While workers are active keep one `send_later` check-in about 45 minutes out (60 when only local cards are pending); stop when nothing
   is active. Notifications arrive late or out of order: verify the current state before acting.
 - `get_session` each worker and look at its PR. Failed: read `list_events` and send a fix. Off track: `interrupt_session`, then steer.
+  Idle without a message (its `status_detail` says it waits on CI or will report later): read its last turn with `list_events` and act
+  on it; workers cannot see CI, so the manager checks the PR's CI itself and answers the worker.
 
 ## 6. Review a PR
 - Fetch the branch; read the diff against main, and in later rounds the diff since the last reviewed commit. Check merge commits with

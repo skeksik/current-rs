@@ -8,6 +8,9 @@ first (Windows, then macOS, then Linux), then the other platforms (ADR 0001). Re
 - All logic is in the Rust core; the native UIs render its state (ADR 0001, ADR 0002).
 - Native behaviour by default; departures are discussed with the owner first (ADR 0001).
 - Check API and platform facts against primary sources before relying on them. The repo is public: nothing private in it.
+- Accessibility (Narrator or VoiceOver, high contrast, keyboard only) is checked by the owner once at the end of each milestone, not in
+  each PR (owner, 2026-10-27). PRs keep it working, with names on controls, theme brushes and keyboard paths, and list it as "deferred to
+  the milestone pass" rather than unverified. Each milestone's done-when includes that pass.
 
 ## D: Desktop foundations
 Spikes first: they decide whether the stack works at all. Each spike ends in a decision record or notes; its prototype is removed
@@ -204,6 +207,9 @@ fixed. Done: the owner accepted M1 on 2026-10-24 (PR 39's run).
   - [x] Before the player bridge ships: the core checks every HLS playlist it hands to the player with gateway credentials (master
         and each variant): every URI relative or on the stream's origin, else a playback problem; `current-mpv` refuses an unchecked
         playlist with credentials (ADR 0019, "Playlists and headers", owner 2026-10-25; PR 61, cookies included since PR 62)
+
+- [ ] End-of-milestone accessibility pass on Windows: Narrator, high contrast and keyboard only, over the screens added since M1
+      (the Windows UI polish of PR 82 included)
 
 Done when: a Jellyfin library is browsable and playable on Windows every day, with resume and progress synced to the server.
 
