@@ -8,6 +8,9 @@
 //! total - played`, `PlayedPercentage = played / total * 100`, `Played = playedCount >= totalCount`); Next up lists a series only once
 //! one of its episodes was played (`NextUpService.GetNextUpSeriesKeys`: `LastPlayedDate != null && LastPlayedDate >= dateCutoff`);
 //! and a stop report near the end marks the item played (`UserDataManager.UpdatePlayState`: "mark as completed close to the end").
+//! A collection is marked through its films (`BoxSet.MarkPlayed`: "`foreach (var item in GetLinkedChildren(user)) item.MarkPlayed(...)`",
+//! v12.3 at 06de749, read 2026-10-27), each taken from `LibraryManager.GetItemById` (`BaseItem.GetLinkedChild`), so their cached
+//! instances are saved too; its played state and counts come from them (`ItemCountService.GetPlayedAndTotalCountFromLinkedChildren`).
 //!
 //! Models an upstream Jellyfin bug, which `JellyfinClient::details` works around (`docs/notes/jellyfin-browse.md`, "Upstream bugs and
 //! our workarounds"): a single-item read of an episode or film answers from the server's cached instance of it, which a folder's sweep
@@ -40,6 +43,12 @@ pub const EPISODE_IDS: [&str; 2] = [
     "57a2d1e0000000000000000000003201",
     "57a2d1e0000000000000000000003202",
 ];
+/// A collection (a `BoxSet`) of the first and third films, in a collections library the user's views do not list: only a query that
+/// names it (its id, or it as the parent) finds it, so it leaves the other lists as they were.
+pub const BOX_SETS_LIBRARY_ID: &str = "57a2d1e0000000000000000000001003";
+pub const BOX_SET_ID: &str = "57a2d1e0000000000000000000006001";
+/// The collection's films: linked children, which stay in the films library.
+pub const BOX_SET_MEMBERS: [&str; 2] = [FILM_IDS[0], FILM_IDS[2]];
 /// An actor in the first film and the series.
 pub const PERSON_ID: &str = "57a2d1e0000000000000000000004001";
 /// The director of the third film by name ("Example Film Two"). A search for people finds them too: Jellyfin's `Items` search answers
@@ -114,6 +123,13 @@ const ITEMS: &[Item] = &[
         parent: SEASON_ID,
         fields: r#""RunTimeTicks":6000000000,"IndexNumber":2,"ParentIndexNumber":1,"IsFolder":false,"SeriesName":"Example Series","SeriesId":"57a2d1e0000000000000000000003001","SeasonId":"57a2d1e0000000000000000000003101","SeasonName":"Season 1","SeriesPrimaryImageTag":"57a2d1e0a0000004","PrimaryImageAspectRatio":0.68,"ImageTags":{},"BackdropImageTags":[]"#,
     },
+    Item {
+        id: BOX_SET_ID,
+        kind: "BoxSet",
+        name: "Example Collection",
+        parent: BOX_SETS_LIBRARY_ID,
+        fields: r#""IsFolder":true,"ImageTags":{},"BackdropImageTags":[]"#,
+    },
     // People are by-name items: in no library, so only a query that asks for their kind, without a parent, lists them
     // (`SearchQueryAccessFilter.Build`: "a by-name item belongs to no library ... A search scoped to a parent gets no exemption").
     Item {
@@ -174,11 +190,15 @@ impl Marks {
     /// (`Folder.MarkPlayed`). Played keeps an earlier last-played date ("`datePlayed ?? data.LastPlayedDate ?? DateTime.UtcNow`",
     /// `BaseItem.MarkPlayed`); unplayed clears it (`ResetPlayedState`).
     pub(crate) fn set_played(&mut self, id: &str, played: bool) {
+        let box_set = id == BOX_SET_ID;
         let ids: Vec<&str> = match find(id) {
             Some(item) if is_folder(item) => leaves_below(id).map(|leaf| leaf.id).collect(),
             _ => vec![id],
         };
         for id in ids {
+            // A collection's films are saved through their cached instances (`BaseItem.GetLinkedChild` takes them from
+            // `GetItemById`), a series' or season's episodes through those `GetItemList` loads.
+            let rehydrate = box_set;
             if played {
                 self.played.insert(id.to_owned());
                 if !self.last_played.contains_key(id) {
@@ -188,6 +208,9 @@ impl Marks {
             } else {
                 self.played.remove(id);
                 self.last_played.remove(id);
+            }
+            if rehydrate {
+                self.rehydrate(id);
             }
         }
     }
@@ -251,15 +274,20 @@ impl Marks {
 }
 
 fn is_folder(item: &Item) -> bool {
-    matches!(item.kind, "Series" | "Season")
+    matches!(item.kind, "Series" | "Season" | "BoxSet")
+}
+
+/// Whether `item` is one of the collection's films.
+fn in_box_set(item: &Item, box_set: &str) -> bool {
+    box_set == BOX_SET_ID && BOX_SET_MEMBERS.contains(&item.id)
 }
 
 /// The episodes below `folder`, in order: what a folder's played state counts (`DescendantQueryHelper.IsCountableLeaf`: "`!b.IsFolder
 /// && !b.IsVirtualItem`").
 fn leaves_below(folder: &str) -> impl Iterator<Item = &'static Item> + '_ {
-    ITEMS
-        .iter()
-        .filter(move |item| !is_folder(item) && is_below(item, folder))
+    ITEMS.iter().filter(move |item| {
+        !is_folder(item) && (is_below(item, folder) || in_box_set(item, folder))
+    })
 }
 
 /// The item's `RunTimeTicks`, read from its record.
@@ -470,9 +498,10 @@ fn items(request: &Browse<'_>, marks: &Marks) -> (u16, String) {
                         .as_ref()
                         .is_some_and(|kinds| kinds.contains(&"Person"))
             }
-            Some(parent) if recursive => is_below(item, parent),
-            Some(parent) => item.parent == parent,
-            None => recursive,
+            Some(parent) if recursive => is_below(item, parent) || in_box_set(item, parent),
+            Some(parent) => item.parent == parent || in_box_set(item, parent),
+            // The collections library is not among the user's views.
+            None => recursive && !is_below(item, BOX_SETS_LIBRARY_ID),
         })
         .filter(|item| {
             people.as_ref().is_none_or(|people| {

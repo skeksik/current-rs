@@ -236,6 +236,8 @@ struct State {
     /// Paths whose requests wait until released.
     held: Mutex<HashSet<String>>,
     released: Notify,
+    /// Paths whose answers are read from the state when their request arrives and sent only once released.
+    held_answers: Mutex<HashSet<String>>,
     /// The path of every request, in order.
     paths: Mutex<Vec<String>>,
     /// Playstate reports received: path and body.
@@ -394,9 +396,16 @@ impl Controls {
         lock(&self.state.held).insert(path.to_owned());
     }
 
-    /// Lets held requests to `path` answer.
+    /// Requests to `path` are answered as the state is when they arrive, but the answer waits until [`Controls::release`]: a slow
+    /// answer that left the server before a later change.
+    pub fn hold_answer(&self, path: &str) {
+        lock(&self.state.held_answers).insert(path.to_owned());
+    }
+
+    /// Lets held requests and answers to `path` go.
     pub fn release(&self, path: &str) {
         lock(&self.state.held).remove(path);
+        lock(&self.state.held_answers).remove(path);
         self.state.released.notify_waiters();
     }
 
@@ -744,6 +753,13 @@ async fn serve(mut socket: TcpStream, state: Arc<State>, door: usize) {
         }
         None => {
             let (status, body) = answer(&state, &received);
+            loop {
+                let released = state.released.notified();
+                if !lock(&state.held_answers).contains(&received.path) {
+                    break;
+                }
+                released.await;
+            }
             let latency = state.latency.load(Ordering::SeqCst);
             if latency > 0 {
                 tokio::time::sleep(Duration::from_millis(latency as u64)).await;
