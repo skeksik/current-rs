@@ -164,6 +164,9 @@ public sealed record ItemQuery
     /// <summary>Only items the server finds for this, as its search does: a library's own search box (<see cref="Searching"/>).</summary>
     public string? SearchTerm { get; init; }
 
+    /// <summary>Only items this person is credited on: a person's titles (<see cref="ForPerson"/>).</summary>
+    public ItemRef? Person { get; init; }
+
     /// <summary>
     /// What a grid loads for the text in its search box, from this query, the one it showed before searching (keep it while the user
     /// searches; the core decides): the text trimmed, searched for with no sort and no filter, so the best matches come first; when the
@@ -197,6 +200,14 @@ public sealed record ItemQuery
     {
         ArgumentNullException.ThrowIfNull(library);
         return MapBrowse.From(Ffi.CurrentFfiMethods.LibraryQuery(MapBrowse.ToFfi(library)));
+    }
+
+    /// <summary>What opening a person shows (the core decides): the films and series they are credited on, in every library, the
+    /// newest first. Open it with <see cref="Browse.OpenItems"/>.</summary>
+    public static ItemQuery ForPerson(ItemRef person)
+    {
+        ArgumentNullException.ThrowIfNull(person);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.PersonQuery(MapBrowse.ToFfi(person)));
     }
 
     /// <summary>The user's favourites in every library, by name (the core decides): with <paramref name="kind"/> (movie, series or
@@ -540,7 +551,8 @@ internal static class MapBrowse
         query.Genres.ToArray(),
         query.Years.ToArray(),
         query.NameStartsWith,
-        query.SearchTerm);
+        query.SearchTerm,
+        query.Person is { } person ? ToFfi(person) : null);
 
     public static ItemQuery From(Ffi.ItemQuery query) => new()
     {
@@ -553,6 +565,7 @@ internal static class MapBrowse
         Years = query.Years,
         NameStartsWith = query.NameStartsWith,
         SearchTerm = query.SearchTerm,
+        Person = query.Person is { } person ? From(person) : null,
     };
 
     public static Slot From(Ffi.Slot slot) => slot switch

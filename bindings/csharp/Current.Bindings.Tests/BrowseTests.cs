@@ -288,6 +288,43 @@ internal static class BrowseTests
         return Task.CompletedTask;
     }
 
+    public static async Task SearchFiltersNarrowAndAPersonOpensTheirTitles()
+    {
+        using var standIn = StandIn.Start();
+        using var core = await SignedIn(standIn);
+        using var browse = core.Browse(FirstServer);
+        var ui = new ManualDispatcher();
+
+        // The core's choices: the catalog is listed, unavailable without a Seerr server, its reason in its name.
+        var tools = core.SearchToolsFor(new SearchFilter("person", SearchSource.Catalog));
+        Check(tools.Types.Select(type => type.Choice.Label).SequenceEqual(["All", "Movies", "Series", "People"]),
+            $"the types, not {string.Join(",", tools.Types.Select(type => type.Choice.Label))}");
+        Check(tools.Types[3].Kind == "person" && tools.Types[3].Choice.Checked, "People checked");
+        var catalog = tools.Sources[2];
+        Check(catalog.Source == SearchSource.Catalog && !catalog.Choice.Enabled && !catalog.Choice.Checked,
+            "the catalog is listed but unavailable");
+        Check(catalog.Choice.Label == "Catalog (needs Seerr)" && catalog.Choice.Tooltip == "Needs a Seerr server",
+            $"the catalog's name and tooltip, not {catalog.Choice.Label} / {catalog.Choice.Tooltip}");
+        Check(tools.Sources[0].Choice.Checked, "without the catalog, every source is in effect");
+        Check(new SearchFilter().Note(24) is not null && new SearchFilter("movie").Note(24) is null, "the note per filter");
+
+        using var search = browse.Search("example", new SearchFilter("person", SearchSource.Library));
+        using var groups = search.ObserveGroups(ui);
+        await Eventually("the people", ui, () => groups.Items.Count == 1);
+        Check(groups.Items.SequenceEqual(["person"]), $"people only, not {string.Join(",", groups.Items)}");
+        using var people = search.ObserveGroup("person", ui);
+        Check(people is not null, "the people's list");
+        await Eventually("both people", ui, () => people!.Items.Count == 2);
+        Check(people!.Items[0].Item.Id == StandIn.PersonId && people.Items[0].Kind == "person", "the actor first");
+
+        var titles = ItemQuery.ForPerson(new ItemRef(FirstServer, StandIn.PersonId));
+        Check(titles.Person?.Id == StandIn.PersonId && titles.Kinds.SequenceEqual(["movie", "series"]), "a person's films and series");
+        using var items = browse.OpenItems(titles);
+        using var grid = items.Collect(ui);
+        await Eventually("the person's titles", ui, () => grid.Items.Count == 2 && grid.Items.All(slot => slot is Slot.Item));
+        Check(grid.Items.Any(slot => slot is Slot.Item { Summary.Item.Id: StandIn.SeriesId }), "the series among them");
+    }
+
     public static async Task FavouritesAreARowPerKind()
     {
         using var standIn = StandIn.Start();

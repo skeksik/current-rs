@@ -34,6 +34,9 @@ internal sealed class StandIn : IDisposable
         "57a2d1e0000000000000000000002003",
     ];
     public const string FirstFilmName = "Example Film One";
+    /// <summary>An actor in the first film and the series; the stand-in's other person is a director.</summary>
+    public const string PersonId = "57a2d1e0000000000000000000004001";
+    public const string SeriesId = "57a2d1e0000000000000000000003001";
     /// <summary>The first film's primary image tag.</summary>
     public const string FirstFilmPosterTag = "57a2d1e0a0000001";
     /// <summary>What every image request gets: a PNG.</summary>
