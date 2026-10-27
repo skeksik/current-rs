@@ -223,7 +223,8 @@
                 <Thickness x:Key="NavigationViewContentMargin">0,48,0,0</Thickness>
             </NavigationView.Resources>
             <!-- Home, then one item per library of each signed-in server, in the user's order (ADR 0018, section 6), added in code
-                 ("You can also add items in code", same page); a header names each server when there is more than one. -->
+                 ("You can also add items in code", same page) under Libraries; an item per server holds its libraries when there is
+                 more than one (ShowLibraries). -->
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
                 <!-- Between Home and the libraries (owner, 2026-10-26); shown only while there are libraries (ShowLibraries). -->

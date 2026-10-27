@@ -57,8 +57,17 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        // After the title bar's own layout passes, which set its click-through areas: ours again (QueueTitleBarRegions).
-        AppTitleBar.LayoutUpdated += (_, _) => QueueTitleBarRegions();
+        // Ours again after the title bar sets its own click-through areas, which it does as it resizes or a button changes
+        // (QueueTitleBarRegions); not on every layout pass in the window, which a scrolling grid makes many of (review, 2026-10-27).
+        AppTitleBar.SizeChanged += (_, _) => QueueTitleBarRegions();
+        AppTitleBar.Loaded += (_, _) =>
+        {
+            if (AppTitleBar.XamlRoot is { } root)
+            {
+                root.Changed += (_, _) => QueueTitleBarRegions();
+            }
+            QueueTitleBarRegions();
+        };
         // Caption buttons as tall as the 48 px title bar (owner's finding, 2026-10-24; Photos' are 48 × 48, measured on the owner's PC,
         // 2026-10-24): "Set PreferredHeightOption to Tall so the caption buttons are the same height as the title bar" ("Title bar
         // customization", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-24), as the WinUI Gallery does after
@@ -830,24 +839,31 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
                 (int)Math.Round(bounds.X * scale), (int)Math.Round(bounds.Y * scale),
                 (int)Math.Round(bounds.Width * scale), (int)Math.Round(bounds.Height * scale)));
         }
-        Add(FindNamed(AppTitleBar, "PART_BackButton"));
-        Add(FindNamed(AppTitleBar, "PART_PaneToggleButton"));
+        _backPart ??= FindNamed(AppTitleBar, "PART_BackButton");
+        _panePart ??= FindNamed(AppTitleBar, "PART_PaneToggleButton");
+        Add(_backPart);
+        Add(_panePart);
         Add(RefreshButton);
         Add(SearchBox);
         Add(SearchButton);
-        // Only when they changed: setting them again, as each layout pass did (pressing the search box lays it out again), turned the
-        // text cursor over it into the arrow while the button was held (owner's run, 2026-10-26).
-        if (rects.SequenceEqual(_titleBarRegions))
+        // The small-window search box's top reaches 4 into the title bar: a click there is the box's, not a drag (review, 2026-10-27).
+        Add(NarrowSearchPlate);
+        // Only when they differ from what is set: setting them again on every layout pass (pressing the search box lays it out again)
+        // turned the text cursor over it into the arrow while the button was held (owner's run, 2026-10-26). Compared with what the
+        // window has, not with our last value: the title bar sets its own when Back is enabled, and ours must replace them then
+        // (review, 2026-10-27).
+        var source = Microsoft.UI.Input.InputNonClientPointerSource.GetForWindowId(AppWindow.Id);
+        if (source.GetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Passthrough).SequenceEqual(rects))
         {
             return;
         }
-        _titleBarRegions = rects;
-        Microsoft.UI.Input.InputNonClientPointerSource.GetForWindowId(AppWindow.Id)
-            .SetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Passthrough, [.. rects]);
+        source.SetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Passthrough, [.. rects]);
     }
 
-    /// <summary>The click-through areas last set, so they are set only when they change.</summary>
-    private List<Windows.Graphics.RectInt32> _titleBarRegions = [];
+    /// <summary>The title bar's own Back and pane buttons, parts of its template, found once.</summary>
+    private FrameworkElement? _backPart;
+
+    private FrameworkElement? _panePart;
 
     /// <summary>Whether every element from <paramref name="element"/> up is visible: a collapsed parent hides it too.</summary>
     private static bool IsShown(FrameworkElement element)
@@ -925,6 +941,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         NarrowSearchBox.Text = SearchBox.Text;
         SearchDismissLayer.Visibility = Visibility.Visible;
         NarrowSearchPlate.Visibility = Visibility.Visible;
+        QueueTitleBarRegions();
         // Once it has been laid out: focused in the same pass as it is shown, it did not take the focus (owner's run, 2026-10-26).
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => NarrowSearchBox.Focus(focus));
     }
@@ -936,6 +953,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
             SearchBox.Text = NarrowSearchBox.Text;
             NarrowSearchPlate.Visibility = Visibility.Collapsed;
             SearchDismissLayer.Visibility = Visibility.Collapsed;
+            QueueTitleBarRegions();
         }
     }
 
