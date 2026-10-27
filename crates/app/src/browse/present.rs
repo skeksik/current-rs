@@ -99,7 +99,7 @@ pub fn library_filters() -> Vec<Option<ItemFilter>> {
 
 /// The filters a library grid offers as ticks, each on or off whatever [`library_filters`] choice is made: favourites (owner,
 /// 2026-10-27). With a choice and a tick the grid asks for items that match both (whether Jellyfin applies every filter it is
-/// sent, not either, is not verified in its source; checked on the owner's server).
+/// sent, not either, is not verified).
 pub fn library_toggle_filters() -> Vec<ItemFilter> {
     vec![ItemFilter::FAVOURITE]
 }
