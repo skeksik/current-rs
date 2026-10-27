@@ -399,6 +399,36 @@ ADR 0019 may replace with its full type).
 - **Removal**: the workaround and the stand-in's model go once a single-item read serves fresh user data after a folder's sweep;
   re-check on each new server baseline. Reporting it upstream is the owner's call.
 
+### A write through an item's cached instance puts back a mark its series' sweep changed
+- **Steps** (from the source; not seen on a server): mark an episode played on its own (the server caches its instance with it
+  played); mark its series played and then unplayed; favourite the episode, or start playing it. The episode is played again, in
+  the database, for every client.
+- **Why**: every write reads the user data it changes from the item's cached instance and saves the whole row back.
+  `UserLibraryController.MarkFavorite`: "`var data = _userDataRepository.GetUserData(user, item); data.IsFavorite = isFavorite;`";
+  `SessionManager.OnPlaybackStart(User, BaseItem)`: "`var data = _userDataManager.GetUserData(user, item); data.PlayCount++;`";
+  `OnPlaybackProgress` and `OnPlaybackStopped` through `UpdatePlayState`, which sets `Played` only near the end.
+  `UserDataManager.GetUserData` reads the instance ("`ResolveUserDataRow(item, item.UserData?.Where(e => e.UserId.Equals(user.Id)))`"),
+  and `SaveUserData` saves every field ("`dbContext.UserData.Attach(userDataEntry).State = EntityState.Modified`"), then puts that row
+  in the per-user cache and rehydrates the instance, so lists, single reads and `UserDataChanged` all agree on the reverted state. The
+  instance is the one the previous entry describes: `Folder.MarkPlayed` and `MarkUnplayed` save other instances. A collection's
+  sweep is not affected: `BoxSet.MarkPlayed` marks each `GetLinkedChildren(user)`, taken from `GetItemById` (`BaseItem.GetLinkedChild`).
+- **Versions**: v12.3 (tag 06de749) and v12.2 (ca0f16eb), the same lines, read 2026-10-27. Not reproduced on a server.
+- **Workaround**: before a favourite or a playback start on an episode (never a folder: a folder's mark would sweep what is below it)
+  whose series or season this session marked since, the core waits for a played change on that series or season still in flight,
+  reads the episode's marks with a list read (`GET Items?ids=`) and sends its played mark on its own id (`UserPlayedItems/{id}`), which
+  saves through the cached instance and rehydrates it (`Context::mend`, `crates/app/src/browse/mod.rs`, called by
+  `JellyfinMedia::report_start` for playback). It does not cover another device's sweeps or an earlier session's, nor a plain folder's.
+  Marking played again moves the episode's last-played date to now. The stand-in models the write-back (`Marks::write_back`,
+  `tools/jellyfin-stand-in/src/library.rs`); `crates/app/tests/series_marks.rs` and the player's tests test it.
+- **Removal**: once a write reads the user data it changes fresh, or a sweep saves the cached instances; re-check on each new server
+  baseline. Reporting it upstream is the owner's call.
+
+### A list read can fall back to the cached instance too
+- `GetUserDataBatch`, which lists use, reads the per-user cache first and, on a miss, the item's instance's `UserData` before the
+  database (v12.3, 06de749, read 2026-10-27). So a list read is stale in the rare case of an item still in the item cache
+  (`LibraryManager`'s LRU of `Environment.ProcessorCount * 100` items) but dropped from the per-user cache. Not seen on a server; no
+  workaround: the next write through the item, a scan, or the LRU puts it right.
+
 ## Sources
 - Jellyfin server `v12.2` (ca0f16eb): `Jellyfin.Api/Controllers/{UserViewsController, ItemsController, UserLibraryController,
   TvShowsController, LibraryController, SearchController, PlaystateController, ImageController}.cs`,

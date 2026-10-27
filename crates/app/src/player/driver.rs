@@ -139,7 +139,12 @@ fn spawn<B: Backend>(context: Context, backend: B, raw: mpsc::UnboundedReceiver<
     let (relay_events, relay_rx) = mpsc::unbounded_channel();
     let controller = Controller::new(
         backend,
-        JellyfinMedia::new(context.shared.clone(), context.relay.clone(), relay_events),
+        JellyfinMedia::new(
+            context.shared.clone(),
+            context.relay.clone(),
+            context.browse.clone(),
+            relay_events,
+        ),
         clock,
         context.prefs.quality_preference(),
         initial_skip,

@@ -254,6 +254,7 @@ Fix and polish:
       answers an item's own read from a cached instance that the series' sweep does not save (v12.3); fixed in
       fix/episode-mark-after-series-unmark: a detail page takes its marks from a list read, and the Played button reads the copy
       read or patched last. The owner re-checks the sequence on their PC after merge
+- [x] One source of truth for each item's user state on every page (owner, 2026-10-27; PR 97)
 - [ ] The M2 device checks still open (see M2): Dolby Vision profiles 5, 7 and 8, HDR10+, 120 Hz, intro and credits skip with a segment
       plugin, the 60 s stall timeout on a real stall; remux and the gateways were checked in the relay check (PR 81)
 - [x] Quality menu named by what the server will send for this file: model its bitrate rules in the core (audio share, codec, frame

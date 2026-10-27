@@ -726,8 +726,8 @@ async fn an_episode_favourite_shows_on_its_page() {
     }
 }
 
-/// Where two lists' copies of an item differ, the Played button reads the copy read last, not the first list holding the item: here
-/// the episode is marked on another device between two reads.
+/// Where two pages read an item at different times (here the episode is marked on another device between two reads), every page and
+/// the Played button show the copy read last.
 #[tokio::test]
 async fn the_copy_read_last_answers_the_played_button() {
     let stand_in = StandIn::start().await.unwrap();
@@ -750,7 +750,7 @@ async fn the_copy_read_last_answers_the_played_button() {
         series.episodes().len() == 2 && !series.state().borrow().loading
     })
     .await;
-    // The episode's page still shows what it read first; the series' page read the new mark.
+    // The series' page read the new mark, and the episode's page shows it too: one state per item on every page.
     let page = || {
         episode
             .details()
@@ -758,8 +758,8 @@ async fn the_copy_read_last_answers_the_played_button() {
             .as_ref()
             .map(|details| details.summary.user.played)
     };
-    assert_eq!(page(), Some(false));
     assert!(series.episodes().snapshot()[0].user.played);
+    eventually("the episode's page follows", || page() == Some(true)).await;
     assert_eq!(button(), Some(true), "the copy read last");
 
     stand_in.set_played_on_server(EPISODE_IDS[0], false);
@@ -768,11 +768,102 @@ async fn the_copy_read_last_answers_the_played_button() {
         page() == Some(false) && !episode.state().borrow().loading
     })
     .await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(series.episodes().snapshot()[0].user.played);
+    eventually("the series' page follows", || {
+        !series.episodes().snapshot()[0].user.played
+    })
+    .await;
     assert_eq!(button(), Some(false), "the page read again is newer");
 
     // A patch is newer than both reads.
     browse.set_played(&first, true);
     assert_eq!(button(), Some(true));
+}
+
+/// D6, an upstream Jellyfin bug: after its series was unmarked, a favourite on an episode marked on its own before must not make it
+/// played again on the server. Jellyfin saves the favourite with the user data its cached instance of the episode still holds, which
+/// the series' sweep left played (the stand-in models it: `Marks::write_back`).
+#[tokio::test]
+async fn a_favourite_after_a_series_unmark_keeps_the_episode_unplayed_on_the_server() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    let first = lists.item(EPISODE_IDS[0]);
+    lists.toggle(EPISODE_IDS[0]);
+    settle().await;
+    lists.toggle(SERIES_ID);
+    settle().await;
+    lists.toggle(SERIES_ID);
+    settle().await;
+    assert!(lists.episodes_played(false));
+
+    lists.browse.set_favourite(&first, true);
+    settle().await;
+    // A list read: what the server's database holds now.
+    lists.series.refresh();
+    settle().await;
+    let episode = lists.series.episodes().snapshot()[0].clone();
+    assert!(episode.user.favourite);
+    assert!(
+        !episode.user.played,
+        "the sweep's unmark stays on the server"
+    );
+    assert!(lists.episodes_played(false));
+}
+
+/// The write-back workaround puts right an episode only: a favourite on a season of a series marked played, one of whose episodes
+/// was then unmarked, sends no played mark on the season (a sweep that would unmark the episode the user watched).
+#[tokio::test]
+async fn a_favourite_on_a_season_sends_no_mark_on_it() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    lists.toggle(SERIES_ID);
+    settle().await;
+    lists.toggle(EPISODE_IDS[0]);
+    settle().await;
+    lists.browse.set_favourite(&lists.item(SEASON_ID), true);
+    settle().await;
+    lists.series.refresh();
+    settle().await;
+    let played: Vec<bool> = lists
+        .series
+        .episodes()
+        .snapshot()
+        .iter()
+        .map(|episode| episode.user.played)
+        .collect();
+    assert_eq!(played, [false, true]);
+    assert_eq!(stand_in.count(&format!("/UserPlayedItems/{SEASON_ID}")), 0);
+}
+
+/// The write-back workaround waits for a played change on the episode's series still in flight: the episode is read after it, and
+/// the mark sent on its own id does not undo the series' unmark.
+#[tokio::test]
+async fn a_favourite_while_its_series_unmark_is_in_flight_keeps_the_unmark() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    let first = lists.item(EPISODE_IDS[0]);
+    lists.toggle(EPISODE_IDS[0]);
+    settle().await;
+    lists.toggle(SERIES_ID);
+    settle().await;
+    // The unmark waits before the server takes it; a mark on the episode's own id waits too.
+    let series = format!("/UserPlayedItems/{SERIES_ID}");
+    let episode = format!("/UserPlayedItems/{}", EPISODE_IDS[0]);
+    stand_in.hold(&series);
+    stand_in.hold(&episode);
+    lists.toggle(SERIES_ID);
+    eventually("the unmark's request", || stand_in.count(&series) == 2).await;
+    lists.browse.set_favourite(&first, true);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    stand_in.release(&series);
+    settle().await;
+    stand_in.release(&episode);
+    settle().await;
+    lists.series.refresh();
+    settle().await;
+    let episode = lists.series.episodes().snapshot()[0].clone();
+    assert!(episode.user.favourite);
+    assert!(!episode.user.played, "the series' unmark stays");
 }

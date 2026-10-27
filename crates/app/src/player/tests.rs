@@ -611,3 +611,43 @@ async fn a_player_start_keeps_its_engines_capabilities_for_settings() {
     );
     player.close().await;
 }
+
+/// D6, an upstream Jellyfin bug: after its series was unmarked, playing an episode marked on its own before must not make it played
+/// again on the server. Jellyfin saves the start report with the user data its cached instance of the episode still holds, which the
+/// series' sweep left played (the stand-in models it: `Marks::write_back`).
+#[tokio::test]
+async fn playing_an_episode_after_a_series_unmark_keeps_it_unplayed_on_the_server() {
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let series_id = jellyfin_stand_in::library::SERIES_ID;
+    let series = browse.details(&item(&server, series_id));
+    eventually(|| series.episodes().len() == 2 && !series.state().borrow().loading).await;
+    let settle =
+        || tokio::time::sleep(crate::browse::DEPENDENT_RELOAD_DELAY + Duration::from_millis(700));
+    browse.set_played(&item(&server, EPISODE_IDS[0]), true);
+    settle().await;
+    browse.set_played(&item(&server, series_id), true);
+    settle().await;
+    browse.set_played(&item(&server, series_id), false);
+    settle().await;
+    assert!(!series.episodes().snapshot()[0].user.played);
+
+    let (player, _control) = open(&app).await;
+    player
+        .play(item(&server, EPISODE_IDS[0]), Duration::ZERO)
+        .await
+        .unwrap();
+    eventually(|| reports(&stand_in).contains(&"/Sessions/Playing".to_owned())).await;
+    player.close().await;
+    settle().await;
+    // A list read: what the server's database holds now.
+    series.refresh();
+    settle().await;
+    assert!(
+        !series.episodes().snapshot()[0].user.played,
+        "the sweep's unmark stays on the server"
+    );
+}
