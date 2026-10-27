@@ -14,10 +14,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc};
 use tokio::task::{AbortHandle, JoinHandle};
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+use tokio_tungstenite::tungstenite::protocol::Role;
 
 /// The stand-in's server id.
 pub const SERVER_ID: &str = "57a2d1e0000000000000000000000001";
@@ -270,6 +275,10 @@ struct State {
     cancelled: Mutex<Vec<String>>,
     /// What the user marked played or favourite.
     marks: Mutex<library::Marks>,
+    /// The open WebSockets: each one's outgoing messages ([`Controls::drop_sockets`] closes them).
+    sockets: Mutex<Vec<mpsc::UnboundedSender<String>>>,
+    /// Every text message a client sent on a WebSocket, in order.
+    socket_texts: Mutex<Vec<String>>,
     /// The user's libraries.
     views: Mutex<library::Views>,
     /// The generated library and its controls.
@@ -525,9 +534,34 @@ impl Controls {
     /// Marks `id` played or not on the server only, as playback or another client would, without any client being told; a series or
     /// season through its episodes, as the mark request does, so its episodes' cached instances keep what they held.
     pub fn set_played_on_server(&self, id: &str, played: bool) {
-        let mut marks = lock(&self.state.marks);
-        marks.set_played(id, played);
-        marks.rehydrate(id);
+        {
+            let mut marks = lock(&self.state.marks);
+            marks.set_played(id, played);
+            marks.rehydrate(id);
+        }
+        user_data_changed(&self.state);
+    }
+
+    /// How many WebSockets are open.
+    pub fn socket_count(&self) -> usize {
+        let mut sockets = lock(&self.state.sockets);
+        sockets.retain(|socket| !socket.is_closed());
+        sockets.len()
+    }
+
+    /// Closes every open WebSocket, as a restart or a network change would.
+    pub fn drop_sockets(&self) {
+        lock(&self.state.sockets).clear();
+    }
+
+    /// Sends `text` on every open WebSocket: a message the server may send, such as a remote control command.
+    pub fn send_socket(&self, text: &str) {
+        lock(&self.state.sockets).retain(|socket| socket.send(text.to_owned()).is_ok());
+    }
+
+    /// Every text message the clients sent on a WebSocket so far, oldest first.
+    pub fn socket_texts(&self) -> Vec<String> {
+        lock(&self.state.socket_texts).clone()
     }
 
     /// The image requests that passed the gateway so far, oldest first.
@@ -654,6 +688,8 @@ struct Received {
     gate_header: String,
     user_agent: String,
     range: String,
+    upgrade: String,
+    websocket_key: String,
     body: String,
 }
 
@@ -690,7 +726,12 @@ async fn serve(mut socket: TcpStream, state: Arc<State>, door: usize) {
             }
         }
     }
-    let response = match gate(&state, door, &received) {
+    let blocked = gate(&state, door, &received);
+    if blocked.is_none() && received.upgrade.eq_ignore_ascii_case("websocket") {
+        websocket(socket, &state, &received).await;
+        return;
+    }
+    let response = match blocked {
         Some(blocked) => blocked,
         None if let Some((kind, body)) = stream_body(&state, &received.path) => {
             let (status, head, body) = streamed(&state, &received, &kind, &body);
@@ -770,8 +811,73 @@ async fn serve(mut socket: TcpStream, state: Arc<State>, door: usize) {
             )
         }
     };
+    // A save the request made goes out to the open WebSockets.
+    user_data_changed(&state);
     let _ = socket.write_all(response.as_bytes()).await;
     let _ = socket.shutdown().await;
+}
+
+/// A WebSocket, as Jellyfin 12.3 opens one (tag 06de749, read 2026-10-27): any path that asks for an upgrade
+/// (`WebSocketHandlerMiddleware.Invoke`: "`if (!httpContext.WebSockets.IsWebSocketRequest)`" passes the request on, there is no path
+/// check), refused with 403 without a live token (`WebSocketManager.WebSocketRequestHandler` throws a `SecurityException`, which
+/// `ExceptionMiddleware` answers with 403). Once open, the server sends `ForceKeepAlive` with the time in seconds it waits for a
+/// `KeepAlive` (`SessionWebSocketListener.KeepAliveWebSocket`, `WebSocketLostTimeout = 60`), and every save of the user's data as
+/// `UserDataChanged` ([`user_data_changed`]). The stand-in records what the client sends and never drops a quiet socket.
+async fn websocket(mut socket: TcpStream, state: &Arc<State>, received: &Received) {
+    if !authorized(state, received) {
+        let _ = socket
+            .write_all(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+            .await;
+        return;
+    }
+    let accept = derive_accept_key(received.websocket_key.as_bytes());
+    let head = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: websocket\r\nsec-websocket-accept: {accept}\r\n\r\n"
+    );
+    if socket.write_all(head.as_bytes()).await.is_err() {
+        return;
+    }
+    let mut stream = WebSocketStream::from_raw_socket(socket, Role::Server, None).await;
+    let (sender, mut outgoing) = mpsc::unbounded_channel();
+    lock(&state.sockets).push(sender);
+    let force = r#"{"MessageType":"ForceKeepAlive","Data":60,"MessageId":"57a2d1e0000000000000000000000030"}"#;
+    if stream.send(Message::text(force)).await.is_err() {
+        return;
+    }
+    loop {
+        tokio::select! {
+            text = outgoing.recv() => match text {
+                Some(text) => {
+                    if stream.send(Message::text(text)).await.is_err() {
+                        return;
+                    }
+                }
+                // Dropped by `Controls::drop_sockets`.
+                None => {
+                    let _ = stream.close(None).await;
+                    return;
+                }
+            },
+            incoming = stream.next() => match incoming {
+                Some(Ok(Message::Text(text))) => lock(&state.socket_texts).push(text.as_str().to_owned()),
+                Some(Ok(Message::Close(_)) | Err(_)) | None => return,
+                Some(Ok(_)) => {}
+            },
+        }
+    }
+}
+
+/// Sends the user data saved since the last call to every open WebSocket, as one `UserDataChanged`: `UserDataChangeNotifier` batches
+/// the saves of 500 ms per user (`UpdateDuration`) and sends `UserDataChangeInfo { UserId, UserDataList }`, each entry a
+/// `UserItemDataDto` with its `ItemId` (v12.3, tag 06de749, read 2026-10-27). The stand-in sends one message per request that saved.
+fn user_data_changed(state: &State) {
+    let Some(list) = lock(&state.marks).take_changed() else {
+        return;
+    };
+    let message = format!(
+        r#"{{"MessageType":"UserDataChanged","Data":{{"UserId":"{USER_ID}","UserDataList":{list}}},"MessageId":"57a2d1e0000000000000000000000031"}}"#
+    );
+    lock(&state.sockets).retain(|socket| socket.send(message.clone()).is_ok());
 }
 
 /// The gateway's answer at address `door` when it does not let `received` through.
@@ -1272,6 +1378,8 @@ async fn read_request(socket: &mut TcpStream) -> Option<Received> {
         gate_header: header(GATE_HEADER),
         user_agent: header("user-agent"),
         range: header("range"),
+        upgrade: header("upgrade"),
+        websocket_key: header("sec-websocket-key"),
         body: String::from_utf8_lossy(&data[head_end..]).into_owned(),
     })
 }
