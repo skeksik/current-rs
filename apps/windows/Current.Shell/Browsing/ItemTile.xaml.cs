@@ -22,7 +22,7 @@ public enum TileShape
 /// Narrator: "when a DataTemplate contains multiple controls … the default accessible name for screenreaders comes from .ToString()
 /// on the item. As a convenience you can instead set the AutomationProperties.Name on the root element of the DataTemplate" ("Item
 /// templates for grid view", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-25). This tile is that root, and names itself
-/// with its lines and marks (BrowseText.TileName).
+/// with its lines and marks (BrowseLabels.TileName).
 /// </remarks>
 public sealed partial class ItemTile : UserControl
 {
@@ -134,14 +134,14 @@ public sealed partial class ItemTile : UserControl
             SubtitleText.Text = "";
             ShowMarks(null, null);
             ShowPicture(null);
-            AutomationProperties.SetName(this, slot is Slot.Failed ? BrowseText.FailedTileName : BrowseText.LoadingTileName);
+            AutomationProperties.SetName(this, slot is Slot.Failed ? BrowseLabels.FailedTileName : BrowseLabels.LoadingTileName);
             return;
         }
-        TitleText.Text = BrowseText.Title(item, ShowsSeries);
-        SubtitleText.Text = BrowseText.Subtitle(item, ShowsSeries);
+        TitleText.Text = BrowseLabels.TileTitle(item, ShowsSeries);
+        SubtitleText.Text = BrowseLabels.TileSubtitle(item, ShowsSeries);
         ShowMarks(item.User, item.TimeLeft);
         ShowPicture(item);
-        AutomationProperties.SetName(this, BrowseText.TileName(item, ShowsSeries));
+        AutomationProperties.SetName(this, BrowseLabels.TileName(item, ShowsSeries));
     }
 
     private void ShowMarks(UserState? user, TimeSpan? timeLeft)

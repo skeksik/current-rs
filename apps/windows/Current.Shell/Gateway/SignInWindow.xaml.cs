@@ -231,7 +231,7 @@ public sealed partial class SignInWindow : Window
         GooglePanel.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
         Web.Visibility = shown ? Visibility.Collapsed : Visibility.Visible;
         // Set when shown, so the live region is read each time (Announce.Shown).
-        GoogleText.Text = shown ? ProblemText.GoogleRefusesWebViews : "";
+        GoogleText.Text = shown ? ProblemTexts.GoogleRefusesWebViews : "";
         if (shown)
         {
             Announce.Shown(GoogleText);

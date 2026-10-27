@@ -88,7 +88,7 @@ public sealed partial class SupportedFormatsPage : Page
             Trace.TraceError($"Current: reading the supported formats failed: {error.GetType().Name}");
             LoadInfo.Severity = InfoBarSeverity.Error;
             LoadInfo.Title = "Couldn't find out what this PC plays.";
-            LoadInfo.Message = ProblemText.Unexpected;
+            LoadInfo.Message = ProblemTexts.Unexpected;
             LoadInfo.IsOpen = true;
         }
         finally

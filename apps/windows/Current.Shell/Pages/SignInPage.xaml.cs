@@ -157,11 +157,11 @@ public sealed partial class SignInPage : Page
                 break;
             case SignInState.Failed { Problem: SignInProblem.Gateway gateway }
                 when gateway.Answer != GatewayProblem.Unsupported && _request?.Saved is not null:
-                ShowError(ProblemText.SignIn(gateway));
+                ShowError(App.Core?.ProblemText(gateway) ?? ProblemTexts.Unexpected);
                 OfferGatewaySignIn(gateway.Answer == GatewayProblem.Refused);
                 break;
             case SignInState.Failed failed:
-                ShowError(ProblemText.SignIn(failed.Problem));
+                ShowError(App.Core?.ProblemText(failed.Problem) ?? ProblemTexts.Unexpected);
                 break;
             case SignInState.SignedIn signedIn:
                 DispatcherQueue.TryEnqueue(() => Finish(signedIn));
@@ -222,7 +222,7 @@ public sealed partial class SignInPage : Page
                 Trace.TraceError($"Current: signing in to the gateway failed: {error.GetType().Name}");
                 if (!_leaving)
                 {
-                    ShowError(ProblemText.Unexpected);
+                    ShowError(ProblemTexts.Unexpected);
                 }
             }
             finally
@@ -318,7 +318,7 @@ public sealed partial class SignInPage : Page
             Trace.TraceError($"Current: signing in failed: {error.GetType().Name}");
             if (!_leaving)
             {
-                ShowError(ProblemText.Unexpected);
+                ShowError(ProblemTexts.Unexpected);
             }
         }
         finally

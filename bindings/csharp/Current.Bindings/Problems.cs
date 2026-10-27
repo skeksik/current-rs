@@ -253,4 +253,112 @@ internal static class MapProblems
         Ffi.DiscoveryProblem.NoNetwork => DiscoveryProblem.NoNetwork,
         _ => DiscoveryProblem.Failed,
     };
+
+    // Back to the core's shapes, for its texts.
+
+    public static Ffi.AddressProblem ToFfi(AddressProblem problem) => problem switch
+    {
+        AddressProblem.Empty => Ffi.AddressProblem.Empty,
+        AddressProblem.UnsupportedScheme => Ffi.AddressProblem.UnsupportedScheme,
+        AddressProblem.Credentials => Ffi.AddressProblem.Credentials,
+        AddressProblem.Invalid => Ffi.AddressProblem.Invalid,
+        _ => throw new ArgumentOutOfRangeException(nameof(problem), problem, "unknown problem"),
+    };
+
+    public static Ffi.ProbeProblem ToFfi(ProbeProblem problem) => problem switch
+    {
+        ProbeProblem.InvalidAddress invalid => new Ffi.ProbeProblem.InvalidAddress(ToFfi(invalid.Reason)),
+        ProbeProblem.Unreachable => new Ffi.ProbeProblem.Unreachable(),
+        ProbeProblem.Timeout => new Ffi.ProbeProblem.Timeout(),
+        ProbeProblem.Tls => new Ffi.ProbeProblem.Tls(),
+        ProbeProblem.NotJellyfin => new Ffi.ProbeProblem.NotJellyfin(),
+        ProbeProblem.Unavailable => new Ffi.ProbeProblem.Unavailable(),
+        ProbeProblem.Redirected redirected => new Ffi.ProbeProblem.Redirected(Status(redirected.Status)),
+        ProbeProblem.UnexpectedStatus status => new Ffi.ProbeProblem.UnexpectedStatus(Status(status.Status)),
+        ProbeProblem.TooOld old => new Ffi.ProbeProblem.TooOld(old.Version),
+        ProbeProblem.SetupIncomplete => new Ffi.ProbeProblem.SetupIncomplete(),
+        ProbeProblem.DifferentServer => new Ffi.ProbeProblem.DifferentServer(),
+        ProbeProblem.Gateway gateway => new Ffi.ProbeProblem.Gateway(ToFfi(gateway.Answer)),
+        _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
+    };
+
+    public static Ffi.NetProblem ToFfi(NetProblem problem) => problem switch
+    {
+        NetProblem.Unreachable => new Ffi.NetProblem.Unreachable(),
+        NetProblem.Timeout => new Ffi.NetProblem.Timeout(),
+        NetProblem.Tls => new Ffi.NetProblem.Tls(),
+        NetProblem.Auth auth => new Ffi.NetProblem.Auth(Status(auth.Status)),
+        NetProblem.UnexpectedStatus status => new Ffi.NetProblem.UnexpectedStatus(Status(status.Status)),
+        NetProblem.Redirected redirected => new Ffi.NetProblem.Redirected(Status(redirected.Status)),
+        NetProblem.Decode => new Ffi.NetProblem.Decode(),
+        NetProblem.InvalidRequest => new Ffi.NetProblem.InvalidRequest(),
+        _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
+    };
+
+    public static Ffi.StoreProblem ToFfi(StoreProblem problem) => problem switch
+    {
+        StoreProblem.Io io => new Ffi.StoreProblem.Io(io.Step, io.Kind),
+        StoreProblem.NewerVersion newer => new Ffi.StoreProblem.NewerVersion(newer.Found),
+        StoreProblem.Random => new Ffi.StoreProblem.Random(),
+        _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
+    };
+
+    public static Ffi.SignInProblem ToFfi(SignInProblem problem) => problem switch
+    {
+        SignInProblem.WrongCredentials => new Ffi.SignInProblem.WrongCredentials(),
+        SignInProblem.Refused => new Ffi.SignInProblem.Refused(),
+        SignInProblem.QuickConnectDisabled => new Ffi.SignInProblem.QuickConnectDisabled(),
+        SignInProblem.QuickConnectExpired => new Ffi.SignInProblem.QuickConnectExpired(),
+        SignInProblem.SessionRevoked => new Ffi.SignInProblem.SessionRevoked(),
+        SignInProblem.NotSignedIn => new Ffi.SignInProblem.NotSignedIn(),
+        SignInProblem.Network network => new Ffi.SignInProblem.Network(ToFfi(network.Problem)),
+        SignInProblem.Probe probe => new Ffi.SignInProblem.Probe(ToFfi(probe.Problem)),
+        SignInProblem.Save save => new Ffi.SignInProblem.Save(ToFfi(save.Problem)),
+        SignInProblem.ServerRemoved => new Ffi.SignInProblem.ServerRemoved(),
+        SignInProblem.Gateway gateway => new Ffi.SignInProblem.Gateway(ToFfi(gateway.Answer)),
+        SignInProblem.EmbyHeaderIgnored => new Ffi.SignInProblem.EmbyHeaderIgnored(),
+        SignInProblem.Unconfirmed => new Ffi.SignInProblem.Unconfirmed(),
+        _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
+    };
+
+    public static Ffi.GatewayProblem ToFfi(GatewayProblem problem) => problem switch
+    {
+        GatewayProblem.Password => Ffi.GatewayProblem.Password,
+        GatewayProblem.SignIn => Ffi.GatewayProblem.SignIn,
+        GatewayProblem.Refused => Ffi.GatewayProblem.Refused,
+        GatewayProblem.Unsupported => Ffi.GatewayProblem.Unsupported,
+        _ => throw new ArgumentOutOfRangeException(nameof(problem), problem, "unknown problem"),
+    };
+
+    public static Ffi.GatewayInputProblem ToFfi(GatewayInputProblem problem) => problem switch
+    {
+        GatewayInputProblem.PlainHttpNotConfirmed => Ffi.GatewayInputProblem.PlainHttpNotConfirmed,
+        GatewayInputProblem.NoHeaders => Ffi.GatewayInputProblem.NoHeaders,
+        GatewayInputProblem.InvalidUserName => Ffi.GatewayInputProblem.InvalidUserName,
+        GatewayInputProblem.InvalidPassword => Ffi.GatewayInputProblem.InvalidPassword,
+        GatewayInputProblem.InvalidHeaderName => Ffi.GatewayInputProblem.InvalidHeaderName,
+        GatewayInputProblem.ReservedHeader => Ffi.GatewayInputProblem.ReservedHeader,
+        GatewayInputProblem.InvalidHeaderValue => Ffi.GatewayInputProblem.InvalidHeaderValue,
+        GatewayInputProblem.InvalidCookie => Ffi.GatewayInputProblem.InvalidCookie,
+        _ => throw new ArgumentOutOfRangeException(nameof(problem), problem, "unknown problem"),
+    };
+
+    public static Ffi.GatewaySignInProblem ToFfi(GatewaySignInProblem problem) => problem switch
+    {
+        GatewaySignInProblem.Probe probe => new Ffi.GatewaySignInProblem.Probe(ToFfi(probe.Problem)),
+        GatewaySignInProblem.Save save => new Ffi.GatewaySignInProblem.Save(ToFfi(save.Problem)),
+        GatewaySignInProblem.ServerRemoved => new Ffi.GatewaySignInProblem.ServerRemoved(),
+        _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
+    };
+
+    public static Ffi.DiscoveryProblem ToFfi(DiscoveryProblem problem) => problem switch
+    {
+        DiscoveryProblem.NotPermitted => Ffi.DiscoveryProblem.NotPermitted,
+        DiscoveryProblem.NoNetwork => Ffi.DiscoveryProblem.NoNetwork,
+        DiscoveryProblem.Failed => Ffi.DiscoveryProblem.Failed,
+        _ => throw new ArgumentOutOfRangeException(nameof(problem), problem, "unknown problem"),
+    };
+
+    /// <summary>An HTTP status as the core holds it (16 bits); the problems only ever hold the core's own.</summary>
+    private static ushort Status(int status) => checked((ushort)status);
 }

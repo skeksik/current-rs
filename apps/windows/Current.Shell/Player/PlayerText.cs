@@ -163,6 +163,6 @@ internal static class PlayerText
         PlayerProblem.Busy => "Another video is still closing. Try again in a moment.",
         PlayerProblem.EngineFailed => "The player couldn't start.",
         PlayerProblem.NotSignedIn => "Sign in to this item's server first.",
-        _ => ProblemText.Unexpected,
+        _ => ProblemTexts.Unexpected,
     };
 }

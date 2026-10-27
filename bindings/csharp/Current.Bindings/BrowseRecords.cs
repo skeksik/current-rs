@@ -611,6 +611,18 @@ internal static class MapBrowse
         _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
     };
 
+    public static Ffi.BrowseProblem ToFfi(BrowseProblem problem) => problem switch
+    {
+        BrowseProblem.NotSignedIn => new Ffi.BrowseProblem.NotSignedIn(),
+        BrowseProblem.SessionRevoked => new Ffi.BrowseProblem.SessionRevoked(),
+        BrowseProblem.Refused => new Ffi.BrowseProblem.Refused(),
+        BrowseProblem.Unconfirmed => new Ffi.BrowseProblem.Unconfirmed(),
+        BrowseProblem.NotAvailable => new Ffi.BrowseProblem.NotAvailable(),
+        BrowseProblem.Gateway gateway => new Ffi.BrowseProblem.Gateway(MapProblems.ToFfi(gateway.Answer)),
+        BrowseProblem.Network network => new Ffi.BrowseProblem.Network(MapProblems.ToFfi(network.Problem)),
+        _ => throw new ArgumentException($"unknown problem {problem.GetType().Name}", nameof(problem)),
+    };
+
     public static ImageProblem From(Ffi.ImageProblem problem) => problem switch
     {
         Ffi.ImageProblem.Request request => new ImageProblem.Request(From(request.Problem)),
@@ -626,6 +638,13 @@ internal static class MapBrowse
     {
         Ffi.ItemAction.SetPlayed played => new ItemAction.SetPlayed(played.Played),
         Ffi.ItemAction.SetFavourite favourite => new ItemAction.SetFavourite(favourite.Favourite),
+        _ => throw new ArgumentException($"unknown action {action.GetType().Name}", nameof(action)),
+    };
+
+    public static Ffi.ItemAction ToFfi(ItemAction action) => action switch
+    {
+        ItemAction.SetPlayed played => new Ffi.ItemAction.SetPlayed(played.Played),
+        ItemAction.SetFavourite favourite => new Ffi.ItemAction.SetFavourite(favourite.Favourite),
         _ => throw new ArgumentException($"unknown action {action.GetType().Name}", nameof(action)),
     };
 
