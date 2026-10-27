@@ -9,33 +9,35 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
-            <!-- The shade under a tile's progress (ItemTile.xaml): clear at its top, 40 % black where the play mark, bar and time
-                 start (16 of its 44, 0.36) and 80 % at the bottom: SystemAltMediumLowColor and SystemAltMediumHighColor in the dark
-                 theme the tile shows it in (generic.xaml of Microsoft.WindowsAppSDK.WinUI 2.3.9). Text needs "a minimum luminance
-                 contrast ratio of 4.5:1" ("Accessible text requirements", learn.microsoft.com, ms.date 2026-08-21, read 2026-10-26):
-                 the time on a white poster measured about 4.7:1 against the shade's middle (a capture of the owner's run,
-                 2026-10-26); 30 % black throughout, the first shade, left about 2.1:1 and was unreadable there, 60 % to 80 % was too
-                 dark for the owner. The clear end is transparent black (SystemControlTransparentColor, #00000000): "Transparent" is
-                 transparent white, and the fade from it to black passed through a see-through grey that lightened the picture in a
-                 line above the bar. High contrast uses a brush in the system's window colour, whole: its alt and smoke colours are
-                 not meant for this there. -->
+            <!-- The shade under a tile's progress (ItemTile.xaml): clear at its top, 60 % black just above the glyphs' top (0.45 of
+                 its 44; the time's glyphs start at about 0.48) and 80 % at the bottom: SystemAltMediumColor and
+                 SystemAltMediumHighColor in the dark theme the tile shows it in (generic.xaml of Microsoft.WindowsAppSDK.WinUI 2.3.9).
+                 Text needs "a minimum luminance contrast ratio of 4.5:1" ("Accessible text requirements", learn.microsoft.com,
+                 ms.date 2026-08-21, read 2026-10-26). Measured where it is lowest, at the lightest background pixel beside the time's
+                 glyphs at their top row (WCAG relative luminance of the pixel, white text; a 150 % capture of the owner's run on a
+                 light poster, 2026-10-27): 6.6:1; over a pure white poster the shade's 61 % there gives about 6.0:1 (computed). The
+                 first shade (30 % black throughout) left about 2.1:1; 40 % at 0.36 measured 4.7:1 at the shade's middle but only
+                 about 3.6:1 at the glyphs' top. The clear end is transparent black (SystemControlTransparentColor, #00000000):
+                 "Transparent" is transparent white, and the fade from it to black passed through a see-through grey that lightened
+                 the picture in a line above the bar. High contrast uses the system's window colour (SystemColorWindowColorBrush),
+                 whole, under the window text colour: its alt and smoke colours are not meant for this there. -->
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
                     <LinearGradientBrush x:Key="TileScrimBrush" StartPoint="0,0" EndPoint="0,1">
                         <GradientStop Offset="0" Color="{ThemeResource SystemControlTransparentColor}" />
-                        <GradientStop Offset="0.36" Color="{ThemeResource SystemAltMediumLowColor}" />
+                        <GradientStop Offset="0.45" Color="{ThemeResource SystemAltMediumColor}" />
                         <GradientStop Offset="1" Color="{ThemeResource SystemAltMediumHighColor}" />
                     </LinearGradientBrush>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Light">
                     <LinearGradientBrush x:Key="TileScrimBrush" StartPoint="0,0" EndPoint="0,1">
                         <GradientStop Offset="0" Color="{ThemeResource SystemControlTransparentColor}" />
-                        <GradientStop Offset="0.36" Color="{ThemeResource SystemAltMediumLowColor}" />
+                        <GradientStop Offset="0.45" Color="{ThemeResource SystemAltMediumColor}" />
                         <GradientStop Offset="1" Color="{ThemeResource SystemAltMediumHighColor}" />
                     </LinearGradientBrush>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="HighContrast">
-                    <StaticResource x:Key="TileScrimBrush" ResourceKey="SmokeFillColorDefaultBrush" />
+                    <StaticResource x:Key="TileScrimBrush" ResourceKey="SystemColorWindowColorBrush" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
