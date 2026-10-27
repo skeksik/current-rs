@@ -199,6 +199,27 @@ pub struct SortChoice {
     pub order: SortOrder,
 }
 
+/// What a library grid's Sort and Filter buttons offer for the query it shows: neither while it searches, its results then coming in
+/// the server's relevance order, unfiltered. Each tooltip says why its button is unavailable; `None` while it is available.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct GridTools {
+    pub sort_available: bool,
+    pub sort_tooltip: Option<String>,
+    pub filter_available: bool,
+    pub filter_tooltip: Option<String>,
+}
+
+impl From<current_app::GridTools> for GridTools {
+    fn from(tools: current_app::GridTools) -> Self {
+        Self {
+            sort_available: tools.sort_available,
+            sort_tooltip: tools.sort_tooltip,
+            filter_available: tools.filter_available,
+            filter_tooltip: tools.filter_tooltip,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Enum)]
 pub enum SortOrder {
     #[default]
