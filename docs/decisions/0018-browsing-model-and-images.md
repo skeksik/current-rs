@@ -280,8 +280,8 @@ the UIs list what it gives.
   is unavailable" (CLAUDE.md), by the owner's decision: the app is also used without Seerr, and the option should be visible.** A
   Catalog choice that cannot apply reads as All. Without Seerr, All and Library find the same.
 - **View**: posters or wide, with or without titles, as a library grid's (section 7's remembered view). Episodes and videos stay wide.
-  Proposed, for the owner (not the owner's decision yet): people show as cast cards whatever the view, and a search narrowed to one
-  type wraps its tiles into a grid. The core shapes each group (`search_result_display(kind, filter, wide, show_titles) ->
+  The owner's decision (2026-10-27): people show as round cast cards whatever the view, and a search narrowed to one type wraps its
+  tiles into a grid. The core shapes each group (`search_result_display(kind, filter, wide, show_titles) ->
   RowDisplay`: its tiles, whether they are cast cards, show titles and wrap, what opening an item does (a person opens their titles),
   whether it has the item menu (a person has none), and its note), from the filter as it applies.
 - **No sort**: results stay in the server's relevance order (Context; section 3). A group that returns as many as it asked for (24,
