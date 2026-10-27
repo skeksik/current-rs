@@ -395,7 +395,8 @@ ADR 0019 may replace with its full type).
 - **Workaround**: a detail page takes the item's marks from `GET Items?ids={id}`, sent with `GET Items/{id}`
   (`JellyfinClient::details`, `crates/jellyfin/src/browse.rs`); the stand-in models the bug (`tools/jellyfin-stand-in/src/library.rs`)
   and `crates/app/tests/series_marks.rs` tests it. Our series' and season's read-backs (`UserItems/{id}/UserData`) are not affected:
-  their marks are derived by count queries (`Folder.FillUserDataDtoValues`). - **Removal**: the workaround and the stand-in's model go once a single-item read serves fresh user data after a folder's sweep;
+  their marks are derived by count queries (`Folder.FillUserDataDtoValues`).
+- **Removal**: the workaround and the stand-in's model go once a single-item read serves fresh user data after a folder's sweep;
   re-check on each new server baseline. Reporting it upstream is the owner's call.
 
 ## Sources
