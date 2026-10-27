@@ -89,10 +89,11 @@ pub struct FilterMenu {
 /// Where a row's header goes.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum RowTarget {
-    /// The library's grid, the newest added first ([`super::recently_added_query`]).
-    Library { library: ItemRef },
+    /// The library's grid, the newest added first ([`super::recently_added_query`]). Not `Library { library }`: a C# class cannot
+    /// hold a member of its own name.
+    OpenLibrary { library: ItemRef },
     /// A view across every library: [`view_query`] with these.
-    View {
+    OpenView {
         view: BrowseView,
         kind: Option<String>,
         favourite: bool,
@@ -124,14 +125,14 @@ impl From<current_app::RowDisplay> for RowDisplay {
             },
             link: display.link.map(|link| RowLink {
                 target: match link.target {
-                    current_app::RowTarget::Library(library) => RowTarget::Library {
+                    current_app::RowTarget::Library(library) => RowTarget::OpenLibrary {
                         library: (&library).into(),
                     },
                     current_app::RowTarget::View {
                         view,
                         kind,
                         favourite,
-                    } => RowTarget::View {
+                    } => RowTarget::OpenView {
                         view: view.into(),
                         kind: kind.map(|kind| kind.as_str().to_owned()),
                         favourite,
@@ -306,7 +307,7 @@ mod tests {
         assert_eq!(display.shape, TileShape::Wide);
         assert_eq!(
             display.link.map(|link| link.target),
-            Some(RowTarget::View {
+            Some(RowTarget::OpenView {
                 view: BrowseView::Everything,
                 kind: Some("episode".into()),
                 favourite: true
