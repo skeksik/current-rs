@@ -63,6 +63,25 @@ internal static class PlayerTests
         return Task.CompletedTask;
     }
 
+    public static Task QualityMenuIsTheCores()
+    {
+        using var core = CoreHost.Create();
+        var menu = core.QualityMenu(null, new QualityChoice.Maximum(), withResolution: true);
+        Check(menu.Select(entry => entry.Label).SequenceEqual(["Original", "40 Mbit/s", "20 Mbit/s", "4 Mbit/s", "1 Mbit/s"]),
+            $"Original and the steps before the core named them, not {string.Join(", ", menu.Select(entry => entry.Label))}");
+        Check(menu[0].Checked && menu.Count(entry => entry.Checked) == 1, "Original checked");
+        var limited = core.QualityMenu(null, new QualityChoice.Bitrate(10_000_000), withResolution: true);
+        Check(limited.Count == 6 && limited[3] is { Label: "10 Mbit/s", Checked: true }
+            && limited[3].Option.Quality == new QualityChoice.Bitrate(10_000_000), "a limit between the steps listed and checked");
+        var original = new QualityOption(new QualityChoice.Maximum(), "4K", 26_100_000);
+        var named = core.QualityMenu([original], new QualityChoice.Maximum(), withResolution: true);
+        Check(named.Single().Label == "Original · 4K · 26.1 Mbit/s", $"the core's names, not {named.Single().Label}");
+        core.SetDecimalSeparator(",");
+        Check(core.BitrateLabel(26_100_000) == "26,1 Mbit/s" && core.BitrateLabel(720_000) == "720 kbit/s", "the platform's separator");
+        Check(core.QualityLabel(original, withResolution: false) == "Original · 26,1 Mbit/s", "without the resolution");
+        return Task.CompletedTask;
+    }
+
     public static async Task PlaysReportsAndReleases()
     {
         using var standIn = StandIn.Start();
