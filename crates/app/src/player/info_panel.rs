@@ -309,11 +309,13 @@ mod tests {
             is_forced: false,
             is_hearing_impaired: false,
             is_external: false,
+            bitrate: None,
             video: Some(VideoFacts {
                 width: Some(3_840),
                 height: Some(2_160),
                 bit_depth: Some(10),
                 frame_rate: Some(23.976),
+                reference_frame_rate: Some(23.976),
                 range: None,
                 range_type: Some(VideoRangeType::from("HDR10")),
                 dv_profile: None,

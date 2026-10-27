@@ -40,6 +40,7 @@ fn source(video: &str, audio: &str) -> MediaSource {
         is_forced: false,
         is_hearing_impaired: false,
         is_external: false,
+        bitrate: None,
         video: None,
         audio: None,
         subtitle_delivery: None,
@@ -139,4 +140,33 @@ fn a_codec_missing_from_the_output_list_is_converted() {
         actions(&route),
         (StreamAction::Transcode, StreamAction::Copy)
     );
+}
+
+#[test]
+fn the_reference_frame_rate_is_the_average_unless_it_reads_1000_or_more() {
+    let video = |average: Option<f32>, real: Option<f32>| {
+        let stream = wire::MediaStream {
+            r#type: Some("Video".into()),
+            index: Some(0),
+            average_frame_rate: average,
+            real_frame_rate: real,
+            bit_rate: Some(8_000_000),
+            ..wire::MediaStream::default()
+        };
+        map_stream(&stream).unwrap()
+    };
+    // An interlaced file: 25 frames, 50 fields. The server transcodes by the average; the info panel's rate stays the real one.
+    let interlaced = video(Some(25.0), Some(50.0));
+    let facts = interlaced.video.as_ref().unwrap();
+    assert_eq!(facts.reference_frame_rate, Some(25.0));
+    assert_eq!(facts.frame_rate, Some(50.0));
+    assert_eq!(interlaced.bitrate, Some(8_000_000));
+    // A misread average of 1000 fps, or none: the real rate.
+    let misread = video(Some(1000.0), Some(23.976));
+    assert_eq!(misread.video.unwrap().reference_frame_rate, Some(23.976));
+    assert_eq!(
+        video(None, Some(30.0)).video.unwrap().reference_frame_rate,
+        Some(30.0)
+    );
+    assert_eq!(video(None, None).video.unwrap().reference_frame_rate, None);
 }
