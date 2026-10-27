@@ -373,6 +373,32 @@ impl JellyfinClient {
         Ok(self.item_details(dto, item))
     }
 
+    /// The marks of `items` as the server holds them now, in one request (`GET Items?ids=`), for those the server still lists. A list
+    /// read: Jellyfin builds its items' user data with `GetUserDataBatch`, not from its cached instances (`DtoService.GetBaseItemDtos`;
+    /// see [`JellyfinClient::details`]), and derives a folder's from its items. Keep `items` to a few dozen: their ids go in the URL.
+    ///
+    /// # Errors
+    /// The session ended, or the server's or the network's failure.
+    pub async fn user_states(
+        &self,
+        items: &[ItemRef],
+    ) -> Result<Vec<(ItemRef, UserState)>, AuthError> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
+        let request = Request::get("/Items")
+            .query("ids", ids.join(","))
+            .query("enableImages", "false")
+            .query("enableTotalRecordCount", "false");
+        let result: ItemsResult = self.get_json(request).await?;
+        Ok(self
+            .summaries(result.items)
+            .into_iter()
+            .map(|summary| (summary.item, summary.user))
+            .collect())
+    }
+
     /// Marks `item` played or unplayed (`POST`/`DELETE UserPlayedItems/{id}`). Returns the state the server now holds.
     pub async fn set_played(&self, item: &ItemRef, played: bool) -> Result<UserState, AuthError> {
         let path = format!("/UserPlayedItems/{}", item.id.as_str());
