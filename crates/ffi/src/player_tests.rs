@@ -378,6 +378,20 @@ fn the_playback_settings_switch_skipping() {
 
 /// Every type `player_records.rs` declares, so that a new one must be added here and so to the check below. The item reference is
 /// browse's (`browse::records`), which holds a server reference and an id only.
+/// Sizes for the info panel's last line, as a window measures them.
+fn panel_sizes() -> PanelSizes {
+    PanelSizes {
+        composition_width: 1_280,
+        composition_height: 720,
+        view_width: 1_280.0,
+        view_height: 720.0,
+        content_width: Some(1_280.0),
+        content_height: Some(800.0),
+        window_width: Some(1_280),
+        window_height: Some(800),
+    }
+}
+
 const RECORD_TYPES: &[&str] = &[
     "CompositionSize",
     "DisplayFacts",
@@ -461,6 +475,10 @@ fn no_url_token_cookie_or_header_value_crosses_the_bridge() {
             .map(|now| format!("{now:?}")),
     );
     crossed.push(format!("{:?}", block_on(player.playback_info()).unwrap()));
+    crossed.push(format!(
+        "{:?}",
+        block_on(player.playback_info_lines(Some(DISPLAY), panel_sizes())).unwrap()
+    ));
     let swap_chain = until(&swap_rx, "a swap chain", Option::is_some)
         .pop()
         .flatten()
@@ -503,6 +521,10 @@ fn no_url_token_cookie_or_header_value_crosses_the_bridge() {
     );
     crossed.extend(failed.iter().map(|state| format!("{state:?}")));
     crossed.push(format!("{:?}", block_on(player.playback_info()).unwrap()));
+    crossed.push(format!(
+        "{:?}",
+        block_on(player.playback_info_lines(Some(DISPLAY), panel_sizes())).unwrap()
+    ));
     crossed.push(format!("{:?}", player.state()));
     crossed.push(format!("{:?}", core.playback_settings()));
 

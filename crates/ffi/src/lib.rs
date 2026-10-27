@@ -16,6 +16,7 @@ mod flows;
 mod formats;
 mod player;
 mod player_records;
+mod player_words;
 mod problems;
 mod records;
 mod runtime;
@@ -78,6 +79,8 @@ pub use player_records::{
     SegmentInfo, SourceInfo, StreamInfo, StreamProtocolKind, SubtitleSelection, TrackInfo,
     TranscodingInfo, quality_steps,
 };
+// The player's words (ADR 0019), worded by the core.
+pub use player_words::PanelSizes;
 pub use problems::{
     AddressProblem, DiscoveryProblem, GatewayInputProblem, GatewayProblem, GatewaySignInProblem,
     NetProblem, ProbeProblem, SignInProblem, StoreProblem,
