@@ -444,3 +444,114 @@ async fn a_read_back_older_than_a_newer_mark_is_dropped() {
     settle().await;
     assert!(lists.series_played(true) && lists.posters(0, Some(1.0)));
 }
+
+/// Case 1 on its own: once the server answered a series' mark and the lists reloaded, the series still shows it everywhere.
+#[tokio::test]
+async fn a_series_mark_stays_after_the_answer_and_the_reloads() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    lists.toggle(SERIES_ID);
+    let path = format!("/UserPlayedItems/{SERIES_ID}");
+    eventually("the answer", || stand_in.count(&path) == 1).await;
+    settle().await;
+    assert!(lists.series_played(true), "{:?}", lists.series_everywhere());
+    assert!(
+        lists
+            .browse
+            .user_state(&lists.item(SERIES_ID))
+            .is_some_and(|state| state.played),
+        "what the Played button reads"
+    );
+}
+
+/// Episodes loaded while a series' mark waits for the server take it, and a refusal rolls them back too.
+#[tokio::test]
+async fn episodes_loaded_while_a_series_mark_waits_roll_back_with_it() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let libraries = browse.libraries().await.unwrap();
+    let shows = libraries
+        .iter()
+        .find(|library| library.item.id.as_str() == SHOWS_LIBRARY_ID)
+        .unwrap();
+    let grid = browse.open_library(shows, current_app::library_query(shows));
+    let series = ItemRef::new(server.clone(), ItemId::new(SERIES_ID));
+    eventually("the grid", || browse.user_state(&series).is_some()).await;
+
+    let path = format!("/UserPlayedItems/{SERIES_ID}");
+    stand_in.hold(&path);
+    browse.set_played(&series, true);
+    eventually("the request", || stand_in.count(&path) == 1).await;
+    // Only now is the series' page opened: its episodes load with the pending mark.
+    let page = browse.details(&series);
+    let episodes_played = |played: bool| {
+        let episodes = page.episodes().snapshot();
+        episodes.len() == 2 && episodes.iter().all(|episode| episode.user.played == played)
+    };
+    eventually("the page's episodes, marked", || episodes_played(true)).await;
+    stand_in.fail(&path);
+    stand_in.release(&path);
+    eventually("rolled back", || episodes_played(false)).await;
+    settle().await;
+    assert!(episodes_played(false));
+    assert!(
+        browse
+            .user_state(&series)
+            .is_some_and(|state| !state.played)
+    );
+    drop(grid);
+}
+
+/// A season read back while its series' own mark waits for the server is dropped: the season keeps showing the series' mark.
+#[tokio::test]
+async fn a_season_read_back_older_than_its_series_mark_is_dropped() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    let season_read_back = format!("/UserItems/{SEASON_ID}/UserData");
+    stand_in.hold(&season_read_back);
+    lists.toggle(EPISODE_IDS[0]);
+    eventually("the season's read-back", || {
+        stand_in.count(&season_read_back) == 1
+    })
+    .await;
+    // The series is marked played while the read-back waits, and its own request waits too.
+    let series_mark = format!("/UserPlayedItems/{SERIES_ID}");
+    stand_in.hold(&series_mark);
+    lists.toggle(SERIES_ID);
+    assert!(lists.season_played(true));
+    stand_in.release(&season_read_back);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        lists.season_played(true),
+        "the older answer (one unplayed) is dropped"
+    );
+    stand_in.release(&series_mark);
+    settle().await;
+    assert!(lists.season_played(true) && lists.series_played(true));
+}
+
+/// A read-back that fails keeps the estimate and tells the user nothing.
+#[tokio::test]
+async fn a_failed_read_back_keeps_the_estimate_without_a_notice() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    let mut notices = app.browse_notices();
+    notices.borrow_and_update();
+    let read_back = format!("/UserItems/{SERIES_ID}/UserData");
+    stand_in.fail(&read_back);
+    lists.toggle(EPISODE_IDS[0]);
+    eventually("the read-back", || stand_in.count(&read_back) == 1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Home's poster, which no reload reads again, keeps the estimate.
+    let poster = lists.latest_series().unwrap();
+    assert_eq!(poster.user.unplayed_count, Some(1), "the estimate");
+    assert!(!poster.user.played);
+    settle().await;
+    assert_eq!(lists.latest_series().unwrap().user.unplayed_count, Some(1));
+    assert!(!notices.has_changed().unwrap(), "no notice");
+}

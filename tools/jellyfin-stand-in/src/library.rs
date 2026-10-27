@@ -146,23 +146,33 @@ impl Marks {
         }
     }
 
-    /// A stop report for `id` at `position_ticks`: played when past 90 % or within a second of the end (Jellyfin's default
-    /// `MaxResumePct`, `UserDataManager.UpdatePlayState`), and last played now either way once it moved (`SessionManager
-    /// .OnPlaybackStopped`: "`if (playedToCompletion || data.PlaybackPositionTicks > 0) data.LastPlayedDate = DateTime.UtcNow`").
-    /// The stand-in keeps no resume point for library items.
+    /// A stop report for `id` at `position_ticks`, as `UserDataManager.UpdatePlayState` takes it with Jellyfin's defaults
+    /// (`ServerConfiguration`: `MinResumePct = 5`, `MaxResumePct = 90`, `MinResumeDurationSeconds = 300`; v12.2 ca0f16eb, read
+    /// 2026-10-27): below 5 % the position counts as 0 ("ignore progress during the beginning"); past 90 % or within a second of the
+    /// end, or anything of an item shorter than 300 s, it is played ("mark as completed close to the end"). It is then last played
+    /// now if it played to its end or kept a position (`SessionManager.OnPlaybackStopped`: "`if (playedToCompletion ||
+    /// data.PlaybackPositionTicks > 0) data.LastPlayedDate = DateTime.UtcNow`"). The stand-in keeps no resume point itself.
     pub(crate) fn stopped(&mut self, id: &str, position_ticks: i64, failed: bool) {
-        let Some(runtime) = find(id).and_then(runtime_ticks) else {
+        let Some(runtime) = find(id).and_then(runtime_ticks).filter(|ticks| *ticks > 0) else {
             return;
         };
         if failed || position_ticks <= 0 {
             return;
         }
-        let finished = position_ticks * 10 > runtime * 9 || position_ticks >= runtime - 10_000_000;
+        let percent = position_ticks as f64 / runtime as f64 * 100.0;
+        let finished = if percent < 5.0 {
+            false
+        } else {
+            percent > 90.0 || position_ticks >= runtime - 10_000_000 || runtime < 300 * 10_000_000
+        };
+        let kept = percent >= 5.0 && !finished;
         if finished {
             self.played.insert(id.to_owned());
         }
-        self.clock += 1;
-        self.last_played.insert(id.to_owned(), self.clock);
+        if finished || kept {
+            self.clock += 1;
+            self.last_played.insert(id.to_owned(), self.clock);
+        }
     }
 }
 
@@ -185,22 +195,24 @@ fn runtime_ticks(item: &Item) -> Option<i64> {
     digits.parse().ok()
 }
 
-/// The series' next episode, as `GET Shows/NextUp` answers: the first unplayed episode after the one played last; nothing for a
-/// series none of whose episodes was played, unless the series is asked for by id (`seriesId`; what Jellyfin answers then for a
-/// series never started is not verified: the stand-in gives its first unplayed episode).
+/// The series' next episode, as `GET Shows/NextUp` answers: the first unplayed episode after the played episode that comes last in
+/// the series' order (`NextUpService.GetNextUpEpisodesBatch`: played episodes "`OrderByDescending(e => e.ParentIndexNumber)
+/// .ThenByDescending(e => e.IndexNumber)`"), or the first unplayed one when none is played. Without `seriesId`, a series is asked
+/// for only once one of its episodes has a last-played date (`GetNextUpSeriesKeys`); with it, whatever was played (what Jellyfin
+/// answers for a series never started is not verified: the stand-in gives its first unplayed episode).
 fn next_up<'a>(marks: &Marks, by_id: bool) -> Option<&'a Item> {
     let episodes: Vec<&Item> = leaves_below(SERIES_ID).collect();
-    let last = episodes
+    let started = episodes
         .iter()
-        .enumerate()
-        .filter_map(|(at, episode)| marks.last_played.get(episode.id).map(|when| (*when, at)))
-        .max()
-        .map(|(_, at)| at);
-    let from = match last {
-        Some(at) => at + 1,
-        None if by_id => 0,
-        None => return None,
-    };
+        .any(|episode| marks.last_played.contains_key(episode.id));
+    if !started && !by_id {
+        return None;
+    }
+    // The stand-in lists its episodes in their order.
+    let from = episodes
+        .iter()
+        .rposition(|episode| marks.played.contains(episode.id))
+        .map_or(0, |at| at + 1);
     episodes
         .into_iter()
         .skip(from)

@@ -454,19 +454,21 @@ public sealed partial class DetailsPage : Page, IRefreshable
         }
     }
 
-    // The button flips its own IsChecked at once; the core's change (or its rollback) sets it again through ShowDetails. Until then
-    // it shows what the page's details show: a change the core does not make (one that leaves the page's details as they were) then
-    // never leaves the button flipped (the owner's run, 2026-10-26: a series needed two clicks on Played).
+    // The button flips its own IsChecked at once. It then shows the core's state, read at once (the page's details take the change a
+    // moment later, through the UI's queue): a click the core does not act on never leaves it flipped (the owner's run, 2026-10-26: a
+    // series needed two clicks on Played). ShowDetails sets it again when the details change.
     private void OnPlayed(object sender, RoutedEventArgs e)
     {
-        ItemActions.Toggle(_details?.Value?.Summary, played: true);
-        PlayedButton.IsChecked = _details?.Value?.Summary.User.Played ?? false;
+        var item = _details?.Value?.Summary;
+        ItemActions.Toggle(item, played: true);
+        PlayedButton.IsChecked = ItemActions.StateOf(item)?.Played ?? false;
     }
 
     private void OnFavourite(object sender, RoutedEventArgs e)
     {
-        ItemActions.Toggle(_details?.Value?.Summary, played: false);
-        FavouriteButton.IsChecked = _details?.Value?.Summary.User.Favourite ?? false;
+        var item = _details?.Value?.Summary;
+        ItemActions.Toggle(item, played: false);
+        FavouriteButton.IsChecked = ItemActions.StateOf(item)?.Favourite ?? false;
     }
 
     private void OnRetry(object sender, RoutedEventArgs e) => _view?.Refresh();

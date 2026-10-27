@@ -205,12 +205,9 @@ impl Inner {
         let since = own
             .filter(|pending| pending.played.is_some())
             .map_or(0, |pending| pending.played_seq);
-        let inherited = parents
-            .iter()
-            .filter_map(|parent| self.pending.get(parent))
-            .filter_map(|pending| pending.played.map(|played| (pending.played_seq, played)))
-            .filter(|(seq, _)| *seq > since)
-            .max_by_key(|(seq, _)| *seq);
+        let inherited = self
+            .inherited(parents, since)
+            .map(|(seq, played, _)| (seq, played));
         let since = match inherited {
             Some((seq, played)) => {
                 set_played(&mut shown, played);
@@ -228,6 +225,24 @@ impl Inner {
             shown.position = estimate.position;
         }
         shown
+    }
+}
+
+impl Inner {
+    /// The newest played change pending for one of `parents` that is newer than `since`: its sequence, the mark, and the parent.
+    fn inherited<'a>(
+        &self,
+        parents: &'a [ItemRef],
+        since: u64,
+    ) -> Option<(u64, bool, &'a ItemRef)> {
+        parents
+            .iter()
+            .filter_map(|parent| {
+                let pending = self.pending.get(parent)?;
+                Some((pending.played_seq, pending.played?, parent))
+            })
+            .filter(|(seq, _, _)| *seq > since)
+            .max_by_key(|(seq, _, _)| *seq)
     }
 }
 
@@ -251,9 +266,24 @@ impl ItemStates {
     pub(super) fn observe_under(&self, summary: &mut ItemSummary, parent: Option<&ItemRef>) {
         let mut up = parents(summary);
         up.extend(parent.cloned());
-        let inner = lock(&self.inner);
-        if let Some(pending) = inner.pending.get(&summary.item) {
+        let mut inner = lock(&self.inner);
+        let own = inner.pending.get(&summary.item);
+        if let Some(pending) = own {
             up.extend(pending.parents.iter().cloned());
+        }
+        let since = own
+            .filter(|pending| pending.played.is_some())
+            .map_or(0, |pending| pending.played_seq);
+        // Taking a parent's pending mark, the item is below it: a failure rolls it back with the items the lists showed when it was
+        // wanted.
+        if let Some((_, _, parent)) = inner.inherited(&up, since) {
+            let parent = parent.clone();
+            if let Some(pending) = inner.pending.get_mut(&parent) {
+                pending
+                    .below
+                    .entry(summary.item.clone())
+                    .or_insert_with(|| summary.clone());
+            }
         }
         summary.user = inner.shown(&summary.item, &up, summary.user.clone());
     }

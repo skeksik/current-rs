@@ -460,9 +460,13 @@ impl Context {
             }
             match answered.failure {
                 Some((name, problem)) => {
-                    // The parents showed an estimate: the server's state replaces it.
+                    // The parents showed an estimate: the server's state replaces it. The item's page and those below it read the
+                    // server again too, in case a list showed the change in a way the rollback does not reach.
                     if matches!(action, ItemAction::SetPlayed(_)) {
                         self.read_back(answered.parents.clone());
+                        let mut dependents = answered.parents.clone();
+                        dependents.push(item.clone());
+                        self.dependents_changed(dependents);
                     }
                     self.notices.raise(NoticeKind::ActionFailed {
                         action,

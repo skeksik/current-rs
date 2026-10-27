@@ -187,8 +187,8 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    (`PlaystateController.UpdatePlayedStatus`), as `GET UserItems/{id}/UserData` does (`ItemsController.GetItemUserData`). Jellyfin
    v12.2 (ca0f16eb), the same on master (02c2951e), read 2026-10-27. So:
    - **at once**, a played change on a series or season shows on every loaded episode and season below it, in every live list.
-     An episode loaded while the change is pending takes it too, unless its own change is newer, and a failure rolls them back with
-     it. A played change on an episode or season moves its loaded series' and season's unplayed count at once (one for an episode, a
+     An episode loaded while the change is pending takes it too, unless its own change is newer. A failure rolls them all back with
+     it, those loaded meanwhile included, and the item's page and its parents' read the server again a second later. A played change on an episode or season moves its loaded series' and season's unplayed count at once (one for an episode, a
      season's own count when marked played), and they show played when nothing below is unplayed;
    - **read again** with the dependent reload a second after the server answered a played change (or a stop was reported): the
      series' and season's own marks (the posters' unplayed count and progress), with `GET UserItems/{id}/UserData`. That is one
