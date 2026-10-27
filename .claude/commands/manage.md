@@ -85,6 +85,9 @@ Setup
 - Run the app with throwaway data folders so the owner's data stays untouched. Servers: throwaway local stand-ins unless the case
   needs a real server, and then the owner signs in themselves; never print or record server addresses, user names or library titles.
 - Ask the owner before downloading or installing anything, or editing files outside the worktree.
+- libmpv (Windows): use the shared build that `MPV_LIB_DIR` points at; check its `source-commit.txt` as
+  docs/notes/windows-mpv-build.md "One shared build on the owner's PC" says. Never build or download libmpv per session; if it is
+  missing or stale, ask the owner.
 
 Cases
 1. <steps and expected result>
