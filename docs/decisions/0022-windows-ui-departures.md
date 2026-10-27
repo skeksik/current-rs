@@ -39,6 +39,12 @@ Each choice below stays until the owner changes it.
    (`MediaStream.GetResolutionText`, jellyfin/jellyfin master, read 2026-10-26; ADR 0019, choice 10). Reason: the names then match the
    server's own and those of other clients of it; "1440p" is not used for now (owner, 2026-10-26).
 
+7. **The search's Catalog source shown, unavailable, without a Seerr server** (owner, 2026-10-27; ADR 0018, "Global search filters").
+   CLAUDE.md: "No feature may assume a service exists: read the capabilities state and hide what is unavailable." Reason: the app is
+   also used without Seerr, and the option should be visible. The item is disabled (it takes no focus, and Narrator reads it as
+   unavailable) and its own name says why, "Catalog (needs Seerr)", as a disabled control shows no tooltip ("It can't handle any input
+   events on itself", Control.IsEnabled, learn.microsoft.com, updated 2026-07-28, read 2026-10-27).
+
 ## Consequences
 - A review checks a new menu, title bar item or shade against this list before calling it a departure.
 - macOS and Linux decide their own; none of these carries over without the owner's choice for that platform.

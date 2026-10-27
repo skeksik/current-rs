@@ -65,12 +65,12 @@ impl From<current_app::SearchFilter> for SearchFilter {
     }
 }
 
-/// One choice of a filter: its name, whether it is the one in effect, and whether it can be chosen; `tooltip` says why not. An
-/// unavailable choice names the reason in `label` too: a disabled menu item shows no tooltip.
+/// One choice of a filter: its name, whether it is the one in effect (`chosen`; not `checked`, a C# keyword), and whether it can be
+/// chosen; `tooltip` says why not. An unavailable choice names the reason in `label` too: a disabled menu item shows no tooltip.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct SearchChoice {
     pub label: String,
-    pub checked: bool,
+    pub chosen: bool,
     pub enabled: bool,
     pub tooltip: Option<String>,
 }
@@ -79,7 +79,7 @@ impl From<current_app::SearchChoice> for SearchChoice {
     fn from(choice: current_app::SearchChoice) -> Self {
         Self {
             label: choice.label,
-            checked: choice.checked,
+            chosen: choice.checked,
             enabled: choice.enabled,
             tooltip: choice.tooltip,
         }
@@ -218,17 +218,17 @@ mod tests {
         let types: Vec<_> = tools.types.iter().map(|t| t.kind.as_deref()).collect();
         assert_eq!(types, [None, Some("movie"), Some("series"), Some("person")]);
         assert_eq!(tools.types[3].choice.label, "People");
-        assert!(tools.types[3].choice.checked);
+        assert!(tools.types[3].choice.chosen);
         let catalog = &tools.sources[2];
         assert_eq!(catalog.source, SearchSource::Catalog);
-        assert!(!catalog.choice.enabled && !catalog.choice.checked);
+        assert!(!catalog.choice.enabled && !catalog.choice.chosen);
         assert_eq!(catalog.choice.label, current_app::CATALOG_NEEDS_SEERR_LABEL);
         assert_eq!(
             catalog.choice.tooltip.as_deref(),
             Some(current_app::CATALOG_NEEDS_SEERR)
         );
         // Without the catalog, every source is the one in effect.
-        assert!(tools.sources[0].choice.checked);
+        assert!(tools.sources[0].choice.chosen);
     }
 
     #[test]

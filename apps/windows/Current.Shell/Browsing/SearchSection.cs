@@ -17,10 +17,13 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
     private readonly ValueSubscription<LoadState> _state;
 
     /// <param name="link">The view a row's header opens with the row's kind (the Favourites tab's rows); null for a search.</param>
-    internal SearchSection(string header, SearchResults results, IUiDispatcher ui, string? link = null)
+    /// <param name="filter">A search's filters, for the line under a full group and whether one type wraps; null for the Favourites
+    /// tab.</param>
+    internal SearchSection(string header, SearchResults results, IUiDispatcher ui, string? link = null, SearchFilter? filter = null)
     {
         Header = header;
         _link = link;
+        _filter = filter;
         _results = results;
         _ui = ui;
         _groups = results.ObserveGroups(ui);
@@ -35,6 +38,39 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
     public string Header { get; }
 
     private readonly string? _link;
+    private readonly SearchFilter? _filter;
+
+    /// <summary>The search page's View (owner, 2026-10-27, as a library grid's): wide pictures, and whether tiles show their titles.</summary>
+    private bool _wide;
+    private bool _titles = true;
+
+    /// <summary>
+    /// Shows every row with the View's tiles. A row keeps its list but not its cards, so its template changes: the rows are made again
+    /// from the core's groups, without searching again.
+    /// </summary>
+    internal void SetView(bool wide, bool titles)
+    {
+        if (wide == _wide && titles == _titles)
+        {
+            return;
+        }
+        (_wide, _titles) = (wide, titles);
+        foreach (var row in Rows)
+        {
+            row.Dispose();
+        }
+        Rows.Clear();
+        SyncGroups();
+    }
+
+    /// <summary>
+    /// The tiles of a row of <paramref name="kind"/>: people as cast cards, whatever the view; episodes and videos wide, as before;
+    /// the rest posters or wide as the View says, with or without their titles.
+    /// </summary>
+    private string TemplateFor(string kind) =>
+        kind == "person" ? "PersonTileTemplate"
+        : (_wide || kind is "episode" or "video") ? (_titles ? "WideTileTemplate" : "WidePictureTemplate")
+        : _titles ? "PosterTileTemplate" : "PosterPictureTemplate";
 
     public Visibility HeaderVisibility => Header.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
@@ -68,6 +104,9 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
                     View = _link,
                     Kind = _link is null ? null : kind,
                     HeaderLinkTip = _link is null ? "" : BrowseText.ViewLinkTip(_link, kind),
+                    ItemTemplate = (DataTemplate)Application.Current.Resources[TemplateFor(kind)],
+                    Wraps = _filter?.Kind is not null,
+                    NoteFor = _filter is { } filter ? count => filter.Note(count) : null,
                 };
                 Rows.Insert(position, existing);
             }

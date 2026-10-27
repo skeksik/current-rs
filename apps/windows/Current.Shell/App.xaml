@@ -103,6 +103,10 @@
             <DataTemplate x:Key="WidePictureTemplate">
                 <browsing:ItemTile Shape="Wide" ShowsText="False" TileWidth="{StaticResource WideTileWidth}" />
             </DataTemplate>
+            <!-- A search's People: the cast card a details page shows, a round picture and the name, whatever the view. -->
+            <DataTemplate x:Key="PersonTileTemplate">
+                <browsing:PersonCard />
+            </DataTemplate>
             <DataTemplate x:Key="EpisodeTileTemplate">
                 <browsing:ItemTile Shape="Wide" ShowsSeries="False" TileWidth="{StaticResource WideTileWidth}" />
             </DataTemplate>

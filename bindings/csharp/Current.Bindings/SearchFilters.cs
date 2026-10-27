@@ -109,7 +109,7 @@ internal static class SearchMap
         _ => SearchSource.All,
     };
 
-    private static SearchChoice From(Ffi.SearchChoice choice) => new(choice.Label, choice.Checked, choice.Enabled, choice.Tooltip);
+    private static SearchChoice From(Ffi.SearchChoice choice) => new(choice.Label, choice.Chosen, choice.Enabled, choice.Tooltip);
 
     public static SearchTools From(Ffi.SearchTools tools) => new(
         Array.ConvertAll(tools.Types, choice => new SearchTypeChoice(choice.Kind, From(choice.Choice))),

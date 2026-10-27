@@ -11,7 +11,7 @@ namespace Current.Shell.Browsing;
 /// thread. Public, because x:DataType needs a public type.
 /// </summary>
 public sealed class TileRow(string key, string title, ListSubscription<ItemSummary> items, bool wide, ItemRef? library = null)
-    : IDisposable
+    : IDisposable, INotifyPropertyChanged
 {
     public string Key { get; } = key;
 
@@ -38,9 +38,41 @@ public sealed class TileRow(string key, string title, ListSubscription<ItemSumma
 
     internal ListSubscription<ItemSummary> Subscription { get; } = items;
 
-    /// <summary>Wide tiles (16:9) for rows of episodes, posters otherwise.</summary>
-    public DataTemplate ItemTemplate { get; } =
+    /// <summary>Wide tiles (16:9) for rows of episodes, posters otherwise, unless the row names its own (a search's view).</summary>
+    public DataTemplate ItemTemplate { get; init; } =
         (DataTemplate)Application.Current.Resources[wide ? "WideTileTemplate" : "PosterTileTemplate"];
+
+    /// <summary>Whether the tiles wrap into a grid of rows rather than scroll sideways: a search narrowed to one type.</summary>
+    public bool Wraps { get; init; }
+
+    /// <summary>
+    /// The line under the header from the item count (a search group's: once it is full, only the best matches show; the core's
+    /// SearchFilter.Note); null for none.
+    /// </summary>
+    public Func<int, string?>? NoteFor
+    {
+        get => _noteFor;
+        init
+        {
+            _noteFor = value;
+            if (value is not null)
+            {
+                Items.CollectionChanged += (_, _) =>
+                {
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Note)));
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NoteVisibility)));
+                };
+            }
+        }
+    }
+
+    private readonly Func<int, string?>? _noteFor;
+
+    public string Note => _noteFor?.Invoke(Items.Count) ?? "";
+
+    public Visibility NoteVisibility => Note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
 
     public void Dispose()
     {

@@ -1,6 +1,9 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using Current.Bindings;
 using Current.Shell.Browsing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 
@@ -10,7 +13,9 @@ namespace Current.Shell.Pages;
 /// The results of a search from the navigation's search box: every signed-in server's best matches, grouped by kind (ADR 0018). The
 /// searches are the core's, kept with the page's history entry (BrowseHub.Search): Back shows the results the page had. The
 /// Favourites tab (a <see cref="ViewArgs"/>) shows its rows the same way, a row per kind whose header opens that kind's whole list
-/// (owner, 2026-10-27); they are kept with the server's browse, as Home's rows are.
+/// (owner, 2026-10-27); they are kept with the server's browse, as Home's rows are. A search has Filter (type and source) and View
+/// (owner, 2026-10-26 and 2026-10-27; ADR 0018, "Global search filters"): the choices are the core's, kept with the history entry
+/// and, while Settings remembers filters or views, for the next search.
 /// </summary>
 public sealed partial class SearchPage : Page, IRefreshable
 {
@@ -52,12 +57,168 @@ public sealed partial class SearchPage : Page, IRefreshable
         {
             return;
         }
-        foreach (var section in hub.Search(e.Parameter!, term))
+        _args = e.Parameter;
+        _term = term;
+        // A new search opens with the filters and view last chosen, each while Settings remembers it (the core's rule); one shown
+        // again (Back) keeps its own.
+        var remembered = App.Core?.SearchChoices;
+        _kept = hub.Search(e.Parameter!, term, remembered?.Filter ?? new SearchFilter(),
+            remembered?.View?.Tile == LibraryView.Wide, remembered?.View?.ShowTitles ?? true);
+        foreach (var section in _kept.Sections)
         {
             Add(section);
         }
+        Tools.Visibility = Visibility.Visible;
+        ShowFilterMenu();
+        ShowViewChecks();
         ShowStatus();
     }
+
+    /// <summary>The search shown, kept with its history entry (<see cref="_args"/>); null for the Favourites tab.</summary>
+    private KeptSearch? _kept;
+    private object? _args;
+    private string _term = "";
+
+    // Glyphs from Segoe Fluent Icons ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-27): E8A9
+    // "ViewAll", E8B2 "Movies" and E7F4 "TVMonitor" as the Recently added tab's types (LibraryPage), E716 "People", E8F1 "Library" and
+    // E719 "Shop" for the catalog. Every item has one (ADR 0022, choice 1).
+    private static string? TypeGlyph(string? kind) => kind switch
+    {
+        null => "\uE8A9",
+        "movie" => "\uE8B2",
+        "series" => "\uE7F4",
+        "person" => "\uE716",
+        _ => null,
+    };
+
+    private static string SourceGlyph(SearchSource source) => source switch
+    {
+        SearchSource.Library => "\uE8F1",
+        SearchSource.Catalog => "\uE719",
+        _ => "\uE8A9",
+    };
+
+    /// <summary>The capabilities can change while the page shows (a server signed in): the menu is the core's answer of now.</summary>
+    private void OnFilterMenuOpening(object? sender, object e) => ShowFilterMenu();
+
+    /// <summary>
+    /// The Filter menu from the core's choices: the types, a separator, the sources. An unavailable choice (the catalog without a
+    /// Seerr server) is disabled, so it takes no focus and Narrator reads it as unavailable; its name says why, as a disabled item
+    /// shows no tooltip: "It can't handle any input events on itself" (Control.IsEnabled, learn.microsoft.com, updated 2026-07-28,
+    /// read 2026-10-27), and the tooltip opens on its owner's pointer and focus events (ToolTipService_Partial.cpp, microsoft-ui-xaml
+    /// main, d8ab5708, read 2026-10-27). The tooltip is set anyway, for when it does show.
+    /// </summary>
+    private void ShowFilterMenu()
+    {
+        if (_kept is null || App.Core is not { } core)
+        {
+            return;
+        }
+        var current = _kept.Filter;
+        var tools = core.SearchToolsFor(current);
+        FilterMenu.Items.Clear();
+        foreach (var type in tools.Types)
+        {
+            var kind = type.Kind;
+            FilterMenu.Items.Add(FilterItem(type.Choice, TypeGlyph(kind), "type", () => Refilter(current with { Kind = kind })));
+        }
+        FilterMenu.Items.Add(new MenuFlyoutSeparator());
+        foreach (var source in tools.Sources)
+        {
+            var chosen = source.Source;
+            FilterMenu.Items.Add(FilterItem(source.Choice, SourceGlyph(chosen), "source",
+                () => Refilter(current with { Source = chosen })));
+        }
+    }
+
+    private static RadioMenuFlyoutItem FilterItem(SearchChoice choice, string? glyph, string group, Action chosen)
+    {
+        var item = new RadioMenuFlyoutItem
+        {
+            Text = choice.Label,
+            GroupName = group,
+            IsChecked = choice.Checked,
+            IsEnabled = choice.Enabled,
+            Icon = glyph is null ? null : new FontIcon { Glyph = glyph },
+        };
+        if (choice.Tooltip is { } tip)
+        {
+            ToolTipService.SetToolTip(item, tip);
+            AutomationProperties.SetHelpText(item, tip);
+        }
+        item.Click += (_, _) => chosen();
+        return item;
+    }
+
+    /// <summary>The search again with <paramref name="filter"/> (a new type or source), remembered while Settings remembers filters.</summary>
+    private void Refilter(SearchFilter filter)
+    {
+        if (_kept is null || _args is null || App.Browsing is not { } hub || filter == _kept.Filter)
+        {
+            return;
+        }
+        Release();
+        _kept = hub.Refilter(_args, _term, filter);
+        foreach (var section in _kept.Sections)
+        {
+            Add(section);
+        }
+        ShowFilterMenu();
+        ShowStatus();
+        Remember(new SearchChoices(Filter: filter));
+    }
+
+    /// <summary>The View menu's checks for the search's view.</summary>
+    private void ShowViewChecks()
+    {
+        if (_kept is null)
+        {
+            return;
+        }
+        PosterItem.IsChecked = !_kept.Wide;
+        WideItem.IsChecked = _kept.Wide;
+        TitlesItem.IsChecked = _kept.Titles;
+    }
+
+    private void OnViewChosen(object sender, RoutedEventArgs e)
+    {
+        if (_kept is null)
+        {
+            return;
+        }
+        _kept.SetView(WideItem.IsChecked, TitlesItem.IsChecked);
+        ShowViewChecks();
+        Remember(new SearchChoices(View: new LibraryView(_kept.Wide ? LibraryView.Wide : LibraryView.Poster, _kept.Titles)));
+    }
+
+    /// <summary>Tells the core what the user chose; it keeps each part only while Settings remembers it. A failed save is only traced.</summary>
+    private static async void Remember(SearchChoices choices)
+    {
+        if (App.Core is not { } core)
+        {
+            return;
+        }
+        try
+        {
+            await core.RememberSearchChoicesAsync(choices);
+        }
+        catch (Exception error)
+        {
+            Trace.TraceWarning($"Current: the search page's choices were not remembered: {error.GetType().Name}");
+        }
+    }
+
+    /// <summary>Narrows the search to one type, as its Filter item does (the smoke run).</summary>
+    internal void FilterTo(string? kind)
+    {
+        if (_kept is not null)
+        {
+            Refilter(_kept.Filter with { Kind = kind });
+        }
+    }
+
+    /// <summary>The kinds of the rows shown now, in order (the smoke run).</summary>
+    internal IReadOnlyList<string> RowKinds => [.. _sections.SelectMany(section => section.Rows).Select(row => row.Key)];
 
     private void Add(SearchSection section)
     {
@@ -154,7 +315,24 @@ public sealed partial class SearchPage : Page, IRefreshable
     {
         if (sender is ListViewBase list)
         {
-            HomeSection.AttachOnce(list, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
+            // A row scrolls sideways; a search narrowed to one type wraps its tiles, the page scrolling them (the panel is set before
+            // the items, which StableSource sets).
+            var wraps = list.DataContext is TileRow { Wraps: true };
+            list.ItemsPanel = (ItemsPanelTemplate)Resources[wraps ? "WrapPanel" : "RowPanel"];
+            ScrollViewer.SetHorizontalScrollMode(list, wraps ? ScrollMode.Disabled : ScrollMode.Enabled);
+            ScrollViewer.SetHorizontalScrollBarVisibility(list, wraps ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto);
+            // A person opens their films and series; anything else its details.
+            HomeSection.AttachOnce(list, item =>
+            {
+                if (item.Kind == "person")
+                {
+                    Frame.Navigate(typeof(LibraryPage), new PersonArgs(item.Item, item.Name));
+                }
+                else
+                {
+                    Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item));
+                }
+            });
             StableSource.Follow<TileRow>(list, row => (row.Items, row.ItemTemplate));
         }
     }

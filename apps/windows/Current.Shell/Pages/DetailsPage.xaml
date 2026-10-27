@@ -127,10 +127,13 @@
                 <StackPanel x:Name="PeoplePart" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="Cast and crew" />
                     <!-- The bottom padding keeps the scroll bar 4 below the cards, as on Home (HomePage.xaml). -->
+                    <!-- A card opens the person's titles (owner, 2026-10-27), as a tile opens its item: ItemClick with SelectionMode None. -->
                     <GridView
                         x:Name="People"
                         Padding="0,0,0,16"
                         SelectionMode="None"
+                        IsItemClickEnabled="True"
+                        ItemClick="OnPersonClick"
                         ItemTemplate="{StaticResource PersonTemplate}"
                         ItemsPanel="{StaticResource RowPanel}"
                         ScrollViewer.HorizontalScrollMode="Enabled"

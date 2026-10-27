@@ -7,7 +7,8 @@ namespace Current.Shell.Browsing;
 
 /// <summary>
 /// One person of a detail page's cast and crew: the platform's PersonPicture, the name and the role. Bound to a <see cref="Person"/>
-/// through its DataContext, as a tile is; it names itself for Narrator ("name, role").
+/// through its DataContext, as a tile is; it names itself for Narrator ("name, role"). A search's People bind it to a tile's slot, a
+/// person's item summary: its name and picture, no role.
 /// </summary>
 public sealed partial class PersonCard : UserControl
 {
@@ -30,7 +31,14 @@ public sealed partial class PersonCard : UserControl
 
     private void Bind()
     {
-        if (DataContext is not Person person)
+        var person = DataContext switch
+        {
+            Person cast => cast,
+            GridSlot { Summary: { } summary } => new Person(
+                summary.Item, summary.Name, null, "", summary.Artwork.FirstOrDefault(art => art.Kind == "primary")),
+            _ => null,
+        };
+        if (person is null)
         {
             _loader.Recycle();
             _shown = null;

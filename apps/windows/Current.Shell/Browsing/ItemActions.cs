@@ -75,7 +75,8 @@ internal static class ItemActions
         {
             if (!args.InRecycleQueue)
             {
-                args.ItemContainer.ContextFlyout = SummaryOf(args.Item) is null ? null : menu;
+                // A person has nothing to play or mark played: no menu (a search's People).
+                args.ItemContainer.ContextFlyout = SummaryOf(args.Item) is { Kind: not "person" } ? menu : null;
             }
         };
     }
