@@ -130,15 +130,14 @@ Local sessions don't build or download libmpv each time. The owner's PC keeps on
   on its checkout. When they match, it uses the build as it is. When they differ, the build is stale: the session tells the owner
   and, with their agreement, replaces it once (unpack the `libmpv-windows-x64` artifact of the current `mpv-windows` run, or
   rebuild as above) and rewrites `source-commit.txt`. Never one build per session or per worktree.
-- **Running the libmpv tests:** linking needs only `MPV_LIB_DIR`, but the test executables load the DLLs at run time, so put
-  the build's `bin` on `PATH` for that terminal only, and openssl as CLAUDE.md asks (Git for Windows ships one):
-  `$env:PATH = "$(Split-Path $env:MPV_LIB_DIR)\bin;C:\Program Files\Git\usr\bin;$env:PATH"`. Without the `bin` folder the test
-  starts with 0xc0000135 (DLL not found). CI does the same through `GITHUB_PATH`. The DLLs are not put on the user's `PATH`: other
-  programs would load them too. `apps/windows/build.ps1` copies them next to `Current.exe` itself.
-- **New terminals only:** a terminal or session started before `MPV_LIB_DIR` was set doesn't see it. The desktop app's terminal
+- **Running the libmpv tests:** linking needs `MPV_LIB_DIR`, and the test executables load the DLLs at run time, so the
+  build's `bin` folder is on the user's `PATH` too (owner, 2026-10-27; appended at the end, so other programs' own DLLs come
+  first). Without it a test starts with 0xc0000135 (DLL not found). CI does the same through `GITHUB_PATH`. openssl, which
+  CLAUDE.md asks for, was already on that `PATH`. `apps/windows/build.ps1` copies the DLLs next to `Current.exe` itself.
+- **New terminals only:** a terminal or session started before these were set doesn't see them. The desktop app's terminal
   tabs inherit the app's environment from when it started, so restart the app after setting the variable.
 - Set up on the owner's PC on 2026-10-27: `C:\mpvb\out`, `source-commit.txt` 8a7ec71 (the `libmpv-windows-x64` artifact of
-  main's `mpv-windows` run 39826795669, all 49 files compared by SHA-256), `MPV_LIB_DIR` set for the user.
+  main's `mpv-windows` run 39826795669, all 49 files compared by SHA-256), `MPV_LIB_DIR` and `C:\mpvb\out\bin` on `PATH` set for the user.
 - A session never deletes or moves the shared build, and never changes `MPV_LIB_DIR`, without the owner's agreement.
 
 ## Publishing the corresponding source (ADR 0003)
