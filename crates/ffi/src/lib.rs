@@ -54,6 +54,10 @@ pub use browse::{
     time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
     view_title,
 };
+pub use browse::{
+    DetailsFacts, action_failed_title, failed_tile_name, library_gone_message, library_gone_title,
+    loading_tile_name, person_kind_name, tile_name, tile_subtitle, tile_title,
+};
 pub use cancel::CancelToken;
 pub use error::CoreError;
 pub use flows::{

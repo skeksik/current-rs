@@ -11,6 +11,7 @@ mod problems;
 mod records;
 mod remember;
 mod search_filter;
+mod texts;
 mod views;
 
 use std::sync::Arc;
@@ -32,6 +33,10 @@ pub use remember::{LibraryChoices, LibraryMemorySettings, LibraryView};
 pub use search_filter::{
     SearchChoice, SearchChoices, SearchFilter, SearchSource, SearchSourceChoice, SearchTools,
     SearchTypeChoice, person_query, search_note, search_result_display,
+};
+pub use texts::{
+    DetailsFacts, action_failed_title, failed_tile_name, library_gone_message, library_gone_title,
+    loading_tile_name, person_kind_name, tile_name, tile_subtitle, tile_title,
 };
 pub use views::{
     BrowseView, FilterMenu, GridOpening, ItemOpens, RowDisplay, RowLink, RowNote, RowTarget,
