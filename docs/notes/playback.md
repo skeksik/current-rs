@@ -92,6 +92,53 @@ Enums are serialised as strings (`src/Jellyfin.Extensions/Json/JsonDefaults.cs` 
 - **Sorting** (`SortMediaSources`): the queried item's own source first ("must stay the default the client plays"), then direct-play
   files, then direct play or stream, then local files, then bitrate under the limit.
 
+### How the server names a step (the quality menu, ADR 0019 choice 10)
+jellyfin/jellyfin v12.2 (commit ca0f16eb), read 2026-10-27; `master` (02c2951e, 2026-10-26) is the same in every file below.
+`current-playback`'s `quality_options` reproduces this chain for each step, the step being the request's `MaxStreamingBitrate`.
+- **Audio share** (`MediaBrowser.Model/Dlna/StreamBuilder.cs`, `BuildStreamVideoItem`, `GetAudioBitrate`): once the step limits the
+  source the audio is never copied ("directAudioStreamSatisfied = directAudioStreamSatisfied &&
+  !playlistItem.TranscodeReasons.HasFlag(TranscodeReason.ContainerBitrateExceedsLimit);"). The target codec is the track's own when
+  the transcoding profile lists it, else the profile's list (`StreamInfo.TargetAudioCodec`). The downmix and other-codec branches
+  need a target channel count (`GlobalMaxAudioChannels ?? TranscodingMaxAudioChannels`); Current sends none, so the server takes
+  "defaultBitrate = audioStream.BitRate ?? GetDefaultAudioBitrate(targetAudioCodec, targetAudioChannels);", where no channel count
+  gives 128 kbit/s for AAC, MP3, AC-3 and E-AC-3, 768 for FLAC and ALAC, 192 otherwise (`GetDefaultAudioBitrate`). A mono track
+  under 64 kbit/s: "Any attempts to transcode over 64k will fail". Then "defaultBitrate =
+  Math.Min(GetMaxAudioBitrateForTotalBitrate(maxTotalBitrate), defaultBitrate);": up to 640 kbit/s 128, 2 Mbit/s 384, 3 448,
+  4 640, 5 768, 10 1536, 15 2304, 20 3584, else 7168 kbit/s.
+- **Video share** (same function): "Make sure the video bitrate is lower than bitrate settings but at least 64k":
+  `playlistItem.VideoBitrate = Math.Max(Math.Min(availableBitrateForVideo, currentValue), 64_000);`, the step less the audio share.
+- **Encoded bitrate** (`MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs`, `GetVideoBitrateParamValue`, called from
+  `Jellyfin.Api/Helpers/StreamingHelpers.cs`, `GetStreamingState`): "Don't allow bitrate increases unless upscaling":
+  `GetMinBitrate` takes the lower of the request and the source's video bitrate, raised ×2.5 up to 2 Mbit/s and ×2 up to 3 ("these
+  values were chosen from testing to improve low bitrate streams"); `GetBitDepthCompensatedBitrate` raises it for a source above
+  8 bits; `ScaleBitrate` for the codecs; then "If a max bitrate was requested, don't let the scaled bitrate exceed it". So the
+  encoded bitrate is the video share unless a small source's own is below it.
+  It also caps the result at 400 Mbit/s ("const int MaxSaneBitrate = 400_000_000;"), far above every step, so it is not modelled.
+- **Codec factor and low-bitrate boost** (`EncodingHelper.ScaleBitrate`, `GetVideoBitrateScaleFactor`): "hevc & vp9 - 40% more
+  efficient than h.264" (0.6), "av1 - 50% more efficient than h.264" (0.5); "Don't scale the real bitrate lower than the requested
+  bitrate" (`Math.Max(outputScaleFactor / inputScaleFactor, 1)`); at least ×4 up to 500 kbit/s, ×3 up to 1 Mbit/s, ×2.5 up to 2,
+  ×2 up to 3; from 30 Mbit/s ×1 ("Don't scale beyond 30Mbps"). For the resolution, `GetStreamingState` calls
+  `EncodingHelper.ScaleBitrate(state.OutputVideoBitrate.Value, state.ActualOutputVideoCodec, "h264")`: HEVC output counts ×1/0.6,
+  H.264 output ×1, so the source's codec plays no part then.
+- **Output codec**: the device profile asks for `hevc,h264`, but `EncodingHelper.ShiftVideoCodecsIfNeeded` moves HEVC to the end
+  "if it's not allowed" (`!encodingOptions.AllowHevcEncoding`), and `MediaBrowser.Model/Configuration/EncodingOptions.cs` has
+  "AllowHevcEncoding = false;". A default server encodes H.264; its session's transcoding information says which it used.
+- **Frame-rate factor** (`MediaBrowser.Model/Dlna/ResolutionNormalizer.cs`, `Normalize`): "Our reference bitrate is based on SDR h264
+  at 30fps": `referenceFps <= 30.0f ? 30.0f / referenceFps : 1.0f / MathF.Sqrt(referenceFps / 30.0f)`, with `targetFps ?? 30.0f`.
+  The rate is `TargetFramerate`, the URL's `MaxFramerate`, which `StreamBuilder` sets to the source's `ReferenceFrameRate`
+  (`MediaStream.cs`: "return AverageFrameRate < 1000 ? AverageFrameRate : RealFrameRate;"). `isHdr` is never passed ("We are not
+  doing HDR transcoding for now, leave for future use"), so HDR changes nothing.
+- **Width** (`ResolutionNormalizer`): "all bitrate here are in the scale of SDR h264 bitrate at 30fps": 416 up to 365 kbit/s, 640 to
+  730, 768 to 1.1 Mbit/s, 960 to 3, 1280 to 6, 1920 to 13.5, 2560 to 28, 3840 to 50; above, no width.
+  `maxWidth = Math.Min(resolutionConfig.MaxWidth, maxWidth ?? resolutionConfig.MaxWidth)`. Before it, `GetStreamingState` keeps the
+  source's size when no size was asked for and "the requested video bitrate is greater than source video bitrate".
+- **Never upscaled** (`EncodingHelper.GetSwScaleFilter`, a maximum width only):
+  `scale=trunc(min(max(iw\,ih*a)\,{maxWidth})/2)*2:trunc(ow/a/2)*2`: never wider than the source's display width, the height in
+  proportion. A 2.39:1 film at the 1280 cap is 1280 × 536, which `GetResolutionText` calls 720p.
+- **Not modelled**: the server's limit for internet addresses (`RemoteClientBitrateLimit`, which lowers the step); a stream's pixel
+  aspect (Current assumes square pixels); which of Current's two transcoding profiles the server ranks first (the audio codec list is
+  both profiles'; it matters only for a track whose bitrate the server does not know).
+
 ### The answer
 `PlaybackInfoResponse`: `MediaSources[]`, `PlaySessionId`, `ErrorCode`. Each `MediaSourceInfo` (`MediaBrowser.Model/Dto/MediaSourceInfo.cs`)
 carries among others `Id`, `Protocol`, `Container`, `Size`, `Name`, `IsRemote`, `ETag`, `RunTimeTicks`, `SupportsDirectPlay`,

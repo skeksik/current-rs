@@ -307,8 +307,11 @@ async fn direct_play_builds_the_static_url_and_sends_the_profile() {
     );
     assert_eq!(facts.range_type, Some(VideoRangeType::DOVI_WITH_HDR10));
     assert_eq!(facts.dv_profile, Some(8));
+    assert_eq!(facts.reference_frame_rate, Some(23.976_025));
+    assert_eq!(video.bitrate, Some(50_000_000));
     let audio = source.stream(1).unwrap();
     assert_eq!(audio.kind, StreamKind::AUDIO);
+    assert_eq!(audio.bitrate, Some(640_000));
     assert_eq!(audio.audio.as_ref().unwrap().channels, Some(6));
     assert_eq!(audio.language.as_deref(), Some("eng"));
     assert_eq!(source.stream(2).unwrap().codec, Some(Codec::new("PGSSUB")));

@@ -67,12 +67,12 @@ internal static class PlayerTests
     {
         using var core = CoreHost.Create();
         var menu = core.QualityMenu(null, new QualityChoice.Maximum(), withResolution: true);
-        Check(menu.Select(entry => entry.Label).SequenceEqual(["Original", "40 Mbit/s", "20 Mbit/s", "4 Mbit/s", "1 Mbit/s"]),
+        Check(menu.Select(entry => entry.Label).SequenceEqual(["Original", "40 Mbit/s", "20 Mbit/s", "10 Mbit/s", "4 Mbit/s", "1 Mbit/s"]),
             $"Original and the steps before the core named them, not {string.Join(", ", menu.Select(entry => entry.Label))}");
         Check(menu[0].Checked && menu.Count(entry => entry.Checked) == 1, "Original checked");
-        var limited = core.QualityMenu(null, new QualityChoice.Bitrate(10_000_000), withResolution: true);
-        Check(limited.Count == 6 && limited[3] is { Label: "10 Mbit/s", Checked: true }
-            && limited[3].Option.Quality == new QualityChoice.Bitrate(10_000_000), "a limit between the steps listed and checked");
+        var limited = core.QualityMenu(null, new QualityChoice.Bitrate(15_000_000), withResolution: true);
+        Check(limited.Count == 7 && limited[3] is { Label: "15 Mbit/s", Checked: true }
+            && limited[3].Option.Quality == new QualityChoice.Bitrate(15_000_000), "a limit between the steps listed and checked");
         var original = new QualityOption(new QualityChoice.Maximum(), "4K", 26_100_000);
         var named = core.QualityMenu([original], new QualityChoice.Maximum(), withResolution: true);
         Check(named.Single().Label == "Original · 4K · 26.1 Mbit/s", $"the core's names, not {named.Single().Label}");
@@ -330,9 +330,9 @@ internal static class PlayerTests
         Check(core.PlaybackSettings().PreferredQuality == new QualityChoice.Maximum(), "Maximum preferred by default");
         await core.SetPreferredQualityAsync(new QualityChoice.Bitrate(20_000_000));
         Check(core.PlaybackSettings().PreferredQuality == new QualityChoice.Bitrate(20_000_000), "20 Mbit/s preferred");
-        await core.SetPreferredQualityAsync(new QualityChoice.Bitrate(10_000_000));
-        Check(core.PlaybackSettings().PreferredQuality == new QualityChoice.Bitrate(4_000_000),
-            "10 Mbit/s, which the short list lacks, stored as the nearest listed step not above it");
+        await core.SetPreferredQualityAsync(new QualityChoice.Bitrate(15_000_000));
+        Check(core.PlaybackSettings().PreferredQuality == new QualityChoice.Bitrate(10_000_000),
+            "15 Mbit/s, which the short list lacks, stored as the nearest listed step not above it");
         await core.SetPreferredQualityAsync(new QualityChoice.Maximum());
         Check(core.PlaybackSettings().PreferredQuality == new QualityChoice.Maximum(), "Maximum preferred again");
         await core.SetShowQualityResolutionAsync(false);

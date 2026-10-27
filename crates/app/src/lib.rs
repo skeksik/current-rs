@@ -91,11 +91,31 @@ pub use player::{
     player_problem_text, position_label, reason_text, remaining_label, route_name, skip_label,
     spoken_time, time_label, track_name,
 };
+/// What the server would convert the version `details` plays to, for naming its quality menu's steps ([`App::quality_options`]): the
+/// audio track playing, and the video codec the server reports it encodes to. Only a transcode's codec says what the server picks; a
+/// copied video's is the source's, so H.264, the server's default, stands then.
+fn quality_target<'a>(
+    details: Option<&'a playback::PlaybackDetails>,
+    audio_codecs: &'a [current_model::Codec],
+) -> playback::QualityTarget<'a> {
+    playback::QualityTarget {
+        audio: details
+            .and_then(|details| details.plan.as_ref())
+            .and_then(|plan| plan.tracks.audio),
+        video_codec: details
+            .and_then(|details| details.transcoding.as_ref())
+            .filter(|facts| !facts.video_direct)
+            .and_then(|facts| facts.video_codec.as_ref()),
+        audio_codecs,
+    }
+}
+
 /// `current-playback`'s values that the player publishes.
 pub mod playback {
     pub use current_playback::{
         AutoSkip, NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, QualityOption,
-        QualityPreference, Track, preferred_quality_options, quality_options, snap_quality,
+        QualityPreference, QualityTarget, Track, preferred_quality_options, quality_options,
+        snap_quality,
     };
 }
 pub use problems::{
@@ -542,6 +562,23 @@ impl App {
         self.playback.set_quality_resolution(&self.shared, on)
     }
 
+    /// The quality menu for the version `info` plays (`current_playback::quality_options`, `all` as there), each step named by the
+    /// picture the server would send this file at (ADR 0019, choice 10, "Names"): with the audio track playing, the audio codecs the
+    /// device profile lists for the engine, and the video codec the server reports it encodes to, else H.264, its default. So the
+    /// names can change once playback has started. Before a version is planned, every step by its width cap.
+    pub fn quality_options(&self, info: &PlaybackInfo, all: bool) -> Vec<playback::QualityOption> {
+        let audio_codecs = self
+            .engine_capabilities
+            .known()
+            .map(|capabilities| current_jellyfin::transcode_targets(&capabilities).audio)
+            .unwrap_or_default();
+        let details = info.details.as_ref();
+        let source = details
+            .and_then(|details| details.plan.as_ref())
+            .map(|plan| &plan.source);
+        playback::quality_options(source, &quality_target(details, &audio_codecs), all)
+    }
+
     /// Settings → Playback's "Show all quality options": whether the quality menu lists every step below the original's bitrate, not
     /// only the common ones (`current_playback::quality_options`); off by default.
     pub fn quality_all(&self) -> bool {
@@ -784,6 +821,34 @@ mod tests {
 
     fn jellyfin() -> ServerRef {
         ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1"))
+    }
+
+    #[test]
+    fn the_quality_names_follow_the_codec_the_server_transcodes_to() {
+        use current_model::{Codec, TranscodingFacts};
+        let details = |video_direct| playback::PlaybackDetails {
+            plan: None,
+            notes: Vec::new(),
+            transcoding: Some(TranscodingFacts {
+                video_direct,
+                video_codec: Some(if video_direct {
+                    Codec::AV1
+                } else {
+                    Codec::HEVC
+                }),
+                ..TranscodingFacts::default()
+            }),
+        };
+        let audio = [Codec::AAC];
+        let transcoded = details(false);
+        let target = quality_target(Some(&transcoded), &audio);
+        assert_eq!(target.video_codec, Some(&Codec::HEVC));
+        assert_eq!(target.audio_codecs, &audio);
+        // A copied video's codec is the source's, not one the server picked: H.264 (`None`) stands.
+        let copied = details(true);
+        assert_eq!(quality_target(Some(&copied), &audio).video_codec, None);
+        let before = quality_target(None, &audio);
+        assert_eq!((before.audio, before.video_codec), (None, None));
     }
 
     #[test]

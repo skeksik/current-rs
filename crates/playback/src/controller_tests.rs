@@ -998,10 +998,10 @@ fn play_preferring(preferred: Quality, all: bool) -> (Harness, Vec<crate::server
 
 #[test]
 fn a_preferred_quality_between_entries_plans_once_more_at_the_entry_below() {
-    // The menu of a 20 Mbit/s source: the original, 720p at 4 and 480p at 1 (20 itself would change nothing).
-    let (mut player, requests) = play_preferring(Quality::Bitrate(10_000_000), false);
+    // The menu of a 20 Mbit/s source: the original, then 10, 4 and 1 Mbit/s (20 itself would change nothing); 8 is between 10 and 4.
+    let (mut player, requests) = play_preferring(Quality::Bitrate(8_000_000), false);
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].quality, Quality::Bitrate(10_000_000));
+    assert_eq!(requests[0].quality, Quality::Bitrate(8_000_000));
     assert_eq!(requests[0].media_source, None);
     // The same version, at the entry.
     assert_eq!(requests[1].quality, Quality::Bitrate(4_000_000));
@@ -1027,10 +1027,13 @@ fn a_preferred_quality_that_is_an_entry_plans_once() {
     let (player, requests) = play_preferring(Quality::Bitrate(4_000_000), false);
     assert_eq!(requests.len(), 1);
     assert_eq!(player.player.status().quality, Quality::Bitrate(4_000_000));
-    // With every step listed, 10 Mbit/s is an entry too.
-    let (player, requests) = play_preferring(Quality::Bitrate(10_000_000), true);
+    // 10 Mbit/s is a common step (owner, 2026-10-27); with every step listed, 8 Mbit/s is an entry too.
+    let (player, requests) = play_preferring(Quality::Bitrate(10_000_000), false);
     assert_eq!(requests.len(), 1);
     assert_eq!(player.player.status().quality, Quality::Bitrate(10_000_000));
+    let (player, requests) = play_preferring(Quality::Bitrate(8_000_000), true);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(player.player.status().quality, Quality::Bitrate(8_000_000));
 }
 
 #[test]
@@ -1066,7 +1069,7 @@ fn a_source_without_a_bitrate_plays_at_the_preferred_quality() {
 
 #[test]
 fn a_track_change_or_the_fallback_keeps_the_entry_without_snapping_again() {
-    let (mut player, _) = play_preferring(Quality::Bitrate(10_000_000), false);
+    let (mut player, _) = play_preferring(Quality::Bitrate(8_000_000), false);
     player.start();
     player.event(EngineEvent::Ended(EndReason::Error(
         EngineErrorKind::DECODER_FAILED,

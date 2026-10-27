@@ -4,6 +4,8 @@ Status: accepted when its PR merges; open choices decided by the owner 2026-10-2
 spike. Amended 2026-10-26 (ADR 0020): gateway streams go through the loopback relay; see "Gateways, tokens and the player".
 Amended 2026-10-27 (owner, fix/windows-ui-polish): choice 10's quality menu and a preferred quality in place of remembering; see
 "Decided by the owner", choice 10.
+Amended 2026-10-27 (owner, feat/quality-names-per-file): choice 10's "Names", the steps named by what the server will send
+for this file.
 Research, quotes and sources: `docs/notes/playback.md`. No code was written.
 
 ## Context
@@ -279,10 +281,19 @@ address without a gateway, which has none to pass.
     - **The menu** (`current-playback`, `quality_options`): "Original" first (the stream as the planner chooses it, the old
       "Maximum"), named with the source's resolution and bitrate ("Original · 4K · 26.1 Mbit/s"), then the steps **40, 20, 4 and
       1 Mbit/s**. Only steps below the source's bitrate are listed: a step at or above it changes nothing.
-    - **Names**: each step is named by the resolution Jellyfin would scale to at that bitrate, from the server's own tables
-      (`ResolutionNormalizer` widths; `MediaStream.GetResolutionText` names, under which anything up to 2560 × 1440 is "1080p";
-      jellyfin/jellyfin master, read 2026-10-26), **assuming H.264 at 30 fps**, with no audio share and no low-bitrate boost. The
-      names are an estimate for other codecs and frame rates; naming by the file is on the roadmap.
+      **Amended 2026-10-27 (owner):** the steps are **40, 20, 10, 4 and 1 Mbit/s** (4K, 1440p, 1080p, 720p and 480p at 30 fps
+      without a file); a stored preferred 10 Mbit/s is listed as it is.
+    - **Names** (amended 2026-10-27, owner, feat/quality-names-per-file): each step is named by the resolution Jellyfin
+      would send for this file, reproducing the server's rules (jellyfin/jellyfin v12.2, ca0f16eb, and master, read 2026-10-27;
+      quotes in `docs/notes/playback.md`, "How the server names a step"): the audio share it sets aside (the chosen track's bitrate,
+      else its default by codec, capped by the step), the 64 kbit/s floor for the video, the cap at a small source's raised video
+      bitrate, the codec factor (×1/0.6 against H.264 when the server encodes HEVC) and low-bitrate boost of `ScaleBitrate`, the
+      frame-rate factor of `ResolutionNormalizer` (30/fps up to 30 fps, 1/√(fps/30) above; HDR changes nothing), its width table and
+      `MediaStream.GetResolutionText`, never wider than the original and in its aspect. One departure from the server's names
+      (owner, 2026-10-27; ADR 0022, item 6): a picture 2560 wide is "1440p", not "1080p", by width class (2560 × 1072 too), so the
+      menu says what really streams, as the info panel shows it. Still an estimate: the output codec before playback starts (H.264, the server's default, until the server reports
+      HEVC, so the names can change once playing), the server's limit for internet addresses, non-square pixels, and Settings'
+      list without a file (each step by its width cap: H.264 at 30 fps, no audio share).
     - **Settings → Playback**: "Show resolution in quality menu" (on by default) and "Show all quality options" (off; on, the menu
       lists every step from 120 Mbit/s down to 420 kbit/s that is below the source's bitrate). Both decide the player's menu and the
       preferred quality's list alike.
