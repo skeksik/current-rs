@@ -726,8 +726,8 @@ async fn an_episode_favourite_shows_on_its_page() {
     }
 }
 
-/// Where two lists' copies of an item differ, the Played button reads the copy read last, not the first list holding the item: here
-/// the episode is marked on another device between two reads.
+/// Where two pages read an item at different times (here the episode is marked on another device between two reads), every page and
+/// the Played button show the copy read last.
 #[tokio::test]
 async fn the_copy_read_last_answers_the_played_button() {
     let stand_in = StandIn::start().await.unwrap();
@@ -750,7 +750,7 @@ async fn the_copy_read_last_answers_the_played_button() {
         series.episodes().len() == 2 && !series.state().borrow().loading
     })
     .await;
-    // The episode's page still shows what it read first; the series' page read the new mark.
+    // The series' page read the new mark, and the episode's page shows it too: one state per item on every page.
     let page = || {
         episode
             .details()
@@ -758,8 +758,8 @@ async fn the_copy_read_last_answers_the_played_button() {
             .as_ref()
             .map(|details| details.summary.user.played)
     };
-    assert_eq!(page(), Some(false));
     assert!(series.episodes().snapshot()[0].user.played);
+    eventually("the episode's page follows", || page() == Some(true)).await;
     assert_eq!(button(), Some(true), "the copy read last");
 
     stand_in.set_played_on_server(EPISODE_IDS[0], false);
@@ -768,8 +768,10 @@ async fn the_copy_read_last_answers_the_played_button() {
         page() == Some(false) && !episode.state().borrow().loading
     })
     .await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(series.episodes().snapshot()[0].user.played);
+    eventually("the series' page follows", || {
+        !series.episodes().snapshot()[0].user.played
+    })
+    .await;
     assert_eq!(button(), Some(false), "the page read again is newer");
 
     // A patch is newer than both reads.
