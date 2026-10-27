@@ -219,6 +219,24 @@
                                 IsEnabled="False"
                                 Toggled="OnAutoSkipToggled" />
                         </toolkit:SettingsCard>
+                        <!-- Preferred quality (owner, 2026-10-27; ADR 0019, choice 10 as amended): Original or a step of the quality
+                             menu; each item plays at the highest entry of its own menu not above it. The two switches below decide
+                             which entries the list shows and how they are named, as they do for the player's menu. A ComboBox in a
+                             SettingsCard, as the theme's above. Icon: Segoe Fluent Icons E713 "Settings", the player's Quality
+                             button's ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-25). -->
+                        <toolkit:SettingsCard
+                            Header="Preferred quality"
+                            Description="The most each video plays at; Original plays every file as it is"
+                            AutomationProperties.Name="Preferred quality">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xE713;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <ComboBox
+                                x:Name="PreferredQualityBox"
+                                AutomationProperties.Name="Preferred quality"
+                                IsEnabled="False"
+                                SelectionChanged="OnPreferredQualityChanged" />
+                        </toolkit:SettingsCard>
                         <!-- The quality menu names each choice's resolution as well as its bitrate ("1080p · 20 Mbit/s"), on
                              by default (owner, 2026-10-26). Icon: Segoe Fluent Icons E713 "Settings", the player's Quality button's
                              ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-25). -->

@@ -929,9 +929,14 @@ public sealed partial class PlayerView : UserControl
     {
         QualityMenu.Items.Clear();
         var withResolution = core.PlaybackSettings().ShowsQualityResolution;
-        // A limit the menu does not list (at or above the original's bitrate, so it changes nothing, or a step of an older version)
-        // plays the original: Original is checked.
-        var current = options.Any(option => option.Quality == State.Quality) ? State.Quality : new QualityChoice.Maximum();
+        // The core plays each item at an entry of its menu (the highest not above the preferred quality), or at the preferred bitrate
+        // itself when every entry is above it: that limit is listed as its own entry, checked, so the menu never claims Original while
+        // the stream is capped (the manager's review, S1, 2026-10-27).
+        var current = State.Quality;
+        if (current is QualityChoice.Bitrate limit && !options.Any(option => option.Quality == current))
+        {
+            options = [.. options, new QualityOption(current, null, limit.BitsPerSecond)];
+        }
         foreach (var option in options)
         {
             var item = new RadioMenuFlyoutItem

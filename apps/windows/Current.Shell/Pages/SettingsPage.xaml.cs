@@ -55,6 +55,8 @@ public sealed partial class SettingsPage : Page
             QualityResolutionSwitch.IsEnabled = true;
             ShowAllQualities(core.PlaybackSettings().ShowsAllQualities);
             AllQualitiesSwitch.IsEnabled = true;
+            ShowPreferredQuality(core);
+            PreferredQualityBox.IsEnabled = true;
             ShowLibraryMemory(core.LibraryMemory);
             RememberSortSwitch.IsEnabled = RememberFilterSwitch.IsEnabled = RememberViewSwitch.IsEnabled = true;
             Servers ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
@@ -251,6 +253,56 @@ public sealed partial class SettingsPage : Page
             ShowQualityResolution(core.PlaybackSettings().ShowsQualityResolution);
             ShowPlaybackInfo(ProblemText.Unexpected);
         }
+        // Its entries follow the switch: which steps it lists, and how they are named.
+        ShowPreferredQuality(core);
+    }
+
+    /// <summary>The preferred quality's list is being filled from the core: its SelectionChanged is not a choice of the user's.</summary>
+    private bool _showingPreferredQuality;
+
+    /// <summary>The entries of the preferred quality's list, as the core lists them (index for index).</summary>
+    private IReadOnlyList<QualityOption> _preferredOptions = [];
+
+    /// <summary>Fills the preferred quality's list as the core lists it, named as the two switches say, and selects the preferred one.</summary>
+    private void ShowPreferredQuality(CoreHost core)
+    {
+        var settings = core.PlaybackSettings();
+        _showingPreferredQuality = true;
+        _preferredOptions = core.PreferredQualityOptions();
+        PreferredQualityBox.Items.Clear();
+        foreach (var option in _preferredOptions)
+        {
+            PreferredQualityBox.Items.Add(Player.PlayerText.Quality(option, settings.ShowsQualityResolution));
+        }
+        PreferredQualityBox.SelectedIndex = _preferredOptions
+            .Select((option, index) => (option, index))
+            .FirstOrDefault(entry => entry.option.Quality == settings.PreferredQuality, (null!, -1)).index;
+        _showingPreferredQuality = false;
+    }
+
+    /// <summary>Saves "Preferred quality" at once; if it cannot be saved it still stands for this run (the core's rule).</summary>
+    private async void OnPreferredQualityChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var index = PreferredQualityBox.SelectedIndex;
+        if (_showingPreferredQuality || App.Core is not { } core || index < 0 || index >= _preferredOptions.Count)
+        {
+            return;
+        }
+        PlaybackInfo.IsOpen = false;
+        try
+        {
+            await core.SetPreferredQualityAsync(_preferredOptions[index].Quality);
+        }
+        catch (CoreStoreException error)
+        {
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing the preferred quality failed: {error.GetType().Name}");
+            ShowPreferredQuality(core);
+            ShowPlaybackInfo(ProblemText.Unexpected);
+        }
     }
 
     /// <summary>The all-qualities switch is being set from the core: its Toggled is not a choice of the user's.</summary>
@@ -285,6 +337,8 @@ public sealed partial class SettingsPage : Page
             ShowAllQualities(core.PlaybackSettings().ShowsAllQualities);
             ShowPlaybackInfo(ProblemText.Unexpected);
         }
+        // Its entries follow the switch: which steps it lists, and how they are named.
+        ShowPreferredQuality(core);
     }
 
     private void ShowPlaybackInfo(string message)
