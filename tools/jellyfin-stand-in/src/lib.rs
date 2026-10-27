@@ -822,7 +822,8 @@ async fn serve(mut socket: TcpStream, state: Arc<State>, door: usize) {
 /// check), refused with 403 without a live token (`WebSocketManager.WebSocketRequestHandler` throws a `SecurityException`, which
 /// `ExceptionMiddleware` answers with 403). Once open, the server sends `ForceKeepAlive` with the time in seconds it waits for a
 /// `KeepAlive` (`SessionWebSocketListener.KeepAliveWebSocket`, `WebSocketLostTimeout = 60`), and every save of the user's data as
-/// `UserDataChanged` ([`user_data_changed`]). The stand-in records what the client sends and never drops a quiet socket.
+/// `UserDataChanged` ([`user_data_changed`]); it answers a `KeepAlive` with one (`WebSocketConnection.SendKeepAliveResponse`). The
+/// stand-in records what the client sends and never drops a quiet socket.
 async fn websocket(mut socket: TcpStream, state: &Arc<State>, received: &Received) {
     if !authorized(state, received) {
         let _ = socket
@@ -859,7 +860,18 @@ async fn websocket(mut socket: TcpStream, state: &Arc<State>, received: &Receive
                 }
             },
             incoming = stream.next() => match incoming {
-                Some(Ok(Message::Text(text))) => lock(&state.socket_texts).push(text.as_str().to_owned()),
+                Some(Ok(Message::Text(text))) => {
+                    lock(&state.socket_texts).push(text.as_str().to_owned());
+                    // Answered with a KeepAlive (`WebSocketConnection.SendKeepAliveResponse`).
+                    if text.as_str().contains(r#""MessageType":"KeepAlive""#)
+                        && stream
+                            .send(Message::text(r#"{"MessageType":"KeepAlive","MessageId":"57a2d1e0000000000000000000000032"}"#))
+                            .await
+                            .is_err()
+                    {
+                        return;
+                    }
+                }
                 Some(Ok(Message::Close(_)) | Err(_)) | None => return,
                 Some(Ok(_)) => {}
             },
