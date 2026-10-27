@@ -4,42 +4,7 @@
 
 use current_playback::{Quality, QualityOption};
 
-/// How the UI's platform writes numbers: its decimal separator ("." or ",", from the user's region), passed once by the UI
-/// ([`crate::App::set_decimal_separator`]). "." until then.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NumberFormat {
-    pub decimal_separator: String,
-}
-
-impl Default for NumberFormat {
-    fn default() -> Self {
-        Self {
-            decimal_separator: ".".to_owned(),
-        }
-    }
-}
-
-impl NumberFormat {
-    /// `numerator / denominator` with at most one decimal, none when it is 0 ("26.1", "40").
-    fn one_decimal(&self, numerator: u64, denominator: u64) -> String {
-        let tenths = rounded(numerator * 10, denominator);
-        let (whole, tenth) = (tenths / 10, tenths % 10);
-        if tenth == 0 {
-            whole.to_string()
-        } else {
-            format!("{whole}{}{tenth}", self.decimal_separator)
-        }
-    }
-}
-
-/// `numerator / denominator` to the nearest whole number, halfway up, as the Windows app's .NET format strings rounded its bitrates
-/// ("0" and "0.#" on a double): a custom format takes the double's first 15 significant digits, then rounds those digits half up
-/// (dotnet/runtime main, `Number.Formatting.cs` `FormatFloat` and `Double.cs` `MaxPrecisionCustomFormat => 15`,
-/// `Number.Formatting.Common.cs` `RoundNumber`, read 2026-10-27). A bitrate in kbit/s or Mbit/s has fewer than 15 significant
-/// digits, so those digits are the exact quotient and this integer rounding gives the same.
-fn rounded(numerator: u64, denominator: u64) -> u64 {
-    (numerator * 2 + denominator) / (denominator * 2)
-}
+use crate::numbers::{NumberFormat, rounded};
 
 /// "40 Mbit/s", "1.5 Mbit/s"; below 1 Mbit/s in kbit/s, "720 kbit/s", which one decimal of Mbit/s would round to "0.7".
 pub fn bitrate_label(bits_per_second: u32, format: &NumberFormat) -> String {
@@ -163,6 +128,7 @@ mod tests {
     fn comma() -> NumberFormat {
         NumberFormat {
             decimal_separator: ",".to_owned(),
+            ..NumberFormat::default()
         }
     }
 

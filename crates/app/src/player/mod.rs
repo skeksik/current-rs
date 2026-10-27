@@ -50,7 +50,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub use backend::{CompositionSize, DisplayFacts, EngineOutput, SwapChain, VideoOutput};
 pub use known_caps::EngineReport;
 pub use labels::{
-    NumberFormat, QualityEntry, QualityMenuItem, bitrate_label, fallback_quality_entries,
+    QualityEntry, QualityMenuItem, bitrate_label, fallback_quality_entries,
     quality_label, quality_menu,
 };
 pub use now_playing::{MediaStatus, NowPlaying, TIMELINE_INTERVAL};

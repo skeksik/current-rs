@@ -14,6 +14,7 @@ mod gateway_sign_in;
 mod images;
 mod library_choices;
 mod list;
+mod numbers;
 mod player;
 mod problems;
 mod session;
@@ -69,11 +70,12 @@ pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState}
 pub use images::{ImageError, ImageLoad, ImageSource, WIDTH_BUCKETS, bucket};
 pub use library_choices::{LibraryMemory, SearchMemory};
 pub use list::{ListSubscription, ObservableList, VectorDiff};
+pub use numbers::NumberFormat;
 #[cfg(any(test, feature = "test-engine"))]
 pub use player::test_engine;
 pub use player::{
     CompositionSize, DisplayFacts, EngineOutput, EngineReport, MediaStatus, NowPlaying,
-    NumberFormat, PlaybackInfo, Player, PlayerAction, PlayerEngine, PlayerError, QualityEntry,
+    PlaybackInfo, Player, PlayerAction, PlayerEngine, PlayerError, QualityEntry,
     QualityMenuItem, SwapChain, TIMELINE_INTERVAL, VideoOutput, bitrate_label,
     fallback_quality_entries, player_engine, quality_label, quality_menu,
 };
