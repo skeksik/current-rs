@@ -21,7 +21,8 @@ use crate::playback;
 /// candidates and pages within those, so later pages are not the next best matches (`docs/notes/jellyfin-browse.md`).
 pub const SEARCH_LIMIT: u32 = 24;
 
-/// The search groups, in the order they are shown: one request each.
+/// The search groups, in the order they are shown: one request each. People come last: `Items` answers every person kind, actors,
+/// directors and writers alike (owner, 2026-10-27: "People"; ADR 0018).
 pub const SEARCH_GROUPS: &[MediaKind] = &[
     MediaKind::MOVIE,
     MediaKind::SERIES,
@@ -32,6 +33,7 @@ pub const SEARCH_GROUPS: &[MediaKind] = &[
     MediaKind::AUDIO,
     MediaKind::MUSIC_VIDEO,
     MediaKind::VIDEO,
+    MediaKind::PERSON,
 ];
 
 /// How far back "next up" looks for series in progress, until a setting exists (ADR 0018).
@@ -118,6 +120,10 @@ impl JellyfinClient {
         }
         if let Some(term) = &query.search_term {
             request = request.query("searchTerm", term.as_str());
+        }
+        // "filtered to include only those containing the specified person id" (`ItemsController.GetItems`, `personIds`).
+        if let Some(person) = &query.person {
+            request = request.query("personIds", person.id.as_str());
         }
         let result: ItemsResult = self.get_json(request).await?;
         let total = with_total
