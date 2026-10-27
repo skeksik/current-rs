@@ -19,3 +19,4 @@ Project docs: `CLAUDE.md`, `docs/architecture.md`, `docs/roadmap.md`, `docs/deci
 
 ## Copyright
 Copyright (c) 2026 Skeksik. All rights reserved.
+
