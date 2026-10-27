@@ -332,3 +332,4 @@ Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 whe
 - [ ] Several servers at once and user switching
 - [ ] Jellyfin's other library types: music with its own player, live TV and DVR, books, photos (owner, 2026-10-27: later)
 - Not planned yet (ask to add): other media servers.
+
