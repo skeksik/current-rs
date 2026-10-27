@@ -3,6 +3,7 @@
 
 use current_jellyfin::AuthError;
 
+use crate::Core;
 use crate::problems::{GatewayProblem, NetProblem};
 
 /// Why a browse request (a page, a row, a detail page, a played or favourite change) failed.
@@ -47,24 +48,55 @@ pub enum ImageProblem {
 
 impl From<&AuthError> for BrowseProblem {
     fn from(error: &AuthError) -> Self {
-        match error {
-            AuthError::NotSignedIn => Self::NotSignedIn,
-            AuthError::SessionRevoked => Self::SessionRevoked,
-            // The others are answers to a sign-in, which a browse request never gets: a refusal is the closest.
-            AuthError::Refused
-            | AuthError::WrongCredentials
-            | AuthError::QuickConnectDisabled
-            | AuthError::QuickConnectExpired
-            | AuthError::EmbyHeaderIgnored => Self::Refused,
-            AuthError::Unconfirmed => Self::Unconfirmed,
-            AuthError::NotAvailable => Self::NotAvailable,
-            AuthError::Gateway(answer) => Self::Gateway {
+        current_app::BrowseProblem::from(error).into()
+    }
+}
+
+// One to one, both ways: every match is exhaustive, so a variant added on one side and not the other fails to compile.
+
+impl From<current_app::BrowseProblem> for BrowseProblem {
+    fn from(problem: current_app::BrowseProblem) -> Self {
+        use current_app::BrowseProblem as P;
+        match problem {
+            P::NotSignedIn => Self::NotSignedIn,
+            P::SessionRevoked => Self::SessionRevoked,
+            P::Refused => Self::Refused,
+            P::Unconfirmed => Self::Unconfirmed,
+            P::NotAvailable => Self::NotAvailable,
+            P::Gateway { answer } => Self::Gateway {
                 answer: answer.into(),
             },
-            AuthError::Network(error) => Self::Network {
-                problem: error.into(),
+            P::Network { problem } => Self::Network {
+                problem: problem.into(),
             },
         }
+    }
+}
+
+impl From<BrowseProblem> for current_app::BrowseProblem {
+    fn from(problem: BrowseProblem) -> Self {
+        use BrowseProblem as P;
+        match problem {
+            P::NotSignedIn => Self::NotSignedIn,
+            P::SessionRevoked => Self::SessionRevoked,
+            P::Refused => Self::Refused,
+            P::Unconfirmed => Self::Unconfirmed,
+            P::NotAvailable => Self::NotAvailable,
+            P::Gateway { answer } => Self::Gateway {
+                answer: answer.into(),
+            },
+            P::Network { problem } => Self::Network {
+                problem: problem.into(),
+            },
+        }
+    }
+}
+
+#[uniffi::export]
+impl Core {
+    /// Why a browse request failed, in plain words.
+    pub fn browse_problem_text(&self, problem: BrowseProblem) -> String {
+        current_app::browse_problem_text(&problem.into(), self.app.platform())
     }
 }
 
@@ -80,6 +112,31 @@ impl From<&current_app::ImageError> for ImageProblem {
             current_app::ImageError::InvalidBlurHash => Self::InvalidBlurHash,
             current_app::ImageError::EmptyBox => Self::EmptyBox,
             current_app::ImageError::Stopped => Self::Stopped,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_browse_problem_converts_both_ways() {
+        for problem in [
+            BrowseProblem::NotSignedIn,
+            BrowseProblem::SessionRevoked,
+            BrowseProblem::Refused,
+            BrowseProblem::Unconfirmed,
+            BrowseProblem::NotAvailable,
+            BrowseProblem::Gateway {
+                answer: GatewayProblem::SignIn,
+            },
+            BrowseProblem::Network {
+                problem: NetProblem::Timeout,
+            },
+        ] {
+            let back: BrowseProblem = current_app::BrowseProblem::from(problem.clone()).into();
+            assert_eq!(back, problem);
         }
     }
 }

@@ -15,6 +15,7 @@ mod images;
 mod library_choices;
 mod list;
 mod player;
+mod problems;
 mod session;
 mod sign_in;
 
@@ -83,6 +84,14 @@ pub mod playback {
         QualityPreference, Track, preferred_quality_options, quality_options, snap_quality,
     };
 }
+pub use problems::{
+    AddressProblem, BrowseProblem, DiscoveryProblem, EMBY_HEADER_IGNORED, GATEWAY_REFUSED,
+    GATEWAY_UNSUPPORTED, GATEWAY_WEB_PAGE, GOOGLE_REFUSES_WEB_VIEWS, GatewayInputProblem,
+    GatewayProblem, GatewaySignInProblem, NetProblem, Platform, ProbeProblem, SignInProblem,
+    StoreProblem, UNEXPECTED, browse_problem_text, discovery_problem_text,
+    gateway_input_problem_text, gateway_problem_text, gateway_sign_in_problem_text,
+    net_problem_text, probe_problem_text, sign_in_problem_text, store_problem_text,
+};
 pub use sign_in::{SignIn, SignInError, SignInState};
 
 use images::ImageCache;
@@ -125,6 +134,8 @@ pub struct App {
     engine_capabilities: Arc<player::KnownCapabilities>,
     /// How the UI's platform writes numbers, for the labels with decimals ([`App::set_decimal_separator`]).
     number_format: Mutex<NumberFormat>,
+    /// The UI's platform, for the texts that name it ([`App::set_platform`]).
+    platform: Mutex<Platform>,
 }
 
 impl std::fmt::Debug for App {
@@ -170,6 +181,7 @@ impl App {
             relay: Arc::default(),
             engine_capabilities: Arc::default(),
             number_format: Mutex::default(),
+            platform: Mutex::default(),
         }
     }
 
@@ -210,6 +222,7 @@ impl App {
             relay: Arc::default(),
             engine_capabilities: Arc::default(),
             number_format: Mutex::default(),
+            platform: Mutex::default(),
         };
         Ok((app, report))
     }
@@ -589,6 +602,18 @@ impl App {
     /// How the labels with decimals write numbers: "." until the UI passes its own ([`App::set_decimal_separator`]).
     pub fn number_format(&self) -> NumberFormat {
         self.lock_number_format().clone()
+    }
+
+    /// The UI's platform, for the few texts that name it ("this PC", "Windows"): a platform fact the UI passes once at start.
+    /// Only Windows's words exist so far, so every platform gets them; macOS's and Linux's come with their apps (M3, Linux).
+    pub fn set_platform(&self, platform: Platform) {
+        *self.platform.lock().unwrap_or_else(PoisonError::into_inner) = platform;
+    }
+
+    /// The platform the texts are worded for: Windows until the UI passes its own ([`App::set_platform`]).
+    pub fn platform(&self) -> Platform {
+        // One assignment at a time: a poisoned lock still holds a whole value.
+        *self.platform.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn lock_number_format(&self) -> std::sync::MutexGuard<'_, NumberFormat> {

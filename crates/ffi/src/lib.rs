@@ -80,7 +80,9 @@ pub use player_records::{
 };
 pub use problems::{
     AddressProblem, DiscoveryProblem, GatewayInputProblem, GatewayProblem, GatewaySignInProblem,
-    NetProblem, ProbeProblem, SignInProblem, StoreProblem,
+    NetProblem, Platform, ProbeProblem, SignInProblem, StoreProblem, gateway_input_problem_text,
+    gateway_problem_text, gateway_refused_text, gateway_unsupported_text, gateway_web_page_text,
+    google_refuses_web_views_text, store_problem_text, unexpected_problem_text,
 };
 pub use records::{
     AppInfo, AppTheme, CapabilitiesSnapshot, Connectivity, InterfaceKind, LoadReport, NetworkFacts,
