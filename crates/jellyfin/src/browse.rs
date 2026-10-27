@@ -333,11 +333,39 @@ impl JellyfinClient {
         Ok(self.summaries(result.items))
     }
 
-    /// Everything a detail page shows of `item` (`GET Items/{id}`, which returns every field).
+    /// Everything a detail page shows of `item` (`GET Items/{id}`, which returns every field), with its marks as a list reads them
+    /// (`GET Items?ids={id}`), sent at the same time.
+    ///
+    /// The single-item read answers the user data of the server's cached instance of the item, which a played mark on its series or
+    /// season does not save: Jellyfin v12.3 (tag 06de749d, read 2026-10-27) takes it from `LibraryManager.GetItemById` ("`if
+    /// (_cache.TryGet(id, out var item))`") and reads the instance's own rows (`UserDataManager.GetUserData`: "`ResolveUserDataRow(item,
+    /// item.UserData?.Where(...))`"); `SaveUserData` reloads only the instance it saved through ("`// rehydrate the cached userdata`"),
+    /// and `Folder.MarkUnplayed` saves the instances `GetItemList` loads. So an episode marked on its own, then through its series,
+    /// kept the first mark on its page (the owner's run, 2026-10-27). A list builds its items' user data with `GetUserDataBatch`,
+    /// which reads the per-user cache every save updates (`DtoService.GetBaseItemDtos`; `Folder.GetItems` answers `ids` with
+    /// `LibraryManager.GetItemsResult`). If the list fails or leaves the item out, the single-item read's marks stand.
     pub async fn details(&self, item: &ItemRef) -> Result<ItemDetails, AuthError> {
-        let dto: BaseItemDto = self
-            .get_json(Request::get(format!("/Items/{}", item.id.as_str())))
-            .await?;
+        let whole = Request::get(format!("/Items/{}", item.id.as_str()));
+        let listed = Request::get("/Items")
+            .query("ids", item.id.as_str())
+            .query("enableImages", "false")
+            .query("enableTotalRecordCount", "false");
+        let (whole, listed) = join_both(
+            self.get_json::<BaseItemDto>(whole),
+            self.get_json::<ItemsResult>(listed),
+        )
+        .await;
+        let mut dto = whole?;
+        let fresh = listed.ok().and_then(|listed| {
+            listed
+                .items
+                .into_iter()
+                .find(|listed| listed.id.as_deref() == Some(item.id.as_str()))
+                .and_then(|listed| listed.user_data)
+        });
+        if let Some(fresh) = fresh {
+            dto.user_data = Some(fresh);
+        }
         Ok(self.item_details(dto, item))
     }
 
@@ -716,6 +744,33 @@ fn join(values: impl Iterator<Item = impl AsRef<str>>) -> String {
         joined.push_str(value.as_ref());
         joined
     })
+}
+
+/// Polls both futures until both are done, and returns their outputs.
+async fn join_both<A: Future, B: Future>(a: A, b: B) -> (A::Output, B::Output) {
+    let (mut a, mut b) = (Box::pin(a), Box::pin(b));
+    let (mut first, mut second) = (None, None);
+    std::future::poll_fn(|cx| {
+        if first.is_none()
+            && let Poll::Ready(value) = a.as_mut().poll(cx)
+        {
+            first = Some(value);
+        }
+        if second.is_none()
+            && let Poll::Ready(value) = b.as_mut().poll(cx)
+        {
+            second = Some(value);
+        }
+        match (first.take(), second.take()) {
+            (Some(a), Some(b)) => Poll::Ready((a, b)),
+            (a, b) => {
+                first = a;
+                second = b;
+                Poll::Pending
+            }
+        }
+    })
+    .await
 }
 
 /// Polls every future until all are done, and returns their outputs in order. A dozen lines instead of a dependency.
