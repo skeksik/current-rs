@@ -234,12 +234,13 @@ Done:
 - [x] Global search filters (owner, 2026-10-27; PR 87): Type (All, Movies, Series, Actors), Source (All, Library, Catalog; Catalog
       comes with Seerr, M4) and View
 Fix and polish:
-- [ ] The texts and rules still in the Windows app's C# (left by PR 88), so macOS and Linux don't copy them: the player's route and
+- [x] The texts and rules still in the Windows app's C# (left by PR 88), so macOS and Linux don't copy them: the player's route and
       reason names, plan notes, skip buttons, the next-episode countdown, track names, times and spoken times, playback problems and
       the playback info panel's lines; tile lines and marks ("N new episodes", "in progress", "N unplayed"), person parts, sizes on
       disk, the action-failed and library-gone notices, browse problems and `ProblemText` (shared by every screen, so it moves as one
       piece); the search page's status lines ("Searching…", "No results", "Couldn't search."). Icon glyphs stay with each platform
-      (PR A: 94, problems, browse and search; the player's texts follow)
+      (PRs 93 and 94)
+- [ ] Times of 24 h or more wrap in the player's time labels (h:mm:ss)
 - [ ] Played marks between a series and its episodes keep a stale mark until a refresh (owner's run, 2026-10-26; each needs a failing
       test against the stand-in first): (1) marking a series played marks its episodes, but the series' own mark disappears; (2)
       unmarking a series leaves its episodes marked; (3) marking every episode played leaves the series unmarked; (4) a series marked

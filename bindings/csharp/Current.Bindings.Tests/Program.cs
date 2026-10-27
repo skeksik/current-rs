@@ -71,6 +71,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("sizes, counts, facts and the search status are the core's", TextTests.NumbersAndStatusesAreTheCores),
     ("the core's engine is the test engine", PlayerTests.EngineIsTheTestEngine),
     ("the quality menu is the core's, with the platform's decimal separator", PlayerTests.QualityMenuIsTheCores),
+    // The player's words (ADR 0019).
+    ("the player's labels are the core's", PlayerTests.PlayerLabelsAreTheCores),
+    ("the playback problems are worded by the core", PlayerTests.ProblemTextsAreTheCores),
+    ("the info panel's lines are the core's, with the platform's decimal separator", PlayerTests.InfoPanelIsTheCores),
     ("a player plays, reports and releases its swap chain", PlayerTests.PlaysReportsAndReleases),
     ("a second player waits, then is busy", PlayerTests.SecondPlayerIsBusy),
     ("a cancelled play leaves nothing started", PlayerTests.CancelledPlayLeavesNothingStarted),

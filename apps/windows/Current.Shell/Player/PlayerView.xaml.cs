@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text;
 using Current.Bindings;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
@@ -33,7 +32,7 @@ internal interface IPlayerHost
 /// The player (ADR 0019 task 5, ADR 0007 "What M2 must do" item 3): libmpv's swap chain in a SwapChainPanel, with the composition size
 /// and the display's facts going to the core, auto-hiding transport controls over it, the skip button and the next-episode card as
 /// the core reports them, playback info, keyboard shortcuts, full screen with the cursor hidden after inactivity, and the system media
-/// controls. It renders the core's PlayerState and sends actions; when anything shows is the core's, the words are PlayerText's.
+/// controls. It renders the core's PlayerState and sends actions; when anything shows is the core's, and so are the words (CoreHost).
 /// </summary>
 public sealed partial class PlayerView : UserControl
 {
@@ -54,6 +53,8 @@ public sealed partial class PlayerView : UserControl
     private IPlayerHost? _host;
     private Window? _window;
     private PlayerSession? _session;
+    /// <summary>The core of the last play, whose words the player shows (the core words every text, ADR 0019).</summary>
+    private CoreHost? _core;
     private DisplayWatcher? _display;
     private MediaControls? _media;
     private CancellationTokenSource? _play;
@@ -152,6 +153,7 @@ public sealed partial class PlayerView : UserControl
         _play?.Cancel();
         var play = new CancellationTokenSource();
         _play = play;
+        _core = core;
         _open = true;
         Visibility = Visibility.Visible;
         ShowProblem(null);
@@ -198,7 +200,7 @@ public sealed partial class PlayerView : UserControl
         catch (PlayerException error)
         {
             BusyRing.IsActive = false;
-            ShowProblem(PlayerText.Player(error.Problem));
+            ShowProblem(core.PlayerProblemText(error.Problem));
         }
         catch (OperationCanceledException)
         {
@@ -380,19 +382,19 @@ public sealed partial class PlayerView : UserControl
             SkipButton.Visibility = state.Segment is null ? Visibility.Collapsed : Visibility.Visible;
             if (state.Segment is { } segment)
             {
-                SkipButton.Content = PlayerText.Skip(segment.Kind);
+                SkipButton.Content = _core?.SkipLabel(segment.Kind);
             }
             NextCard.Visibility = state.Next is null ? Visibility.Collapsed : Visibility.Visible;
             if (state.Next is { } next)
             {
-                NextName.Text = PlayerText.Episode(next);
-                NextCountdown.Text = next.Countdown is { } seconds ? PlayerText.Countdown(seconds) : "";
+                NextName.Text = _core?.EpisodeLine(next) ?? "";
+                NextCountdown.Text = next.Countdown is { } seconds ? _core?.CountdownText(seconds) ?? "" : "";
                 NextCountdown.Visibility = next.Countdown is null ? Visibility.Collapsed : Visibility.Visible;
             }
 
             if (state is { State: PlayerStateKind.Failed, Problem: { } problem })
             {
-                ShowProblem(PlayerText.Problem(problem));
+                ShowProblem(_core?.PlaybackProblemText(problem));
             }
             else if (state.State is not PlayerStateKind.Idle)
             {
@@ -472,12 +474,16 @@ public sealed partial class PlayerView : UserControl
         {
             return;
         }
+        if (_core is not { } core)
+        {
+            return;
+        }
         _shownSecond = second;
-        ElapsedText.Text = PlayerText.Time(position);
+        ElapsedText.Text = core.TimeLabel(position);
         var remaining = duration - position;
-        RemainingText.Text = PlayerText.Time(remaining);
-        SetName(ElapsedText, PlayerText.Elapsed(position));
-        SetName(RemainingText, PlayerText.Remaining(remaining));
+        RemainingText.Text = core.TimeLabel(remaining);
+        SetName(ElapsedText, core.ElapsedLabel(position));
+        SetName(RemainingText, core.RemainingLabel(remaining));
         if (state.State is not PlayerStateKind.Playing)
         {
             ShowSeekStatus();
@@ -485,8 +491,13 @@ public sealed partial class PlayerView : UserControl
     }
 
     /// <summary>Where the seek bar is, read by Narrator when it gets focus; not raised every second while playing.</summary>
-    private void ShowSeekStatus() =>
-        AutomationProperties.SetItemStatus(SeekBar, PlayerText.Position(TimeSpan.FromSeconds(SeekBar.Value), State.Duration));
+    private void ShowSeekStatus()
+    {
+        if (_core is { } core)
+        {
+            AutomationProperties.SetItemStatus(SeekBar, core.PositionLabel(TimeSpan.FromSeconds(SeekBar.Value), State.Duration));
+        }
+    }
 
     private Microsoft.UI.Xaml.Shapes.Rectangle? _buffered;
 
@@ -816,12 +827,12 @@ public sealed partial class PlayerView : UserControl
 
     private void OnSeekBarChanged(object sender, RangeBaseValueChangedEventArgs e)
     {
-        if (_showingState || _session is null)
+        if (_showingState || _session is null || _core is not { } core)
         {
             return;
         }
         var position = TimeSpan.FromSeconds(e.NewValue);
-        ElapsedText.Text = PlayerText.Time(position);
+        ElapsedText.Text = core.TimeLabel(position);
         // A drag seeks when it ends; keys seek once they settle.
         if (!_dragging)
         {
@@ -850,32 +861,43 @@ public sealed partial class PlayerView : UserControl
     private void OnAudioMenuOpening(object sender, object e)
     {
         AudioMenu.Items.Clear();
+        if (_core is not { } core)
+        {
+            return;
+        }
         var state = State;
         foreach (var track in state.AudioTracks)
         {
-            var item = new RadioMenuFlyoutItem { Text = PlayerText.Track(track), GroupName = "audio", IsChecked = track.Index == state.Audio };
+            var item = new RadioMenuFlyoutItem { Text = core.TrackName(track), GroupName = "audio", IsChecked = track.Index == state.Audio };
             var index = track.Index;
             item.Click += (_, _) => Long(ct => _session?.SelectAudioAsync(index, ct) ?? Task.CompletedTask);
             AudioMenu.Items.Add(item);
         }
         if (AudioMenu.Items.Count == 0)
         {
-            AudioMenu.Items.Add(new MenuFlyoutItem { Text = "No audio tracks", IsEnabled = false });
+            AudioMenu.Items.Add(new MenuFlyoutItem { Text = core.NoAudioTracksLabel(), IsEnabled = false });
         }
     }
 
     private void OnSubtitlesMenuOpening(object sender, object e)
     {
         SubtitlesMenu.Items.Clear();
+        if (_core is not { } core)
+        {
+            return;
+        }
         var state = State;
-        var off = new RadioMenuFlyoutItem { Text = "Off", GroupName = "subtitles", IsChecked = state.Subtitle is SubtitleSelection.Off };
+        var off = new RadioMenuFlyoutItem
+        {
+            Text = core.SubtitlesOffLabel(), GroupName = "subtitles", IsChecked = state.Subtitle is SubtitleSelection.Off,
+        };
         off.Click += (_, _) => Long(ct => _session?.SelectSubtitleAsync(new SubtitleSelection.Off(), ct) ?? Task.CompletedTask);
         SubtitlesMenu.Items.Add(off);
         foreach (var track in state.SubtitleTracks)
         {
             var item = new RadioMenuFlyoutItem
             {
-                Text = PlayerText.Track(track),
+                Text = core.TrackName(track),
                 GroupName = "subtitles",
                 IsChecked = state.Subtitle is SubtitleSelection.Stream stream && stream.Index == track.Index,
             };
@@ -971,11 +993,8 @@ public sealed partial class PlayerView : UserControl
         }
         try
         {
-            var info = await session.PlaybackInfoAsync();
-            if (App.Core is { } core)
-            {
-                InfoText.Text = InfoLines(core, info);
-            }
+            var lines = await session.PlaybackInfoLinesAsync(_display?.Facts, MeasurePanel());
+            InfoText.Text = string.Join(Environment.NewLine, lines);
         }
         catch (PlayerException)
         {
@@ -986,69 +1005,17 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
-    /// <summary>The playback info as lines: route, reasons, notes, the source and its streams, the server's transcode, the engine's
-    /// output, and the display the window is on. No URL: the record holds none.</summary>
-    private string InfoLines(CoreHost core, PlaybackInfo info)
+    /// <summary>The info panel's sizes as this window measures them, in physical pixels; the core words the lines (route, reasons,
+    /// notes, the source and its streams, the server's transcode, the engine's output, the display and these sizes).</summary>
+    private PanelSizes MeasurePanel()
     {
-        var text = new StringBuilder();
-        void Line(string line) => text.AppendLine(line);
-        static string Join(params string?[] parts) => string.Join(" · ", parts.Where(part => !string.IsNullOrEmpty(part)));
-        if (info.Route is { } route)
-        {
-            Line(Join(PlayerText.Route(route.Kind), route.Protocol?.ToString().ToUpperInvariant(), route.Container));
-        }
-        foreach (var reason in info.Reasons)
-        {
-            Line($"• {PlayerText.Reason(reason)}");
-        }
-        foreach (var note in info.Notes)
-        {
-            Line($"• {PlayerText.Note(core, note)}");
-        }
-        if (info.Source is { } source)
-        {
-            Line("");
-            Line(Join("Source", source.Container, source.Bitrate is { } bitrate ? core.BitrateLabel(bitrate) : null,
-                source.Size is { } size ? $"{size / 1_000_000_000.0:0.0} GB" : null));
-            foreach (var stream in source.Streams)
-            {
-                Line(Join($"#{stream.Index} {stream.Kind}", stream.Codec, stream.Profile,
-                    stream.Width is { } w && stream.Height is { } h ? $"{w}×{h}" : null,
-                    stream.FrameRate is { } fps ? $"{fps:0.###} fps" : null,
-                    stream.BitDepth is { } depth ? $"{depth}-bit" : null, stream.RangeType,
-                    stream.Channels is { } channels ? $"{channels} ch" : null, stream.Language, stream.Label,
-                    stream.IsExternal ? "external" : null));
-            }
-        }
-        if (info.Transcoding is { } t)
-        {
-            Line("");
-            Line(Join("Server", t.VideoDirect ? "video copied" : $"video to {t.VideoCodec}", t.AudioDirect ? "audio copied" : $"audio to {t.AudioCodec}",
-                t.Container, t.Bitrate is { } bitrate ? core.BitrateLabel(bitrate) : null,
-                t.Width is { } w && t.Height is { } h ? $"{w}×{h}" : null, t.FrameRate is { } fps ? $"{fps:0.###} fps" : null,
-                t.HardwareAcceleration, t.Completion is { } done ? $"{done:0}% done" : null));
-            foreach (var reason in t.Reasons)
-            {
-                Line($"• {PlayerText.Reason(reason)}");
-            }
-        }
-        var engine = info.Engine;
-        Line("");
-        Line(Join("Player", engine.HardwareDecoder is { Length: > 0 } hw ? $"decoder {hw}" : "software decoder",
-            engine.VideoWidth is { } vw && engine.VideoHeight is { } vh ? $"{vw}×{vh}" : null, engine.PixelFormat, engine.Primaries,
-            engine.Transfer));
-        if (_display?.Facts is { } display)
-        {
-            Line(Join("Display", display.Hdr ? "HDR" : "SDR", display.PeakNits > 0 ? $"peak {display.PeakNits:0} nits" : null,
-                display.SdrWhiteNits > 0 ? $"SDR white {display.SdrWhiteNits:0} nits" : null,
-                display.RefreshHz > 0 ? $"{display.RefreshHz:0.###} Hz" : null));
-        }
         var scale = XamlRoot?.RasterizationScale ?? 1;
-        Line(Join("Panel", $"{_compositionSize.Width}×{_compositionSize.Height}",
-            $"view {ActualWidth * scale:0.##}×{ActualHeight * scale:0.##}",
-            XamlRoot is { } root ? $"content {root.Size.Width * scale:0.##}×{root.Size.Height * scale:0.##}" : null,
-            _window is { } window ? $"window {window.AppWindow.ClientSize.Width}×{window.AppWindow.ClientSize.Height}" : null));
-        return text.ToString().TrimEnd();
+        var root = XamlRoot;
+        var client = _window?.AppWindow.ClientSize;
+        return new PanelSizes(
+            _compositionSize.Width, _compositionSize.Height, ActualWidth * scale, ActualHeight * scale,
+            root is null ? null : root.Size.Width * scale, root is null ? null : root.Size.Height * scale,
+            client?.Width, client?.Height);
     }
 
     // Leaving ----------------------------------------------------------------------------------------------------------------------

@@ -94,17 +94,35 @@ pub enum PlayerProblem {
 
 impl From<&current_app::PlayerError> for PlayerProblem {
     fn from(error: &current_app::PlayerError) -> Self {
-        use current_app::PlayerError as E;
-        match error {
-            E::EngineUnavailable => Self::EngineUnavailable,
-            E::Busy => Self::Busy,
-            E::EngineFailed { kind } => Self::EngineFailed {
-                kind: kind.as_str().to_owned(),
-            },
-            E::NotSignedIn => Self::NotSignedIn,
-            E::Replaced => Self::Replaced,
-            // Calls through the bridge always run on the core's runtime.
-            E::NoRuntime | E::Closed => Self::Closed,
+        (&current_app::PlayerProblem::from(error)).into()
+    }
+}
+
+// One to one with `current-app`'s problems, both ways (`player_words` tests every variant).
+impl From<&current_app::PlayerProblem> for PlayerProblem {
+    fn from(problem: &current_app::PlayerProblem) -> Self {
+        use current_app::PlayerProblem as P;
+        match problem {
+            P::EngineUnavailable => Self::EngineUnavailable,
+            P::Busy => Self::Busy,
+            P::EngineFailed { kind } => Self::EngineFailed { kind: kind.clone() },
+            P::NotSignedIn => Self::NotSignedIn,
+            P::Replaced => Self::Replaced,
+            P::Closed => Self::Closed,
+        }
+    }
+}
+
+impl From<&PlayerProblem> for current_app::PlayerProblem {
+    fn from(problem: &PlayerProblem) -> Self {
+        use PlayerProblem as P;
+        match problem {
+            P::EngineUnavailable => Self::EngineUnavailable,
+            P::Busy => Self::Busy,
+            P::EngineFailed { kind } => Self::EngineFailed { kind: kind.clone() },
+            P::NotSignedIn => Self::NotSignedIn,
+            P::Replaced => Self::Replaced,
+            P::Closed => Self::Closed,
         }
     }
 }
@@ -140,20 +158,44 @@ pub enum PlaybackProblem {
 
 impl From<&ModelProblem> for PlaybackProblem {
     fn from(problem: &ModelProblem) -> Self {
+        (&current_app::PlaybackProblem::from(problem)).into()
+    }
+}
+
+impl From<&current_app::PlaybackProblem> for PlaybackProblem {
+    fn from(problem: &current_app::PlaybackProblem) -> Self {
+        use current_app::PlaybackProblem as P;
         match problem {
-            ModelProblem::NotPlayable { reasons } => Self::NotPlayable {
-                reasons: reasons.iter().map(|r| r.as_str().to_owned()).collect(),
+            P::NotPlayable { reasons } => Self::NotPlayable {
+                reasons: reasons.clone(),
             },
-            ModelProblem::Engine { kind } => Self::Engine {
-                kind: kind.as_str().to_owned(),
+            P::Engine { kind } => Self::Engine { kind: kind.clone() },
+            P::Network => Self::Network,
+            P::GatewaySignInNeeded => Self::GatewaySignInNeeded,
+            P::SignedOut => Self::SignedOut,
+            P::Server { status } => Self::Server { status: *status },
+            P::NotFound => Self::NotFound,
+            P::PlaylistElsewhere => Self::PlaylistElsewhere,
+            P::LocalRelay => Self::LocalRelay,
+        }
+    }
+}
+
+impl From<&PlaybackProblem> for current_app::PlaybackProblem {
+    fn from(problem: &PlaybackProblem) -> Self {
+        use PlaybackProblem as P;
+        match problem {
+            P::NotPlayable { reasons } => Self::NotPlayable {
+                reasons: reasons.clone(),
             },
-            ModelProblem::Network => Self::Network,
-            ModelProblem::GatewaySignInNeeded => Self::GatewaySignInNeeded,
-            ModelProblem::SignedOut => Self::SignedOut,
-            ModelProblem::Server { status } => Self::Server { status: *status },
-            ModelProblem::NotFound => Self::NotFound,
-            ModelProblem::PlaylistElsewhere => Self::PlaylistElsewhere,
-            ModelProblem::LocalRelay => Self::LocalRelay,
+            P::Engine { kind } => Self::Engine { kind: kind.clone() },
+            P::Network => Self::Network,
+            P::GatewaySignInNeeded => Self::GatewaySignInNeeded,
+            P::SignedOut => Self::SignedOut,
+            P::Server { status } => Self::Server { status: *status },
+            P::NotFound => Self::NotFound,
+            P::PlaylistElsewhere => Self::PlaylistElsewhere,
+            P::LocalRelay => Self::LocalRelay,
         }
     }
 }
