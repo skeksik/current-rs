@@ -56,6 +56,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("the image cache's size grows, and clear and sign-out empty it", BrowseTests.ImageCacheSizeAndClear),
     ("a refused toggle rolls back with a notice that hides the name", BrowseTests.RefusedToggleRollsBack),
     ("Home rows each have their own list", BrowseTests.HomeRowsHaveTheirOwnLists),
+    ("a library search turns Sort and Filter off and notes a full window", BrowseTests.LibrarySearchTurnsOffSortAndFilter),
+    ("the Favourites tab is a row per kind", BrowseTests.FavouritesAreARowPerKind),
     ("no browse without a signed-in server", BrowseTests.NoBrowseWithoutASignedInServer),
     ("browse subscriptions are released", BrowseTests.BrowseSubscriptionsAreReleased),
     ("Play starts the item from where the core says", BrowseTests.PlayStartsTheItemFromWhereTheCoreSays),

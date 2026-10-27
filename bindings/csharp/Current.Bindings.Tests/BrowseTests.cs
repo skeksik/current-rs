@@ -259,6 +259,43 @@ internal static class BrowseTests
         Check(!core.DiagnosticsText().Contains("Example Film", StringComparison.Ordinal), "no name in the request log");
     }
 
+    public static Task LibrarySearchTurnsOffSortAndFilter()
+    {
+        // What the core decides for a library's search box; no server needed.
+        var browsing = ItemQuery.ForLibrary(BigLibrary()) with { Filters = ["unplayed"] };
+        var tools = browsing.Tools();
+        Check(tools.SortAvailable && tools.FilterAvailable && tools.SortTooltip is null, "Sort and Filter while browsing");
+        Check(browsing.SearchNote(1000) is null, "no note while browsing");
+
+        var searching = browsing.Searching("  example ");
+        Check(searching.SearchTerm == "example" && searching.Sort.Count == 0 && searching.Filters.Count == 0,
+            "a search: the text trimmed, no sort and no filter");
+        tools = searching.Tools();
+        Check(!tools.SortAvailable && !tools.FilterAvailable, "neither Sort nor Filter while searching");
+        Check(tools.SortTooltip == "Sorted by relevance while searching", $"the Sort tooltip, not {tools.SortTooltip}");
+        Check(searching.SearchNote(299) is null, "no note below the search window");
+        Check(searching.SearchNote(300) == "Showing the best 300 matches. Type more to narrow it.", "the note at the window");
+
+        var cleared = browsing.Searching("  ");
+        Check(cleared.SearchTerm is null && cleared.Filters.SequenceEqual(["unplayed"]) && cleared.Sort.SequenceEqual(browsing.Sort),
+            "blank text: the query before searching, its sort and filter back");
+        return Task.CompletedTask;
+    }
+
+    public static async Task FavouritesAreARowPerKind()
+    {
+        using var standIn = StandIn.Start();
+        using var core = await SignedIn(standIn);
+        using var browse = core.Browse(FirstServer);
+        var ui = new ManualDispatcher();
+        using var favourites = browse.Favourites();
+        using var groups = favourites.ObserveGroups(ui);
+        // The stand-in's item list takes no filter: every film, series and episode counts as a favourite here.
+        await Eventually("the rows", ui, () => groups.Items.Count == 3);
+        Check(groups.Items.SequenceEqual(["movie", "series", "episode"]), $"films, series, episodes, not {string.Join(",", groups.Items)}");
+        Check(ItemQuery.Favourites("episode").Kinds.SequenceEqual(["episode"]), "an Episodes row's header opens the episodes");
+    }
+
     public static async Task HomeRowsHaveTheirOwnLists()
     {
         using var standIn = StandIn.Start();

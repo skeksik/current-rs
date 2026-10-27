@@ -126,6 +126,12 @@ public sealed record ItemDetails(
     MediaSummary? Media,
     SeriesRun? Run = null);
 
+/// <summary>
+/// What a library grid's Sort and Filter buttons offer for the query it shows (<see cref="ItemQuery.Tools"/>): each tooltip says why
+/// its button is unavailable, null while it is available.
+/// </summary>
+public sealed record GridTools(bool SortAvailable, string? SortTooltip, bool FilterAvailable, string? FilterTooltip);
+
 public enum SortOrder
 {
     Ascending,
@@ -158,12 +164,30 @@ public sealed record ItemQuery
     /// <summary>Only items the server finds for this, as its search does: a library's own search box (<see cref="Searching"/>).</summary>
     public string? SearchTerm { get; init; }
 
-    /// <summary>This query searching for what the user typed (the core decides): the text trimmed, no search when it is blank.</summary>
+    /// <summary>
+    /// What a grid loads for the text in its search box, from this query, the one it showed before searching (keep it while the user
+    /// searches; the core decides): the text trimmed, searched for with no sort and no filter, so the best matches come first; when the
+    /// text is blank, this query itself, its sort and filters back.
+    /// </summary>
     public ItemQuery Searching(string term)
     {
         ArgumentNullException.ThrowIfNull(term);
         return MapBrowse.From(Ffi.CurrentFfiMethods.LibrarySearch(MapBrowse.ToFfi(this), term));
     }
+
+    /// <summary>What the Sort and Filter buttons of a grid showing this query offer (the core decides): neither while it searches.</summary>
+    public GridTools Tools()
+    {
+        var tools = Ffi.CurrentFfiMethods.LibraryGridTools(MapBrowse.ToFfi(this));
+        return new(tools.SortAvailable, tools.SortTooltip, tools.FilterAvailable, tools.FilterTooltip);
+    }
+
+    /// <summary>
+    /// The line a grid showing this query shows above its items once its total is <paramref name="total"/> (the core decides): while it
+    /// searches and the server's search window is full, that only the best matches show; null otherwise.
+    /// </summary>
+    public string? SearchNote(int total) =>
+        Ffi.CurrentFfiMethods.LibrarySearchNote(MapBrowse.ToFfi(this), (uint)Math.Max(total, 0));
 
     /// <summary>
     /// What <paramref name="library"/>'s grid shows before the user sorts or filters it, by name (the core decides): a film library
@@ -175,8 +199,8 @@ public sealed record ItemQuery
         return MapBrowse.From(Ffi.CurrentFfiMethods.LibraryQuery(MapBrowse.ToFfi(library)));
     }
 
-    /// <summary>The Favorites tab (the core decides): the user's favourites in every library, by name; only <paramref name="kind"/>
-    /// (a media kind from <see cref="ViewKindChoices"/>) when given.</summary>
+    /// <summary>The user's favourites in every library, by name (the core decides): with <paramref name="kind"/> (movie, series or
+    /// episode, as a Favourites row names it), that kind only, the list a row's header opens; without, Home's Favourites row.</summary>
     public static ItemQuery Favourites(string? kind = null) => MapBrowse.From(Ffi.CurrentFfiMethods.FavouritesQuery(kind));
 
     /// <summary>The Recently added tab (the core decides): what was added to every library, the newest first; only
