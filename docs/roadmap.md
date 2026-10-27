@@ -226,17 +226,19 @@ Done when: a Jellyfin library is browsable and playable on Windows every day, wi
 ## Next: Jellyfin and playback complete (Windows) (before M4 and M3; owner, 2026-10-27)
 The owner's order: implement, fix and polish everything Jellyfin and playback first; Seerr (M4), macOS (M3) and the rest after.
 
-In progress:
-- [ ] Move the Windows app's remaining rules and texts into the core, so macOS and Linux don't copy them (manager's
-      review of the Windows UI pass, 2026-10-27). Rules: which quality entry is current and the fallback quality list; dropping
-      remembered filters a menu no longer offers; Favourites offering type filters only; Home-header grids ignoring remembered choices;
-      view ids and the view → query mapping; row kind → tab links and which rows get wide tiles; kbit/s and Mbit/s formatting and the
-      "Original · 4K · 26.1 Mbit/s" composition; time-left rounding and format. Texts: Home row titles ("Recently added in X"), view
-      titles, kind names, link tooltips, the Favourites tab's "No favourites yet" and its failure line. Bindings tests for the quality options, `OpenItems`, the Favourites and Recently added
-      queries, searching, time left and the new Home row kinds
-- [ ] Global search filters (owner, 2026-10-27): Type (All, Movies, Series, Actors), Source (All, Library, Catalog; Catalog comes with
-      Seerr, M4) and View
+Done:
+- [x] Move the Windows app's remaining rules and texts into the core, so macOS and Linux don't copy them (manager's
+      review of the Windows UI pass, 2026-10-27; PR 88): the quality menu, what a library grid opens with, the Filter menu, the
+      views and their queries, Home rows and search groups (titles, wide tiles, links), bitrate and time labels, kind and view names,
+      the Favourites tab's lines; with bindings tests
+- [x] Global search filters (owner, 2026-10-27; PR 87): Type (All, Movies, Series, Actors), Source (All, Library, Catalog; Catalog
+      comes with Seerr, M4) and View
 Fix and polish:
+- [ ] The texts and rules still in the Windows app's C# (left by PR 88), so macOS and Linux don't copy them: the player's route and
+      reason names, plan notes, skip buttons, the next-episode countdown, track names, times and spoken times, playback problems and
+      the playback info panel's lines; tile lines and marks ("N new episodes", "in progress", "N unplayed"), person parts, sizes on
+      disk, the action-failed and library-gone notices, browse problems and `ProblemText` (shared by every screen, so it moves as one
+      piece); the search page's status lines ("Searching…", "No results", "Couldn't search."). Icon glyphs stay with each platform
 - [ ] Played marks between a series and its episodes keep a stale mark until a refresh (owner's run, 2026-10-26; each needs a failing
       test against the stand-in first): (1) marking a series played marks its episodes, but the series' own mark disappears; (2)
       unmarking a series leaves its episodes marked; (3) marking every episode played leaves the series unmarked; (4) a series marked
