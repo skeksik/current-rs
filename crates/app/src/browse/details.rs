@@ -9,7 +9,7 @@ use current_model::{ItemDetails, ItemRef, ItemSummary, MediaKind, PlayTarget, Us
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
-use super::{Context, Live, find_in, lock, patch_list, sync_list};
+use super::{Context, Live, below_in, find_in, lock, patch_list, states, sync_list};
 use crate::list::ObservableList;
 
 /// How many similar items a detail page shows.
@@ -208,7 +208,10 @@ impl Details {
                         Err(error) => failures.push(error),
                     }
                     if let Some((mut seasons, mut episodes)) = lists {
-                        page.ctx.observe(&mut seasons);
+                        // A season names no series: a played change pending for this one shows on it too.
+                        for season in &mut seasons {
+                            page.ctx.states.observe_under(season, Some(&page.item));
+                        }
                         page.ctx.observe(&mut episodes);
                         sync_list(&page.seasons, seasons);
                         sync_list(&page.episodes, episodes);
@@ -256,7 +259,16 @@ impl Live for Details {
     }
 
     fn dependents_changed(&self, items: &HashSet<ItemRef>) {
+        // The page's item, a season it lists, or (an episode's page) the episode's series or season: a played mark on a series
+        // reaches every episode below it on the server.
+        let links = self
+            .details
+            .borrow()
+            .as_ref()
+            .map(|details| states::parents(&details.summary))
+            .unwrap_or_default();
         let shows = items.contains(&self.item)
+            || links.iter().any(|link| items.contains(link))
             || self
                 .seasons
                 .snapshot()
@@ -281,5 +293,28 @@ impl Live for Details {
         [&self.seasons, &self.episodes, &self.similar]
             .into_iter()
             .find_map(|list| find_in(list, item))
+    }
+
+    fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
+        let _guard = lock(&self.lists);
+        let mut below = Vec::new();
+        if let Some(details) = self.details.borrow().as_ref()
+            && states::parents(&details.summary).contains(parent)
+        {
+            below.push(details.summary.clone());
+        }
+        // This series' seasons.
+        if parent == &self.item {
+            below.extend(self.seasons.snapshot());
+        }
+        for list in [&self.episodes, &self.similar] {
+            below.extend(below_in(list, parent));
+        }
+        below
+    }
+
+    fn parent_of(&self, item: &ItemRef) -> Option<ItemRef> {
+        let _guard = lock(&self.lists);
+        find_in(&self.seasons, item).map(|_| self.item.clone())
     }
 }

@@ -1,8 +1,15 @@
 //! A small fake library for the browse endpoints (ADR 0018), in Jellyfin 12.2's shapes: PascalCase names, nulls left out, ids as 32
 //! hex digits. Two libraries: films and shows, with one series of one season. Libraries can be added, renamed, reordered and
 //! removed while it runs ([`crate::Controls::add_library`] and the others). Every name is an example.
+//!
+//! Played marks follow Jellyfin 12.2 (ca0f16eb, read 2026-10-27): marking a series or season marks every episode below it and not the
+//! folder itself (`Folder.MarkPlayed` and `MarkUnplayed`: "Sweep through recursively and update status" over `Recursive = true,
+//! IsFolder = false`); a folder's played state is derived from its episodes (`Folder.FillUserDataDtoValues`: `UnplayedItemCount =
+//! total - played`, `PlayedPercentage = played / total * 100`, `Played = playedCount >= totalCount`); Next up lists a series only once
+//! one of its episodes was played (`NextUpService.GetNextUpSeriesKeys`: `LastPlayedDate != null && LastPlayedDate >= dateCutoff`);
+//! and a stop report near the end marks the item played (`UserDataManager.UpdatePlayState`: "mark as completed close to the end").
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// The films library.
 pub const FILMS_LIBRARY_ID: &str = "57a2d1e0000000000000000000001001";
@@ -16,7 +23,8 @@ pub const FILM_IDS: [&str; 3] = [
 ];
 pub const SERIES_ID: &str = "57a2d1e0000000000000000000003001";
 pub const SEASON_ID: &str = "57a2d1e0000000000000000000003101";
-/// The season's episodes, in order. The second has no image of its own: it shows the series' poster.
+/// The season's episodes, in order. The second has no image of its own: it shows the series' poster. Each runs 600 s, as the player's
+/// test engine does, so playing one to its end marks it played.
 pub const EPISODE_IDS: [&str; 2] = [
     "57a2d1e0000000000000000000003201",
     "57a2d1e0000000000000000000003202",
@@ -76,14 +84,14 @@ const ITEMS: &[Item] = &[
         kind: "Episode",
         name: "Example Episode One",
         parent: SEASON_ID,
-        fields: r#""RunTimeTicks":13000000000,"IndexNumber":1,"ParentIndexNumber":1,"IsFolder":false,"SeriesName":"Example Series","SeriesId":"57a2d1e0000000000000000000003001","SeasonId":"57a2d1e0000000000000000000003101","SeasonName":"Season 1","SeriesPrimaryImageTag":"57a2d1e0a0000004","ImageTags":{"Primary":"57a2d1e0a0000005"},"BackdropImageTags":[]"#,
+        fields: r#""RunTimeTicks":6000000000,"IndexNumber":1,"ParentIndexNumber":1,"IsFolder":false,"SeriesName":"Example Series","SeriesId":"57a2d1e0000000000000000000003001","SeasonId":"57a2d1e0000000000000000000003101","SeasonName":"Season 1","SeriesPrimaryImageTag":"57a2d1e0a0000004","ImageTags":{"Primary":"57a2d1e0a0000005"},"BackdropImageTags":[]"#,
     },
     Item {
         id: EPISODE_IDS[1],
         kind: "Episode",
         name: "Example Episode Two",
         parent: SEASON_ID,
-        fields: r#""RunTimeTicks":13000000000,"IndexNumber":2,"ParentIndexNumber":1,"IsFolder":false,"SeriesName":"Example Series","SeriesId":"57a2d1e0000000000000000000003001","SeasonId":"57a2d1e0000000000000000000003101","SeasonName":"Season 1","SeriesPrimaryImageTag":"57a2d1e0a0000004","PrimaryImageAspectRatio":0.68,"ImageTags":{},"BackdropImageTags":[]"#,
+        fields: r#""RunTimeTicks":6000000000,"IndexNumber":2,"ParentIndexNumber":1,"IsFolder":false,"SeriesName":"Example Series","SeriesId":"57a2d1e0000000000000000000003001","SeasonId":"57a2d1e0000000000000000000003101","SeasonName":"Season 1","SeriesPrimaryImageTag":"57a2d1e0a0000004","PrimaryImageAspectRatio":0.68,"ImageTags":{},"BackdropImageTags":[]"#,
     },
 ];
 
@@ -104,11 +112,111 @@ pub(crate) fn is_browse_path(path: &str) -> bool {
     .any(|prefix| path.starts_with(prefix))
 }
 
-/// What the user has marked, shared by every request.
+/// What the user has marked, shared by every request. `played` holds items that are not folders: a series' or season's played state
+/// is derived from its episodes.
 #[derive(Default)]
 pub(crate) struct Marks {
     pub played: HashSet<String>,
     pub favourite: HashSet<String>,
+    /// When each item was last played, as a count that only goes up: Jellyfin's `LastPlayedDate`.
+    last_played: HashMap<String, u64>,
+    clock: u64,
+}
+
+impl Marks {
+    /// Marks `id` played or unplayed as `POST`/`DELETE UserPlayedItems` does: a series or season through every episode below it
+    /// (`Folder.MarkPlayed`). Played keeps an earlier last-played date ("`datePlayed ?? data.LastPlayedDate ?? DateTime.UtcNow`",
+    /// `BaseItem.MarkPlayed`); unplayed clears it (`ResetPlayedState`).
+    pub(crate) fn set_played(&mut self, id: &str, played: bool) {
+        let ids: Vec<&str> = match find(id) {
+            Some(item) if is_folder(item) => leaves_below(id).map(|leaf| leaf.id).collect(),
+            _ => vec![id],
+        };
+        for id in ids {
+            if played {
+                self.played.insert(id.to_owned());
+                if !self.last_played.contains_key(id) {
+                    self.clock += 1;
+                    self.last_played.insert(id.to_owned(), self.clock);
+                }
+            } else {
+                self.played.remove(id);
+                self.last_played.remove(id);
+            }
+        }
+    }
+
+    /// A stop report for `id` at `position_ticks`, as `UserDataManager.UpdatePlayState` takes it with Jellyfin's defaults
+    /// (`ServerConfiguration`: `MinResumePct = 5`, `MaxResumePct = 90`, `MinResumeDurationSeconds = 300`; v12.2 ca0f16eb, read
+    /// 2026-10-27): below 5 % the position counts as 0 ("ignore progress during the beginning"); past 90 % or within a second of the
+    /// end, or anything of an item shorter than 300 s, it is played ("mark as completed close to the end"). It is then last played
+    /// now if it played to its end or kept a position (`SessionManager.OnPlaybackStopped`: "`if (playedToCompletion ||
+    /// data.PlaybackPositionTicks > 0) data.LastPlayedDate = DateTime.UtcNow`"). The stand-in keeps no resume point itself.
+    pub(crate) fn stopped(&mut self, id: &str, position_ticks: i64, failed: bool) {
+        let Some(runtime) = find(id).and_then(runtime_ticks).filter(|ticks| *ticks > 0) else {
+            return;
+        };
+        if failed || position_ticks <= 0 {
+            return;
+        }
+        let percent = position_ticks as f64 / runtime as f64 * 100.0;
+        let finished = if percent < 5.0 {
+            false
+        } else {
+            percent > 90.0 || position_ticks >= runtime - 10_000_000 || runtime < 300 * 10_000_000
+        };
+        let kept = percent >= 5.0 && !finished;
+        if finished {
+            self.played.insert(id.to_owned());
+        }
+        if finished || kept {
+            self.clock += 1;
+            self.last_played.insert(id.to_owned(), self.clock);
+        }
+    }
+}
+
+fn is_folder(item: &Item) -> bool {
+    matches!(item.kind, "Series" | "Season")
+}
+
+/// The episodes below `folder`, in order: what a folder's played state counts (`DescendantQueryHelper.IsCountableLeaf`: "`!b.IsFolder
+/// && !b.IsVirtualItem`").
+fn leaves_below(folder: &str) -> impl Iterator<Item = &'static Item> + '_ {
+    ITEMS
+        .iter()
+        .filter(move |item| !is_folder(item) && is_below(item, folder))
+}
+
+/// The item's `RunTimeTicks`, read from its record.
+fn runtime_ticks(item: &Item) -> Option<i64> {
+    let rest = item.fields.split("\"RunTimeTicks\":").nth(1)?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+/// The series' next episode, as `GET Shows/NextUp` answers: the first unplayed episode after the played episode that comes last in
+/// the series' order (`NextUpService.GetNextUpEpisodesBatch`: played episodes "`OrderByDescending(e => e.ParentIndexNumber)
+/// .ThenByDescending(e => e.IndexNumber)`"), or the first unplayed one when none is played. Without `seriesId`, a series is asked
+/// for only once one of its episodes has a last-played date (`GetNextUpSeriesKeys`); with it, whatever was played (what Jellyfin
+/// answers for a series never started is not verified: the stand-in gives its first unplayed episode).
+fn next_up<'a>(marks: &Marks, by_id: bool) -> Option<&'a Item> {
+    let episodes: Vec<&Item> = leaves_below(SERIES_ID).collect();
+    let started = episodes
+        .iter()
+        .any(|episode| marks.last_played.contains_key(episode.id));
+    if !started && !by_id {
+        return None;
+    }
+    // The stand-in lists its episodes in their order.
+    let from = episodes
+        .iter()
+        .rposition(|episode| marks.played.contains(episode.id))
+        .map_or(0, |at| at + 1);
+    episodes
+        .into_iter()
+        .skip(from)
+        .find(|episode| !marks.played.contains(episode.id))
 }
 
 /// A request to a browse endpoint.
@@ -172,15 +280,13 @@ pub(crate) fn answer(
             (200, result(&resumable, 0, None))
         }
         "/Shows/NextUp" => {
-            let next = EPISODE_IDS
-                .iter()
-                .filter(|id| !marks.played.contains(**id))
-                .take(1)
-                .filter_map(|id| Some(record(find(id)?, marks, "")))
-                .collect::<Vec<_>>();
+            let next: Vec<String> = next_up(marks, request.param("seriesId").is_some())
+                .map(|episode| record(episode, marks, ""))
+                .into_iter()
+                .collect();
             (200, result(&next, 0, None))
         }
-        _ => return item_paths(request, marks),
+        _ => return item_user_data(path, marks).or_else(|| item_paths(request, marks)),
     };
     Some(answer)
 }
@@ -390,10 +496,30 @@ fn record(item: &Item, marks: &Marks, extra: &str) -> String {
     )
 }
 
-/// `UserItemDataDto`.
+/// `UserItemDataDto`. A series' or season's `Played`, `UnplayedItemCount` and `PlayedPercentage` come from its episodes
+/// (`Folder.FillUserDataDtoValues`); its own position and play count stay 0.
 fn user_data(id: &str, marks: &Marks) -> String {
-    let played = marks.played.contains(id);
     let favourite = marks.favourite.contains(id);
+    if find(id).is_some_and(is_folder) {
+        let total = leaves_below(id).count();
+        let played = leaves_below(id)
+            .filter(|leaf| marks.played.contains(leaf.id))
+            .count();
+        let percentage = if total > 0 {
+            format!(
+                ",\"PlayedPercentage\":{}",
+                played as f64 / total as f64 * 100.0
+            )
+        } else {
+            String::new()
+        };
+        return format!(
+            r#"{{"PlaybackPositionTicks":0{percentage},"UnplayedItemCount":{},"PlayCount":0,"IsFavorite":{favourite},"Played":{},"Key":"{id}","ItemId":"{id}"}}"#,
+            total - played,
+            played >= total
+        );
+    }
+    let played = marks.played.contains(id);
     // The second film is half watched until it is marked played.
     let (position, percentage) = if id == FILM_IDS[1] && !played {
         (27_000_000_000_i64, ",\"PlayedPercentage\":50")
@@ -412,23 +538,36 @@ enum Mark {
     Favourite,
 }
 
-/// `POST` sets the mark, `DELETE` clears it; both answer the item's user data.
+/// `POST` sets the mark, `DELETE` clears it; both answer the item's user data as it is after the change, a folder's derived from its
+/// episodes (`PlaystateController.UpdatePlayedStatus`: "`return _userDataRepository.GetUserDataDto(item, user)`").
 fn mark(marks: &mut Marks, which: Mark, id: &str, method: &str) -> (u16, String) {
     if find(id).is_none() {
         return (404, String::new());
     }
-    let set = match which {
-        Mark::Played => &mut marks.played,
-        Mark::Favourite => &mut marks.favourite,
-    };
-    match method {
-        "POST" => {
-            set.insert(id.to_owned());
-        }
-        "DELETE" => {
-            set.remove(id);
-        }
+    let on = match method {
+        "POST" => true,
+        "DELETE" => false,
         _ => return (405, String::new()),
+    };
+    match which {
+        Mark::Played => marks.set_played(id, on),
+        Mark::Favourite if on => {
+            marks.favourite.insert(id.to_owned());
+        }
+        Mark::Favourite => {
+            marks.favourite.remove(id);
+        }
     }
     (200, user_data(id, marks))
+}
+
+/// `GET UserItems/{id}/UserData`: the item's user data, as the mark requests answer it (`ItemsController.GetItemUserData`).
+fn item_user_data(path: &str, marks: &Marks) -> Option<(u16, String)> {
+    let id = path
+        .strip_prefix("/UserItems/")?
+        .strip_suffix("/UserData")?;
+    Some(match find(id) {
+        Some(_) => (200, user_data(id, marks)),
+        None => (404, String::new()),
+    })
 }

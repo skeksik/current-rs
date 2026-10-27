@@ -148,8 +148,26 @@ sends `enableResumable: false` (so an episode in progress shows in "Continue wat
   `UserItemDataDto`.
 - `POST UserItems/{itemId}/UserData` with an `UpdateUserItemDataDto` body (`ItemsController`, line 1128) sets several fields at once.
   We use the dedicated endpoints.
-- Whether marking a series or season played marks its episodes (and what the answer's counts then say) was not verified; ADR 0018
-  re-reads the affected rows after any change instead of predicting the server.
+- ~~Whether marking a series or season played marks its episodes was not verified.~~ Checked 2026-10-27 in v12.2 (ca0f16eb), the same
+  on master (02c2951e), for fix/series-episode-marks:
+  - `PlaystateController.UpdatePlayedStatus` calls `item.MarkPlayed(user, datePlayed, true)` or `item.MarkUnplayed(user)`, then
+    answers `_userDataRepository.GetUserDataDto(item, user)`.
+  - `Folder.MarkPlayed` and `MarkUnplayed` mark every item below that is not a folder ("Sweep through recursively and update
+    status", `Recursive = true, IsFolder = false`), skipping virtual items when marking played unless the user displays missing
+    episodes. The folder's own row is left as it was.
+  - `BaseItem.MarkPlayed` sets `PlayCount` to at least 1, `PlaybackPositionTicks = 0` and `LastPlayedDate = datePlayed ??
+    data.LastPlayedDate ?? DateTime.UtcNow`. `ResetPlayedState` clears play count, position and `LastPlayedDate`.
+  - A folder's user data is derived (`Folder.FillUserDataDtoValues`: `UnplayedItemCount = total - played`, `PlayedPercentage =
+    played / total * 100`, `Played = playedCount >= totalCount`, and `Played = true` with nothing to count). It counts items that are
+    neither folders nor virtual (`DescendantQueryHelper.IsCountableLeaf`: `!b.IsFolder && !b.IsVirtualItem`). So the mark's answer
+    for a series already carries its new count.
+  - `GET UserItems/{itemId}/UserData` (`ItemsController.GetItemUserData`, line 1072) answers the same `GetUserDataDto`: one item's
+    marks without its record.
+- Next up lists a series only once one of its episodes has a `LastPlayedDate` on or after the cutoff
+  (`NextUpService.GetNextUpSeriesKeys`). A stop report marks the item played when past `MaxResumePct` (90 by default) or within a
+  second of the end, and sets `LastPlayedDate` when it played to the end or kept a position (`UserDataManager.UpdatePlayState`,
+  `SessionManager.OnPlaybackStopped`). `ReportPlaybackStopped` awaits this before it answers. With `seriesId`, Next up answers for
+  that series whatever was played; what it answers for a series never started is not verified.
 
 ### The item record
 `BaseItemDto` (`MediaBrowser.Model/Dto/BaseItemDto.cs`) fields the browse screens use:

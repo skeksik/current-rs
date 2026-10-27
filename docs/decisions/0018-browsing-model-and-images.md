@@ -178,6 +178,31 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    (`ItemQuery::depends_on_marks`). Before, a new favourite did not appear in them until a manual refresh.)
 5. Failure: the store rolls back to the state before the change, broadcasts it, and raises one notice (`ActionFailed { action, problem }`)
    that the UI shows as a message. The item's name may appear in the message; it never goes to the log.
+6. (**Amended 2026-10-27 (owner)**, fix/series-episode-marks.) **A series and its episodes.** Jellyfin
+   marks a series or season by marking every episode below it, not the folder, and derives the folder's played state, unplayed count
+   and played percentage from its episodes: `Folder.MarkPlayed` ("Sweep through recursively and update status", over `Recursive =
+   true, IsFolder = false`) and `Folder.FillUserDataDtoValues` (`dto.UnplayedItemCount = unplayedCount; dto.PlayedPercentage =
+   playedCount / (double)totalCount * 100; dto.Played = playedCount >= totalCount`), counting episodes that are neither folders nor
+   virtual (`DescendantQueryHelper.IsCountableLeaf`). The mark request answers the folder's user data computed after the sweep
+   (`PlaystateController.UpdatePlayedStatus`), as `GET UserItems/{id}/UserData` does (`ItemsController.GetItemUserData`). Jellyfin
+   v12.2 (ca0f16eb), the same on master (02c2951e), read 2026-10-27. So:
+   - **at once**, a played change on a series or season shows on every loaded episode and season below it, in every live list.
+     An episode loaded while the change is pending takes it too, unless its own change is newer. A failure rolls them all back with
+     it, those loaded meanwhile included, and the item's page and its parents' read the server again a second later. A played change on an episode or season moves its loaded series' and season's unplayed count at once (one for an episode, a
+     season's own count when marked played), and they show played when nothing below is unplayed;
+   - **read again** with the dependent reload a second after the server answered a played change (or a stop was reported): the
+     series' and season's own marks (the posters' unplayed count and progress), with `GET UserItems/{id}/UserData`. That is one
+     request per series or season however many changes came within the second. The estimate is shown in every list loaded meanwhile,
+     until its read-back answers; the read-back corrects it where the server counts what the lists don't show. A read-back older than
+     a newer played change is dropped, and the item is read again after the next delay. A failed read-back keeps the estimate and
+     raises no notice;
+   - **reload** a second later, with the dependents of point 4: the marked series' or season's own page (its episodes and seasons)
+     and an episode's page whose series or season changed. The reload and the read-backs wait while a played change still waits for
+     the server; its answer schedules them again.
+
+   Not verified on a server: missing (virtual) episodes. Jellyfin's sweep marks them only when the user displays missing episodes,
+   and they never count; a page that lists them may show them marked at once, before the reload a second later shows the server's
+   state.
 
 ### 6. Home
 Home's layout is **provisional**: the owner accepted it for now and will have it redesigned later (2026-10-25). The `HomeFeed`

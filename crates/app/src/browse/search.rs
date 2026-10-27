@@ -10,7 +10,7 @@ use current_model::{ItemRef, ItemSummary, MediaKind, UserState};
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 
-use super::{Context, Live, LoadState, find_in, lock, patch_list, sync_list};
+use super::{Context, Live, LoadState, below_in, find_in, lock, patch_list, sync_list};
 use crate::list::ObservableList;
 
 /// The Favourites tab's rows, in order (owner, 2026-10-27): films, series and episodes. Each row's header opens the whole list of its
@@ -220,5 +220,13 @@ impl Live for Search {
     fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
         let groups = lock(&self.lists);
         groups.lists.values().find_map(|list| find_in(list, item))
+    }
+    fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
+        let groups = lock(&self.lists);
+        groups
+            .lists
+            .values()
+            .flat_map(|list| below_in(list, parent))
+            .collect()
     }
 }

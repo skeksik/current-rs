@@ -87,6 +87,25 @@ internal static class ItemActions
         _ => null,
     };
 
+    /// <summary>The item's marks as every list shows them now, read from the core at once: a list's subscription takes a change a
+    /// moment later, through the UI's queue.</summary>
+    public static UserState? StateOf(ItemSummary? item)
+    {
+        if (item is null || App.Browsing?.Find(item.Item.Server) is not { } server)
+        {
+            return item?.User;
+        }
+        try
+        {
+            return server.Session.GetUserState(item.Item) ?? item.User;
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: reading an item's marks failed: {error.GetType().Name}");
+            return item.User;
+        }
+    }
+
     /// <summary>Flips the item's played (or favourite) mark, from the state every list shows now.</summary>
     public static void Toggle(ItemSummary? item, bool played)
     {

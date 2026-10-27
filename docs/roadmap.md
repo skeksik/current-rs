@@ -287,7 +287,9 @@ Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 whe
       unmarking a series leaves its episodes marked; (3) marking every episode played leaves the series unmarked; (4) a series marked
       through its episodes needs two clicks on Played to unmark; (5) a newly marked series keeps its poster's unplayed count and
       progress bar; (6) after unmarking a series, its episodes' tiles show unmarked but an episode's details page still shows it
-      played; (7) finishing an episode does not bring up Next up on Home
+      played; (7) finishing an episode does not bring up Next up on Home. Cases 1 to 6 fixed in the core with tests (fix/series-episode-marks;
+      ADR 0018 section 5 point 6, proposed). Case 7 already passes in the core against a Jellyfin-like stand-in; the owner re-checks
+      it on their PC, then this is ticked
 - [ ] AV1 as a transcoding target where the server has an AV1 encoder (the device profile asks `hevc,h264` today; ADR 0019)
 - [ ] Before M3: move the Windows app's remaining rules and texts into the core, so macOS and Linux don't copy them (manager's
       review of the Windows UI pass, 2026-10-27). Rules: which quality entry is current and the fallback quality list; dropping

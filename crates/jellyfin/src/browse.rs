@@ -351,6 +351,15 @@ impl JellyfinClient {
         self.set_mark(path, favourite).await
     }
 
+    /// `item`'s marks as the server holds them now (`GET UserItems/{id}/UserData`, which answers what the mark requests do: for a
+    /// series or season, its played state, unplayed count and played percentage derived from its episodes; `ItemsController
+    /// .GetItemUserData` and `Folder.FillUserDataDtoValues`, v12.2 at ca0f16eb, read 2026-10-27).
+    pub async fn user_data(&self, item: &ItemRef) -> Result<UserState, AuthError> {
+        let path = format!("/UserItems/{}/UserData", item.id.as_str());
+        let data: UserItemDataDto = self.get_json(Request::get(path)).await?;
+        Ok(user_state(Some(data)))
+    }
+
     async fn set_mark(&self, path: String, on: bool) -> Result<UserState, AuthError> {
         let method = if on { Method::POST } else { Method::DELETE };
         let data: UserItemDataDto = self.get_json(Request::new(method, path)).await?;

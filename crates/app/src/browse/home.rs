@@ -16,7 +16,7 @@ use current_model::{CollectionKind, ItemQuery, ItemRef, ItemSummary, Library, Us
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 
-use super::{Context, Live, find_in, lock, patch_list, sync_list};
+use super::{Context, Live, below_in, find_in, lock, patch_list, sync_list};
 use crate::list::ObservableList;
 
 /// How many items each row asks for (what jellyfin-web asks; `docs/notes/jellyfin-browse.md`).
@@ -510,6 +510,13 @@ impl Live for Home {
     fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
         let rows = lock(&self.lists);
         rows.lists.values().find_map(|list| find_in(list, item))
+    }
+    fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
+        let rows = lock(&self.lists);
+        rows.lists
+            .values()
+            .flat_map(|list| below_in(list, parent))
+            .collect()
     }
 }
 

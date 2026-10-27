@@ -504,14 +504,10 @@ impl Controls {
         lock(&self.state.reports).clone()
     }
 
-    /// Marks `id` played or not on the server only, as playback or another client would, without any client being told.
+    /// Marks `id` played or not on the server only, as playback or another client would, without any client being told; a series or
+    /// season through its episodes, as the mark request does.
     pub fn set_played_on_server(&self, id: &str, played: bool) {
-        let mut marks = lock(&self.state.marks);
-        if played {
-            marks.played.insert(id.to_owned());
-        } else {
-            marks.played.remove(id);
-        }
+        lock(&self.state.marks).set_played(id, played);
     }
 
     /// The image requests that passed the gateway so far, oldest first.
@@ -1024,6 +1020,22 @@ fn subtitle_item(path: &str) -> Option<&str> {
     }
 }
 
+/// A string field of a flat JSON body.
+fn json_string(body: &str, key: &str) -> Option<String> {
+    let rest = body.split(&format!("\"{key}\":\"")).nth(1)?;
+    Some(rest.split('"').next()?.to_owned())
+}
+
+/// A whole-number field of a flat JSON body.
+fn json_number(body: &str, key: &str) -> Option<i64> {
+    let rest = body.split(&format!("\"{key}\":")).nth(1)?;
+    let digits: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
+    digits.parse().ok()
+}
+
 /// Playback's endpoints, for a signed-in caller.
 fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
     if !authorized(state, received) {
@@ -1032,6 +1044,15 @@ fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
     match path {
         "/Sessions/Playing" | "/Sessions/Playing/Progress" | "/Sessions/Playing/Stopped" => {
             lock(&state.reports).push((path.to_owned(), received.body.clone()));
+            // Jellyfin takes the stop into the user's data before it answers (`SessionManager.OnPlaybackStopped`, awaited by
+            // `PlaystateController.ReportPlaybackStopped`).
+            if path == "/Sessions/Playing/Stopped"
+                && let Some(item) = json_string(&received.body, "ItemId")
+            {
+                let position = json_number(&received.body, "PositionTicks").unwrap_or(0);
+                let failed = received.body.contains("\"Failed\":true");
+                lock(&state.marks).stopped(&item, position, failed);
+            }
             (204, String::new())
         }
         "/Sessions" => (200, sessions(received)),

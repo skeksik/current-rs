@@ -82,8 +82,14 @@ async fn the_stand_ins_library_is_browsable() {
     assert_eq!(resume[0].user.progress, Some(0.5));
 
     let cutoff = SystemTime::now() - NEXT_UP_CUTOFF;
-    let next_up = client.next_up(12, cutoff).await.unwrap();
-    assert_eq!(next_up[0].item, item(EPISODE_IDS[0]));
+    // No episode was played: no series is in progress.
+    assert!(client.next_up(12, cutoff).await.unwrap().is_empty());
+    // A series' own Play button still gets its first episode.
+    let first = client.series_next_up(&item(SERIES_ID)).await.unwrap();
+    assert_eq!(
+        first.map(|episode| episode.item),
+        Some(item(EPISODE_IDS[0]))
+    );
 
     let seasons = client.seasons(&item(SERIES_ID)).await.unwrap();
     assert_eq!(seasons[0].item, item(SEASON_ID));
@@ -129,6 +135,8 @@ async fn marks_stick_and_change_next_up() {
     let next_up = client.next_up(12, cutoff).await.unwrap();
     assert_eq!(next_up[0].item, item(EPISODE_IDS[1]));
     assert!(!client.set_played(&first, false).await.unwrap().played);
+    // Unplayed again, nothing in the series was played.
+    assert!(client.next_up(12, cutoff).await.unwrap().is_empty());
 
     let state = client.set_favourite(&first, true).await.unwrap();
     assert!(state.favourite);
@@ -145,5 +153,58 @@ async fn browsing_without_a_session_is_refused() {
     assert_eq!(
         client.libraries().await.unwrap_err(),
         AuthError::SessionRevoked
+    );
+}
+
+/// As Jellyfin 12.2 (`Folder.MarkPlayed`, `Folder.FillUserDataDtoValues`): a series' mark is one on each of its episodes, and its own
+/// state, unplayed count and played percentage come from them, in the mark's answer and in `UserItems/{id}/UserData`.
+#[tokio::test]
+async fn a_series_mark_is_its_episodes() {
+    let stand_in = StandIn::start().await.unwrap();
+    let client = signed_in(&stand_in).await;
+    let series = item(SERIES_ID);
+    let fresh = client.user_data(&series).await.unwrap();
+    assert!(!fresh.played);
+    assert_eq!(fresh.unplayed_count, Some(2));
+    assert_eq!(fresh.progress, Some(0.0));
+
+    let one = client
+        .set_played(&item(EPISODE_IDS[0]), true)
+        .await
+        .unwrap();
+    assert!(one.played && one.unplayed_count.is_none());
+    let half = client.user_data(&series).await.unwrap();
+    assert!(!half.played);
+    assert_eq!(half.unplayed_count, Some(1));
+    assert_eq!(half.progress, Some(0.5));
+    assert_eq!(
+        client
+            .user_data(&item(SEASON_ID))
+            .await
+            .unwrap()
+            .unplayed_count,
+        Some(1)
+    );
+
+    let all = client.set_played(&series, true).await.unwrap();
+    assert!(all.played);
+    assert_eq!(all.unplayed_count, Some(0));
+    assert_eq!(all.progress, Some(1.0));
+    let episodes = client.episodes(&series, &item(SEASON_ID)).await.unwrap();
+    assert!(episodes.iter().all(|episode| episode.user.played));
+    // Every episode played: the series has no next episode.
+    let cutoff = SystemTime::now() - NEXT_UP_CUTOFF;
+    assert!(client.next_up(12, cutoff).await.unwrap().is_empty());
+
+    let none = client.set_played(&series, false).await.unwrap();
+    assert!(!none.played);
+    assert_eq!(none.unplayed_count, Some(2));
+    let episodes = client.episodes(&series, &item(SEASON_ID)).await.unwrap();
+    assert!(episodes.iter().all(|episode| !episode.user.played));
+    assert!(
+        client
+            .user_data(&item("57a2d1e00000000000000000000fffff"))
+            .await
+            .is_err()
     );
 }
