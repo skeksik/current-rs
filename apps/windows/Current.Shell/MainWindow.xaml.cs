@@ -553,8 +553,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         var all = new List<object>();
         // The views across every library: above Libraries with one server, first inside each server's item with more.
         var single = servers.Count == 1 ? servers[0].Server : null;
-        FavouritesItem.Tag = single is null ? null : new ViewArgs(single, ViewArgs.Favourites);
-        RecentItem.Tag = single is null ? null : new ViewArgs(single, ViewArgs.RecentlyAdded);
+        FavouritesItem.Tag = single is null ? null : new ViewArgs(single, BrowseView.Favourites);
+        RecentItem.Tag = single is null ? null : new ViewArgs(single, BrowseView.RecentlyAdded);
         FavouritesItem.Visibility = RecentItem.Visibility = single is null ? Visibility.Collapsed : Visibility.Visible;
         foreach (var server in servers)
         {
@@ -572,11 +572,11 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
                 all.Add(group);
                 into = [];
                 wanted.Add((group.MenuItems, into));
-                foreach (var (view, glyph) in new[] { (ViewArgs.Favourites, "\uEB51"), (ViewArgs.RecentlyAdded, "\uE823") })
+                foreach (var (view, glyph) in new[] { (BrowseView.Favourites, "\uEB51"), (BrowseView.RecentlyAdded, "\uE823") })
                 {
                     var tag = new ViewArgs(server.Server, view);
                     var item = _libraryItems.OfType<NavigationViewItem>().FirstOrDefault(known => Equals(known.Tag, tag))
-                        ?? new NavigationViewItem { Tag = tag, Content = BrowseText.ViewTitle(view), Icon = new FontIcon { Glyph = glyph } };
+                        ?? new NavigationViewItem { Tag = tag, Content = Views.Title(view), Icon = new FontIcon { Glyph = glyph } };
                     into.Add(item);
                     all.Add(item);
                 }
@@ -1061,8 +1061,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         // header opened, under Favourites (review 2, S2).
         if (_shownParameter is ViewArgs shownView)
         {
-            var tab = shownView is { View: ViewArgs.Everything, Favourite: true }
-                ? new ViewArgs(shownView.Server, ViewArgs.Favourites)
+            var tab = shownView is { View: BrowseView.Everything, Favourite: true }
+                ? new ViewArgs(shownView.Server, BrowseView.Favourites)
                 : shownView with { Kind = null };
             NavView.SelectedItem = new[] { FavouritesItem, RecentItem }.Concat(_libraryItems.OfType<NavigationViewItem>())
                 .FirstOrDefault(item => item.Visibility == Visibility.Visible && Equals(item.Tag, tab));

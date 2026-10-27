@@ -322,12 +322,12 @@ internal sealed class ServerBrowse : IDisposable
     /// The grid of a view across every library (<see cref="Pages.ViewArgs"/>): the Favorites or Recently added tab, opened on first use
     /// and kept as a library's grid is.
     /// </summary>
-    public LibraryGrid View(string view, string? kind = null)
+    public LibraryGrid View(BrowseView view, string? kind = null)
     {
-        var key = kind is null ? view : $"{view}/{kind}";
+        var key = kind is null ? view.ToString() : $"{view}/{kind}";
         if (!_views.TryGetValue(key, out var grid))
         {
-            var query = Pages.ViewArgs.Query(view, kind);
+            var query = Views.Query(view, kind);
             grid = new LibraryGrid(Session.OpenItems(query), query);
             _views[key] = grid;
         }
@@ -336,22 +336,35 @@ internal sealed class ServerBrowse : IDisposable
 
     private readonly Dictionary<string, LibraryGrid> _views = [];
 
-    /// <summary>The grid of <paramref name="person"/>'s titles (<see cref="Pages.PersonArgs"/>), opened on first use and kept as a
-    /// view's grid is.</summary>
+    /// <summary>
+    /// The grid of <paramref name="person"/>'s titles (<see cref="Pages.PersonArgs"/>), opened on first use and kept for the
+    /// <see cref="KeptPeople"/> people shown last (review of PR 87, S4): a person's page shown again among them returns to where it
+    /// was left; an older one is retired (freed once no page binds it) and opens again from the top.
+    /// </summary>
     public LibraryGrid Person(ItemRef person)
     {
-        var key = $"person/{person.Id}";
-        if (!_views.TryGetValue(key, out var grid))
+        if (!_people.TryGetValue(person, out var kept))
         {
             var query = ItemQuery.ForPerson(person);
-            grid = new LibraryGrid(Session.OpenItems(query), query);
-            _views[key] = grid;
+            kept = (new LibraryGrid(Session.OpenItems(query), query), 0);
         }
-        return grid;
+        _people[person] = (kept.Grid, ++_peopleUses);
+        foreach (var older in _people.OrderByDescending(entry => entry.Value.LastUsed).Skip(KeptPeople).Select(entry => entry.Key).ToList())
+        {
+            _people[older].Grid.Retire();
+            _people.Remove(older);
+        }
+        return kept.Grid;
     }
 
+    /// <summary>How many people's grids stay live, as many as the searches kept (<see cref="BrowseHub"/>'s KeptSearches).</summary>
+    internal const int KeptPeople = 5;
+
+    private readonly Dictionary<ItemRef, (LibraryGrid Grid, ulong LastUsed)> _people = [];
+    private ulong _peopleUses;
+
     /// <summary>The Favourites tab's rows, a row per media kind (the core's), opened on first use and kept, as Home is.</summary>
-    public SearchSection Favourites => _favourites ??= new SearchSection("", Session.Favourites(), _ui, Pages.ViewArgs.Everything);
+    public SearchSection Favourites => _favourites ??= new SearchSection("", Session.Favourites(), _ui, BrowseView.Everything);
 
     private SearchSection? _favourites;
 
@@ -429,12 +442,13 @@ internal sealed class ServerBrowse : IDisposable
         _home = null;
         _favourites?.Dispose();
         _favourites = null;
-        foreach (var grid in _grids.Values.Concat(_views.Values))
+        foreach (var grid in _grids.Values.Concat(_views.Values).Concat(_people.Values.Select(person => person.Grid)))
         {
             grid.Retire();
         }
         _grids.Clear();
         _views.Clear();
+        _people.Clear();
         Session.Dispose();
     }
 }
@@ -515,7 +529,6 @@ internal sealed class KeptDetails
     public double SimilarOffset { get; set; }
 }
 
-/// <summary>A history entry's search: its sections, one per server, and when it was last shown.</summary>
 /// <summary>A history entry's search: its sections, the filters they were searched with, and the View they show.</summary>
 internal sealed class KeptSearch(IReadOnlyList<SearchSection> sections, SearchFilter filter, bool wide, bool titles)
 {

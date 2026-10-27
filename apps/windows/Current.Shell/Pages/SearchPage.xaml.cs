@@ -42,7 +42,7 @@ public sealed partial class SearchPage : Page, IRefreshable
         if (e.Parameter is ViewArgs view)
         {
             _view = view;
-            TitleText.Text = BrowseText.ViewTitle(view.View);
+            TitleText.Text = Views.Title(view.View);
             if (App.Browsing?.Find(view.Server) is { } server)
             {
                 Add(server.Favourites);
@@ -103,10 +103,10 @@ public sealed partial class SearchPage : Page, IRefreshable
 
     /// <summary>
     /// The Filter menu from the core's choices: the types, a separator, the sources. An unavailable choice (the catalog without a
-    /// Seerr server) is disabled, so it takes no focus and Narrator reads it as unavailable; its name says why, as a disabled item
-    /// shows no tooltip: "It can't handle any input events on itself" (Control.IsEnabled, learn.microsoft.com, updated 2026-07-28,
-    /// read 2026-10-27), and the tooltip opens on its owner's pointer and focus events (ToolTipService_Partial.cpp, microsoft-ui-xaml
-    /// main, d8ab5708, read 2026-10-27). The tooltip is set anyway, for when it does show.
+    /// Seerr server) is disabled: "The control can't receive keyboard focus" and "It can't handle any input events on itself"
+    /// (Control.IsEnabled, learn.microsoft.com, updated 2026-07-28, read 2026-10-27). Its name says why, as the tooltip opens on its
+    /// owner's pointer and focus events (ToolTipService_Partial.cpp, microsoft-ui-xaml main, d8ab5708, read 2026-10-27), so it may not
+    /// show on a disabled item, and how Narrator reads a disabled item (not verified). The tooltip is set anyway, for when it shows.
     /// </summary>
     private void ShowFilterMenu()
     {
@@ -137,7 +137,7 @@ public sealed partial class SearchPage : Page, IRefreshable
         {
             Text = choice.Label,
             GroupName = group,
-            IsChecked = choice.Checked,
+            IsChecked = choice.Chosen,
             IsEnabled = choice.Enabled,
             Icon = glyph is null ? null : new FontIcon { Glyph = glyph },
         };
@@ -263,7 +263,8 @@ public sealed partial class SearchPage : Page, IRefreshable
         var failed = _sections.Select(section => section.State.Failed).FirstOrDefault(problem => problem is not null);
         LoadingRing.IsActive = loading && found == 0;
         var text = _view is not null
-            ? (found > 0 || loading ? "" : failed is not null ? $"Couldn't load favourites. {BrowseText.Problem(failed)}" : "No favourites yet")
+            ? (BrowseLabels.FavouritesStatus(found, loading, failed is not null) is not { } status ? ""
+                : failed is not null ? $"{status} {BrowseText.Problem(failed)}" : status)
             : found > 0 ? ""
             : loading ? "Searching…"
             : failed is not null ? $"Couldn't search. {BrowseText.Problem(failed)}"
@@ -303,7 +304,7 @@ public sealed partial class SearchPage : Page, IRefreshable
     {
         if ((sender as FrameworkElement)?.Tag is TileRow { View: { } view } row && _view is { } shown)
         {
-            var args = new ViewArgs(shown.Server, view, row.Kind, Favourite: true);
+            var args = new ViewArgs(shown.Server, view, row.Kind, row.Favourite);
             Frame.Navigate(args.Page, args);
         }
     }
@@ -317,14 +318,16 @@ public sealed partial class SearchPage : Page, IRefreshable
         {
             // A row scrolls sideways; a search narrowed to one type wraps its tiles, the page scrolling them (the panel is set before
             // the items, which StableSource sets).
-            var wraps = list.DataContext is TileRow { Wraps: true };
+            var shown = list.DataContext as TileRow;
+            var wraps = shown is { Wraps: true };
             list.ItemsPanel = (ItemsPanelTemplate)Resources[wraps ? "WrapPanel" : "RowPanel"];
             ScrollViewer.SetHorizontalScrollMode(list, wraps ? ScrollMode.Disabled : ScrollMode.Enabled);
             ScrollViewer.SetHorizontalScrollBarVisibility(list, wraps ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto);
-            // A person opens their films and series; anything else its details.
+            // What opening an item does and whether it has the item menu are the core's (a person opens their titles, with no menu).
+            var opens = shown?.Opens ?? ItemOpens.Details;
             HomeSection.AttachOnce(list, item =>
             {
-                if (item.Kind == "person")
+                if (opens == ItemOpens.PersonTitles)
                 {
                     Frame.Navigate(typeof(LibraryPage), new PersonArgs(item.Item, item.Name));
                 }
@@ -332,7 +335,7 @@ public sealed partial class SearchPage : Page, IRefreshable
                 {
                     Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item));
                 }
-            });
+            }, shown?.ItemMenu ?? true);
             StableSource.Follow<TileRow>(list, row => (row.Items, row.ItemTemplate));
         }
     }

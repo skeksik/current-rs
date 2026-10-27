@@ -25,7 +25,8 @@ use current_jellyfin::{
     AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, platform_name,
 };
 use current_model::{
-    AppTheme, Capabilities, ItemRef, NetworkFacts, SavedServer, ServerAddress, ServerId, ServerRef,
+    AppTheme, Capabilities, ItemQuery, ItemRef, Library, NetworkFacts, SavedServer, ServerAddress,
+    ServerId, ServerRef,
 };
 use current_net::{
     Gateway, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError, RuntimeHandle,
@@ -47,10 +48,15 @@ pub use browse::{
     tile_artwork, view_kinds, with_filter_choice, with_filter_toggle,
 };
 pub use browse::{
-    CATALOG_NEEDS_SEERR, CATALOG_NEEDS_SEERR_LABEL, NARROWED_SEARCH_LIMIT, SearchChoice,
-    SearchFilter, SearchSource, SearchSourceChoice, SearchTools, SearchTypeChoice,
-    catalog_available, person_query, search_filter_in_effect, search_note, search_tools,
-    search_type_label, search_types,
+    BrowseView, CATALOG_NEEDS_SEERR, CATALOG_NEEDS_SEERR_LABEL, FAVOURITES_EMPTY,
+    FAVOURITES_FAILED, FilterMenu, GridOpening, ItemOpens, NARROWED_SEARCH_LIMIT, RowDisplay,
+    RowLink, RowNote, RowTarget, SearchChoice, SearchFilter, SearchSource, SearchSourceChoice,
+    SearchTools, SearchTypeChoice, ViewLayout, catalog_available, favourites_status, filter_menu,
+    grid_opening, home_row_display, kind_choice_name, kind_group, library_filter_name,
+    library_sort_name, person_query, runtime_label, search_filter_in_effect, search_group_display,
+    search_note, search_result_display, search_tools, search_type_label, search_types,
+    time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
+    view_title,
 };
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use formats::{
@@ -66,8 +72,9 @@ pub use list::{ListSubscription, ObservableList, VectorDiff};
 pub use player::test_engine;
 pub use player::{
     CompositionSize, DisplayFacts, EngineOutput, EngineReport, MediaStatus, NowPlaying,
-    PlaybackInfo, Player, PlayerAction, PlayerEngine, PlayerError, SwapChain, TIMELINE_INTERVAL,
-    VideoOutput, player_engine,
+    NumberFormat, PlaybackInfo, Player, PlayerAction, PlayerEngine, PlayerError, QualityEntry,
+    QualityMenuItem, SwapChain, TIMELINE_INTERVAL, VideoOutput, bitrate_label,
+    fallback_quality_entries, player_engine, quality_label, quality_menu,
 };
 /// `current-playback`'s values that the player publishes.
 pub mod playback {
@@ -116,6 +123,8 @@ pub struct App {
     relay: Arc<player::RelaySlot>,
     /// What the engine plays, kept from its last start or read once from a headless one (ADR 0021).
     engine_capabilities: Arc<player::KnownCapabilities>,
+    /// How the UI's platform writes numbers, for the labels with decimals ([`App::set_decimal_separator`]).
+    number_format: Mutex<NumberFormat>,
 }
 
 impl std::fmt::Debug for App {
@@ -160,6 +169,7 @@ impl App {
             libraries: library_choices::LibraryPrefs::new(),
             relay: Arc::default(),
             engine_capabilities: Arc::default(),
+            number_format: Mutex::default(),
         }
     }
 
@@ -199,6 +209,7 @@ impl App {
             libraries: library_choices::LibraryPrefs::new(),
             relay: Arc::default(),
             engine_capabilities: Arc::default(),
+            number_format: Mutex::default(),
         };
         Ok((app, report))
     }
@@ -555,6 +566,36 @@ impl App {
     /// with nothing remembered, which opens with the library's first choice.
     pub fn library_choices(&self, library: &ItemRef) -> LibraryChoices {
         self.libraries.choices(self.settings(), library)
+    }
+
+    /// What `library`'s grid opens with ([`grid_opening`]): `home_query` as it is when a Home row's header opened it, else the
+    /// library's first query with what [`App::library_choices`] remembers.
+    pub fn library_opening(&self, library: &Library, home_query: Option<ItemQuery>) -> GridOpening {
+        let remembered = match home_query {
+            Some(_) => LibraryChoices::default(),
+            None => self.library_choices(&library.item),
+        };
+        grid_opening(library, home_query, &remembered)
+    }
+
+    /// The UI's decimal separator ("." or ",", from the user's region), for the labels with decimals ([`App::number_format`]): a
+    /// platform fact the UI passes once at start. An empty one keeps ".".
+    pub fn set_decimal_separator(&self, separator: &str) {
+        if !separator.is_empty() {
+            self.lock_number_format().decimal_separator = separator.to_owned();
+        }
+    }
+
+    /// How the labels with decimals write numbers: "." until the UI passes its own ([`App::set_decimal_separator`]).
+    pub fn number_format(&self) -> NumberFormat {
+        self.lock_number_format().clone()
+    }
+
+    fn lock_number_format(&self) -> std::sync::MutexGuard<'_, NumberFormat> {
+        // One assignment at a time: a poisoned lock still holds a whole value.
+        self.number_format
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Remembers the user's choices in `library`: each part given (`Some`) whose switch is on; the others stay as they were. Saved at

@@ -262,25 +262,34 @@ the UIs list what it gives.
   `Items` cannot narrow people by their part (its `personTypes` narrows the items a person is credited on), so the choice and the
   group are called **People**, not Actors. `GET Persons?searchTerm=&personTypes=Actor` gives actors only, but by a plain name match
   in name order (`PeopleRepository.GetPeople`: `OrderBy(e => e.Name.ToLower())`), not by relevance; `GET Search/Hints` needs a
-  second answer shape and has no user data. (jellyfin/jellyfin v12.2, ca0f16eb, read 2026-10-27.) Not verified: whether a user with
-  content restrictions is shown people credited only on items hidden from them (the exemption is by type, not by credit).
+  second answer shape and has no user data. (jellyfin/jellyfin v12.2, ca0f16eb, read 2026-10-27.) A user with content
+  restrictions sees only people credited on an item they can reach: under `UserHasContentRestrictions`,
+  `ApplyItemByNameAccessFiltering` keeps a Person "only when at least one item behind its name is reachable for the user"
+  (`Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs`), and a user has content restrictions when not every
+  folder is enabled, or with blocked folders, a parental rating limit, blocked or allowed tags, or blocked unrated items
+  (`User.HasContentRestrictions`, `Jellyfin.Data/UserEntityExtensions.cs`; same tag, read 2026-10-27).
 - **Opening a person** (owner, 2026-10-27) shows the films and series they are credited on, in every library, the newest first
   (`person_query(person)`: `ItemQuery.person`, `personIds`), as a grid titled with their name, with nothing remembered. A details
   page's cast and crew cards open the same. A person page of its own is later.
 - **Source: All, Library, Catalog.** Catalog is what can be requested, with Seerr (M4); it is available while a Seerr server is
   signed in (`catalog_available`: the capabilities state's `is_available(SEERR)`), so today never, and M4 only has to provide one.
-  Until then **the Source filter is shown, with Catalog unavailable**: disabled, its name saying why ("Catalog (needs Seerr)", as a
-  disabled menu item gets no pointer input and so shows no tooltip: "It can't handle any input events on itself", Control.IsEnabled,
-  learn.microsoft.com, updated 2026-07-28, read 2026-10-27) and the tooltip "Needs a Seerr server". **This departs from "hide what
+  Until then **the Source filter is shown, with Catalog unavailable**: disabled, its name saying why ("Catalog (needs Seerr)") and
+  the tooltip "Needs a Seerr server". A disabled control "can't receive keyboard focus" and "can't handle any input events on itself"
+  (Control.IsEnabled, learn.microsoft.com, updated 2026-07-28, read 2026-10-27); that its tooltip then does not show, and how
+  Narrator reads it, are not verified, so the reason is in its name. **This departs from "hide what
   is unavailable" (CLAUDE.md), by the owner's decision: the app is also used without Seerr, and the option should be visible.** A
   Catalog choice that cannot apply reads as All. Without Seerr, All and Library find the same.
-- **View**: posters or wide, with or without titles, as a library grid's (section 7's remembered view). Episodes and videos stay wide,
-  people show as cast cards whatever the view; a search narrowed to one type wraps its tiles into a grid.
+- **View**: posters or wide, with or without titles, as a library grid's (section 7's remembered view). Episodes and videos stay wide.
+  Proposed, for the owner (not the owner's decision yet): people show as cast cards whatever the view, and a search narrowed to one
+  type wraps its tiles into a grid. The core shapes each group (`search_result_display(kind, filter, wide, show_titles) ->
+  RowDisplay`: its tiles, whether they are cast cards, show titles and wrap, what opening an item does (a person opens their titles),
+  whether it has the item menu (a person has none), and its note), from the filter as it applies.
 - **No sort**: results stay in the server's relevance order (Context; section 3). A group that returns as many as it asked for (24,
   or 100 narrowed) shows "Showing the best N matches. Type more to narrow it." (`search_note(filter, count)`).
 - **Remembered** under the existing switches (section 7): the search page's filter while "Remember filter" is on and its view while
   "Remember view" is, one entry for the page (`browse.search` in `settings.json`, ADR 0013's open-value rules: `{"filter": {"type":
-  "movie" | "all", "source": "library"}, "view": {...}}`), forgotten when its switch goes off.
+  "movie" | "all", "source": "library"}, "view": {...}}`), forgotten when its switch goes off; every type and every source, the
+  default, is left out.
 - Across the bridge: `Browse::search(term, filter)`; `Core::search_tools(filter) -> SearchTools`, `search_choices()`,
   `remember_search_choices(choices)`; `search_note(filter, count)`, `person_query(person)`; `ItemQuery` gains `person`.
 

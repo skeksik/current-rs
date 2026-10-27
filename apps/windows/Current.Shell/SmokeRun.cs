@@ -339,7 +339,7 @@ internal static class SmokeRun
             }
 
             // The Favourites tab, a row per kind (the stand-in counts every item a favourite), and the Recently added grid.
-            window.ShowView(new ViewArgs(server.Server, ViewArgs.Favourites));
+            window.ShowView(new ViewArgs(server.Server, BrowseView.Favourites));
             var rows = await WaitUntilAsync(() => window.ShownPage is SearchPage { RowCount: > 0 });
             check(rows, $"the Favourites tab shows its rows ({(window.ShownPage as SearchPage)?.RowCount ?? 0})");
             // A search, every type and then films only (the core's Filter): the people come last, and narrowed it is one group.
@@ -349,7 +349,7 @@ internal static class SmokeRun
             (window.ShownPage as SearchPage)?.FilterTo("movie");
             var narrowed = await WaitUntilAsync(() => window.ShownPage is SearchPage { RowKinds: ["movie"], RowCount: 1 });
             check(narrowed, $"a search narrowed to films shows films only ({string.Join(",", (window.ShownPage as SearchPage)?.RowKinds ?? [])})");
-            window.ShowView(new ViewArgs(server.Server, ViewArgs.RecentlyAdded));
+            window.ShowView(new ViewArgs(server.Server, BrowseView.RecentlyAdded));
             var recent = await WaitUntilAsync(() => window.ShownPage is LibraryPage { Slots.Count: > 0 } recentPage
                 && recentPage.Slots[0].Slot is Slot.Item);
             check(recent, "the Recently added tab shows its grid");

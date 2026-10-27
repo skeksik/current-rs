@@ -223,13 +223,75 @@ Done when: a Jellyfin library is browsable and playable on Windows every day, wi
   docs/notes/relay-windows-check.md)
 - ADR 0020 task 6 (AVPlayer through the relay) moves with M3
 
-## M4: Seerr: discover and request (Windows first, before M3; macOS with M3) (order changed by the owner, 2026-10-26)
+## Next: Jellyfin and playback complete (Windows) (before M4 and M3; owner, 2026-10-27)
+The owner's order: implement, fix and polish everything Jellyfin and playback first; Seerr (M4), macOS (M3) and the rest after.
+
+In progress:
+- [ ] Move the Windows app's remaining rules and texts into the core, so macOS and Linux don't copy them (manager's
+      review of the Windows UI pass, 2026-10-27). Rules: which quality entry is current and the fallback quality list; dropping
+      remembered filters a menu no longer offers; Favourites offering type filters only; Home-header grids ignoring remembered choices;
+      view ids and the view → query mapping; row kind → tab links and which rows get wide tiles; kbit/s and Mbit/s formatting and the
+      "Original · 4K · 26.1 Mbit/s" composition; time-left rounding and format. Texts: Home row titles ("Recently added in X"), view
+      titles, kind names, link tooltips, the Favourites tab's "No favourites yet" and its failure line. Bindings tests for the quality options, `OpenItems`, the Favourites and Recently added
+      queries, searching, time left and the new Home row kinds
+- [ ] Global search filters (owner, 2026-10-27): Type (All, Movies, Series, Actors), Source (All, Library, Catalog; Catalog comes with
+      Seerr, M4) and View
+Fix and polish:
+- [ ] Played marks between a series and its episodes keep a stale mark until a refresh (owner's run, 2026-10-26; each needs a failing
+      test against the stand-in first): (1) marking a series played marks its episodes, but the series' own mark disappears; (2)
+      unmarking a series leaves its episodes marked; (3) marking every episode played leaves the series unmarked; (4) a series marked
+      through its episodes needs two clicks on Played to unmark; (5) a newly marked series keeps its poster's unplayed count and
+      progress bar; (6) after unmarking a series, its episodes' tiles show unmarked but an episode's details page still shows it
+      played; (7) finishing an episode does not bring up Next up on Home. Cases 1 to 6 fixed in the core with tests (PR 83;
+      ADR 0018 section 5 point 6, amended 2026-10-27 by the owner). Case 7 already passes in the core against a Jellyfin-like stand-in; the owner re-checks
+      it on their PC, then this is ticked
+- [ ] The M2 device checks still open (see M2): Dolby Vision profiles 5, 7 and 8, HDR10+, 120 Hz, intro and credits skip with a segment
+      plugin, the 60 s stall timeout on a real stall; remux and the gateways were checked in the relay check (PR 81)
+- [ ] Quality menu named by what the server will send for this file: model its bitrate rules in the core (audio share, codec, frame
+      rate, low-bitrate boost; the Windows UI pass's research); today's names assume H.264 at 30 fps
+- [ ] AV1 as a transcoding target where the server has an AV1 encoder (the device profile asks `hevc,h264` today; ADR 0019)
+- [ ] MPEG-4 Part 2 (DivX, Xvid) in the engine's codec table, so it plays directly instead of being converted (a device profile change;
+      the supported formats page shows "Server converts" today, ADR 0021)
+- [ ] Reorder or hide the pane's items within their groups (Favourites, Recently added; the libraries), Home and Settings fixed, and
+      reorder Home's rows (owner, 2026-10-26); where the order is kept (locally or the user's Jellyfin library order) to be researched
+- [ ] Per-type pages (Movies, Series, Episodes, opened from the Favourites rows' headers) as pane tabs, and view settings per Home
+      row: to be discussed with the owner (2026-10-27)
+- [ ] Browse by genre: a Genres tab and a Genres row on Home; Studios and Networks rows on Home (owner, 2026-10-26, from the Windows UI
+      pass; moved here from M4, 2026-10-27)
+New features (each starts with a spike and an ADR with the owner's choices):
+- [ ] Generated subtitles for videos without any (owner, 2026-10-25): speech to text on the device, with translation into English
+      (for example Japanese audio to English subtitles). The first candidate is Whisper through whisper.cpp: MIT code and weights;
+      Whisper's `translate` task targets English only, and its turbo model does not translate; models are 1.5 GiB (medium) to 2.9 GiB
+      (large); GPU backends include Vulkan and CUDA on Windows and Metal on macOS (github.com/openai/whisper and
+      github.com/ggml-org/whisper.cpp, read 2026-10-25). The core extracts the audio, generates ahead of the playhead, caches the
+      result and loads it as an added subtitle; for Jellyfin it may upload the result as an external subtitle so every client gets it
+      (the SDKs list an `uploadSubtitle` operation; its route is not verified). Other target languages need a second translation
+      model. Before generating, offer the server's own subtitles: Jellyfin's remote subtitle search, and Stash's captions (external
+      SRT/VTT files beside the scene; GraphQL `Scene.captions` and `paths.caption`, served as WebVTT; docs.stashapp.cc "Captions" and
+      stashapp/stash `internal/api/routes_scene.go`, read 2026-10-25). Start with a spike: speed and quality of medium and large on
+      the owner's GPU with one Japanese file, ending in an ADR; the dependency and the model download need the owner's approval.
+      Models are not shipped in the app: downloaded on first use after the user picks a size, checked against a pinned checksum,
+      kept in the data folder and deleted from Settings → Storage. whisper.cpp's files: medium 1.53 GB (539 MB as q5_0), large-v3
+      3.1 GB (1.08 GB as q5_0); the quality cost of q5_0 on Japanese is for the spike (huggingface.co/ggerganov/whisper.cpp, read
+      2026-10-25). On Apple platforms, Apple-hosted asset packs (200 GB per app record, App Store Connect Help, read 2026-10-25) are
+      an alternative; whether the App Store guidelines treat model weights as allowed downloaded data is not verified
+- [ ] VR playback (owner, 2026-10-27): 180° and 360° video and stereoscopic 3D (side by side, top and bottom) in our own player, with
+      a view you can turn on the desktop and headsets later. Spike first: what libmpv and FFmpeg offer for projection (not verified),
+      how Jellyfin and Stash mark such files, and what each platform offers for headsets; an ADR with the owner's choices
+- [ ] Downloads and offline playback from Jellyfin, and local files (owner, 2026-10-27): what to download (original or a transcode),
+      storage and its limit, progress synced back when online again
+- [ ] Watch-together (Jellyfin SyncPlay) and casting to other devices (owner, 2026-10-27)
+- [ ] End-of-milestone accessibility pass on Windows: Narrator, high contrast and keyboard only
+
+Done when: everything above is done on Windows and the owner accepts the milestone.
+
+## M4: Seerr: discover and request (Windows first, after the Jellyfin and playback milestone; macOS with M3)
+Order: the owner, 2026-10-26 (Seerr before macOS) and 2026-10-27 (Jellyfin and playback complete first).
+
 - [ ] Spike first: Seerr's API, sign-in through the Jellyfin session, permissions for users and managers; an ADR with the
       owner's choices
 - [ ] Seerr sign-in through the app's Jellyfin session; discover rows, browse, search merged with library results; title pages joined
       with Jellyfin; requests, my requests, approvals for managers; watchlist, issues
-- [ ] Browse by genre: a Genres tab and a Genres row on Home; Studios and Networks rows on Home (owner, 2026-10-26, from the Windows UI
-      pass)
 
 Done when: a title can be found, requested and followed to "available", then played, without leaving the app.
 
@@ -266,49 +328,7 @@ Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 whe
 - [ ] Store policies checked before any store submission (adult content, M6)
 
 ## Later
-- [ ] VR playback (owner, 2026-10-27): 180° and 360° video and stereoscopic 3D (side by side, top and bottom) in our own player, with
-      a view you can turn on the desktop and headsets later. Spike first: what libmpv and FFmpeg offer for projection (not verified),
-      how Jellyfin and Stash mark such files, and what each platform offers for headsets; an ADR with the owner's choices
-- [ ] Generated subtitles for videos without any (owner, 2026-10-25): speech to text on the device, with translation into English
-      (for example Japanese audio to English subtitles). The first candidate is Whisper through whisper.cpp: MIT code and weights;
-      Whisper's `translate` task targets English only, and its turbo model does not translate; models are 1.5 GiB (medium) to 2.9 GiB
-      (large); GPU backends include Vulkan and CUDA on Windows and Metal on macOS (github.com/openai/whisper and
-      github.com/ggml-org/whisper.cpp, read 2026-10-25). The core extracts the audio, generates ahead of the playhead, caches the
-      result and loads it as an added subtitle; for Jellyfin it may upload the result as an external subtitle so every client gets it
-      (the SDKs list an `uploadSubtitle` operation; its route is not verified). Other target languages need a second translation
-      model. Before generating, offer the server's own subtitles: Jellyfin's remote subtitle search, and Stash's captions (external
-      SRT/VTT files beside the scene; GraphQL `Scene.captions` and `paths.caption`, served as WebVTT; docs.stashapp.cc "Captions" and
-      stashapp/stash `internal/api/routes_scene.go`, read 2026-10-25). Start with a spike: speed and quality of medium and large on
-      the owner's GPU with one Japanese file, ending in an ADR; the dependency and the model download need the owner's approval.
-      Models are not shipped in the app: downloaded on first use after the user picks a size, checked against a pinned checksum,
-      kept in the data folder and deleted from Settings → Storage. whisper.cpp's files: medium 1.53 GB (539 MB as q5_0), large-v3
-      3.1 GB (1.08 GB as q5_0); the quality cost of q5_0 on Japanese is for the spike (huggingface.co/ggerganov/whisper.cpp, read
-      2026-10-25). On Apple platforms, Apple-hosted asset packs (200 GB per app record, App Store Connect Help, read 2026-10-25) are
-      an alternative; whether the App Store guidelines treat model weights as allowed downloaded data is not verified
 - [ ] Android (Compose, Media3 plus a fallback engine), iOS and iPadOS (SwiftUI from macOS), tvOS, the web (the core on WebAssembly)
-- [ ] Local files, downloads and offline playback; several servers and user switching; casting and watch-together
-- [ ] Reorder or hide the pane's items within their groups (Favourites, Recently added; the libraries), Home and Settings fixed, and
-      reorder Home's rows (owner, 2026-10-26); where the order is kept (locally or the user's Jellyfin library order) to be researched
-- [ ] Quality menu named by what the server will send for this file: model its bitrate rules in the core (audio share, codec, frame
-      rate, low-bitrate boost; the Windows UI pass's research); today's names assume H.264 at 30 fps
-- [ ] Played marks between a series and its episodes keep a stale mark until a refresh (owner's run, 2026-10-26; each needs a failing
-      test against the stand-in first): (1) marking a series played marks its episodes, but the series' own mark disappears; (2)
-      unmarking a series leaves its episodes marked; (3) marking every episode played leaves the series unmarked; (4) a series marked
-      through its episodes needs two clicks on Played to unmark; (5) a newly marked series keeps its poster's unplayed count and
-      progress bar; (6) after unmarking a series, its episodes' tiles show unmarked but an episode's details page still shows it
-      played; (7) finishing an episode does not bring up Next up on Home. Cases 1 to 6 fixed in the core with tests (fix/series-episode-marks;
-      ADR 0018 section 5 point 6, proposed). Case 7 already passes in the core against a Jellyfin-like stand-in; the owner re-checks
-      it on their PC, then this is ticked
-- [ ] AV1 as a transcoding target where the server has an AV1 encoder (the device profile asks `hevc,h264` today; ADR 0019)
-- [ ] Before M3: move the Windows app's remaining rules and texts into the core, so macOS and Linux don't copy them (manager's
-      review of the Windows UI pass, 2026-10-27). Rules: which quality entry is current and the fallback quality list; dropping
-      remembered filters a menu no longer offers; Favourites offering type filters only; Home-header grids ignoring remembered choices;
-      view ids and the view → query mapping; row kind → tab links and which rows get wide tiles; kbit/s and Mbit/s formatting and the
-      "Original · 4K · 26.1 Mbit/s" composition; time-left rounding and format. Texts: Home row titles ("Recently added in X"), view
-      titles, kind names, link tooltips, the Favourites tab's "No favourites yet" and its failure line. Bindings tests for the quality options, `OpenItems`, the Favourites and Recently added
-      queries, searching, time left and the new Home row kinds
-- [ ] Global search filters (owner, 2026-10-27): Type (All, Movies, Series, Actors), Source (All, Library, Catalog; Catalog comes with
-      Seerr, M4) and View
-- [ ] Per-type pages (Movies, Series, Episodes, opened from the Favourites rows' headers) as pane tabs, and view settings per Home
-      row: to be discussed with the owner (2026-10-27)
-- Not planned yet (ask to add): music, live TV, books, photos, other media servers.
+- [ ] Several servers at once and user switching
+- [ ] Jellyfin's other library types: music with its own player, live TV and DVR, books, photos (owner, 2026-10-27: later)
+- Not planned yet (ask to add): other media servers.

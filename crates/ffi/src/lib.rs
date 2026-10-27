@@ -45,7 +45,14 @@ pub use browse::{
     library_filter_choices, library_grid_tools, library_query, library_search, library_search_note,
     library_sort_choices, library_toggle_filter_choices, library_with_filter_choice,
     library_with_filter_toggle, person_query, recently_added_everywhere_query,
-    recently_added_query, search_note, view_kind_choices,
+    recently_added_query, search_note, search_result_display, view_kind_choices,
+};
+pub use browse::{
+    BrowseView, FilterMenu, GridOpening, ItemOpens, RowDisplay, RowLink, RowNote, RowTarget,
+    TileShape, ViewLayout, favourites_status, grid_filter_menu, home_row_display, kind_choice_name,
+    kind_group_name, library_filter_name, library_sort_name, runtime_label, search_group_display,
+    time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
+    view_title,
 };
 pub use cancel::CancelToken;
 pub use error::CoreError;
@@ -67,9 +74,9 @@ pub use player_records::{
     CompositionSize, DisplayFacts, EngineOutputInfo, MediaStatusKind, NextEpisodeInfo,
     NowPlayingSnapshot, PlanNoteInfo, PlaybackInfoSnapshot, PlaybackProblem,
     PlaybackSettingsSnapshot, PlayerEngineKind, PlayerProblem, PlayerStateKind,
-    PlayerStateSnapshot, QualityChoice, QualityOptionInfo, RouteInfo, RouteKind, SegmentInfo,
-    SourceInfo, StreamInfo, StreamProtocolKind, SubtitleSelection, TrackInfo, TranscodingInfo,
-    quality_steps,
+    PlayerStateSnapshot, QualityChoice, QualityMenuEntry, QualityOptionInfo, RouteInfo, RouteKind,
+    SegmentInfo, SourceInfo, StreamInfo, StreamProtocolKind, SubtitleSelection, TrackInfo,
+    TranscodingInfo, quality_steps,
 };
 pub use problems::{
     AddressProblem, DiscoveryProblem, GatewayInputProblem, GatewayProblem, GatewaySignInProblem,

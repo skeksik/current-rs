@@ -12,12 +12,14 @@
 
 mod details;
 mod home;
+mod labels;
 mod libraries;
 mod paged;
 mod present;
 mod search;
 mod search_filter;
 mod states;
+mod views;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -41,6 +43,10 @@ pub use details::{DetailsView, LoadState, SIMILAR_LIMIT};
 pub use home::{
     HomeFeed, HomeRow, HomeRowKind, HomeState, LATEST_LIMIT, NEXT_UP_LIMIT, RESUME_LIMIT,
 };
+pub use labels::{
+    FAVOURITES_EMPTY, FAVOURITES_FAILED, favourites_status, kind_choice_name, kind_group,
+    library_filter_name, library_sort_name, runtime_label, time_left_label, time_left_short,
+};
 pub use paged::{BACKLOG_PAGES, MAX_PAGE_REQUESTS, PAGE_SIZE, PagedItems, PagedState, Slot};
 pub(crate) use present::ShownAgain;
 pub use present::{
@@ -53,10 +59,15 @@ pub use search::{FAVOURITE_ROW_KINDS, FAVOURITE_ROW_LIMIT, SearchResults};
 pub use search_filter::{
     CATALOG_NEEDS_SEERR, CATALOG_NEEDS_SEERR_LABEL, NARROWED_SEARCH_LIMIT, SearchChoice,
     SearchFilter, SearchSource, SearchSourceChoice, SearchTools, SearchTypeChoice,
-    catalog_available, person_query, search_filter_in_effect, search_note, search_tools,
-    search_type_label, search_types,
+    catalog_available, person_query, search_filter_in_effect, search_note, search_result_display,
+    search_tools, search_type_label, search_types,
 };
 pub use states::{BrowseNotice, ItemAction, NoticeKind};
+pub use views::{
+    BrowseView, FilterMenu, GridOpening, ItemOpens, RowDisplay, RowLink, RowNote, RowTarget,
+    ViewLayout, filter_menu, grid_opening, home_row_display, search_group_display, view_layout,
+    view_link_tooltip, view_opening, view_query, view_title,
+};
 
 use libraries::Libraries;
 use states::ItemStates;

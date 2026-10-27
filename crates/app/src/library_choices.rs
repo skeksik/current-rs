@@ -203,10 +203,12 @@ impl LibraryPrefs {
             if browse.remember_filter
                 && let Some(filter) = &choices.filter
             {
-                next.filter = Some(RememberedSearchFilter {
-                    kind: filter.kind.clone(),
-                    source: filter.source.as_str().to_owned(),
-                });
+                // Everything is the default: left out of the file, as ADR 0013 leaves defaults out.
+                next.filter =
+                    (*filter != SearchFilter::default()).then(|| RememberedSearchFilter {
+                        kind: filter.kind.clone(),
+                        source: filter.source.as_str().to_owned(),
+                    });
             }
             if browse.remember_view && choices.view.is_some() {
                 next.view.clone_from(&choices.view);
@@ -317,6 +319,18 @@ mod tests {
         drop(app);
         let app = open(temp.path());
         assert_eq!(app.search_choices(), search_memory());
+        // Everything is the default: nothing is written for it.
+        app.remember_search_choices(SearchMemory {
+            filter: Some(SearchFilter::default()),
+            view: None,
+        })
+        .unwrap();
+        assert_eq!(app.search_choices().filter, None);
+        assert!(
+            file(temp.path())["browse"]["search"]
+                .get("filter")
+                .is_none()
+        );
         // Off forgets it.
         app.set_remember_filter(false).unwrap();
         app.set_remember_view(false).unwrap();
@@ -495,6 +509,45 @@ mod tests {
             app.library_choices(&library("a")),
             LibraryChoices::default()
         );
+    }
+
+    #[test]
+    fn a_library_opens_with_its_remembered_choices_unless_a_home_header_opened_it() {
+        let app = App::new();
+        app.set_remember_sort(true).unwrap();
+        app.set_remember_filter(true).unwrap();
+        app.set_remember_view(true).unwrap();
+        app.remember_library_choices(&library("a"), everything())
+            .unwrap();
+        let films = current_model::Library {
+            item: library("a"),
+            name: "Films".into(),
+            collection: Some(current_model::CollectionKind::MOVIES),
+            artwork: Vec::new(),
+        };
+        let opening = app.library_opening(&films, None);
+        assert_eq!(opening.query.sort, vec![SortKey::DATE_CREATED]);
+        assert_eq!(opening.query.filters, vec![ItemFilter::UNPLAYED]);
+        assert!(opening.wide);
+        assert!(!opening.show_titles);
+        let home = crate::recently_added_query(&films);
+        let opening = app.library_opening(&films, Some(home.clone()));
+        assert_eq!(opening.query, home);
+        assert!(!opening.wide);
+        assert!(opening.show_titles);
+    }
+
+    #[test]
+    fn numbers_use_the_decimal_separator_the_ui_passed() {
+        let app = App::new();
+        assert_eq!(app.number_format().decimal_separator, ".");
+        app.set_decimal_separator(",");
+        assert_eq!(
+            crate::bitrate_label(26_100_000, &app.number_format()),
+            "26,1 Mbit/s"
+        );
+        app.set_decimal_separator("");
+        assert_eq!(app.number_format().decimal_separator, ",");
     }
 
     #[tokio::test]

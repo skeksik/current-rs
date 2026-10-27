@@ -121,7 +121,7 @@
                                                     <FontIcon VerticalAlignment="Center" FontSize="16" Glyph="&#xE76C;" />
                                                 </StackPanel>
                                             </HyperlinkButton>
-                                            <!-- Under a full group: only the best matches show (the core's SearchFilter.Note), as a
+                                            <!-- Under a full group: only the best matches show (the core's RowDisplay note), as a
                                                  library's search notes its window (LibraryPage's count line). -->
                                             <TextBlock
                                                 Margin="0,0,24,8"

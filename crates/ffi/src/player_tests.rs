@@ -404,6 +404,7 @@ const RECORD_TYPES: &[&str] = &[
     "PlaybackInfoSnapshot",
     "PlaybackSettingsSnapshot",
     "QualityOptionInfo",
+    "QualityMenuEntry",
 ];
 
 #[test]

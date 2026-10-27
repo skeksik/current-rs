@@ -17,9 +17,8 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
     private readonly ValueSubscription<LoadState> _state;
 
     /// <param name="link">The view a row's header opens with the row's kind (the Favourites tab's rows); null for a search.</param>
-    /// <param name="filter">A search's filters, for the line under a full group and whether one type wraps; null for the Favourites
-    /// tab.</param>
-    internal SearchSection(string header, SearchResults results, IUiDispatcher ui, string? link = null, SearchFilter? filter = null)
+    /// <param name="filter">A search's filters, from which the core shapes its rows; null for the Favourites tab.</param>
+    internal SearchSection(string header, SearchResults results, IUiDispatcher ui, BrowseView? link = null, SearchFilter? filter = null)
     {
         Header = header;
         _link = link;
@@ -37,7 +36,7 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
 
     public string Header { get; }
 
-    private readonly string? _link;
+    private readonly BrowseView? _link;
     private readonly SearchFilter? _filter;
 
     /// <summary>The search page's View (owner, 2026-10-27, as a library grid's): wide pictures, and whether tiles show their titles.</summary>
@@ -62,15 +61,6 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
         Rows.Clear();
         SyncGroups();
     }
-
-    /// <summary>
-    /// The tiles of a row of <paramref name="kind"/>: people as cast cards, whatever the view; episodes and videos wide, as before;
-    /// the rest posters or wide as the View says, with or without their titles.
-    /// </summary>
-    private string TemplateFor(string kind) =>
-        kind == "person" ? "PersonTileTemplate"
-        : (_wide || kind is "episode" or "video") ? (_titles ? "WideTileTemplate" : "WidePictureTemplate")
-        : _titles ? "PosterTileTemplate" : "PosterPictureTemplate";
 
     public Visibility HeaderVisibility => Header.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
@@ -99,15 +89,11 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
                 {
                     continue;
                 }
-                existing = new TileRow(kind, BrowseText.KindGroup(kind), items, kind is "episode" or "video")
-                {
-                    View = _link,
-                    Kind = _link is null ? null : kind,
-                    HeaderLinkTip = _link is null ? "" : BrowseText.ViewLinkTip(_link, kind),
-                    ItemTemplate = (DataTemplate)Application.Current.Resources[TemplateFor(kind)],
-                    Wraps = _filter?.Kind is not null,
-                    NoteFor = _filter is { } filter ? count => filter.Note(count) : null,
-                };
+                // A search's rows as the core shapes them for its filter and View; the Favourites tab's as its own.
+                var display = _filter is { } filter
+                    ? Views.ForSearchResult(kind, filter, _wide, _titles)
+                    : Views.ForSearchGroup(kind, _link);
+                existing = new TileRow(kind, display, items);
                 Rows.Insert(position, existing);
             }
             else if (Rows.IndexOf(existing) != position)

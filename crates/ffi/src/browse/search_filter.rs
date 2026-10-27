@@ -65,8 +65,9 @@ impl From<current_app::SearchFilter> for SearchFilter {
     }
 }
 
-/// One choice of a filter: its name, whether it is the one in effect (`chosen`; not `checked`, a C# keyword), and whether it can be
-/// chosen; `tooltip` says why not. An unavailable choice names the reason in `label` too: a disabled menu item shows no tooltip.
+/// One choice of a filter: its name, whether it is the one in effect (`chosen`), and whether it can be
+/// chosen; `tooltip` says why not. An unavailable choice names the reason in `label` too: a disabled menu item takes no input, and may
+/// show no tooltip (not verified).
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct SearchChoice {
     pub label: String,
@@ -79,7 +80,7 @@ impl From<current_app::SearchChoice> for SearchChoice {
     fn from(choice: current_app::SearchChoice) -> Self {
         Self {
             label: choice.label,
-            chosen: choice.checked,
+            chosen: choice.chosen,
             enabled: choice.enabled,
             tooltip: choice.tooltip,
         }
@@ -143,6 +144,24 @@ pub struct SearchChoices {
 #[uniffi::export]
 pub fn search_note(filter: SearchFilter, count: u32) -> Option<String> {
     current_app::search_note(&(&filter).into(), count)
+}
+
+/// How a group of `kind` on the search page shows with `filter` and the page's View (`wide`, `show_titles`): its title and tiles,
+/// whether it wraps, what opening an item does, whether it has the item menu, and its note once full.
+#[uniffi::export]
+pub fn search_result_display(
+    kind: String,
+    filter: SearchFilter,
+    wide: bool,
+    show_titles: bool,
+) -> super::RowDisplay {
+    current_app::search_result_display(
+        &current_model::MediaKind::new(kind),
+        &(&filter).into(),
+        wide,
+        show_titles,
+    )
+    .into()
 }
 
 /// What opening a person shows: the films and series they are credited on, in every library, the newest first. Open it with
@@ -247,6 +266,10 @@ mod tests {
         assert_eq!(query.person, Some(person));
         assert_eq!(query.kinds, ["movie", "series"]);
         assert_eq!(query.sort, ["premiere_date"]);
+        let people = search_result_display("person".into(), SearchFilter::default(), false, true);
+        assert!(people.cards && !people.item_menu);
+        assert_eq!(people.opens, super::super::ItemOpens::PersonTitles);
+        assert_eq!(people.note.map(|note| note.full_at), Some(24));
     }
 
     #[test]

@@ -29,9 +29,9 @@ public sealed record SearchFilter(string? Kind = null, SearchSource Source = Sea
 
 /// <summary>
 /// One choice of a filter: its name, whether it is the one in effect, and whether it can be chosen; <c>Tooltip</c> says why not. An
-/// unavailable choice names the reason in <c>Label</c> too: a disabled menu item shows no tooltip.
+/// unavailable choice names the reason in <c>Label</c> too: a disabled menu item takes no input and may show no tooltip (not verified).
 /// </summary>
-public sealed record SearchChoice(string Label, bool Checked, bool Enabled, string? Tooltip);
+public sealed record SearchChoice(string Label, bool Chosen, bool Enabled, string? Tooltip);
 
 /// <summary>One Type choice: <c>Kind</c> is null for "All".</summary>
 public sealed record SearchTypeChoice(string? Kind, SearchChoice Choice);

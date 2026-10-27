@@ -4,9 +4,9 @@ using Current.Bindings;
 namespace Current.Shell.Player;
 
 /// <summary>
-/// What the player says: times, the route and its reasons, track and quality names, the skip button, the next-episode card, and
-/// problems in plain words. Never an address or a server's message: the records hold none. When the controls show and what they
-/// offer is the core's (PlayerState); this only words it.
+/// What the player says: times, the route and its reasons, track names, the skip button, the next-episode card, and problems in
+/// plain words. Never an address or a server's message: the records hold none. When the controls show and what they offer is the
+/// core's (PlayerState), and so are bitrates and the quality menu's labels (CoreHost.QualityMenu); this only words the rest.
 /// </summary>
 internal static class PlayerText
 {
@@ -100,41 +100,15 @@ internal static class PlayerText
         _ => reason,
     };
 
-    /// <summary>What the server's permissions say about the plan.</summary>
-    public static string Note(PlanNote note) => note switch
+    /// <summary>What the server's permissions say about the plan; the bitrate as the core writes it.</summary>
+    public static string Note(CoreHost core, PlanNote note) => note switch
     {
-        PlanNote.RemoteBitrateLimit limit => $"The server limits streaming outside your network to {Bitrate(limit.BitsPerSecond)}.",
+        PlanNote.RemoteBitrateLimit limit =>
+            $"The server limits streaming outside your network to {core.BitrateLabel(limit.BitsPerSecond)}.",
         PlanNote.TranscodingNotAllowed => "The server doesn't allow you to convert video.",
         PlanNote.RemuxingNotAllowed => "The server doesn't allow you to repackage video.",
         _ => "The server converts every stream from a remote source.",
     };
-
-    /// <summary>"40 Mbit/s", "1.5 Mbit/s"; below 1 Mbit/s in kbit/s, "720 kbit/s", which one decimal of Mbit/s rounded to "0.7".</summary>
-    public static string Bitrate(uint bitsPerSecond) => bitsPerSecond < 1_000_000
-        ? $"{(bitsPerSecond / 1_000.0).ToString("0", CultureInfo.CurrentCulture)} kbit/s"
-        : $"{(bitsPerSecond / 1_000_000.0).ToString("0.#", CultureInfo.CurrentCulture)} Mbit/s";
-
-    /// <summary>
-    /// A quality menu entry: "Original · 1080p · 5.2 Mbit/s", "720p · 4 Mbit/s", or without the resolution when Settings hides it ("Show
-    /// resolution in quality menu"); the parts the core does not know are left out.
-    /// </summary>
-    public static string Quality(QualityOption option, bool withResolution)
-    {
-        var parts = new List<string>();
-        if (option.Quality is QualityChoice.Maximum)
-        {
-            parts.Add("Original");
-        }
-        if (withResolution && option.Resolution is { Length: > 0 } resolution)
-        {
-            parts.Add(resolution);
-        }
-        if (option.Bitrate is { } bitrate)
-        {
-            parts.Add(Bitrate(bitrate));
-        }
-        return string.Join(" · ", parts);
-    }
 
     /// <summary>A track as the server names it (its display title), else by its language and codec, else its number.</summary>
     public static string Track(TrackInfo track)

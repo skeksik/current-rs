@@ -21,8 +21,9 @@ namespace Current.Shell.Browsing;
 /// </remarks>
 internal static class ItemActions
 {
-    /// <summary>Opens items of <paramref name="list"/> with <paramref name="open"/> and gives each its context menu.</summary>
-    public static void Attach(ListViewBase list, Action<ItemSummary> open)
+    /// <summary>Opens items of <paramref name="list"/> with <paramref name="open"/> and, unless <paramref name="itemMenu"/> is off (the
+    /// core's row display: a search's People), gives each its context menu.</summary>
+    public static void Attach(ListViewBase list, Action<ItemSummary> open, bool itemMenu = true)
     {
         list.SelectionMode = ListViewSelectionMode.None;
         list.IsItemClickEnabled = true;
@@ -75,8 +76,7 @@ internal static class ItemActions
         {
             if (!args.InRecycleQueue)
             {
-                // A person has nothing to play or mark played: no menu (a search's People).
-                args.ItemContainer.ContextFlyout = SummaryOf(args.Item) is { Kind: not "person" } ? menu : null;
+                args.ItemContainer.ContextFlyout = itemMenu && SummaryOf(args.Item) is not null ? menu : null;
             }
         };
     }

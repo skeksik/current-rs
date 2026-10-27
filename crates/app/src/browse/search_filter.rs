@@ -1,6 +1,6 @@
 //! The global search's filters (owner, 2026-10-26 and 2026-10-27; ADR 0018, "Global search filters"): a Type (all of them, or films,
 //! series or people only) and a Source (all of them, the library, or the catalog). The UIs list [`search_tools`]'s choices as given:
-//! their names, which is checked, and which are unavailable and why. No sort: results stay in the server's relevance order.
+//! their names, which is chosen, and which are unavailable and why. No sort: results stay in the server's relevance order.
 //!
 //! The catalog comes with Seerr (M4). Without a Seerr server its choice is still listed, unavailable, with the reason in its own name
 //! and its tooltip (owner, 2026-10-27: the app is also used without Seerr, and the option should be visible). Without it, All and
@@ -8,6 +8,10 @@
 
 use current_jellyfin::{SEARCH_GROUPS, SEARCH_LIMIT};
 use current_model::{Capabilities, ItemQuery, ItemRef, MediaKind, ServiceType, SortKey, SortOrder};
+
+use super::TileShape;
+use super::labels::kind_group;
+use super::views::{ItemOpens, RowDisplay, RowNote};
 
 /// Where a search looks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -59,15 +63,15 @@ pub const NARROWED_SEARCH_LIMIT: u32 = 100;
 
 /// The Catalog choice's tooltip while no Seerr server is set up.
 pub const CATALOG_NEEDS_SEERR: &str = "Needs a Seerr server";
-/// The Catalog choice's name while no Seerr server is set up: the reason in the name too, as a disabled menu item shows no tooltip
-/// (ADR 0018, "Global search filters").
+/// The Catalog choice's name while no Seerr server is set up: the reason in the name too, as a disabled menu item takes no input
+/// and so may show no tooltip (not verified; ADR 0018, "Global search filters").
 pub const CATALOG_NEEDS_SEERR_LABEL: &str = "Catalog (needs Seerr)";
 
 /// One choice of a filter: its name, whether it is the one in effect, and whether it can be chosen; `tooltip` says why not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchChoice {
     pub label: String,
-    pub checked: bool,
+    pub chosen: bool,
     pub enabled: bool,
     pub tooltip: Option<String>,
 }
@@ -93,15 +97,9 @@ pub struct SearchTools {
     pub sources: Vec<SearchSourceChoice>,
 }
 
-/// The name of a Type choice: "All", or the type's.
+/// The name of a Type choice: "All", or the type's group name ([`kind_group`]: "Movies", "Series", "People").
 pub fn search_type_label(kind: Option<&MediaKind>) -> String {
-    match kind {
-        None => "All".to_owned(),
-        Some(kind) if *kind == MediaKind::MOVIE => "Movies".to_owned(),
-        Some(kind) if *kind == MediaKind::SERIES => "Series".to_owned(),
-        Some(kind) if *kind == MediaKind::PERSON => "People".to_owned(),
-        Some(kind) => kind.as_str().to_owned(),
-    }
+    kind.map_or_else(|| "All".to_owned(), kind_group)
 }
 
 /// Whether the catalog can be searched: a Seerr server is signed in. None can be yet: M4 adds the Seerr service, and this follows it.
@@ -109,13 +107,19 @@ pub fn catalog_available(capabilities: &Capabilities) -> bool {
     capabilities.is_available(&ServiceType::SEERR)
 }
 
+/// The type `filter` narrows to as it can apply: `None` (every type) for a type the search does not offer (a remembered one from
+/// another version).
+fn kind_in_effect(filter: &SearchFilter) -> Option<MediaKind> {
+    filter
+        .kind
+        .clone()
+        .filter(|kind| search_types().contains(kind))
+}
+
 /// `filter` as it can apply now: a type the search does not offer (a remembered one from another version) reads as all of them, and
 /// the catalog while it is unavailable as every source.
 pub fn search_filter_in_effect(capabilities: &Capabilities, filter: &SearchFilter) -> SearchFilter {
-    let kind = filter
-        .kind
-        .clone()
-        .filter(|kind| search_types().contains(kind));
+    let kind = kind_in_effect(filter);
     let source = match filter.source {
         SearchSource::Catalog if !catalog_available(capabilities) => SearchSource::All,
         source => source,
@@ -123,7 +127,7 @@ pub fn search_filter_in_effect(capabilities: &Capabilities, filter: &SearchFilte
     SearchFilter { kind, source }
 }
 
-/// The search page's Filter choices for `filter`, with the one in effect checked.
+/// The search page's Filter choices for `filter`, with the one in effect chosen.
 pub fn search_tools(capabilities: &Capabilities, filter: &SearchFilter) -> SearchTools {
     let shown = search_filter_in_effect(capabilities, filter);
     let types = std::iter::once(None)
@@ -131,7 +135,7 @@ pub fn search_tools(capabilities: &Capabilities, filter: &SearchFilter) -> Searc
         .map(|kind| SearchTypeChoice {
             choice: SearchChoice {
                 label: search_type_label(kind.as_ref()),
-                checked: kind == shown.kind,
+                chosen: kind == shown.kind,
                 enabled: true,
                 tooltip: None,
             },
@@ -157,7 +161,7 @@ pub fn search_tools(capabilities: &Capabilities, filter: &SearchFilter) -> Searc
             source,
             choice: SearchChoice {
                 label: label.to_owned(),
-                checked: source == shown.source,
+                chosen: source == shown.source,
                 enabled: !unavailable,
                 tooltip: unavailable.then(|| CATALOG_NEEDS_SEERR.to_owned()),
             },
@@ -173,21 +177,67 @@ pub(crate) fn library_groups(filter: &SearchFilter) -> Option<(Vec<MediaKind>, u
     if filter.source == SearchSource::Catalog {
         return None;
     }
-    Some(match &filter.kind {
+    Some(match &kind_in_effect(filter) {
         Some(kind) => (vec![kind.clone()], NARROWED_SEARCH_LIMIT),
         None => (SEARCH_GROUPS.to_vec(), SEARCH_LIMIT),
     })
 }
 
-/// The line a search group with `count` matches shows (owner, 2026-10-27): once it holds as many as the search asks for, the server
-/// may have left out what matched less well, so the user is told to narrow the search. `None` otherwise.
-pub fn search_note(filter: &SearchFilter, count: u32) -> Option<String> {
-    let limit = if filter.kind.is_some() {
+/// How many matches each group of a search with `filter` asks for: [`NARROWED_SEARCH_LIMIT`] of the one type it keeps, else
+/// [`SEARCH_LIMIT`] of each, by the type in effect.
+fn group_limit(filter: &SearchFilter) -> u32 {
+    if kind_in_effect(filter).is_some() {
         NARROWED_SEARCH_LIMIT
     } else {
         SEARCH_LIMIT
+    }
+}
+
+fn note_text(limit: u32) -> String {
+    format!("Showing the best {limit} matches. Type more to narrow it.")
+}
+
+/// The line a search group with `count` matches shows (owner, 2026-10-27): once it holds as many as the search asks for, the server
+/// may have left out what matched less well, so the user is told to narrow the search. `None` otherwise.
+pub fn search_note(filter: &SearchFilter, count: u32) -> Option<String> {
+    let limit = group_limit(filter);
+    (count >= limit).then(|| note_text(limit))
+}
+
+/// How a group of `kind` on the search page shows, with `filter` (as it applies) and the page's View (`wide`, `show_titles`).
+/// Proposed, for the owner (2026-10-27): people as cast cards whatever the view, and a search narrowed to one type wrapping into a
+/// grid. Episodes and videos stay wide, as before; the rest are posters or wide as the View says. A person opens their titles and has
+/// no item menu (nothing to play or mark); anything else opens its details. The group's note shows once it holds as many as it asked
+/// for.
+pub fn search_result_display(
+    kind: &MediaKind,
+    filter: &SearchFilter,
+    wide: bool,
+    show_titles: bool,
+) -> RowDisplay {
+    let person = *kind == MediaKind::PERSON;
+    let shape = if wide || *kind == MediaKind::EPISODE || *kind == MediaKind::VIDEO {
+        TileShape::Wide
+    } else {
+        TileShape::Poster
     };
-    (count >= limit).then(|| format!("Showing the best {limit} matches. Type more to narrow it."))
+    let limit = group_limit(filter);
+    RowDisplay {
+        cards: person,
+        show_titles,
+        wraps: kind_in_effect(filter).is_some(),
+        opens: if person {
+            ItemOpens::PersonTitles
+        } else {
+            ItemOpens::Details
+        },
+        item_menu: !person,
+        note: Some(RowNote {
+            full_at: limit,
+            text: note_text(limit),
+        }),
+        ..RowDisplay::plain(kind_group(kind), shape, None)
+    }
 }
 
 /// What opening a person shows (owner, 2026-10-27): the films and series they are credited on, in every library, the newest first.
@@ -238,7 +288,7 @@ mod tests {
                 Some(MediaKind::PERSON)
             ]
         );
-        assert!(tools.types[0].choice.checked);
+        assert!(tools.types[0].choice.chosen);
         assert!(tools.types.iter().all(|t| t.choice.enabled));
         let sources: Vec<_> = tools.sources.iter().map(|s| s.source).collect();
         assert_eq!(
@@ -249,7 +299,7 @@ mod tests {
                 SearchSource::Catalog
             ]
         );
-        assert!(tools.sources[0].choice.checked);
+        assert!(tools.sources[0].choice.chosen);
     }
 
     #[test]
@@ -279,8 +329,8 @@ mod tests {
         assert_eq!(shown.source, SearchSource::All);
         assert_eq!(shown.kind, Some(MediaKind::SERIES));
         let tools = search_tools(&Capabilities::default(), &catalog);
-        assert!(tools.sources[0].choice.checked && !tools.sources[2].choice.checked);
-        assert!(tools.types[2].choice.checked);
+        assert!(tools.sources[0].choice.chosen && !tools.sources[2].choice.chosen);
+        assert!(tools.types[2].choice.chosen);
         // With Seerr the catalog stands.
         assert_eq!(
             search_filter_in_effect(&with_seerr(true), &catalog),
@@ -339,6 +389,71 @@ mod tests {
         assert_eq!(
             search_note(&films, NARROWED_SEARCH_LIMIT).as_deref(),
             Some("Showing the best 100 matches. Type more to narrow it.")
+        );
+    }
+
+    #[test]
+    fn a_remembered_type_the_search_does_not_offer_runs_as_every_type() {
+        let episodes = SearchFilter {
+            kind: Some(MediaKind::EPISODE),
+            ..SearchFilter::default()
+        };
+        assert_eq!(
+            library_groups(&episodes),
+            Some((SEARCH_GROUPS.to_vec(), SEARCH_LIMIT))
+        );
+        // Its groups are full at 24, as every type's, and do not wrap.
+        assert!(search_note(&episodes, SEARCH_LIMIT).is_some());
+        let display = search_result_display(&MediaKind::MOVIE, &episodes, false, true);
+        assert!(!display.wraps);
+        assert_eq!(display.note.unwrap().full_at, SEARCH_LIMIT);
+    }
+
+    #[test]
+    fn a_search_groups_display_follows_its_kind_the_filter_and_the_view() {
+        let every = SearchFilter::default();
+        let films = search_result_display(&MediaKind::MOVIE, &every, false, true);
+        assert_eq!(films.title, "Movies");
+        assert_eq!(films.shape, TileShape::Poster);
+        assert!(!films.cards && !films.wraps && films.item_menu && films.show_titles);
+        assert_eq!(films.opens, ItemOpens::Details);
+        assert_eq!(films.link, None);
+        let note = films.note.unwrap();
+        assert_eq!(note.full_at, SEARCH_LIMIT);
+        assert_eq!(
+            note.text,
+            "Showing the best 24 matches. Type more to narrow it."
+        );
+        // Wide, without titles.
+        let wide = search_result_display(&MediaKind::SERIES, &every, true, false);
+        assert_eq!(wide.shape, TileShape::Wide);
+        assert!(!wide.show_titles);
+        // Episodes stay wide in the posters view.
+        assert_eq!(
+            search_result_display(&MediaKind::EPISODE, &every, false, true).shape,
+            TileShape::Wide
+        );
+        // People: cast cards, no item menu, opening their titles.
+        let people = search_result_display(&MediaKind::PERSON, &every, true, true);
+        assert_eq!(people.title, "People");
+        assert!(people.cards && !people.item_menu);
+        assert_eq!(people.opens, ItemOpens::PersonTitles);
+        // Narrowed to one type: it wraps, and is full at 100.
+        let narrowed = SearchFilter {
+            kind: Some(MediaKind::PERSON),
+            ..SearchFilter::default()
+        };
+        let one = search_result_display(&MediaKind::PERSON, &narrowed, false, true);
+        assert!(one.wraps);
+        assert_eq!(one.note.unwrap().full_at, NARROWED_SEARCH_LIMIT);
+        // An unknown kind's group is named as the core names it.
+        assert_eq!(
+            search_result_display(&MediaKind::new("live_tv"), &every, false, true).title,
+            "Live Tv"
+        );
+        assert_eq!(
+            search_type_label(Some(&MediaKind::new("live_tv"))),
+            "Live Tv"
         );
     }
 

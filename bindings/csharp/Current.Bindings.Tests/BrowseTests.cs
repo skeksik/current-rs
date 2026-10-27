@@ -288,6 +288,104 @@ internal static class BrowseTests
         return Task.CompletedTask;
     }
 
+    public static Task ViewsAndRowsAreTheCores()
+    {
+        // What the core decides for the views, Home's rows, the search page's rows, names and times; no server needed.
+        Check(Views.Query(BrowseView.Favourites).Filters.SequenceEqual(["favourite"]), "the Favourites tab's query");
+        var recent = Views.Query(BrowseView.RecentlyAdded);
+        Check(recent.Sort.SequenceEqual(["date_created"]) && recent.Order == SortOrder.Descending && recent.Recursive,
+            "Recently added: the newest first, in every library");
+        Check(Views.Query(BrowseView.RecentlyAdded, "series").Kinds.SequenceEqual(["series"]), "Recently added narrowed to a type");
+        var ticked = Views.Opening(BrowseView.Everything, "episode", favourite: true);
+        Check(ticked.Query.Kinds.SequenceEqual(["episode"]) && ticked.Query.Filters.SequenceEqual(["favourite"]) && !ticked.Wide
+            && ticked.ShowTitles, "a Favourites row's header: its kind's page, favourites ticked, posters with titles");
+        Check(Views.Layout(BrowseView.Favourites) == ViewLayout.Rows && Views.Layout(BrowseView.Favourites, "movie") == ViewLayout.Grid
+            && Views.Layout(BrowseView.RecentlyAdded) == ViewLayout.Grid, "only the Favourites tab is rows");
+        var menu = Views.FilterMenu(BrowseView.RecentlyAdded);
+        Check(menu.Kinds.SequenceEqual([null, "movie", "series"]) && menu.Filters, "Recently added narrows by type, and filters");
+        Check(Views.FilterMenu(null).Kinds.Count == 0 && Views.FilterMenu(BrowseView.Everything, "movie").Kinds.Count == 0
+            && Views.FilterMenu(null).Filters, "a library and a kind's page are one type already");
+        Check(Views.Title(BrowseView.Everything, "series") == "Series" && Views.Title(BrowseView.RecentlyAdded) == "Recently added",
+            "the views' titles");
+        Check(Views.LinkTooltip(BrowseView.Everything, "movie") == "Open Movies, favourites ticked", "a kind's link tooltip");
+
+        static RowDisplay Row(HomeRowKind kind, string title = "", ItemRef? library = null) =>
+            Views.ForHomeRow(new HomeRow("row", kind, title, library));
+        Check(Row(HomeRowKind.ContinueWatching) is { Title: "Continue watching", Wide: true, Link: null }, "Continue watching");
+        Check(Row(HomeRowKind.NextUp) is { Title: "Next up", Wide: true, Link: null }, "Next up");
+        Check(Row(HomeRowKind.SeenRecently) is { Title: "Seen recently", Wide: false, Link: null }, "Seen recently");
+        Check(Row(HomeRowKind.RecentlyAdded) is { Title: "Recently added", Wide: false, Link.Tooltip: "Open Recently added" }
+            && Row(HomeRowKind.RecentlyAdded).Link?.Target == new RowTarget.OpenView(BrowseView.RecentlyAdded, null, false),
+            "Recently added opens its tab");
+        Check(Row(HomeRowKind.Favourites) is { Title: "Favourites", Link.Tooltip: "Open Favourites" }
+            && Row(HomeRowKind.Favourites).Link?.Target == new RowTarget.OpenView(BrowseView.Favourites, null, false),
+            "Favourites opens its tab");
+        var films = new ItemRef(FirstServer, StandIn.FilmsLibraryId);
+        var latest = Row(HomeRowKind.Latest, "Films", films);
+        Check(latest is { Title: "Recently added in Films", Link.Tooltip: "Open Films, newest first" }
+            && latest.Link?.Target == new RowTarget.OpenLibrary(films), "a Latest row opens its library, newest first");
+
+        var group = Views.ForSearchGroup("episode", BrowseView.Everything);
+        Check(group is { Title: "Episodes", Wide: true }
+            && group.Link?.Target == new RowTarget.OpenView(BrowseView.Everything, "episode", true), "a Favourites row of episodes");
+        Check(Views.ForSearchGroup("movie") is { Title: "Movies", Wide: false, Link: null }, "a search group");
+
+        Check(BrowseLabels.KindGroup("live_tv") == "Live Tv", "a kind Current has no name for, title-cased");
+        Check(BrowseLabels.KindChoice(null) == "All types" && BrowseLabels.SortName("date_created") == "Date added"
+            && BrowseLabels.FilterName(null) == "All" && BrowseLabels.FilterName("favourite") == "Favourites", "the menus' names");
+        Check(BrowseLabels.TimeLeftShort(TimeSpan.FromMinutes(72)) == "1h 12m"
+            && BrowseLabels.TimeLeftShort(TimeSpan.FromSeconds(20)) == "1m",
+            "the time left on a tile");
+        Check(BrowseLabels.TimeLeft(TimeSpan.FromMinutes(45)) == "45 min left"
+            && BrowseLabels.TimeLeft(TimeSpan.FromSeconds(20)) == "1 min left",
+            "the time left in words");
+        Check(BrowseLabels.Runtime(TimeSpan.FromMinutes(90.5)) == "1 h 30 min", "a half minute rounds to the even one");
+        Check(BrowseLabels.FavouritesStatus(0, false, false) == "No favourites yet"
+            && BrowseLabels.FavouritesStatus(0, false, true) == "Couldn't load favourites."
+            && BrowseLabels.FavouritesStatus(1, false, true) is null && BrowseLabels.FavouritesStatus(0, true, false) is null,
+            "the Favourites tab's line");
+        return Task.CompletedTask;
+    }
+
+    public static async Task ViewGridsOpenTheirItems()
+    {
+        using var standIn = StandIn.Start();
+        using var core = await SignedIn(standIn);
+        using var browse = core.Browse(FirstServer);
+        var ui = new ManualDispatcher();
+
+        using var recent = browse.OpenItems(Views.Opening(BrowseView.RecentlyAdded).Query);
+        using var recentGrid = recent.Collect(ui);
+        await Eventually("Recently added's items", ui, () => recentGrid.Items.Count > 0 && recentGrid.Items[0] is Slot.Item);
+        Check(recentGrid.Items.OfType<Slot.Item>().All(slot => slot.Summary.Kind is "movie" or "series"), "films and series");
+
+        using var favourites = browse.OpenItems(Views.Query(BrowseView.Everything, "movie", favourite: true));
+        using var favouritesGrid = favourites.Collect(ui);
+        await Eventually("a kind's page", ui, () => favouritesGrid.Items.Count > 0 && favouritesGrid.Items[0] is Slot.Item);
+        Check(favouritesGrid.Items.OfType<Slot.Item>().All(slot => slot.Summary.Kind == "movie"), "films only");
+
+        using var searched = browse.OpenItems(Views.Query(BrowseView.RecentlyAdded).Searching(StandIn.FirstFilmName));
+        using var searchedGrid = searched.Collect(ui);
+        await Eventually("the search's items", ui,
+            () => searchedGrid.Items.OfType<Slot.Item>().Any(slot => slot.Summary.Name == StandIn.FirstFilmName));
+
+        // What a library opens with: nothing remembered yet, then what is, unless a Home row's header opened it.
+        var first = core.LibraryOpening(BigLibrary());
+        Check(first.Query.Sort.SequenceEqual(["sort_name"]) && !first.Wide && first.ShowTitles, "the first query, posters with titles");
+        await core.SetRememberSortAsync(true);
+        await core.SetRememberFilterAsync(true);
+        await core.SetRememberViewAsync(true);
+        await core.RememberLibraryChoicesAsync(BigLibrary().Item, new LibraryChoices(
+            new SortChoice("community_rating", SortOrder.Descending), ["unplayed"], new LibraryView(LibraryView.Wide, false)));
+        var remembered = core.LibraryOpening(BigLibrary());
+        Check(remembered.Query.Sort.SequenceEqual(["community_rating"]) && remembered.Query.Order == SortOrder.Descending
+            && remembered.Query.Filters.SequenceEqual(["unplayed"]) && remembered.Wide && !remembered.ShowTitles, "what is remembered");
+        await core.RememberLibraryChoicesAsync(BigLibrary().Item, new LibraryChoices(Filters: ["unplayed", "resumable"]));
+        Check(core.LibraryOpening(BigLibrary()).Query.Filters.Count == 0, "filters the menu no longer offers are dropped");
+        var home = core.LibraryOpening(BigLibrary(), ItemQuery.RecentlyAdded(BigLibrary()));
+        Check(home.Query.Sort.SequenceEqual(["date_created"]) && !home.Wide && home.ShowTitles, "a Home header ignores what is remembered");
+    }
+
     public static async Task SearchFiltersNarrowAndAPersonOpensTheirTitles()
     {
         using var standIn = StandIn.Start();
@@ -299,14 +397,19 @@ internal static class BrowseTests
         var tools = core.SearchToolsFor(new SearchFilter("person", SearchSource.Catalog));
         Check(tools.Types.Select(type => type.Choice.Label).SequenceEqual(["All", "Movies", "Series", "People"]),
             $"the types, not {string.Join(",", tools.Types.Select(type => type.Choice.Label))}");
-        Check(tools.Types[3].Kind == "person" && tools.Types[3].Choice.Checked, "People checked");
+        Check(tools.Types[3].Kind == "person" && tools.Types[3].Choice.Chosen, "People chosen");
         var catalog = tools.Sources[2];
-        Check(catalog.Source == SearchSource.Catalog && !catalog.Choice.Enabled && !catalog.Choice.Checked,
+        Check(catalog.Source == SearchSource.Catalog && !catalog.Choice.Enabled && !catalog.Choice.Chosen,
             "the catalog is listed but unavailable");
         Check(catalog.Choice.Label == "Catalog (needs Seerr)" && catalog.Choice.Tooltip == "Needs a Seerr server",
             $"the catalog's name and tooltip, not {catalog.Choice.Label} / {catalog.Choice.Tooltip}");
-        Check(tools.Sources[0].Choice.Checked, "without the catalog, every source is in effect");
-        Check(new SearchFilter().Note(24) is not null && new SearchFilter("movie").Note(24) is null, "the note per filter");
+        Check(tools.Sources[0].Choice.Chosen, "without the catalog, every source is in effect");
+        var peopleRow = Views.ForSearchResult("person", new SearchFilter("person"), wide: true, showTitles: true);
+        Check(peopleRow is { Title: "People", Cards: true, Wraps: true, Opens: ItemOpens.PersonTitles, ItemMenu: false, Note.FullAt: 100 },
+            $"a People group: cast cards that open their titles, no item menu, wrapping, full at 100 ({peopleRow})");
+        Check(Views.ForSearchResult("movie", new SearchFilter("episode"), wide: false, showTitles: false)
+            is { Wide: false, ShowTitles: false, Wraps: false, Cards: false, ItemMenu: true, Note.FullAt: 24 },
+            "a type the search does not offer runs as every type");
 
         using var search = browse.Search("example", new SearchFilter("person", SearchSource.Library));
         using var groups = search.ObserveGroups(ui);
