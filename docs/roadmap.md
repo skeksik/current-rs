@@ -282,8 +282,22 @@ Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 whe
       reorder Home's rows (owner, 2026-10-26); where the order is kept (locally or the user's Jellyfin library order) to be researched
 - [ ] Quality menu named by what the server will send for this file: model its bitrate rules in the core (audio share, codec, frame
       rate, low-bitrate boost; the Windows UI pass's research); today's names assume H.264 at 30 fps
-- [ ] Settings: "Remember selected quality", off by default (owner, 2026-10-26); changes ADR 0019, choice 8 (always remembered)
-- [ ] Played marks between a series and its episodes: seven cases where the series, its episodes, their tiles, the details page or
-      Next up keep a stale mark until a refresh (owner's run, 2026-10-26; listed in the Windows UI pass's PR)
+- [ ] Played marks between a series and its episodes keep a stale mark until a refresh (owner's run, 2026-10-26; each needs a failing
+      test against the stand-in first): (1) marking a series played marks its episodes, but the series' own mark disappears; (2)
+      unmarking a series leaves its episodes marked; (3) marking every episode played leaves the series unmarked; (4) a series marked
+      through its episodes needs two clicks on Played to unmark; (5) a newly marked series keeps its poster's unplayed count and
+      progress bar; (6) after unmarking a series, its episodes' tiles show unmarked but an episode's details page still shows it
+      played; (7) finishing an episode does not bring up Next up on Home
 - [ ] AV1 as a transcoding target where the server has an AV1 encoder (the device profile asks `hevc,h264` today; ADR 0019)
+- [ ] Before M3: move the Windows app's remaining rules and texts into the core, so macOS and Linux don't copy them (manager's
+      review of the Windows UI pass, 2026-10-27). Rules: which quality entry is current and the fallback quality list; dropping
+      remembered filters a menu no longer offers; Favourites offering type filters only; Home-header grids ignoring remembered choices;
+      view ids and the view → query mapping; row kind → tab links and which rows get wide tiles; kbit/s and Mbit/s formatting and the
+      "Original · 4K · 26.1 Mbit/s" composition; time-left rounding and format. Texts: Home row titles ("Recently added in X"), view
+      titles, kind names, link tooltips. Bindings tests for the quality options, `OpenItems`, the Favourites and Recently added
+      queries, searching, time left and the new Home row kinds
+- [ ] Global search filters (owner, 2026-10-27): Type (All, Movies, Series, Actors), Source (All, Library, Catalog; Catalog comes with
+      Seerr, M4) and View
+- [ ] Per-type pages (Movies, Series, Episodes, opened from the Favourites rows' headers) as pane tabs, and view settings per Home
+      row: to be discussed with the owner (2026-10-27)
 - Not planned yet (ask to add): music, live TV, books, photos, other media servers.
