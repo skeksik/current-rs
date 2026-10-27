@@ -183,6 +183,10 @@ impl Hub {
 #[derive(Default)]
 struct Dependents {
     changed: HashSet<ItemRef>,
+    /// Items whose marks are read again when the timer fires ([`Context::read_back`]).
+    read_back: HashSet<ItemRef>,
+    /// Whether the lists reload when it fires: a read again alone does not reload them.
+    reload: bool,
     timer: Option<AbortHandle>,
     /// Counts the schedules: a timer that fires after a newer schedule leaves the reload to the newer timer.
     generation: u64,
@@ -306,34 +310,51 @@ impl Context {
         }
     }
 
-    /// Reads the marks of `items` (a series and season whose counts changed) from the server and shows them in every live list. An
-    /// answer is dropped when the user marked the item meanwhile: the newer mark shows.
-    fn read_marks_again(self: &Arc<Self>, items: Vec<ItemRef>) {
+    /// Reads the marks of `items` (a series and season whose counts changed) from the server, one request each, and shows them in
+    /// every live list. They correct the estimate shown at once ([`states::estimate_parent`]), which is off where the server counts
+    /// what the lists do not show (episodes not loaded, or marked elsewhere). An answer is dropped when a played change was wanted
+    /// after its request went out (its count may predate it), and that item is read again after the next delay; a failed read
+    /// keeps what the lists show, with no notice.
+    async fn read_marks_again(self: Arc<Self>, items: HashSet<ItemRef>) {
+        let Ok(client) = self.client() else {
+            return;
+        };
+        for item in items {
+            let wanted = self.states.wanted(&item);
+            let played = self.states.played_wants();
+            let Ok(state) = client.user_data(&item).await else {
+                // The lists keep the estimate; the next load shows the server's state.
+                self.states.settle(&item, played);
+                continue;
+            };
+            if self.states.played_wants() != played {
+                self.read_back(Some(item));
+            } else if self.states.wanted(&item) == wanted {
+                self.states.settle(&item, played);
+                self.publish(&item, state);
+            }
+        }
+    }
+
+    /// The marks of `items` are read again with the dependent reload ([`Context::dependents_changed`]): once per item however many
+    /// changes came within the delay.
+    fn read_back(self: &Arc<Self>, items: impl IntoIterator<Item = ItemRef>) {
+        let items: Vec<ItemRef> = items.into_iter().collect();
         if items.is_empty() {
             return;
         }
-        let context = self.clone();
-        self.spawn(async move {
-            let Ok(client) = context.client() else {
-                return;
-            };
-            for item in items {
-                let wanted = context.states.wanted(&item);
-                // A failure leaves the lists as they were; the dependent reload still runs.
-                if let Ok(state) = client.user_data(&item).await
-                    && context.states.wanted(&item) == wanted
-                {
-                    context.publish(&item, state);
-                }
-            }
-        });
+        lock(&self.dependents).read_back.extend(items);
+        self.schedule(false);
     }
 
     /// Sends `item`'s state to every live list: the pending state if a change is pending, else `settled` (the server's answer).
     /// Read under one lock, so publishes for one item cannot land out of order: the last one shows the newest state.
     fn publish(&self, item: &ItemRef, settled: UserState) {
         let _order = lock(&self.publishing);
-        let state = self.states.pending(item).unwrap_or(settled);
+        let state = self
+            .states
+            .pending(item)
+            .unwrap_or_else(|| self.states.shown(item, settled));
         for live in self.lives() {
             live.patch(item, &state);
         }
@@ -341,8 +362,14 @@ impl Context {
 
     /// The lists depending on `items` reload [`DEPENDENT_RELOAD_DELAY`] after the last such call.
     fn dependents_changed(self: &Arc<Self>, items: impl IntoIterator<Item = ItemRef>) {
+        lock(&self.dependents).changed.extend(items);
+        self.schedule(true);
+    }
+
+    /// (Re)starts the timer of [`Context::dependents_changed`]; `reload` when the lists are to reload, not only marks to be read.
+    fn schedule(self: &Arc<Self>, reload: bool) {
         let mut dependents = lock(&self.dependents);
-        dependents.changed.extend(items);
+        dependents.reload |= reload;
         if let Some(timer) = dependents.timer.take() {
             timer.abort();
         }
@@ -354,17 +381,31 @@ impl Context {
             let Some(context) = context.upgrade() else {
                 return;
             };
-            let changed = {
+            let (reload, changed, read_back) = {
                 let mut dependents = lock(&context.dependents);
                 // A newer schedule came while this one woke: its timer reloads, a second after it.
                 if dependents.generation != generation {
                     return;
                 }
                 dependents.timer = None;
-                std::mem::take(&mut dependents.changed)
+                // A played change still waits for the server, whose counts may not include it yet: its answer schedules again, and
+                // everything gathered so far waits for that.
+                if context.states.played_pending() {
+                    return;
+                }
+                (
+                    std::mem::take(&mut dependents.reload),
+                    std::mem::take(&mut dependents.changed),
+                    std::mem::take(&mut dependents.read_back),
+                )
             };
-            for live in context.lives() {
-                live.dependents_changed(&changed);
+            if !read_back.is_empty() {
+                context.spawn(context.clone().read_marks_again(read_back));
+            }
+            if reload {
+                for live in context.lives() {
+                    live.dependents_changed(&changed);
+                }
             }
         }));
     }
@@ -387,6 +428,7 @@ impl Context {
                 for parent in &parents {
                     if let Some(mut shown) = self.find(parent) {
                         states::estimate_parent(&mut shown.user, &before.user, played);
+                        self.states.estimate(parent, &shown.user);
                         self.publish(parent, shown.user);
                     }
                 }
@@ -420,7 +462,7 @@ impl Context {
                 Some((name, problem)) => {
                     // The parents showed an estimate: the server's state replaces it.
                     if matches!(action, ItemAction::SetPlayed(_)) {
-                        self.read_marks_again(answered.parents);
+                        self.read_back(answered.parents.clone());
                     }
                     self.notices.raise(NoticeKind::ActionFailed {
                         action,
@@ -429,7 +471,7 @@ impl Context {
                     });
                 }
                 // A mark changes the lists chosen by marks (Home's rows, the Favourites tab, a filtered grid): they read again a moment
-                // later. A played mark changes its series' and season's own marks and counts: they are read again now, and their pages
+                // later. A played mark changes its series' and season's own marks and counts: they are read again then, and their pages
                 // and the item's own (a series' episodes, which the server marked too) reload with the rest.
                 None if matches!(action, ItemAction::SetPlayed(_)) => {
                     let mut changed = answered.parents.clone();
@@ -440,7 +482,7 @@ impl Context {
                             .filter(|below| below.user.unplayed_count.is_some())
                             .map(|below| below.item),
                     );
-                    self.read_marks_again(changed);
+                    self.read_back(changed);
                     let mut dependents = answered.parents;
                     dependents.push(item.clone());
                     self.dependents_changed(dependents);
@@ -568,7 +610,7 @@ impl Browse {
             .map(|summary| states::parents(&summary))
             .unwrap_or_default();
         // An episode played to its end changes its series' and season's counts.
-        self.ctx.read_marks_again(parents.clone());
+        self.ctx.read_back(parents.clone());
         let mut items = parents;
         items.push(item.clone());
         self.ctx.dependents_changed(items);

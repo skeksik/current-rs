@@ -120,7 +120,9 @@ pub(super) fn set_played(state: &mut UserState, played: bool) {
 
 /// What a parent (a series or season) shows at once when `child`, shown as `before`, is marked `played`: its unplayed count moves by
 /// the child's (one for an episode, a season's own count when it is marked played), and it is played when nothing below is unplayed
-/// (`Folder.FillUserDataDtoValues`: "`dto.Played = playedCount >= totalCount`"). The server's state follows once it answered.
+/// (`Folder.FillUserDataDtoValues`: "`dto.Played = playedCount >= totalCount`"). Only an estimate: it is off where the server counts
+/// what the change does not move (an episode marked on another device, one the lists never loaded), so the parent's marks are read
+/// again from the server after the change (`Context::read_back`), and that answer replaces it.
 pub(super) fn estimate_parent(parent: &mut UserState, before: &UserState, played: bool) {
     if before.played == played {
         return;
@@ -187,8 +189,11 @@ struct Inner {
     sending: HashSet<ItemRef>,
     /// How many changes were wanted per item.
     wanted: HashMap<ItemRef, u64>,
-    /// Counts the played changes wanted, for [`Pending::played_seq`].
+    /// Counts the played changes wanted, for [`Pending::played_seq`] and [`ItemStates::played_wants`].
     seq: u64,
+    /// Series and seasons showing an estimate: lists loaded before the server's marks are read again show it too, so an answer read
+    /// before the change does not undo it.
+    estimates: HashMap<ItemRef, Estimate>,
 }
 
 impl Inner {
@@ -206,11 +211,34 @@ impl Inner {
             .filter_map(|pending| pending.played.map(|played| (pending.played_seq, played)))
             .filter(|(seq, _)| *seq > since)
             .max_by_key(|(seq, _)| *seq);
-        if let Some((_, played)) = inherited {
-            set_played(&mut shown, played);
+        let since = match inherited {
+            Some((seq, played)) => {
+                set_played(&mut shown, played);
+                seq
+            }
+            None => since,
+        };
+        // An estimate made after every change above stands until the server's marks are read again.
+        if let Some(estimate) = self.estimates.get(item)
+            && estimate.seq > since
+        {
+            shown.played = estimate.played;
+            shown.unplayed_count = estimate.unplayed_count;
+            shown.progress = estimate.progress;
+            shown.position = estimate.position;
         }
         shown
     }
+}
+
+/// What a series or season shows of an estimate ([`estimate_parent`]) until its marks are read again.
+struct Estimate {
+    played: bool,
+    unplayed_count: Option<u32>,
+    progress: Option<f32>,
+    position: Option<std::time::Duration>,
+    /// [`Inner::seq`] when it was made.
+    seq: u64,
 }
 
 impl ItemStates {
@@ -245,11 +273,64 @@ impl ItemStates {
         lock(&self.inner).wanted.get(item).copied().unwrap_or(0)
     }
 
+    /// Records `state` as `item`'s estimate (a series or season whose child changed) until [`ItemStates::settle`].
+    pub(super) fn estimate(&self, item: &ItemRef, state: &UserState) {
+        let mut inner = lock(&self.inner);
+        let seq = inner.seq;
+        inner.estimates.insert(
+            item.clone(),
+            Estimate {
+                played: state.played,
+                unplayed_count: state.unplayed_count,
+                progress: state.progress,
+                position: state.position,
+                seq,
+            },
+        );
+    }
+
+    /// `item`'s marks were read again (or could not be) after `played_wants` played changes: an estimate made no later than that is
+    /// done.
+    pub(super) fn settle(&self, item: &ItemRef, played_wants: u64) {
+        let mut inner = lock(&self.inner);
+        if inner
+            .estimates
+            .get(item)
+            .is_some_and(|estimate| estimate.seq <= played_wants)
+        {
+            inner.estimates.remove(item);
+        }
+    }
+
+    /// Whether a played change is wanted that the server has not answered yet: what the server counts now may not include it.
+    pub(super) fn played_pending(&self) -> bool {
+        lock(&self.inner)
+            .pending
+            .values()
+            .any(|pending| pending.played.is_some())
+    }
+
+    /// How many played changes were wanted so far, for any item: an answer read before a later one may count what it changed wrong.
+    pub(super) fn played_wants(&self) -> u64 {
+        lock(&self.inner).seq
+    }
+
     /// The state of `item` while a change for it, or a played change for its series or season, is pending.
     pub(super) fn pending(&self, item: &ItemRef) -> Option<UserState> {
         let inner = lock(&self.inner);
         let pending = inner.pending.get(item)?;
         Some(inner.shown(item, &pending.parents, pending.server.clone()))
+    }
+
+    /// `state` (what a list or the server gave for `item`) as the lists show it: with the changes pending for it and its estimate.
+    pub(super) fn shown(&self, item: &ItemRef, state: UserState) -> UserState {
+        let inner = lock(&self.inner);
+        let parents = inner
+            .pending
+            .get(item)
+            .map(|pending| pending.parents.clone())
+            .unwrap_or_default();
+        inner.shown(item, &parents, state)
     }
 
     /// Records a wanted change; `shown` is the item as a live list shows it, if one does, and `parents` its series and season.
@@ -263,7 +344,9 @@ impl ItemStates {
     ) -> (UserState, bool) {
         let mut inner = lock(&self.inner);
         *inner.wanted.entry(item.clone()).or_default() += 1;
-        inner.seq += 1;
+        if matches!(action, ItemAction::SetPlayed(_)) {
+            inner.seq += 1;
+        }
         let seq = inner.seq;
         let pending = inner
             .pending
@@ -571,6 +654,49 @@ mod tests {
         );
         assert_eq!(answered.rolled_back.len(), 1);
         assert!(!answered.rolled_back[0].user.played, "as it was first");
+    }
+
+    #[test]
+    fn an_estimate_stands_until_settled_and_a_newer_change_wins_over_it() {
+        let states = ItemStates::default();
+        // A read of the series' marks begins before the change.
+        let read_began = states.played_wants();
+        let shown = episode("e", played(false));
+        states.want(
+            &item("e"),
+            ItemAction::SetPlayed(true),
+            Some(&shown),
+            parents(&shown),
+        );
+        let estimate = UserState {
+            played: true,
+            unplayed_count: Some(0),
+            ..UserState::default()
+        };
+        states.estimate(&item("s"), &estimate);
+        // A load that read the server before the change.
+        let mut loaded = summary(
+            "s",
+            UserState {
+                unplayed_count: Some(1),
+                ..UserState::default()
+            },
+        );
+        states.observe(&mut loaded);
+        assert!(loaded.user.played && loaded.user.unplayed_count == Some(0));
+        // That read's answer predates the estimate: it stays.
+        states.settle(&item("s"), read_began);
+        assert!(states.shown(&item("s"), UserState::default()).played);
+        states.settle(&item("s"), states.played_wants());
+        assert!(!states.shown(&item("s"), UserState::default()).played);
+
+        // The series' own change, made after an estimate, wins over it.
+        states.estimate(&item("s"), &estimate);
+        states.want(&item("s"), ItemAction::SetPlayed(false), None, Vec::new());
+        assert_eq!(
+            states.pending(&item("s")).map(|state| state.played),
+            Some(false)
+        );
     }
 
     #[test]

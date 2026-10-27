@@ -8,7 +8,7 @@ use current_app::{
     AddServerState, App, Browse, DetailsView, HomeFeed, PagedItems, SignInState, Slot,
 };
 use current_model::{ItemId, ItemRef, ItemSummary, ServerRef};
-use jellyfin_stand_in::library::{EPISODE_IDS, SERIES_ID, SHOWS_LIBRARY_ID};
+use jellyfin_stand_in::library::{EPISODE_IDS, SEASON_ID, SERIES_ID, SHOWS_LIBRARY_ID};
 use jellyfin_stand_in::{PASSWORD, StandIn, USER_NAME};
 
 /// Waits (at most 5 s) until `check` passes.
@@ -373,4 +373,74 @@ async fn an_episode_s_newer_mark_wins_over_its_series() {
     );
     assert!(lists.series_played(false), "one episode left unplayed");
     assert!(lists.posters(1, Some(0.5)));
+}
+
+/// Marking both episodes within the delay reads the series' and season's marks back once each, not once per episode.
+#[tokio::test]
+async fn read_backs_are_coalesced() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    lists.toggle(EPISODE_IDS[0]);
+    lists.toggle(EPISODE_IDS[1]);
+    settle().await;
+    for id in [SERIES_ID, SEASON_ID] {
+        assert_eq!(
+            stand_in.count(&format!("/UserItems/{id}/UserData")),
+            1,
+            "{id}"
+        );
+    }
+}
+
+/// The estimate shown at once is replaced by the server's count when they differ: here the second episode was marked on another
+/// device, so the series is played as soon as the first one is.
+#[tokio::test]
+async fn the_server_s_count_replaces_the_estimate() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    stand_in.set_played_on_server(EPISODE_IDS[1], true);
+    lists.toggle(EPISODE_IDS[0]);
+    assert!(
+        lists.posters(1, Some(0.0)) && lists.series_played(false),
+        "the estimate"
+    );
+    eventually("the server's count", || {
+        lists.posters(0, Some(1.0)) && lists.series_played(true)
+    })
+    .await;
+}
+
+/// A read-back sent before a newer played change is dropped (its count predates the change); the series is read again after it.
+#[tokio::test]
+async fn a_read_back_older_than_a_newer_mark_is_dropped() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    let read_back = format!("/UserItems/{SERIES_ID}/UserData");
+    stand_in.hold(&read_back);
+    lists.toggle(EPISODE_IDS[0]);
+    eventually("the read-back", || stand_in.count(&read_back) == 1).await;
+    // The second episode is marked while the read-back waits; its own request waits too, so the server still counts one unplayed.
+    let second = format!("/UserPlayedItems/{}", EPISODE_IDS[1]);
+    stand_in.hold(&second);
+    lists.toggle(EPISODE_IDS[1]);
+    assert!(lists.series_played(true), "the estimate: nothing unplayed");
+    stand_in.release(&read_back);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        lists.series_played(true),
+        "the older answer is dropped: {:?}",
+        lists
+            .series_everywhere()
+            .iter()
+            .map(|s| (s.user.played, s.user.unplayed_count))
+            .collect::<Vec<_>>()
+    );
+    assert!(lists.posters(0, None));
+    stand_in.release(&second);
+    eventually("read again", || stand_in.count(&read_back) >= 2).await;
+    settle().await;
+    assert!(lists.series_played(true) && lists.posters(0, Some(1.0)));
 }
