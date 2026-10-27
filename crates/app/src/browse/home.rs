@@ -16,6 +16,7 @@ use current_model::{CollectionKind, ItemQuery, ItemRef, ItemSummary, Library, Us
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 
+use super::store::ReadTicket;
 use super::{Context, Live, lock, patch_list, sync_list};
 use crate::list::ObservableList;
 
@@ -268,8 +269,12 @@ impl HomeFeed {
         if stale {
             self.refresh();
         } else {
-            // Within the five minutes: every item held reads its marks again, which another device may have changed meanwhile.
-            self.inner.ctx.resync();
+            // Within the five minutes: what Home shows reads its marks again, which another device may have changed meanwhile.
+            let mut held = HashSet::new();
+            self.inner.holds(&mut held);
+            self.inner
+                .ctx
+                .resync(held.into_iter().take(super::RESYNC_LIMIT));
         }
         stale
     }
@@ -354,14 +359,14 @@ impl Home {
                         }
                     }
                     while let Some(joined) = rows.join_next().await {
-                        let Ok((spec, at, result)) = joined else {
+                        let Ok((spec, read, result)) = joined else {
                             continue;
                         };
                         let Some(home) = me.upgrade() else {
                             return;
                         };
                         match result {
-                            Ok(items) => home.apply(&spec, items, at),
+                            Ok(items) => home.apply(&spec, items, read.at),
                             Err(error) => failures.push(error),
                         }
                     }
@@ -485,8 +490,8 @@ fn load_generation(loads: &Loads, full: bool) -> u64 {
     }
 }
 
-/// A row's answer, and when its request went out ([`Context::tick`]).
-type RowAnswer = (Spec, u64, Result<Vec<ItemSummary>, AuthError>);
+/// A row's answer, and its read ([`Context::begin_read`]): when its request went out.
+type RowAnswer = (Spec, ReadTicket, Result<Vec<ItemSummary>, AuthError>);
 
 fn spawn_row(
     rows: &mut JoinSet<RowAnswer>,
@@ -495,10 +500,10 @@ fn spawn_row(
     spec: Spec,
 ) {
     let client = client.clone();
-    let at = ctx.tick();
+    let read = ctx.begin_read();
     rows.spawn(async move {
         let result = spec.load(&client).await;
-        (spec, at, result)
+        (spec, read, result)
     });
 }
 

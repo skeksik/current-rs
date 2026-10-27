@@ -134,8 +134,11 @@ impl Details {
         let item = self.item.clone();
         let season = lock(&self.season).clone();
         self.state.send_modify(|state| state.loading = true);
-        let at = self.ctx.tick();
+        let read = self.ctx.begin_read();
+        let at = read.at;
         let task = self.ctx.spawn(async move {
+            // Held until the answers are shown.
+            let _read = read;
             let mut failures = Vec::new();
             match ctx.client() {
                 Ok(client) => {

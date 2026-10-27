@@ -16,6 +16,7 @@ use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
 use super::libraries::might_be_gone;
+use super::store::ReadTicket;
 use super::{Context, Live, lock};
 use crate::list::{ObservableList, VectorDiff};
 
@@ -85,8 +86,8 @@ enum Page {
 
 struct Flight {
     id: u64,
-    /// When its request went out ([`Context::tick`]).
-    at: u64,
+    /// Its read: when its request went out ([`Context::begin_read`]).
+    read: ReadTicket,
     task: AbortHandle,
     with_total: bool,
     auto: bool,
@@ -200,8 +201,10 @@ impl PagedItems {
         if stale {
             self.refresh();
         } else {
-            // Within the five minutes: every item held reads its marks again, which another device may have changed meanwhile.
-            self.inner.ctx.resync();
+            // Within the five minutes: what the grid shows reads its marks again, which another device may have changed meanwhile.
+            self.inner
+                .ctx
+                .resync(self.inner.shown_first(super::RESYNC_LIMIT));
         }
         stale
     }
@@ -342,7 +345,7 @@ impl Paged {
     fn launch(&self, control: &mut Control, page: usize, with_total: bool, auto: bool) {
         control.next_id += 1;
         let id = control.next_id;
-        let at = self.ctx.tick();
+        let read = self.ctx.begin_read();
         let query = control.query.clone();
         let ctx = self.ctx.clone();
         let me = self.me.clone();
@@ -378,7 +381,7 @@ impl Paged {
             page,
             Flight {
                 id,
-                at,
+                read,
                 task,
                 with_total,
                 auto,
@@ -399,7 +402,7 @@ impl Paged {
             return;
         };
         match result {
-            Ok(answer) if !control.started => self.start(&mut control, answer, flight.at),
+            Ok(answer) if !control.started => self.start(&mut control, answer, flight.read.at),
             Ok(answer) => {
                 if flight.with_total {
                     self.resize(&mut control, answer.total);
@@ -410,7 +413,7 @@ impl Paged {
                 {
                     control.refresh_wanted = true;
                 }
-                self.fill(&mut control, page, answer.items, flight.at);
+                self.fill(&mut control, page, answer.items, flight.read.at);
                 if !control
                     .pages
                     .iter()
@@ -579,6 +582,32 @@ impl Paged {
             *current = state;
             changed
         });
+    }
+}
+
+impl Paged {
+    /// Up to `limit` of the items the grid holds, those in the visible range first, then by their place in the grid.
+    fn shown_first(&self, limit: usize) -> Vec<ItemRef> {
+        let control = lock(&self.control);
+        let (first, last) = control.visible.unwrap_or((0, 0));
+        let mut items: Vec<(usize, &ItemRef)> = control
+            .index
+            .iter()
+            .filter_map(|(item, indices)| indices.iter().min().map(|index| (*index, item)))
+            .collect();
+        // Visible first, then the nearest to the visible range.
+        items.sort_by_key(|(index, _)| {
+            if (first..=last).contains(index) {
+                0
+            } else {
+                index.abs_diff(first).min(index.abs_diff(last))
+            }
+        });
+        items
+            .into_iter()
+            .take(limit)
+            .map(|(_, item)| item.clone())
+            .collect()
     }
 }
 

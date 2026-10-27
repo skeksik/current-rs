@@ -177,8 +177,9 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    last, on the session's clock (a list's read takes the clock when its request goes out, a server's answer to a mark, a read-back
    or a stop when it arrives). Every list's read goes through it: a read newer than the store's copy replaces it and every live list
    shows it; an older one (a slow answer that left the server before a later change) shows the store's. The pending changes and
-   estimates show on top. An item's state for the UI's actions (`Browse::user_state`) is the store's with them. Entries no live list
-   holds are dropped after each read. Before, each list kept its own copy and only patches were shared, so a page read later, or a
+   estimates show on top. An item's state for the UI's actions (`Browse::user_state`) is the store's with them. After each read the
+   entries are dropped that no live list holds, no wanted change waits for, and no read still in flight went out before; a server's
+   answer about an item no list holds is kept the same way, so a slower, older read does not undo it. Before, each list kept its own copy and only patches were shared, so a page read later, or a
    slow answer, left the pages disagreeing.)
 3. The request goes out; requests for one item are sent one at a time, and only the last wanted state is sent after one in flight.
 4. Success: the server's answer becomes the item's state. Then the lists whose content depends on it reload in the background, a
@@ -233,16 +234,18 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
      parent it is) reload with the dependents.
    - A season keeps its series from the page that listed it, so a series' change reaches it in every list.
    - A change for an item no live list holds is sent whatever it asks for: what the server holds is not known.
-   - **Resync on focus**: Home or a grid shown again within `REFRESH_WHEN_SHOWN_AFTER` reads the marks of every item the store
-     holds again, so a change made on another device shows; after that time they refresh, and the foreground refresh reads every
+   - **Resync on focus**: Home or a grid shown again within `REFRESH_WHEN_SHOWN_AFTER` reads again the marks of what it shows
+     (`RESYNC_LIMIT`, 200, at most: a grid's visible items first; the rest wait for the next time), so a change made on another
+     device shows; after that time they refresh, and the foreground refresh reads every
      list again, as before. Jellyfin's WebSocket `UserDataChanged` would push such changes; it needs a dependency the owner has not
      approved, so it is not used.
    - An estimate made before a confirmed played change, of the item or of what is below it, is dropped when the server answers.
    - *Workaround for an upstream Jellyfin bug* (`docs/notes/jellyfin-browse.md`, "Upstream bugs and our workarounds"): Jellyfin saves
      a favourite or a playback report on an episode with the user data its cached instance holds, which a series' sweep leaves
-     behind, so the write puts the old played mark back in the database. Before a favourite or a playback start on an episode whose
-     series or season this session marked since, its played mark as a list reads it is sent on its own id, which puts the instance
-     right. It goes once a write reads its user data fresh.
+     behind, so the write puts the old played mark back in the database. Before a favourite or a playback start on an episode (an
+     item that is not a folder) whose series or season this session marked since, its played mark as a list reads it is sent on its
+     own id, which puts the instance right; while a played change on its series or season is still in flight, it waits for its
+     answer first. It goes once a write reads its user data fresh.
 
 ### 6. Home
 Home's layout is **provisional**: the owner accepted it for now and will have it redesigned later (2026-10-25). The `HomeFeed`

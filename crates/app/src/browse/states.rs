@@ -345,6 +345,22 @@ impl ItemStates {
         }
     }
 
+    /// The items with changes the server has not confirmed yet.
+    pub(super) fn pending_items(&self) -> Vec<ItemRef> {
+        lock(&self.inner).pending.keys().cloned().collect()
+    }
+
+    /// Whether a played change is wanted for one of `items` that the server has not answered yet.
+    pub(super) fn played_pending_for(&self, items: &[ItemRef]) -> bool {
+        let inner = lock(&self.inner);
+        items.iter().any(|item| {
+            inner
+                .pending
+                .get(item)
+                .is_some_and(|pending| pending.played.is_some())
+        })
+    }
+
     /// Whether a played change is wanted that the server has not answered yet: what the server counts now may not include it.
     pub(super) fn played_pending(&self) -> bool {
         lock(&self.inner)

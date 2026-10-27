@@ -78,7 +78,7 @@ pub use views::{
 
 use libraries::Libraries;
 use states::ItemStates;
-use store::ItemStore;
+use store::{ItemStore, ReadTicket};
 
 /// How long after the last played or favourite change the lists that depend on it reload (ADR 0018, section 5).
 pub const DEPENDENT_RELOAD_DELAY: Duration = Duration::from_secs(1);
@@ -217,11 +217,35 @@ struct Dependents {
     generation: u64,
 }
 
-/// Whether a resync ([`Context::resync`]) runs, and whether another was asked for meanwhile.
+/// Whether a resync ([`Context::resync`]) runs, and the items asked for meanwhile, which it reads next.
 #[derive(Default)]
 struct Resync {
     running: bool,
-    again: bool,
+    queued: Vec<ItemRef>,
+}
+
+/// Clears [`Resync::running`] if the resync's task ends before it read everything queued (aborted with the runtime), so the next
+/// resync starts.
+struct Resyncing {
+    context: Arc<Context>,
+    done: bool,
+}
+
+impl Resyncing {
+    /// Everything queued was read: `running` is cleared under the same lock.
+    fn finish(&mut self) {
+        self.done = true;
+    }
+}
+
+impl Drop for Resyncing {
+    fn drop(&mut self) {
+        if !self.done {
+            let mut resync = lock(&self.context.resync);
+            resync.running = false;
+            resync.queued.clear();
+        }
+    }
 }
 
 /// Workaround for an upstream Jellyfin bug: the series and seasons this session marked, and the episodes whose own instance on the
@@ -236,6 +260,10 @@ struct Sweeps {
 
 /// How many items one resync request asks for ([`Context::resync`]): their ids go in the URL.
 const RESYNC_CHUNK: usize = 50;
+
+/// How many items a list shown again reads again at most ([`Context::resync`]), the first it shows: a long grid would otherwise
+/// send dozens of requests each time it is shown. The rest wait for the next time, a refresh, or the foreground.
+pub(super) const RESYNC_LIMIT: usize = 200;
 
 /// One session's browse state: its store of the items' states, the changes wanted, and its live lists.
 pub(crate) struct Context {
@@ -253,6 +281,8 @@ pub(crate) struct Context {
     dependents: Mutex<Dependents>,
     resync: Mutex<Resync>,
     sweeps: Mutex<Sweeps>,
+    /// Told each time the server answers a wanted change ([`Context::mend`] waits on it).
+    answered: tokio::sync::Notify,
     libraries: Libraries,
     /// Orders the lists' reads and the server's answers ([`store::ItemStore`]).
     clock: AtomicU64,
@@ -287,6 +317,7 @@ impl Context {
             dependents: Mutex::new(Dependents::default()),
             resync: Mutex::new(Resync::default()),
             sweeps: Mutex::new(Sweeps::default()),
+            answered: tokio::sync::Notify::new(),
             libraries: Libraries::default(),
             clock: AtomicU64::new(0),
         }
@@ -346,6 +377,20 @@ impl Context {
         self.clock.fetch_add(1, Ordering::Relaxed) + 1
     }
 
+    /// A read whose request goes out now: the store keeps what it may be older than until the ticket drops ([`ItemStore::retain`]).
+    fn begin_read(&self) -> ReadTicket {
+        self.store.begin(self.tick())
+    }
+
+    /// Every item the live lists hold.
+    fn held(&self) -> HashSet<ItemRef> {
+        let mut held = HashSet::new();
+        for live in self.lives() {
+            live.holds(&mut held);
+        }
+        held
+    }
+
     /// A list read `items` at `at` (below `series`, for a series' seasons): each takes the store's state if the store's is newer, or
     /// becomes it if older, then shows the changes pending for it or above it. Returns the items whose state the read changed: the
     /// list hands them to [`Context::spread`] once it shows them, so every other list shows them too.
@@ -366,10 +411,9 @@ impl Context {
         for item in changed {
             self.publish(&item);
         }
-        let mut held = HashSet::new();
-        for live in self.lives() {
-            live.holds(&mut held);
-        }
+        let mut held = self.held();
+        // An item a change waits for keeps its entry: the server's answer lands in it.
+        held.extend(self.states.pending_items());
         self.store.retain(&held);
     }
 
@@ -402,7 +446,8 @@ impl Context {
         for item in items {
             let wanted = self.states.wanted(&item);
             let played = self.states.played_wants();
-            let at = self.tick();
+            let read = self.begin_read();
+            let at = read.at;
             let Ok(state) = client.user_data(&item).await else {
                 // The lists keep the estimate; the next load shows the server's state.
                 self.states.settle(&item, played);
@@ -445,44 +490,57 @@ impl Context {
         }
     }
 
-    /// Reads the state of every item the live lists hold again, [`RESYNC_CHUNK`] a request (`GET Items?ids=`, whose user data
-    /// Jellyfin reads fresh), and shows what changed: a page shown again within [`REFRESH_WHEN_SHOWN_AFTER`], and a sweep whose
-    /// items the core cannot name (a collection's, a folder's), take what another device or the server changed meanwhile (owner,
-    /// 2026-10-27). One runs at a time; one asked for meanwhile runs after it. A failure leaves the lists as they are, with no notice.
-    fn resync(self: &Arc<Self>) {
+    /// Reads the state of `items` again, [`RESYNC_CHUNK`] a request (`GET Items?ids=`, whose user data Jellyfin reads fresh), and
+    /// shows what changed: a list shown again within [`REFRESH_WHEN_SHOWN_AFTER`] (what it shows, [`RESYNC_LIMIT`] at most), and a
+    /// sweep whose items the core cannot name (a collection's, a folder's: every item held), take what another device or the server
+    /// changed meanwhile (owner, 2026-10-27). One runs at a time; items asked for meanwhile are read after it. A failed request
+    /// leaves its items as they are, with no notice, and the next ones are still sent.
+    fn resync(self: &Arc<Self>, items: impl IntoIterator<Item = ItemRef>) {
         {
             let mut resync = lock(&self.resync);
-            if resync.running {
-                resync.again = true;
+            for item in items {
+                if !resync.queued.contains(&item) {
+                    resync.queued.push(item);
+                }
+            }
+            if resync.running || resync.queued.is_empty() {
                 return;
             }
             resync.running = true;
         }
-        let context = self.clone();
+        let mut guard = Resyncing {
+            context: self.clone(),
+            done: false,
+        };
         self.spawn(async move {
             loop {
-                context.resync_once().await;
-                let mut resync = lock(&context.resync);
-                if !std::mem::take(&mut resync.again) {
-                    resync.running = false;
-                    return;
-                }
+                let items = {
+                    let mut resync = lock(&guard.context.resync);
+                    let items = std::mem::take(&mut resync.queued);
+                    if items.is_empty() {
+                        resync.running = false;
+                        drop(resync);
+                        guard.finish();
+                        return;
+                    }
+                    items
+                };
+                guard.context.resync_once(items).await;
             }
         });
     }
 
-    async fn resync_once(&self) {
+    async fn resync_once(&self, items: Vec<ItemRef>) {
         let Ok(client) = self.client() else {
             return;
         };
-        let items = self.store.items();
         for chunk in items.chunks(RESYNC_CHUNK) {
-            let at = self.tick();
+            let read = self.begin_read();
             let Ok(states) = client.user_states(chunk).await else {
-                return;
+                continue;
             };
             for (item, state) in states {
-                if self.store.answer(&item, state, at) {
+                if self.store.answer(&item, state, read.at) {
                     self.publish(&item);
                 }
             }
@@ -597,7 +655,26 @@ impl Context {
     /// another device's or an earlier session's. Marking played again moves the episode's last-played date to now. A failure sends
     /// the write anyway. It can go once a write on an item reads its user data fresh: re-check on each new server baseline.
     async fn mend(&self, item: &ItemRef) {
-        let parents = self.parents_of(item, self.store.get(item).as_ref());
+        let held = self.store.get(item);
+        // An episode, a film, a video: a folder's own played mark would sweep what is below it.
+        let leaf = held.as_ref().is_some_and(|summary| {
+            summary.kind != MediaKind::SERIES
+                && summary.kind != MediaKind::SEASON
+                && summary.user.unplayed_count.is_none()
+        });
+        if !leaf {
+            return;
+        }
+        let parents = self.parents_of(item, held.as_ref());
+        // A played change on the series or season still in flight: the episode is read once it is answered, or it would be read
+        // before the sweep and its mark would undo it.
+        loop {
+            let answered = self.answered.notified();
+            if !self.states.played_pending_for(&parents) {
+                break;
+            }
+            answered.await;
+        }
         let swept = {
             let sweeps = lock(&self.sweeps);
             let since = sweeps.mended.get(item).copied().unwrap_or(0);
@@ -612,15 +689,19 @@ impl Context {
         let Ok(client) = self.client() else {
             return;
         };
-        let at = self.tick();
+        let read = self.begin_read();
         let Ok(states) = client.user_states(std::slice::from_ref(item)).await else {
             return;
         };
         let Some((_, state)) = states.into_iter().find(|(found, _)| found == item) else {
             return;
         };
-        if client.set_played(item, state.played).await.is_ok() {
-            lock(&self.sweeps).mended.insert(item.clone(), at);
+        if let Ok(state) = client.set_played(item, state.played).await {
+            lock(&self.sweeps).mended.insert(item.clone(), read.at);
+            let at = self.tick();
+            if self.store.answer(item, state, at) {
+                self.publish(item);
+            }
         }
     }
 
@@ -648,7 +729,13 @@ impl Context {
 
     /// Sends `item`'s wanted changes one at a time until none is left (ADR 0018, section 5).
     async fn send_changes(self: Arc<Self>, item: ItemRef) {
-        while let Some(action) = self.states.next(&item) {
+        loop {
+            let next = self.states.next(&item);
+            // A change done or replaced: a mend waiting for this item's played change may go on.
+            self.answered.notify_waiters();
+            let Some(action) = next else {
+                break;
+            };
             let result = match self.client() {
                 Ok(client) => match action {
                     ItemAction::SetPlayed(played) => client.set_played(&item, played).await,
@@ -680,7 +767,7 @@ impl Context {
                 }
             }
             if unnamed_below {
-                self.resync();
+                self.resync(self.held());
             }
             match answered.failure {
                 Some((name, problem)) => {
@@ -859,7 +946,8 @@ impl Browse {
                 return;
             };
             let wanted = context.states.wanted(&item);
-            let at = context.tick();
+            let read = context.begin_read();
+            let at = read.at;
             // A failure leaves the lists as they were; the dependent reload still runs. A mark the user made meanwhile is newer than
             // this answer, even once the server confirmed it: the answer is dropped.
             if let Ok(details) = client.details(&item).await

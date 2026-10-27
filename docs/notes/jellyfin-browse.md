@@ -413,7 +413,8 @@ ADR 0019 may replace with its full type).
   instance is the one the previous entry describes: `Folder.MarkPlayed` and `MarkUnplayed` save other instances. A collection's
   sweep is not affected: `BoxSet.MarkPlayed` marks each `GetLinkedChildren(user)`, taken from `GetItemById` (`BaseItem.GetLinkedChild`).
 - **Versions**: v12.3 (tag 06de749) and v12.2 (ca0f16eb), the same lines, read 2026-10-27. Not reproduced on a server.
-- **Workaround**: before a favourite or a playback start on an episode whose series or season this session marked since, the core
+- **Workaround**: before a favourite or a playback start on an episode (never a folder: a folder's mark would sweep what is below it)
+  whose series or season this session marked since, the core waits for a played change on that series or season still in flight,
   reads the episode's marks with a list read (`GET Items?ids=`) and sends its played mark on its own id (`UserPlayedItems/{id}`), which
   saves through the cached instance and rehydrates it (`Context::mend`, `crates/app/src/browse/mod.rs`, called by
   `JellyfinMedia::report_start` for playback). It does not cover another device's sweeps or an earlier session's, nor a plain folder's.
