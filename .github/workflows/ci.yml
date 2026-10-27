@@ -16,11 +16,54 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # No incremental dirs: they only help local edit loops and would bloat the cached target folders.
+  CARGO_INCREMENTAL: 0
 
 # Actions are pinned by commit SHA, with the tag they were taken from in a comment.
 jobs:
+  # Decides whether the heavy jobs run: on a pull request whose changes are all docs they are skipped. A job skipped by its `if:`
+  # reports "Success" and satisfies a required check (GitHub docs, "Using conditions to control job execution", read 2026-10-27).
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.decide.outputs.code }}
+    steps:
+      # For a pull request this is GitHub's merge commit: its first parent is the base, so HEAD^1..HEAD is the PR's own changes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - name: Decide
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          code=true
+          # --no-renames: with rename detection a file moved into docs/ would list only its new path and hide the old code path.
+          if [ "$EVENT" = pull_request ] && files=$(git diff --name-only --no-renames HEAD^1 HEAD) && [ -n "$files" ]; then
+            code=false
+            # Docs: docs/**, *.md at the root, .claude/**. Anything else (.github/** included) is code.
+            while IFS= read -r f; do
+              case "$f" in
+                docs/*|.claude/*) ;;
+                */*) code=true ;;
+                *.md) ;;
+                *) code=true ;;
+              esac
+            done <<< "$files"
+            printf 'Changed paths:\n%s\n' "$files"
+          fi
+          echo "code=$code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # The docs-only condition is on the steps, not the job: a matrix job skipped at job level reports one unexpanded name,
+  # "Rust (${{ matrix.os }})", instead of the three per-OS checks (seen on a throwaway PR, 2026-10-27). Run this way, the three
+  # report "success" with their steps skipped. Fail-safe as in the jobs below: only an explicit code=false skips.
   rust:
     name: Rust (${{ matrix.os }})
+    needs: changes
+    if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,12 +72,29 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code != 'false'
       # Installs the toolchain pinned in rust-toolchain.toml.
       - run: rustup toolchain install
+        if: needs.changes.outputs.code != 'false'
+      # Cargo's downloads and this job's target folder, per OS and job (their features and profiles differ). A miss or a stale
+      # target only means more to build.
+      - name: Cache Cargo
+        if: needs.changes.outputs.code != 'false'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ github.job }}-
       - run: cargo fmt --all --check
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && needs.changes.outputs.code != 'false'
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        if: needs.changes.outputs.code != 'false'
       - run: cargo test --workspace --locked
+        if: needs.changes.outputs.code != 'false'
 
   licences:
     name: Licences and sources (cargo-deny)
@@ -60,6 +120,10 @@ jobs:
   # rebuilt here with the same steps and pinned tools (about 29 minutes).
   mpv-windows:
     name: mpv (Windows)
+    needs: changes
+    # Fail-safe: only an explicit code=false skips. If the changes job failed, its dependents would otherwise be skipped and could
+    # pass as required checks, so a missing answer runs everything.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -69,6 +133,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
+      # Cargo's downloads and this job's target folder, per OS and job (their features and profiles differ). A miss or a stale
+      # target only means more to build.
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ github.job }}-
       - name: Restore the libmpv build
         id: cache-build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -114,13 +190,36 @@ jobs:
   # The C# bindings and their adapters (bindings/csharp), from generated code that is not checked in (ADR 0004).
   bindings-windows:
     name: Bindings (C#, Windows)
+    needs: changes
+    # Fail-safe: only an explicit code=false skips. If the changes job failed, its dependents would otherwise be skipped and could
+    # pass as required checks, so a missing answer runs everything.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
+      # Cargo's downloads and this job's target folder, per OS and job (their features and profiles differ). A miss or a stale
+      # target only means more to build.
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ github.job }}-
+      - name: Cache uniffi-bindgen-cs
+        id: cache-bindgen
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs.exe
+          key: uniffi-bindgen-cs-${{ runner.os }}-v0.11.1+v0.31.0
       # Uncached: about 3 minutes.
       - name: Install uniffi-bindgen-cs
+        if: steps.cache-bindgen.outputs.cache-hit != 'true'
         run: cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.1+v0.31.0 uniffi-bindgen-cs
       - name: Build the core, generate C# and build the class library
         shell: pwsh
@@ -140,6 +239,10 @@ jobs:
   # build comes from the same cache as the "mpv (Windows)" job, with the same key and the same steps on a miss (about 29 minutes more).
   app-windows:
     name: App (Windows)
+    needs: changes
+    # Fail-safe: only an explicit code=false skips. If the changes job failed, its dependents would otherwise be skipped and could
+    # pass as required checks, so a missing answer runs everything.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: windows-latest
     timeout-minutes: 75
     env:
@@ -149,6 +252,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
+      # Cargo's downloads and this job's target folder, per OS and job (their features and profiles differ). A miss or a stale
+      # target only means more to build.
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ github.job }}-
       - name: Restore the libmpv build
         id: cache-build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -177,8 +292,15 @@ jobs:
       - name: Licence check and the DLL set
         shell: pwsh
         run: python build/mpv-windows/check.py --work $env:WORK --out $env:WORK\out
+      - name: Cache uniffi-bindgen-cs
+        id: cache-bindgen
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/uniffi-bindgen-cs.exe
+          key: uniffi-bindgen-cs-${{ runner.os }}-v0.11.1+v0.31.0
       # Uncached: about 3 minutes.
       - name: Install uniffi-bindgen-cs
+        if: steps.cache-bindgen.outputs.cache-hit != 'true'
         run: cargo install --locked --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.1+v0.31.0 uniffi-bindgen-cs
       - name: Build the core and the C# bindings
         shell: pwsh
@@ -223,11 +345,27 @@ jobs:
   # The Swift package (bindings/swift): XCFramework, generated bindings and adapters (ADR 0004).
   bindings-macos:
     name: Bindings (Swift, macOS)
+    needs: changes
+    # Fail-safe: only an explicit code=false skips. If the changes job failed, its dependents would otherwise be skipped and could
+    # pass as required checks, so a missing answer runs everything.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
+      # Cargo's downloads and this job's target folder, per OS and job (their features and profiles differ). A miss or a stale
+      # target only means more to build.
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ github.job }}-
       - run: swift --version
       - name: Build the core, generate Swift and make the XCFramework
         run: sh bindings/swift/build.sh
