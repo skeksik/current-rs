@@ -118,6 +118,20 @@ python build\mpv-windows\check.py --work C:\mpvb --out C:\mpvb\out
 Windows' path length limit. Finished stages leave a stamp in `<work>\prefix\share\current-build\stamps`; delete the prefix to rebuild
 from scratch.
 
+## One shared build on the owner's PC (owner, 2026-10-27)
+Local sessions don't build or download libmpv each time. The owner's PC keeps one build, and every session uses it:
+- **Where:** one folder with the "Output" layout above (`bin\`, `include\`, `lib\mpv.lib`, licences, `components.json`),
+  `C:\mpvb\out` unless the owner chose another. The user environment variable `MPV_LIB_DIR` points at its `lib` folder, so
+  `apps/windows/build.ps1` without `-Mpv`, `cargo test -p current-mpv --features libmpv` and the live tests find it in any new
+  terminal.
+- **Which build:** the folder holds `source-commit.txt`, the commit that last changed `build/mpv-windows/` or
+  `.github/workflows/mpv-windows.yml` when it was made:
+  `git log -1 --format=%H -- build/mpv-windows .github/workflows/mpv-windows.yml`. A session compares it with the same command
+  on its checkout. When they match, it uses the build as it is. When they differ, the build is stale: the session tells the owner
+  and, with their agreement, replaces it once (unpack the `libmpv-windows-x64` artifact of the current `mpv-windows` run, or
+  rebuild as above) and rewrites `source-commit.txt`. Never one build per session or per worktree.
+- A session never deletes or moves the shared build, and never changes `MPV_LIB_DIR`, without the owner's agreement.
+
 ## Publishing the corresponding source (ADR 0003)
 For each release that ships these DLLs, the release attaches: the unmodified tarballs listed in `sources.toml` (which the build
 verified by SHA-256), a `git archive` of each pinned commit for the git sources, our build scripts (`build/mpv-windows/` at the release
