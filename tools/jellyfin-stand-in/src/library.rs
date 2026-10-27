@@ -18,7 +18,7 @@
 //! list (`GET Items`, `Shows/{id}/Episodes`) reads every item's user data fresh, through `GetUserDataBatch`, which reads the per-user
 //! cache every save updates. The stand-in caches an instance on its first single-item read or a mark or stop on its own id; Jellyfin
 //! also caches items as a scan creates them (`RegisterItem` from `CreateItems`), and evicts some: not modelled. The model can go with
-//! the workaround, once the server's single-item read no longer serves the cached item's stale user data.
+//! the workaround, once a single-item read serves fresh user data after a folder's sweep: re-check on each new server baseline.
 
 use std::collections::{HashMap, HashSet};
 

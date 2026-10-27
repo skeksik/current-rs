@@ -390,13 +390,13 @@ ADR 0019 may replace with its full type).
   reloads only the instance it saved through ("`// rehydrate the cached userdata`"); `Folder.MarkPlayed` and `MarkUnplayed` save the
   instances `GetItemList` loads, so the cached episode keeps what its own mark saved. Lists (`DtoService.GetBaseItemDtos`) read user
   data through `GetUserDataBatch`, which reads the per-user cache every save updates, so they are right.
-- **Versions**: seen on 12.3 (the owner's server; source at tag 06de749, read 2026-10-27). 12.2 (ca0f16eb) has the same lines, from
+- **Versions**: seen on 12.3 (the owner's server, 2026-10-27; source at tag 06de749, read 2026-10-27). 12.2 (ca0f16eb) has the same lines, from
   the source; not seen on a 12.2 server.
 - **Workaround**: a detail page takes the item's marks from `GET Items?ids={id}`, sent with `GET Items/{id}`
   (`JellyfinClient::details`, `crates/jellyfin/src/browse.rs`); the stand-in models the bug (`tools/jellyfin-stand-in/src/library.rs`)
   and `crates/app/tests/series_marks.rs` tests it. Our series' and season's read-backs (`UserItems/{id}/UserData`) are not affected:
-  their marks are derived by count queries (`Folder.FillUserDataDtoValues`). The workaround can go once the server's single-item read
-  no longer serves the cached item's stale user data. Reporting it upstream is the owner's call.
+  their marks are derived by count queries (`Folder.FillUserDataDtoValues`). - **Removal**: the workaround and the stand-in's model go once a single-item read serves fresh user data after a folder's sweep;
+  re-check on each new server baseline. Reporting it upstream is the owner's call.
 
 ## Sources
 - Jellyfin server `v12.2` (ca0f16eb): `Jellyfin.Api/Controllers/{UserViewsController, ItemsController, UserLibraryController,

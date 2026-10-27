@@ -346,8 +346,8 @@ impl JellyfinClient {
     /// on its own read, once it was marked on its own and then through its series or season (the owner's run, 2026-10-27). A list
     /// builds its items' user data with `GetUserDataBatch`, which reads the per-user cache every save updates
     /// (`DtoService.GetBaseItemDtos`; `Folder.GetItems` answers `ids` with `LibraryManager.GetItemsResult`). If the list fails or
-    /// leaves the item out, the single-item read's marks stand. The list read can go once the server's single-item read no longer
-    /// serves the cached item's stale user data.
+    /// leaves the item out, the single-item read's marks stand. The list read can go once a single-item read serves fresh user data
+    /// after a folder's sweep: re-check on each new server baseline.
     pub async fn details(&self, item: &ItemRef) -> Result<ItemDetails, AuthError> {
         let whole = Request::get(format!("/Items/{}", item.id.as_str()));
         let listed = Request::get("/Items")

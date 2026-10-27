@@ -206,9 +206,9 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    and they never count; a page that lists them may show them marked at once, before the reload a second later shows the server's
    state.
 
-   **Proposed, for the owner** (fix/episode-mark-after-series-unmark, 2026-10-27; not decided): a wording note under this point.
-   *A workaround for an upstream Jellyfin bug: an item's own read (`GET Items/{id}`) is not trusted for its marks after a folder's
-   sweep* (`docs/notes/jellyfin-browse.md`, "Upstream bugs and our workarounds"). Jellyfin v12.3 (tag 06de749, read 2026-10-27;
+   **Proposed, for the owner** (fix/episode-mark-after-series-unmark, 2026-10-27; not decided): a workaround for an upstream
+   Jellyfin bug, as a wording note under this point. *An item's own read (`GET Items/{id}`) is not trusted for its marks after a
+   folder's sweep* (`docs/notes/jellyfin-browse.md`, "Upstream bugs and our workarounds"). Jellyfin v12.3 (tag 06de749, read 2026-10-27;
    v12.2 at ca0f16eb has the same lines) answers it from its cached instance of the item (`LibraryManager.GetItemById`: "`if (_cache.TryGet(id, out var
    item))`"), whose user data only a mark on the item's own id saves (`SaveUserData`: "`// rehydrate the cached userdata`"), while
    `Folder.MarkUnplayed` saves the instances `GetItemList` loads. So a detail page takes the item's marks from a list read of it
@@ -216,7 +216,7 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    copies of an item differ, the one read or patched last is the item's state for the UI's actions (`Browse::user_state`). The
    series' and season's own read-backs (`GET UserItems/{id}/UserData`) stay: their played state, unplayed count and percentage are
    derived from their episodes by count queries (`Folder.FillUserDataDtoValues`), not from the cached instance. The workaround goes
-   once the server's single-item read no longer serves the cached item's stale user data.
+   once a single-item read serves fresh user data after a folder's sweep: re-check on each new server baseline.
 
 ### 6. Home
 Home's layout is **provisional**: the owner accepted it for now and will have it redesigned later (2026-10-25). The `HomeFeed`
