@@ -206,7 +206,7 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    and they never count; a page that lists them may show them marked at once, before the reload a second later shows the server's
    state.
 
-   **Proposed, for the owner** (fix/episode-mark-after-series-unmark, 2026-10-27; not decided): a workaround for an upstream
+   **Amended 2026-10-27 (owner):** a workaround for an upstream
    Jellyfin bug, as a wording note under this point. *An item's own read (`GET Items/{id}`) is not trusted for its marks after a
    folder's sweep* (`docs/notes/jellyfin-browse.md`, "Upstream bugs and our workarounds"). Jellyfin v12.3 (tag 06de749, read 2026-10-27;
    v12.2 at ca0f16eb has the same lines) answers it from its cached instance of the item (`LibraryManager.GetItemById`: "`if (_cache.TryGet(id, out var
