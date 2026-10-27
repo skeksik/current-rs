@@ -654,6 +654,8 @@ impl PlayTargetOf {
 #[tokio::test]
 async fn dependent_rows_reload_a_second_after_the_last_change() {
     let stand_in = StandIn::start().await.unwrap();
+    // A series in progress, as Jellyfin lists it in "next up": its first episode was played.
+    stand_in.set_played_on_server(EPISODE_IDS[0], true);
     let app = App::new();
     let server = signed_in(&stand_in, &app).await;
     let browse = app.browse(&server).unwrap();
@@ -710,6 +712,8 @@ async fn dependent_rows_reload_a_second_after_the_last_change() {
 async fn rows_without_items_are_absent_and_a_failed_row_offers_retry() {
     let stand_in = StandIn::start().await.unwrap();
     stand_in.set_latest_excludes(&[SHOWS_LIBRARY_ID]);
+    // A series in progress, so "next up" has an episode.
+    stand_in.set_played_on_server(EPISODE_IDS[0], true);
     let app = App::new();
     let server = signed_in(&stand_in, &app).await;
     let browse = app.browse(&server).unwrap();

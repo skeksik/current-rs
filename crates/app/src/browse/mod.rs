@@ -67,6 +67,12 @@ pub(crate) trait Live: Send + Sync {
     fn refresh(&self);
     /// `item` as the list shows it, if it does.
     fn find(&self, item: &ItemRef) -> Option<ItemSummary>;
+    /// What the list shows below `parent`: the episodes whose series or season it is, and on a series' page its seasons.
+    fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary>;
+    /// The series of `item` where the item does not name it (a season on its series' page), if the list knows it.
+    fn parent_of(&self, _item: &ItemRef) -> Option<ItemRef> {
+        None
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -256,7 +262,7 @@ impl Context {
         }
     }
 
-    /// Gives each of `items` the state of a change still pending for it.
+    /// Gives each of `items` the state of a change still pending for it, or for its series or season.
     fn observe(&self, items: &mut [ItemSummary]) {
         for item in items {
             self.states.observe(item);
@@ -266,6 +272,61 @@ impl Context {
     /// `item` as the first live list that shows it does.
     fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
         self.lives().iter().find_map(|live| live.find(item))
+    }
+
+    /// The series and season of `item`: its own links, else what a live list knows (a season's series).
+    fn parents_of(&self, item: &ItemRef, found: Option<&ItemSummary>) -> Vec<ItemRef> {
+        let links = found.map(states::parents).unwrap_or_default();
+        if !links.is_empty() {
+            return links;
+        }
+        self.lives()
+            .iter()
+            .find_map(|live| live.parent_of(item))
+            .into_iter()
+            .collect()
+    }
+
+    /// Everything the live lists show below `parent`, once per item.
+    fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
+        let mut seen = HashSet::new();
+        self.lives()
+            .iter()
+            .flat_map(|live| live.find_below(parent))
+            .filter(|summary| seen.insert(summary.item.clone()))
+            .collect()
+    }
+
+    /// Shows `summary`, an item below `parent`, with the changes pending for it or above it, in every live list.
+    fn publish_below(&self, mut summary: ItemSummary, parent: &ItemRef) {
+        let _order = lock(&self.publishing);
+        self.states.observe_under(&mut summary, Some(parent));
+        for live in self.lives() {
+            live.patch(&summary.item, &summary.user);
+        }
+    }
+
+    /// Reads the marks of `items` (a series and season whose counts changed) from the server and shows them in every live list. An
+    /// answer is dropped when the user marked the item meanwhile: the newer mark shows.
+    fn read_marks_again(self: &Arc<Self>, items: Vec<ItemRef>) {
+        if items.is_empty() {
+            return;
+        }
+        let context = self.clone();
+        self.spawn(async move {
+            let Ok(client) = context.client() else {
+                return;
+            };
+            for item in items {
+                let wanted = context.states.wanted(&item);
+                // A failure leaves the lists as they were; the dependent reload still runs.
+                if let Ok(state) = client.user_data(&item).await
+                    && context.states.wanted(&item) == wanted
+                {
+                    context.publish(&item, state);
+                }
+            }
+        });
     }
 
     /// Sends `item`'s state to every live list: the pending state if a change is pending, else `settled` (the server's answer).
@@ -310,8 +371,27 @@ impl Context {
 
     fn want(self: &Arc<Self>, item: &ItemRef, action: ItemAction) {
         let found = self.find(item);
-        let (shown, start) = self.states.want(item, action, found.as_ref());
+        let parents = self.parents_of(item, found.as_ref());
+        let (shown, start) = self
+            .states
+            .want(item, action, found.as_ref(), parents.clone());
         self.publish(item, shown);
+        if let ItemAction::SetPlayed(played) = action {
+            // A series or season: the episodes and seasons below it take the mark at once, as the server gives it to them.
+            for below in self.find_below(item) {
+                self.states.keep_below(item, &below);
+                self.publish_below(below, item);
+            }
+            // An episode or season: its series and season show the count it moves at once; the server's follows its answer.
+            if let Some(before) = &found {
+                for parent in &parents {
+                    if let Some(mut shown) = self.find(parent) {
+                        states::estimate_parent(&mut shown.user, &before.user, played);
+                        self.publish(parent, shown.user);
+                    }
+                }
+            }
+        }
         if start {
             let context = self.clone();
             let item = item.clone();
@@ -333,14 +413,38 @@ impl Context {
             };
             let answered = self.states.answered(&item, action, result);
             self.publish(&item, answered.shown);
+            for below in answered.rolled_back {
+                self.publish_below(below, &item);
+            }
             match answered.failure {
-                Some((name, problem)) => self.notices.raise(NoticeKind::ActionFailed {
-                    action,
-                    item_name: name,
-                    problem,
-                }),
+                Some((name, problem)) => {
+                    // The parents showed an estimate: the server's state replaces it.
+                    if matches!(action, ItemAction::SetPlayed(_)) {
+                        self.read_marks_again(answered.parents);
+                    }
+                    self.notices.raise(NoticeKind::ActionFailed {
+                        action,
+                        item_name: name,
+                        problem,
+                    });
+                }
                 // A mark changes the lists chosen by marks (Home's rows, the Favourites tab, a filtered grid): they read again a moment
-                // later, with the item's parents for the played mark's (a series' unplayed count).
+                // later. A played mark changes its series' and season's own marks and counts: they are read again now, and their pages
+                // and the item's own (a series' episodes, which the server marked too) reload with the rest.
+                None if matches!(action, ItemAction::SetPlayed(_)) => {
+                    let mut changed = answered.parents.clone();
+                    // A series' seasons have counts of their own.
+                    changed.extend(
+                        self.find_below(&item)
+                            .into_iter()
+                            .filter(|below| below.user.unplayed_count.is_some())
+                            .map(|below| below.item),
+                    );
+                    self.read_marks_again(changed);
+                    let mut dependents = answered.parents;
+                    dependents.push(item.clone());
+                    self.dependents_changed(dependents);
+                }
                 None => self.dependents_changed(answered.parents),
             }
         }
@@ -458,11 +562,14 @@ impl Browse {
     /// takes its new marks (its resume point, played) from the server, so a row that does not reload (a library's latest, a grid)
     /// does not keep the old ones, and Play on any tile of it resumes (found on the owner's run, 2026-10-25).
     pub fn playback_stopped(&self, item: &ItemRef) {
-        let mut items = self
+        let parents = self
             .ctx
             .find(item)
             .map(|summary| states::parents(&summary))
             .unwrap_or_default();
+        // An episode played to its end changes its series' and season's counts.
+        self.ctx.read_marks_again(parents.clone());
+        let mut items = parents;
         items.push(item.clone());
         self.ctx.dependents_changed(items);
         let context = self.ctx.clone();
@@ -512,6 +619,14 @@ fn find_in(list: &ObservableList<ItemSummary>, item: &ItemRef) -> Option<ItemSum
     list.snapshot()
         .into_iter()
         .find(|summary| &summary.item == item)
+}
+
+/// The summaries in `list` below `parent`: episodes whose series or season it is.
+fn below_in(list: &ObservableList<ItemSummary>, parent: &ItemRef) -> Vec<ItemSummary> {
+    list.snapshot()
+        .into_iter()
+        .filter(|summary| states::parents(summary).contains(parent))
+        .collect()
 }
 
 /// Gives `item`'s new state to every summary of it in `list`.

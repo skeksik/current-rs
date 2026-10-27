@@ -394,6 +394,49 @@ async fn after_the_autoplay_countdown_the_media_controls_show_the_next_episode()
     player.close().await;
 }
 
+/// Case 7 of the owner's run (2026-10-26): finishing an episode brings up Next up on Home without a refresh. The stand-in, as Jellyfin,
+/// lists a series in Next up only once one of its episodes was played (`NextUpService.GetNextUpSeriesKeys`), and takes a stop report
+/// at the end as played (`UserDataManager.UpdatePlayState`).
+#[tokio::test]
+async fn finishing_an_episode_brings_up_next_up_on_home() {
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let home = browse.home();
+    eventually(|| {
+        home.row(&format!(
+            "latest:{}",
+            jellyfin_stand_in::library::SHOWS_LIBRARY_ID
+        ))
+        .is_some()
+            && !home.state().borrow().loading
+    })
+    .await;
+    assert!(home.row("next_up").is_none(), "nothing started yet");
+
+    let (player, control) = open(&app).await;
+    player
+        .play(item(&server, EPISODE_IDS[0]), Duration::ZERO)
+        .await
+        .unwrap();
+    until(&player.now_playing(), |now| {
+        now.title.as_deref() == Some("Example Episode One")
+    })
+    .await;
+    control.send(EngineEvent::Ended(current_playback::EndReason::Eof));
+    eventually(|| {
+        home.row("next_up").is_some_and(|row| {
+            row.snapshot()
+                .iter()
+                .any(|episode| episode.item == item(&server, EPISODE_IDS[1]))
+        })
+    })
+    .await;
+    player.close().await;
+}
+
 #[tokio::test]
 async fn an_item_the_server_cannot_find_fails_with_its_problem() {
     let _engine = ENGINE.lock().await;

@@ -1,6 +1,11 @@
 //! One session's played and favourite marks (ADR 0018, section 5): what each loaded item showed last, and the changes the user
 //! wants that the server has not confirmed yet. A wanted change shows at once; the request for an item goes out one at a time, and
 //! only the last wanted state follows one in flight; a failed request rolls the change back.
+//!
+//! A played mark on a series or season is one on every episode below it: Jellyfin marks each of them and derives the folder's own
+//! state from them (`Folder.MarkPlayed`, `Folder.FillUserDataDtoValues`, v12.2 at ca0f16eb, read 2026-10-27). So while such a change
+//! is pending, the episodes and seasons below it show it too, unless they have a newer change of their own, and a failure rolls
+//! them back with it.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -68,8 +73,14 @@ struct Pending {
     favourite: Option<bool>,
     /// The item's name for a notice, as a list showed it when the change was wanted.
     name: Option<String>,
-    /// The series and season of an episode: lists of them depend on its played mark.
+    /// The series and season of an episode, or the series of a season: lists of them depend on its played mark, and a played change
+    /// pending for them shows on it.
     parents: Vec<ItemRef>,
+    /// When the played change was wanted, against every other item's: the newest of an item's and its parents' wins.
+    played_seq: u64,
+    /// The items below this one (a series' or season's episodes and seasons) as the lists showed them before its first played
+    /// change, then as the server's answers left them: what a failure rolls them back to.
+    below: HashMap<ItemRef, ItemSummary>,
 }
 
 impl Pending {
@@ -86,16 +97,51 @@ impl Pending {
     }
 }
 
-/// Marks an item played or unplayed as the server would: a played item has no resume point and nothing unplayed inside.
-fn set_played(state: &mut UserState, played: bool) {
+/// Marks an item played or unplayed as the server would: a played item has no resume point and nothing unplayed inside, and has
+/// been played at least once; an unplayed one has no resume point and no plays (`BaseItem.MarkPlayed`: "`data.PlayCount =
+/// Math.Max(data.PlayCount, 1)`", `ResetPlayedState`: "`data.PlayCount = 0; data.PlaybackPositionTicks = 0`", v12.2, read
+/// 2026-10-27). An unplayed folder's count of unplayed items is not known until the server answers: it keeps what it showed.
+pub(super) fn set_played(state: &mut UserState, played: bool) {
     if state.played == played {
         return;
     }
     state.played = played;
     state.position = None;
     state.progress = None;
-    if played && let Some(unplayed) = &mut state.unplayed_count {
-        *unplayed = 0;
+    if played {
+        state.play_count = state.play_count.max(1);
+        if let Some(unplayed) = &mut state.unplayed_count {
+            *unplayed = 0;
+        }
+    } else {
+        state.play_count = 0;
+    }
+}
+
+/// What a parent (a series or season) shows at once when `child`, shown as `before`, is marked `played`: its unplayed count moves by
+/// the child's (one for an episode, a season's own count when it is marked played), and it is played when nothing below is unplayed
+/// (`Folder.FillUserDataDtoValues`: "`dto.Played = playedCount >= totalCount`"). The server's state follows once it answered.
+pub(super) fn estimate_parent(parent: &mut UserState, before: &UserState, played: bool) {
+    if before.played == played {
+        return;
+    }
+    // An episode has no count of its own: it is one item.
+    let moved = before.unplayed_count.unwrap_or(1);
+    if played {
+        if let Some(unplayed) = &mut parent.unplayed_count {
+            *unplayed = unplayed.saturating_sub(moved);
+            if *unplayed == 0 {
+                set_played(parent, true);
+            }
+        }
+    } else {
+        if before.unplayed_count.is_none()
+            && let Some(unplayed) = &mut parent.unplayed_count
+        {
+            *unplayed += 1;
+        }
+        // Something below is unplayed now; how much it played is not known until the server answers.
+        parent.played = false;
     }
 }
 
@@ -123,6 +169,8 @@ pub(super) struct Answered {
     pub(super) failure: Option<(Option<String>, AuthError)>,
     /// The lists depending on the item: its series and season.
     pub(super) parents: Vec<ItemRef>,
+    /// On a failed played change: the items below the item, to show again as they were (each through [`ItemStates::observe`]).
+    pub(super) rolled_back: Vec<ItemSummary>,
 }
 
 /// Only the items with changes not yet confirmed are kept, and a count of the changes wanted per item: what an item shows otherwise
@@ -139,13 +187,56 @@ struct Inner {
     sending: HashSet<ItemRef>,
     /// How many changes were wanted per item.
     wanted: HashMap<ItemRef, u64>,
+    /// Counts the played changes wanted, for [`Pending::played_seq`].
+    seq: u64,
+}
+
+impl Inner {
+    /// The state `item` shows: `base` (what a list or the server gave), with the item's own pending changes, and the newest played
+    /// change pending for one of `parents` if it is newer than the item's own.
+    fn shown(&self, item: &ItemRef, parents: &[ItemRef], base: UserState) -> UserState {
+        let own = self.pending.get(item);
+        let mut shown = own.map_or(base, Pending::shown);
+        let since = own
+            .filter(|pending| pending.played.is_some())
+            .map_or(0, |pending| pending.played_seq);
+        let inherited = parents
+            .iter()
+            .filter_map(|parent| self.pending.get(parent))
+            .filter_map(|pending| pending.played.map(|played| (pending.played_seq, played)))
+            .filter(|(seq, _)| *seq > since)
+            .max_by_key(|(seq, _)| *seq);
+        if let Some((_, played)) = inherited {
+            set_played(&mut shown, played);
+        }
+        shown
+    }
 }
 
 impl ItemStates {
-    /// Gives `summary` the state of a change still pending for it.
+    /// Gives `summary` the state of a change still pending for it, or for its series or season.
     pub(super) fn observe(&self, summary: &mut ItemSummary) {
-        if let Some(pending) = lock(&self.inner).pending.get(&summary.item) {
-            summary.user = pending.shown();
+        self.observe_under(summary, None);
+    }
+
+    /// As [`ItemStates::observe`], for an item below `parent` too (a season on its series' page, which names no series itself).
+    pub(super) fn observe_under(&self, summary: &mut ItemSummary, parent: Option<&ItemRef>) {
+        let mut up = parents(summary);
+        up.extend(parent.cloned());
+        let inner = lock(&self.inner);
+        if let Some(pending) = inner.pending.get(&summary.item) {
+            up.extend(pending.parents.iter().cloned());
+        }
+        summary.user = inner.shown(&summary.item, &up, summary.user.clone());
+    }
+
+    /// Keeps `below` (an item below `item`, as a list shows it before `item`'s played change) for a rollback, unless one is kept.
+    pub(super) fn keep_below(&self, item: &ItemRef, below: &ItemSummary) {
+        if let Some(pending) = lock(&self.inner).pending.get_mut(item) {
+            pending
+                .below
+                .entry(below.item.clone())
+                .or_insert_with(|| below.clone());
         }
     }
 
@@ -154,21 +245,26 @@ impl ItemStates {
         lock(&self.inner).wanted.get(item).copied().unwrap_or(0)
     }
 
-    /// The state of `item` while a change for it is pending.
+    /// The state of `item` while a change for it, or a played change for its series or season, is pending.
     pub(super) fn pending(&self, item: &ItemRef) -> Option<UserState> {
-        lock(&self.inner).pending.get(item).map(Pending::shown)
+        let inner = lock(&self.inner);
+        let pending = inner.pending.get(item)?;
+        Some(inner.shown(item, &pending.parents, pending.server.clone()))
     }
 
-    /// Records a wanted change; `shown` is the item as a live list shows it, if one does. Returns what the lists show now, and
-    /// whether a sender must start (none runs for the item).
+    /// Records a wanted change; `shown` is the item as a live list shows it, if one does, and `parents` its series and season.
+    /// Returns what the lists show now, and whether a sender must start (none runs for the item).
     pub(super) fn want(
         &self,
         item: &ItemRef,
         action: ItemAction,
         shown: Option<&ItemSummary>,
+        parents: Vec<ItemRef>,
     ) -> (UserState, bool) {
         let mut inner = lock(&self.inner);
         *inner.wanted.entry(item.clone()).or_default() += 1;
+        inner.seq += 1;
+        let seq = inner.seq;
         let pending = inner
             .pending
             .entry(item.clone())
@@ -179,13 +275,24 @@ impl ItemStates {
                 played: None,
                 favourite: None,
                 name: shown.map(|summary| summary.name.clone()),
-                parents: shown.map(parents).unwrap_or_default(),
+                parents: Vec::new(),
+                played_seq: 0,
+                below: HashMap::new(),
             });
+        for parent in parents {
+            if !pending.parents.contains(&parent) {
+                pending.parents.push(parent);
+            }
+        }
         match action {
-            ItemAction::SetPlayed(played) => pending.played = Some(played),
+            ItemAction::SetPlayed(played) => {
+                pending.played = Some(played);
+                pending.played_seq = seq;
+            }
             ItemAction::SetFavourite(favourite) => pending.favourite = Some(favourite),
         }
-        let state = pending.shown();
+        let up = pending.parents.clone();
+        let state = inner.shown(item, &up, shown.map(|s| s.user.clone()).unwrap_or_default());
         let start = inner.sending.insert(item.clone());
         (state, start)
     }
@@ -227,25 +334,39 @@ impl ItemStates {
                 shown: result.clone().unwrap_or_default(),
                 failure: result.err().map(|problem| (None, problem)),
                 parents: Vec::new(),
+                rolled_back: Vec::new(),
             };
         };
+        let mut rolled_back = Vec::new();
         let failure = match result {
             Ok(state) => {
                 pending.server = state;
+                // The server marked everything below as well: a later failure rolls back to that.
+                if let ItemAction::SetPlayed(played) = action {
+                    for below in pending.below.values_mut() {
+                        set_played(&mut below.user, played);
+                    }
+                }
                 None
             }
             Err(problem) => {
                 match action {
-                    ItemAction::SetPlayed(_) => pending.played = None,
+                    ItemAction::SetPlayed(_) => {
+                        pending.played = None;
+                        rolled_back = pending.below.values().cloned().collect();
+                    }
                     ItemAction::SetFavourite(_) => pending.favourite = None,
                 }
                 Some((pending.name.clone(), problem))
             }
         };
+        let parents = pending.parents.clone();
+        let server = pending.server.clone();
         Answered {
-            shown: pending.shown(),
+            shown: inner.shown(item, &parents, server),
             failure,
-            parents: pending.parents.clone(),
+            parents,
+            rolled_back,
         }
     }
 }
@@ -288,12 +409,21 @@ mod tests {
     fn only_the_last_wanted_state_follows_one_in_flight() {
         let states = ItemStates::default();
         let film = summary("a", played(false));
-        let (shown, start) = states.want(&item("a"), ItemAction::SetPlayed(true), Some(&film));
+        let (shown, start) = states.want(
+            &item("a"),
+            ItemAction::SetPlayed(true),
+            Some(&film),
+            Vec::new(),
+        );
         assert!(shown.played && start);
         assert_eq!(states.next(&item("a")), Some(ItemAction::SetPlayed(true)));
         // While it is in flight: unplayed, played, unplayed. No second sender.
         for on in [false, true, false] {
-            assert!(!states.want(&item("a"), ItemAction::SetPlayed(on), None).1);
+            assert!(
+                !states
+                    .want(&item("a"), ItemAction::SetPlayed(on), None, Vec::new())
+                    .1
+            );
         }
         let answered = states.answered(&item("a"), ItemAction::SetPlayed(true), Ok(played(true)));
         assert!(!answered.shown.played, "the last wish still shows");
@@ -311,8 +441,18 @@ mod tests {
     fn a_change_undone_before_it_is_sent_sends_nothing() {
         let states = ItemStates::default();
         let film = summary("a", played(false));
-        states.want(&item("a"), ItemAction::SetFavourite(true), Some(&film));
-        states.want(&item("a"), ItemAction::SetFavourite(false), Some(&film));
+        states.want(
+            &item("a"),
+            ItemAction::SetFavourite(true),
+            Some(&film),
+            Vec::new(),
+        );
+        states.want(
+            &item("a"),
+            ItemAction::SetFavourite(false),
+            Some(&film),
+            Vec::new(),
+        );
         assert_eq!(states.next(&item("a")), None);
     }
 
@@ -320,7 +460,12 @@ mod tests {
     fn a_failure_rolls_back_and_names_the_item_for_the_notice() {
         let states = ItemStates::default();
         let film = summary("a", played(false));
-        states.want(&item("a"), ItemAction::SetPlayed(true), Some(&film));
+        states.want(
+            &item("a"),
+            ItemAction::SetPlayed(true),
+            Some(&film),
+            Vec::new(),
+        );
         states.next(&item("a"));
         let answered = states.answered(
             &item("a"),
@@ -338,7 +483,7 @@ mod tests {
     #[test]
     fn items_loaded_while_a_change_is_pending_take_it() {
         let states = ItemStates::default();
-        states.want(&item("a"), ItemAction::SetPlayed(true), None);
+        states.want(&item("a"), ItemAction::SetPlayed(true), None, Vec::new());
         let mut late = summary("a", played(false));
         states.observe(&mut late);
         assert!(late.user.played);
@@ -359,6 +504,109 @@ mod tests {
             debug.contains("SetPlayed") && !debug.contains("Example"),
             "{debug}"
         );
+    }
+
+    fn episode(id: &str, user: UserState) -> ItemSummary {
+        ItemSummary {
+            kind: MediaKind::EPISODE,
+            episode: Some(current_model::EpisodeLinks {
+                series: Some(item("s")),
+                season: Some(item("t")),
+                ..current_model::EpisodeLinks::default()
+            }),
+            ..summary(id, user)
+        }
+    }
+
+    #[test]
+    fn a_series_change_shows_below_it_unless_an_episode_s_own_is_newer() {
+        let states = ItemStates::default();
+        let series = summary("s", played(false));
+        states.want(
+            &item("s"),
+            ItemAction::SetPlayed(true),
+            Some(&series),
+            Vec::new(),
+        );
+        let mut loaded = episode("e", played(false));
+        states.observe(&mut loaded);
+        assert!(loaded.user.played, "an episode loaded meanwhile takes it");
+        // A season names no series: its page says which.
+        let mut season = summary("t", played(false));
+        states.observe_under(&mut season, Some(&item("s")));
+        assert!(season.user.played);
+
+        // The episode's own change, made later, wins.
+        let shown = episode("e", played(true));
+        let (state, _) = states.want(
+            &item("e"),
+            ItemAction::SetPlayed(false),
+            Some(&shown),
+            parents(&shown),
+        );
+        assert!(!state.played);
+        assert_eq!(
+            states.pending(&item("e")).map(|state| state.played),
+            Some(false)
+        );
+        // A newer series change wins again.
+        states.want(&item("s"), ItemAction::SetPlayed(true), None, Vec::new());
+        assert_eq!(
+            states.pending(&item("e")).map(|state| state.played),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn a_failed_series_change_rolls_back_what_was_below_it() {
+        let states = ItemStates::default();
+        states.want(&item("s"), ItemAction::SetPlayed(true), None, Vec::new());
+        states.keep_below(&item("s"), &episode("e", played(false)));
+        states.keep_below(&item("s"), &episode("e", played(true)));
+        states.next(&item("s"));
+        let answered = states.answered(
+            &item("s"),
+            ItemAction::SetPlayed(true),
+            Err(AuthError::NotSignedIn),
+        );
+        assert_eq!(answered.rolled_back.len(), 1);
+        assert!(!answered.rolled_back[0].user.played, "as it was first");
+    }
+
+    #[test]
+    fn a_parent_s_count_moves_with_its_child() {
+        let mut series = UserState {
+            unplayed_count: Some(2),
+            ..UserState::default()
+        };
+        estimate_parent(&mut series, &played(false), true);
+        assert_eq!(series.unplayed_count, Some(1));
+        assert!(!series.played);
+        estimate_parent(&mut series, &played(false), true);
+        assert_eq!(series.unplayed_count, Some(0));
+        assert!(series.played);
+        // Already in that state: nothing moves.
+        estimate_parent(&mut series, &played(true), true);
+        assert_eq!(series.unplayed_count, Some(0));
+        estimate_parent(&mut series, &played(true), false);
+        assert_eq!(series.unplayed_count, Some(1));
+        assert!(!series.played);
+        // A season marked played takes its own count off its series'.
+        let season = UserState {
+            unplayed_count: Some(1),
+            ..UserState::default()
+        };
+        estimate_parent(&mut series, &season, true);
+        assert!(series.played);
+        // A season marked unplayed: its series is unplayed, by a count only the server knows.
+        let season = UserState {
+            played: true,
+            unplayed_count: Some(0),
+            ..UserState::default()
+        };
+        estimate_parent(&mut series, &season, false);
+        assert!(!series.played);
+        assert_eq!(series.unplayed_count, Some(0));
     }
 
     #[test]

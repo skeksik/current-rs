@@ -454,10 +454,20 @@ public sealed partial class DetailsPage : Page, IRefreshable
         }
     }
 
-    // The button flips its own IsChecked at once; the core's change (or its rollback) sets it again through ShowDetails.
-    private void OnPlayed(object sender, RoutedEventArgs e) => ItemActions.Toggle(_details?.Value?.Summary, played: true);
+    // The button flips its own IsChecked at once; the core's change (or its rollback) sets it again through ShowDetails. Until then
+    // it shows what the page's details show: a change the core does not make (one that leaves the page's details as they were) then
+    // never leaves the button flipped (the owner's run, 2026-10-26: a series needed two clicks on Played).
+    private void OnPlayed(object sender, RoutedEventArgs e)
+    {
+        ItemActions.Toggle(_details?.Value?.Summary, played: true);
+        PlayedButton.IsChecked = _details?.Value?.Summary.User.Played ?? false;
+    }
 
-    private void OnFavourite(object sender, RoutedEventArgs e) => ItemActions.Toggle(_details?.Value?.Summary, played: false);
+    private void OnFavourite(object sender, RoutedEventArgs e)
+    {
+        ItemActions.Toggle(_details?.Value?.Summary, played: false);
+        FavouriteButton.IsChecked = _details?.Value?.Summary.User.Favourite ?? false;
+    }
 
     private void OnRetry(object sender, RoutedEventArgs e) => _view?.Refresh();
 

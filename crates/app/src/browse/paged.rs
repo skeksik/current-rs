@@ -16,7 +16,7 @@ use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
 use super::libraries::might_be_gone;
-use super::{Context, Live, lock};
+use super::{Context, Live, lock, states};
 use crate::list::{ObservableList, VectorDiff};
 
 /// How many items one request reads (what jellyfin-web uses; `docs/notes/jellyfin-browse.md`).
@@ -616,6 +616,17 @@ impl Live for Paged {
                 Some(Slot::Item(summary)) if &summary.item == item => Some(*summary),
                 _ => None,
             })
+    }
+    fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
+        let _control = lock(&self.control);
+        self.slots
+            .snapshot()
+            .into_iter()
+            .filter_map(|slot| match slot {
+                Slot::Item(summary) if states::parents(&summary).contains(parent) => Some(*summary),
+                _ => None,
+            })
+            .collect()
     }
 }
 
