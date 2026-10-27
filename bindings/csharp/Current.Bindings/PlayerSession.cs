@@ -266,7 +266,8 @@ public static class PlaybackExtensions
 
     /// <summary>
     /// Settings' "Preferred quality" list (the core decides): Original, then the steps the quality menu lists ("Show all quality
-    /// options" as set), each named by its usual resolution; the preferred quality itself when the list no longer offers it.
+    /// options" as set), each named by its usual resolution. The preferred quality is always one of them: switching "Show all" off
+    /// moves a step only it listed to the nearest listed one not above it.
     /// </summary>
     public static IReadOnlyList<QualityOption> PreferredQualityOptions(this CoreHost core) =>
         Array.ConvertAll(core.Core.PreferredQualityOptions(), option => PlayerMap.From(option));

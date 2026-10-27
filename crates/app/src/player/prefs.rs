@@ -5,7 +5,7 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use current_playback::{Quality, QualityPreference};
+use current_playback::{Quality, QualityPreference, listed_quality};
 use current_store::{SettingsStore, StoreError, StreamQuality};
 use tokio::sync::watch;
 
@@ -40,7 +40,11 @@ impl PlaybackPrefs {
             .map(|store| store.get().playback)
             .unwrap_or_default();
         Self {
-            preferred_quality: watch::Sender::new(quality(playback.quality_preferred)),
+            // One the list does not offer (a hand-edited file) reads as the nearest it does, as switching "Show all" off moves it.
+            preferred_quality: watch::Sender::new(listed_quality(
+                quality(playback.quality_preferred),
+                playback.quality_all,
+            )),
             auto_skip: watch::Sender::new(playback.auto_skip),
             quality_resolution: watch::Sender::new(playback.quality_resolution),
             quality_all: watch::Sender::new(playback.quality_all),
@@ -115,10 +119,14 @@ impl PlaybackPrefs {
     pub(crate) fn set_quality_all(&self, shared: &Shared, all: bool) -> Result<(), StoreError> {
         let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
         self.quality_all.send_replace(all);
+        // A preferred step the list no longer offers moves to the nearest one listed, in the same save (owner, 2026-10-27).
+        let preferred = listed_quality(self.preferred_quality(), all);
+        self.preferred_quality.send_replace(preferred);
         match &shared.storage {
-            Some(storage) => storage
-                .settings
-                .update(|settings| settings.playback.quality_all = all),
+            Some(storage) => storage.settings.update(|settings| {
+                settings.playback.quality_all = all;
+                settings.playback.quality_preferred = stored(preferred);
+            }),
             None => Ok(()),
         }
     }

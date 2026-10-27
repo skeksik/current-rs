@@ -194,28 +194,33 @@ pub fn snap_quality(preferred: Quality, source: Option<&MediaSource>, all: bool)
 }
 
 /// Settings' "Preferred quality" list (owner, 2026-10-27): the quality menu without a file ([`quality_options`] with no source, `all`
-/// as there), so "Maximum" (Original) and every step named by its width cap. A preferred bitrate the list does not offer (a step of
-/// "Show all" after it was switched off, or one an older version saved) is kept as its own entry in its place, so the setting shows
-/// what applies instead of falling back to Original.
-pub fn preferred_quality_options(preferred: Quality, all: bool) -> Vec<QualityOption> {
-    let mut options = quality_options(None, all);
-    if let Quality::Bitrate(bitrate) = preferred
-        && !options.iter().any(|option| option.quality == preferred)
-    {
-        let at = options
-            .iter()
-            .position(|option| option.bitrate.is_some_and(|step| step < bitrate))
-            .unwrap_or(options.len());
-        options.insert(
-            at,
-            QualityOption {
-                quality: preferred,
-                resolution: width_cap(bitrate).and_then(|cap| resolution_name(cap, cap * 9 / 16)),
-                bitrate: Some(bitrate),
-            },
-        );
+/// as there), so "Maximum" (Original) and every step named by its width cap. The preferred quality is always one of them
+/// ([`listed_quality`]).
+pub fn preferred_quality_options(all: bool) -> Vec<QualityOption> {
+    quality_options(None, all)
+}
+
+/// The preferred quality once Settings lists the steps `all` says (owner, 2026-10-27): itself when the list has it, else the nearest
+/// listed step not above it, so the items never play above what the user chose; below every step, the lowest. "Show all quality
+/// options" switched off with a step only it lists as the preferred one moves the setting to this.
+pub fn listed_quality(preferred: Quality, all: bool) -> Quality {
+    let Quality::Bitrate(bitrate) = preferred else {
+        return Quality::Maximum;
+    };
+    let steps: &[Quality] = if all {
+        &Quality::ALL_STEPS
+    } else {
+        &Quality::STEPS
+    };
+    if steps.contains(&preferred) {
+        return preferred;
     }
-    options
+    steps
+        .iter()
+        .copied()
+        .find(|step| matches!(step, Quality::Bitrate(step) if *step <= bitrate))
+        .or_else(|| steps.last().copied())
+        .unwrap_or(preferred)
 }
 
 /// Settings' quality choices, which the composition root loads and gives the controller: the preferred quality and whether the menu
@@ -306,7 +311,7 @@ mod tests {
 
     #[test]
     fn the_preferred_quality_list_is_original_then_the_steps() {
-        let options = preferred_quality_options(Quality::Maximum, false);
+        let options = preferred_quality_options(false);
         assert_eq!(options[0].quality, Quality::Maximum);
         assert_eq!(options[0].bitrate, None);
         assert_eq!(
@@ -316,37 +321,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             Quality::STEPS
         );
-        assert_eq!(
-            preferred_quality_options(mbit(20), false).len(),
-            options.len()
-        );
     }
 
     #[test]
-    fn a_preferred_quality_the_list_no_longer_offers_keeps_its_place() {
-        // 10 Mbit/s: a step of "Show all", or what an older version saved; between 20 and 4.
-        let options = preferred_quality_options(mbit(10), false);
-        assert_eq!(
-            options
-                .iter()
-                .map(|option| option.quality)
-                .collect::<Vec<_>>(),
-            [
-                Quality::Maximum,
-                mbit(40),
-                mbit(20),
-                mbit(10),
-                mbit(4),
-                mbit(1)
-            ]
-        );
-        assert_eq!(options[3].bitrate, Some(10_000_000));
-        // Below every step: last.
-        let low = preferred_quality_options(Quality::Bitrate(500_000), false);
-        assert_eq!(
-            low.last().map(|option| option.quality),
-            Some(Quality::Bitrate(500_000))
-        );
+    fn a_preferred_step_the_common_list_lacks_moves_to_the_nearest_below() {
+        // "Show all" off with 10 Mbit/s preferred: 4 (20 would be above it).
+        assert_eq!(listed_quality(mbit(10), false), mbit(4));
+        assert_eq!(listed_quality(mbit(60), false), mbit(40));
+        assert_eq!(listed_quality(Quality::Bitrate(500_000), false), mbit(1));
+        // Listed steps and Original stay.
+        assert_eq!(listed_quality(mbit(20), false), mbit(20));
+        assert_eq!(listed_quality(Quality::Maximum, false), Quality::Maximum);
+        assert_eq!(listed_quality(mbit(10), true), mbit(10));
     }
 
     #[test]

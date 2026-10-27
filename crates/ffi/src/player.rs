@@ -375,16 +375,13 @@ impl Core {
     }
 
     /// Settings' "Preferred quality" list (`current_playback::preferred_quality_options`): Original, then the steps the quality menu
-    /// lists ("Show all quality options" as set), each named by the resolution its width cap gives at 16:9; the preferred quality
-    /// itself when the list no longer offers it, in its place.
+    /// lists ("Show all quality options" as set), each named by the resolution its width cap gives at 16:9. The preferred quality is
+    /// always one of them.
     pub fn preferred_quality_options(&self) -> Vec<QualityOptionInfo> {
-        current_app::playback::preferred_quality_options(
-            self.app.preferred_quality(),
-            self.app.quality_all(),
-        )
-        .iter()
-        .map(Into::into)
-        .collect()
+        current_app::playback::preferred_quality_options(self.app.quality_all())
+            .iter()
+            .map(Into::into)
+            .collect()
     }
 
     /// The Settings choice "Preferred quality": each item plays at the highest entry of its quality menu that is not above it, on local

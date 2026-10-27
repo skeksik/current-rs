@@ -334,7 +334,18 @@ fn the_playback_settings_switch_skipping() {
     );
     block_on(core.set_show_all_qualities(true)).unwrap();
     assert!(core.playback_settings().shows_all_qualities);
+    // A step only "Show all" lists, then the switch off: the nearest listed step not above it, 4 Mbit/s.
+    block_on(core.set_preferred_quality(QualityChoice::Bitrate {
+        bits_per_second: 10_000_000,
+    }))
+    .unwrap();
     block_on(core.set_show_all_qualities(false)).unwrap();
+    assert_eq!(
+        core.playback_settings().preferred_quality,
+        QualityChoice::Bitrate {
+            bits_per_second: 4_000_000
+        }
+    );
     block_on(core.set_show_quality_resolution(false)).unwrap();
     assert!(!core.playback_settings().shows_quality_resolution);
     block_on(core.set_show_quality_resolution(true)).unwrap();

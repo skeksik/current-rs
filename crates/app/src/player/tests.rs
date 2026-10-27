@@ -471,9 +471,9 @@ async fn items_play_at_the_preferred_quality_and_a_picked_one_is_not_saved() {
     .await;
     player.close().await;
     drop(app);
-    // Read again at the next start.
+    // Read again at the next start: 1.2 Mbit/s is no step Settings lists, so it reads as the nearest listed one not above it.
     let app = open_stored(temp.path());
-    assert_eq!(app.preferred_quality(), Quality::Bitrate(1_200_000));
+    assert_eq!(app.preferred_quality(), Quality::Bitrate(1_000_000));
 }
 
 #[tokio::test]
