@@ -48,7 +48,7 @@
             VerticalAlignment="Center"
             AutomationProperties.Name="Loading" />
 
-        <!-- A problem from the core, in plain words (PlayerText), with Back. -->
+        <!-- A problem from the core, in plain words (the core's, CoreHost), with Back. -->
         <InfoBar
             x:Name="ProblemInfo"
             MaxWidth="480"

@@ -9,9 +9,7 @@ use current_app::playback::PlanNote;
 use current_model::RouteLabel;
 
 use crate::Core;
-use crate::player_records::{
-    NextEpisodeInfo, PlanNoteInfo, PlaybackProblem, PlayerProblem, RouteKind, TrackInfo,
-};
+use crate::player_records::{PlanNoteInfo, PlaybackProblem, PlayerProblem, RouteKind, TrackInfo};
 
 /// What the platform measures for the info panel's last line: the swap chain panel's size in physical pixels, the view's and the
 /// content's sizes in physical pixels (device-independent size × the window's scale, so fractional), and the window's client size
@@ -117,9 +115,9 @@ impl Core {
         current_app::skip_label(&kind).to_owned()
     }
 
-    /// The next-episode card's line: "S1:E3 Name", or the name alone.
-    pub fn episode_line(&self, next: NextEpisodeInfo) -> String {
-        current_app::episode_line(&next.number, &next.name)
+    /// The next-episode card's line from its number label and name ([`crate::NextEpisodeInfo`]'s): "S1:E3 Name", or the name alone.
+    pub fn episode_line(&self, number: String, name: String) -> String {
+        current_app::episode_line(&number, &name)
     }
 
     /// The next-episode card's countdown: "Starts in 5 seconds".
@@ -266,6 +264,10 @@ mod tests {
             "The server limits streaming outside your network to 1,5 Mbit/s."
         );
         assert_eq!(core.skip_label("outro".into()), "Skip credits");
+        assert_eq!(
+            core.episode_line("S1:E3".into(), "Name".into()),
+            "S1:E3 Name"
+        );
         assert_eq!(core.countdown_text(1), "Starts in 1 second");
         assert_eq!(core.no_audio_tracks_label(), "No audio tracks");
         assert_eq!(core.subtitles_off_label(), "Off");

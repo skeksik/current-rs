@@ -82,6 +82,89 @@ internal static class PlayerTests
         return Task.CompletedTask;
     }
 
+    // The player's words (ADR 0019): the core's, as the app shows them -----------------------------------------------------------
+
+    public static Task PlayerLabelsAreTheCores()
+    {
+        using var core = CoreHost.Create();
+        core.SetDecimalSeparator(",");
+        var hour = TimeSpan.FromHours(1) + TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(3);
+        Check(core.TimeLabel(hour) == "1:02:03" && core.TimeLabel(TimeSpan.FromSeconds(123)) == "2:03", "the shown times");
+        Check(core.TimeLabel(TimeSpan.FromSeconds(-5)) == "0:00", "below zero is 0:00");
+        Check(core.TimeLabel(TimeSpan.FromHours(25)) == "1:00:00", "24 hours or more wrap, as before");
+        Check(core.SpokenTime(hour) == "1 hour 2 minutes 3 seconds" && core.SpokenTime(TimeSpan.Zero) == "0 seconds", "the spoken time");
+        Check(core.ElapsedLabel(TimeSpan.FromSeconds(1)) == "Time elapsed 1 second", "the elapsed time's name");
+        Check(core.RemainingLabel(TimeSpan.FromMinutes(12)) == "Time remaining 12 minutes", "the remaining time's name");
+        Check(core.PositionLabel(TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(90)) == "1 minute of 1 hour 30 minutes"
+            && core.PositionLabel(TimeSpan.FromSeconds(3), null) == "3 seconds", "the seek bar's status");
+        Check(core.RouteName(RouteKind.DirectStream) == "Direct stream" && core.RouteName(RouteKind.DirectPlay) == "Direct play", "routes");
+        Check(core.ReasonText("audio_is_external") == "The audio is in a separate file.", "a reason");
+        Check(core.ReasonText("a_reason_no_release_knows") == "a_reason_no_release_knows", "an unknown reason by its name");
+        Check(core.PlanNoteText(new PlanNote.RemoteBitrateLimit(1_500_000))
+            == "The server limits streaming outside your network to 1,5 Mbit/s.", "a note with the platform's separator");
+        var track = new TrackInfo(3, null, "eng", "ac3", IsDefault: true, IsForced: false, IsHearingImpaired: false, IsExternal: false);
+        Check(core.TrackName(track) == "eng · AC3", $"a track by its facts, not {core.TrackName(track)}");
+        Check(core.TrackName(track with { Label = "English" }) == "English", "a track by its label");
+        Check(core.TrackName(track with { Language = null, Codec = null }) == "Track 3", "a track by its number");
+        Check(core.SkipLabel("outro") == "Skip credits" && core.SkipLabel("a_kind_no_release_knows") == "Skip", "the skip button");
+        var next = new NextEpisodeInfo(Item("next"), "Name", null, 1, 3, "S1:E3", 5);
+        Check(core.EpisodeLine(next) == "S1:E3 Name" && core.EpisodeLine(next with { Number = "" }) == "Name", "the episode line");
+        Check(core.CountdownText(1) == "Starts in 1 second" && core.CountdownText(5) == "Starts in 5 seconds", "the countdown");
+        Check(core.NoAudioTracksLabel() == "No audio tracks" && core.SubtitlesOffLabel() == "Off", "the menus' fixed items");
+        return Task.CompletedTask;
+    }
+
+    public static Task ProblemTextsAreTheCores()
+    {
+        using var core = CoreHost.Create();
+        Check(core.PlaybackProblemText(new PlaybackProblem.Server(500)) == "The server couldn't play this item (error 500).", "a server error");
+        Check(core.PlaybackProblemText(new PlaybackProblem.Engine("decoder_failed")) == "The player couldn't decode this file.",
+            "an engine error");
+        Check(core.PlaybackProblemText(new PlaybackProblem.Engine("a_kind_no_release_knows")) == "The player couldn't open the stream.",
+            "an unknown engine error");
+        Check(core.PlaybackProblemText(new PlaybackProblem.NotPlayable(["container_not_supported"]))
+            == "The server offers no way to play this item.", "not playable");
+        Check(core.PlaybackProblemText(new PlaybackProblem.NotFound()) == "The server can't find this item anymore.", "not found");
+        Check(core.PlayerProblemText(new PlayerProblem.Busy()) == "Another video is still closing. Try again in a moment.", "busy");
+        Check(core.PlayerProblemText(new PlayerProblem.EngineFailed("loading_failed")) == "The player couldn't start.", "engine failed");
+        Check(core.PlayerProblemText(new PlayerProblem.Closed()) == "Something went wrong in Current. Try again.", "the fallback");
+        return Task.CompletedTask;
+    }
+
+    public static async Task InfoPanelIsTheCores()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        core.SetDecimalSeparator(",");
+        await SignIn(core, standIn);
+        var ui = new ManualDispatcher();
+        var session = await PlayerSession.OpenAsync(core, Size, Display, ui);
+        var panel = new PanelSizes(1280, 720, 1280, 720, 1280.5, 800, 1280, 800);
+        try
+        {
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+            await Eventually("playing", ui, () => session.State.Value.State == PlayerStateKind.Playing);
+            var lines = await session.PlaybackInfoLinesAsync(Display, panel);
+            var text = string.Join(" | ", lines);
+            Check(lines[0] == "Direct play", $"the route first, not {text}");
+            Check(lines.Any(line => line.StartsWith("Source", StringComparison.Ordinal)), $"the source, not {text}");
+            Check(lines.Contains("Display · SDR · peak 300 nits · SDR white 200 nits · 60 Hz"), $"the display, not {text}");
+            Check(lines[^1] == "Panel · 1280×720 · view 1280×720 · content 1280,5×800 · window 1280×800",
+                $"the panel's sizes with the platform's separator, not {lines[^1]}");
+            var bare = await session.PlaybackInfoLinesAsync(null, panel with { ContentWidth = null, WindowHeight = null });
+            Check(!bare.Any(line => line.StartsWith("Display", StringComparison.Ordinal)), "no display line without facts");
+            Check(bare[^1] == "Panel · 1280×720 · view 1280×720", $"no content or window size when one is missing, not {bare[^1]}");
+            Check(!text.Contains("http", StringComparison.OrdinalIgnoreCase), "no URL");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+        var closed = await ThrowsPlayer(() => session.PlaybackInfoLinesAsync(Display, panel));
+        Check(closed.Problem is PlayerProblem.Closed, $"after closing: closed, not {closed.Problem}");
+        await Eventually("listeners dropped", new ManualDispatcher(), () => core.LiveListeners == 0);
+    }
+
     public static async Task PlaysReportsAndReleases()
     {
         using var standIn = StandIn.Start();

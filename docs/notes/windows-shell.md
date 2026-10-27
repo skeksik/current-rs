@@ -1403,7 +1403,8 @@ handlers, the disk read, a failed Clear, release before load. All **pass** on th
 ## Player (ADR 0019, task 5)
 The player in the main window, over the pages, as Media Player plays a video in its own window (Media Player 11.2609.11.0 on the
 owner's PC, 2026-10-25: a video opened from Explorer replaced its library view in the same window). All logic is the core's
-(`PlayerSession`, `PlayTarget`); the UI words and lays out what it gives (`Player/PlayerText`).
+(`PlayerSession`, `PlayTarget`), and so are its words (`current-app`'s `player::words` and `player::info_panel`, through
+`CoreHost`); the UI lays out what it gives.
 - **Play:** the details page's Play or Resume (accent) and "Play from the beginning", and Play or Resume first in a tile's context
   menu, from the core's `PlayTarget`: the item from its resume point unless played; a series' page plays its next episode
   (`Shows/NextUp?seriesId=`, else its first episode). Back (title bar, Alt+Left, the mouse's Back button) or the media controls'
@@ -1421,7 +1422,7 @@ owner's PC, 2026-10-25: a video opened from Explorer replaced its library view i
   while playing (`ControlPanelDisplayTimeoutInSecs`, 3.0), fading in over 0.3 s and out over 0.7 s, and stay while the pointer is over
   them, a menu is open or the keyboard is in them. The seek bar shows the buffered range in its own track. The skip button ("Skip intro",
   "Skip credits", ...) and the next-episode card with its countdown show as the core reports them; a problem shows as an InfoBar with
-  Back, in `PlayerText.Problem`'s words. Playback info: route, reasons in plain words, source streams, the server's transcode, the
+  Back, in the core's words. Playback info: route, reasons in plain words, source streams, the server's transcode, the
   engine's decoder and output, the display and the panel's sizes.
 - **Keyboard:** Space and K play or pause, Left and Right seek 10 s, Up and Down change the volume by 5, F and F11 toggle full screen,
   Esc leaves it, M mutes; Ctrl+P, Ctrl+Left (back 10 s), Ctrl+Right (forward 30 s), F11 and Ctrl+I (playback info) are Media Player's
