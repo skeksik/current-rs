@@ -265,6 +265,8 @@ public sealed partial class LibraryPage : Page, IRefreshable
             {
                 first = first with { Filters = filters };
             }
+            // Opened anew: a search left in this grid is over, so a later one starts from the query shown now (review 2, S1).
+            _grid.Browsing = null;
             if (!SameChoices(_grid.Query, first))
             {
                 _grid.Query = first;
@@ -321,6 +323,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
             _grid.FirstVisible = 0;
             _grid.Wide = false;
             _grid.ShowsTitles = true;
+            _grid.Browsing = null;
             if (!SameChoices(_grid.Query, first))
             {
                 _grid.Query = first;
@@ -411,7 +414,14 @@ public sealed partial class LibraryPage : Page, IRefreshable
         }
     }
 
-    private void OnStateChanged(object? sender, PropertyChangedEventArgs e) => ShowState();
+    /// <summary>A search was just started: the state shown is still the previous query's until the grid's next state arrives.</summary>
+    private bool _stateBeforeSearch;
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        _stateBeforeSearch = false;
+        ShowState();
+    }
 
     private void ShowState()
     {
@@ -421,7 +431,9 @@ public sealed partial class LibraryPage : Page, IRefreshable
         }
         LoadingRing.IsActive = state.Loading && state.Total == 0;
         // A search that fills the server's window says so instead of a count that would only be the window's size (the core decides).
-        CountText.Text = _grid?.Query.SearchNote(state.Total) ?? (state.Total > 0
+        // Only from the searched query's own state: the previous query's total (a big library's) would flash the note (review 2).
+        var note = _stateBeforeSearch ? null : _grid?.Query.SearchNote(state.Total);
+        CountText.Text = note ?? (state.Total > 0
             ? (state.Total == 1 ? "1 item" : $"{state.Total.ToString("N0", System.Globalization.CultureInfo.CurrentCulture)} items")
             : "");
         EmptyText.Visibility = !state.Loading && state.Total == 0 && state.Failed is null ? Visibility.Visible : Visibility.Collapsed;
@@ -519,6 +531,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
             return;
         }
         _grid.Query = query;
+        _grid.Browsing = null;
         _grid.FirstVisible = 0;
         _grid.Items.SetQuery(query);
         Remember(new LibraryChoices(
@@ -574,6 +587,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
         _grid.Query = query;
         _grid.FirstVisible = 0;
         _grid.Items.SetQuery(query);
+        _stateBeforeSearch = true;
         ShowQuery(query);
         ShowState();
     }

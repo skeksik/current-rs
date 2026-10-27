@@ -1053,10 +1053,13 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         {
             return;
         }
-        // A view's page selects its tab: the Favourites tab's rows (on the search page) and one kind's whole list of it alike.
+        // A view's page selects its tab: the Favourites tab's rows (on the search page), and a kind's page that a Favourites row's
+        // header opened, under Favourites (review 2, S2).
         if (_shownParameter is ViewArgs shownView)
         {
-            var tab = shownView with { Kind = null };
+            var tab = shownView is { View: ViewArgs.Everything, Favourite: true }
+                ? new ViewArgs(shownView.Server, ViewArgs.Favourites)
+                : shownView with { Kind = null };
             NavView.SelectedItem = new[] { FavouritesItem, RecentItem }.Concat(_libraryItems.OfType<NavigationViewItem>())
                 .FirstOrDefault(item => item.Visibility == Visibility.Visible && Equals(item.Tag, tab));
             return;
