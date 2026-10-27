@@ -82,6 +82,7 @@ mod tests {
             is_forced: false,
             is_hearing_impaired: false,
             is_external: false,
+            bitrate: None,
             video: None,
             audio: None,
             subtitle_delivery: None,

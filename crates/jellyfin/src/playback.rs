@@ -649,6 +649,13 @@ fn map_stream(stream: &wire::MediaStream) -> Option<MediaStream> {
             .real_frame_rate
             .or(stream.average_frame_rate)
             .filter(|rate| *rate > 0.0),
+        // `MediaStream.ReferenceFrameRate` (jellyfin/jellyfin `MediaBrowser.Model/Entities/MediaStream.cs`, v12.2 ca0f16eb, read
+        // 2026-10-27): "return AverageFrameRate < 1000 ? AverageFrameRate : RealFrameRate;".
+        reference_frame_rate: match stream.average_frame_rate {
+            Some(average) if average < 1000.0 => Some(average),
+            _ => stream.real_frame_rate,
+        }
+        .filter(|rate| *rate > 0.0),
         range: stream
             .video_range
             .as_deref()
@@ -683,6 +690,7 @@ fn map_stream(stream: &wire::MediaStream) -> Option<MediaStream> {
         is_forced: stream.is_forced,
         is_hearing_impaired: stream.is_hearing_impaired,
         is_external: stream.is_external,
+        bitrate: positive(stream.bit_rate),
         kind,
         video,
         audio,

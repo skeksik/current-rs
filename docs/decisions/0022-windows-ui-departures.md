@@ -38,6 +38,10 @@ Each choice below stays until the owner changes it.
 6. **2560 × 1440 named "1080p"** in the quality menu and its setting. Jellyfin names anything up to 2560 × 1440 "1080p"
    (`MediaStream.GetResolutionText`, jellyfin/jellyfin master, read 2026-10-26; ADR 0019, choice 10). Reason: the names then match the
    server's own and those of other clients of it; "1440p" is not used for now (owner, 2026-10-26).
+   **Amended 2026-10-27 (owner): named 1440p, as it streams.** A picture 2560 wide is "1440p" wherever the core names a resolution
+   (the quality menu's steps, Original's name, Settings' preferred-quality list), named by width class as the server's table is
+   (2560 × 1072 and 2560 × 1080 too); the server's thresholds stand otherwise (`current-playback`, `resolution_name`). Reason: the
+   menu should say what really streams, which the info panel shows (a 4K file at 60 fps at 40 Mbit/s streams at 2560 × 1440).
 
 7. **The search's Catalog source shown, unavailable, without a Seerr server** (owner, 2026-10-27; ADR 0018, "Global search filters").
    CLAUDE.md: "No feature may assume a service exists: read the capabilities state and hide what is unavailable." Reason: the app is

@@ -159,6 +159,8 @@ pub struct MediaStream {
     pub is_hearing_impaired: bool,
     /// A separate file next to the media (an external subtitle or audio track).
     pub is_external: bool,
+    /// Bits per second, as the server has it for this stream; `None` when it does not know.
+    pub bitrate: Option<u32>,
     pub video: Option<VideoFacts>,
     pub audio: Option<AudioFacts>,
     /// How the server would deliver this subtitle stream; `None` for other kinds.
@@ -173,6 +175,9 @@ pub struct VideoFacts {
     pub bit_depth: Option<u32>,
     /// Frames per second.
     pub frame_rate: Option<f32>,
+    /// Frames per second as the server works with them when it transcodes (its `MediaStream.ReferenceFrameRate`: the average rate,
+    /// else the real one when the average reads 1000 or more); may differ from `frame_rate` for interlaced or variable-rate files.
+    pub reference_frame_rate: Option<f32>,
     pub range: Option<VideoRange>,
     pub range_type: Option<VideoRangeType>,
     /// The Dolby Vision profile, when the stream has one.
@@ -492,6 +497,7 @@ mod tests {
             is_forced: false,
             is_hearing_impaired: false,
             is_external: false,
+            bitrate: None,
             video: None,
             audio: None,
             subtitle_delivery: None,

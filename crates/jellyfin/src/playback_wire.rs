@@ -149,6 +149,7 @@ pub(crate) struct MediaStream {
     pub is_forced: bool,
     pub is_hearing_impaired: bool,
     pub is_external: bool,
+    pub bit_rate: Option<i32>,
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub bit_depth: Option<i32>,

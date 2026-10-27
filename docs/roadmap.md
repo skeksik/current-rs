@@ -256,8 +256,9 @@ Fix and polish:
       read or patched last. The owner re-checks the sequence on their PC after merge
 - [ ] The M2 device checks still open (see M2): Dolby Vision profiles 5, 7 and 8, HDR10+, 120 Hz, intro and credits skip with a segment
       plugin, the 60 s stall timeout on a real stall; remux and the gateways were checked in the relay check (PR 81)
-- [ ] Quality menu named by what the server will send for this file: model its bitrate rules in the core (audio share, codec, frame
-      rate, low-bitrate boost; the Windows UI pass's research); today's names assume H.264 at 30 fps
+- [x] Quality menu named by what the server will send for this file: model its bitrate rules in the core (audio share, codec, frame
+      rate, low-bitrate boost; the Windows UI pass's research); the names assumed H.264 at 30 fps before (ADR 0019 choice 10,
+      "Names", amended 2026-10-27 by the owner)
 - [ ] AV1 as a transcoding target where the server has an AV1 encoder (the device profile asks `hevc,h264` today; ADR 0019)
 - [ ] MPEG-4 Part 2 (DivX, Xvid) in the engine's codec table, so it plays directly instead of being converted (a device profile change;
       the supported formats page shows "Server converts" today, ADR 0021)
