@@ -16,7 +16,7 @@ use current_model::{CollectionKind, ItemQuery, ItemRef, ItemSummary, Library, Us
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 
-use super::{Context, Live, Stamps, below_in, find_in, lock, patch_list, sync_list};
+use super::{Context, Live, lock, patch_list, sync_list};
 use crate::list::ObservableList;
 
 /// How many items each row asks for (what jellyfin-web asks; `docs/notes/jellyfin-browse.md`).
@@ -165,8 +165,6 @@ struct Rows {
     /// Every row's key in Home's order, from the last load of the libraries.
     order: Vec<String>,
     lists: HashMap<String, Arc<ObservableList<ItemSummary>>>,
-    /// When each row's copies were read or patched: the rows are read one request each.
-    stamps: HashMap<String, Stamps>,
 }
 
 /// One kind of load: every row, or only the rows that depend on played marks.
@@ -243,7 +241,6 @@ impl HomeFeed {
                     Spec::SeenRecently.key(),
                 ],
                 lists: HashMap::new(),
-                stamps: HashMap::new(),
             }),
             state: watch::Sender::new(HomeState::default()),
             loads: Mutex::new(Loads::default()),
@@ -264,11 +261,15 @@ impl HomeFeed {
     }
 
     /// Home is shown again: loads every row again, keeping what they show, if it was left five minutes or more ago (ADR 0018,
-    /// section 3: [`super::REFRESH_WHEN_SHOWN_AFTER`]). Returns whether it refreshed.
+    /// section 3: [`super::REFRESH_WHEN_SHOWN_AFTER`]); else the marks of every item the session's lists hold are read again
+    /// (section 5, amended 2026-10-27 by the owner). Returns whether it refreshed.
     pub fn shown(&self) -> bool {
         let stale = self.shown.shown();
         if stale {
             self.refresh();
+        } else {
+            // Within the five minutes: every item held reads its marks again, which another device may have changed meanwhile.
+            self.inner.ctx.resync();
         }
         stale
     }
@@ -422,16 +423,12 @@ impl Home {
         let at = self.rows.snapshot().iter().position(|row| row.key == key);
         if items.is_empty() {
             rows.lists.remove(&key);
-            rows.stamps.remove(&key);
             if let Some(at) = at {
                 let _ = self.rows.remove(at);
             }
             return;
         }
-        self.ctx.observe(&mut items);
-        let mut stamps = Stamps::default();
-        stamps.read(&items, read);
-        rows.stamps.insert(key.clone(), stamps);
+        let changed = self.ctx.take(&mut items, read, None);
         let list = rows
             .lists
             .entry(key.clone())
@@ -462,6 +459,9 @@ impl Home {
                 let _ = self.rows.insert(at, row);
             }
         }
+        // Outside the lock: every list, this one too, is patched.
+        drop(rows);
+        self.ctx.spread(changed);
     }
 
     /// Removes the rows of libraries that are gone or now excluded.
@@ -471,7 +471,6 @@ impl Home {
         for (at, row) in snapshot.iter().enumerate().rev() {
             if !order.contains(&row.key) {
                 rows.lists.remove(&row.key);
-                rows.stamps.remove(&row.key);
                 let _ = self.rows.remove(at);
             }
         }
@@ -504,11 +503,8 @@ fn spawn_row(
 }
 
 impl Live for Home {
-    fn patch(&self, item: &ItemRef, state: &UserState, at: u64) {
-        let mut rows = lock(&self.lists);
-        for stamps in rows.stamps.values_mut() {
-            stamps.patched(item, at);
-        }
+    fn patch(&self, item: &ItemRef, state: &UserState) {
+        let rows = lock(&self.lists);
         for list in rows.lists.values() {
             patch_list(list, item, state);
         }
@@ -523,22 +519,11 @@ impl Live for Home {
         self.load(true);
     }
 
-    fn find(&self, item: &ItemRef) -> Option<(u64, ItemSummary)> {
+    fn holds(&self, held: &mut HashSet<ItemRef>) {
         let rows = lock(&self.lists);
-        rows.lists
-            .iter()
-            .filter_map(|(key, list)| {
-                let at = rows.stamps.get(key).map_or(0, |stamps| stamps.of(item));
-                Some((at, find_in(list, item)?))
-            })
-            .max_by_key(|(at, _)| *at)
-    }
-    fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
-        let rows = lock(&self.lists);
-        rows.lists
-            .values()
-            .flat_map(|list| below_in(list, parent))
-            .collect()
+        for list in rows.lists.values() {
+            held.extend(list.snapshot().into_iter().map(|summary| summary.item));
+        }
     }
 }
 

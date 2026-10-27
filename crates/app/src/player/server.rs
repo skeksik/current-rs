@@ -28,6 +28,7 @@ use current_relay::{RelayEvent, Route, RouteConfig};
 use tokio::sync::mpsc;
 
 use super::relay::{RelaySlot, RouteEvents, SessionUpstream};
+use crate::browse::Hub;
 use crate::session::Shared;
 
 /// The session of the item playing, as a media server for one player.
@@ -40,6 +41,8 @@ pub(crate) struct JellyfinMedia {
     route: Mutex<Option<(u64, Route)>>,
     last_route: AtomicU64,
     events: mpsc::UnboundedSender<(u64, RelayEvent)>,
+    /// Browse, for the workaround a start report waits for ([`Hub::before_play`]).
+    browse: Arc<Hub>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -51,6 +54,7 @@ impl JellyfinMedia {
     pub(crate) fn new(
         shared: Arc<Shared>,
         relay: Arc<RelaySlot>,
+        browse: Arc<Hub>,
         events: mpsc::UnboundedSender<(u64, RelayEvent)>,
     ) -> Self {
         Self {
@@ -60,6 +64,7 @@ impl JellyfinMedia {
             route: Mutex::new(None),
             last_route: AtomicU64::new(0),
             events,
+            browse,
         }
     }
 
@@ -279,6 +284,9 @@ impl MediaServer for JellyfinMedia {
     }
 
     async fn report_start(&self, report: &ProgressReport) -> Result<(), PlaybackProblem> {
+        // Workaround for an upstream Jellyfin bug: a start report saves the episode's user data as the server's cached instance of
+        // it holds them, which this session's series or season mark may have left behind (`Hub::before_play`).
+        self.browse.before_play(&report.item).await;
         self.session()?
             .report_start(&progress(report))
             .await

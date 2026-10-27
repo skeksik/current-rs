@@ -16,7 +16,7 @@ use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
 use super::libraries::might_be_gone;
-use super::{Context, Live, Stamps, lock, states};
+use super::{Context, Live, lock};
 use crate::list::{ObservableList, VectorDiff};
 
 /// How many items one request reads (what jellyfin-web uses; `docs/notes/jellyfin-browse.md`).
@@ -105,8 +105,8 @@ struct Control {
     error: Option<AuthError>,
     /// The slots of each loaded item, for played and favourite patches.
     index: HashMap<ItemRef, Vec<usize>>,
-    /// When each loaded item's copy was read or patched.
-    stamps: Stamps,
+    /// Items whose state a read changed: they go to every other list once the control lock is released ([`Context::spread`]).
+    changed: Vec<ItemRef>,
     next_id: u64,
 }
 
@@ -122,7 +122,7 @@ impl Control {
             refresh_wanted: false,
             error: None,
             index: HashMap::new(),
-            stamps: Stamps::default(),
+            changed: Vec::new(),
             next_id: 0,
         }
     }
@@ -193,11 +193,15 @@ impl PagedItems {
     }
 
     /// The page showing the grid is shown again: refreshes, without a reset, if it was left five minutes or more ago (ADR 0018,
-    /// section 3: [`super::REFRESH_WHEN_SHOWN_AFTER`]). Returns whether it refreshed.
+    /// section 3: [`super::REFRESH_WHEN_SHOWN_AFTER`]); else the marks of every item the session's lists hold are read again
+    /// (section 5, amended 2026-10-27 by the owner). Returns whether it refreshed.
     pub fn shown(&self) -> bool {
         let stale = self.shown.shown();
         if stale {
             self.refresh();
+        } else {
+            // Within the five minutes: every item held reads its marks again, which another device may have changed meanwhile.
+            self.inner.ctx.resync();
         }
         stale
     }
@@ -447,6 +451,10 @@ impl Paged {
             }
         }
         self.pump(&mut control);
+        // Outside the lock: every list, this one too, is patched.
+        let changed = std::mem::take(&mut control.changed);
+        drop(control);
+        self.ctx.spread(changed);
     }
 
     /// The first page answered: the list becomes `total` slots, page 0 filled and the rest loading.
@@ -456,10 +464,9 @@ impl Paged {
             .map_or(answer.items.len(), |total| total as usize);
         let mut items = answer.items;
         items.truncate(PAGE_SIZE.min(total));
-        self.ctx.observe(&mut items);
+        let changed = self.ctx.take(&mut items, at, None);
+        control.changed.extend(changed);
         control.index.clear();
-        control.stamps = Stamps::default();
-        control.stamps.read(&items, at);
         for (index, item) in items.iter().enumerate() {
             control
                 .index
@@ -532,8 +539,8 @@ impl Paged {
             return;
         }
         items.truncate(page_range(page, control.total).len());
-        self.ctx.observe(&mut items);
-        control.stamps.read(&items, at);
+        let changed = self.ctx.take(&mut items, at, None);
+        control.changed.extend(changed);
         let start = page * PAGE_SIZE;
         let mut diffs = Vec::new();
         for (offset, item) in items.into_iter().enumerate() {
@@ -557,8 +564,6 @@ impl Paged {
             diffs.push(VectorDiff::Set { index, value });
         }
         control.index.retain(|_, indices| !indices.is_empty());
-        let index = &control.index;
-        control.stamps.retain(|item| index.contains_key(item));
         control.pages[page] = Page::Loaded { stale: false };
         let _ = self.slots.change_many(diffs);
     }
@@ -578,9 +583,8 @@ impl Paged {
 }
 
 impl Live for Paged {
-    fn patch(&self, item: &ItemRef, state: &UserState, at: u64) {
-        let mut control = lock(&self.control);
-        control.stamps.patched(item, at);
+    fn patch(&self, item: &ItemRef, state: &UserState) {
+        let control = lock(&self.control);
         let Some(indices) = control.index.get(item) else {
             return;
         };
@@ -604,10 +608,16 @@ impl Live for Paged {
 
     fn dependents_changed(&self, items: &HashSet<ItemRef>) {
         // A list chosen by the user's marks (favourites, unplayed, ...) reads again on any mark: an item can join it as well as leave
-        // it (the owner's run, 2026-10-26: a new favourite did not show in the Favourites tab).
+        // it (the owner's run, 2026-10-26: a new favourite did not show in the Favourites tab). So does a list of what is below a
+        // marked item (a collection's films, a folder's items), which the server marked too.
         let reload = {
             let control = lock(&self.control);
             control.query.depends_on_marks()
+                || control
+                    .query
+                    .parent
+                    .as_ref()
+                    .is_some_and(|parent| items.contains(parent))
                 || items.iter().any(|item| control.index.contains_key(item))
         };
         if reload {
@@ -619,28 +629,8 @@ impl Live for Paged {
         Paged::refresh(self);
     }
 
-    fn find(&self, item: &ItemRef) -> Option<(u64, ItemSummary)> {
-        let control = lock(&self.control);
-        control
-            .index
-            .get(item)?
-            .iter()
-            .find_map(|index| match self.slots.get(*index) {
-                Some(Slot::Item(summary)) if &summary.item == item => Some(*summary),
-                _ => None,
-            })
-            .map(|summary| (control.stamps.of(item), summary))
-    }
-    fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
-        let _control = lock(&self.control);
-        self.slots
-            .snapshot()
-            .into_iter()
-            .filter_map(|slot| match slot {
-                Slot::Item(summary) if states::parents(&summary).contains(parent) => Some(*summary),
-                _ => None,
-            })
-            .collect()
+    fn holds(&self, held: &mut HashSet<ItemRef>) {
+        held.extend(lock(&self.control).index.keys().cloned());
     }
 }
 

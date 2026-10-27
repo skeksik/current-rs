@@ -11,7 +11,7 @@ use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 
 use super::search_filter::{SearchFilter, library_groups};
-use super::{Context, Live, LoadState, Stamps, below_in, find_in, lock, patch_list, sync_list};
+use super::{Context, Live, LoadState, lock, patch_list, sync_list};
 use crate::list::ObservableList;
 
 /// The Favourites tab's rows, in order (owner, 2026-10-27): films, series and episodes. Each row's header opens the whole list of its
@@ -73,8 +73,6 @@ async fn favourite_rows(client: Arc<JellyfinClient>) -> Result<Vec<SearchGroup>,
 
 struct Groups {
     lists: HashMap<String, Arc<ObservableList<ItemSummary>>>,
-    /// When the groups' copies were read or patched: every group is read at once.
-    stamps: Stamps,
 }
 
 struct Search {
@@ -128,7 +126,6 @@ impl SearchResults {
             groups: ObservableList::new(),
             lists: Mutex::new(Groups {
                 lists: HashMap::new(),
-                stamps: Stamps::default(),
             }),
             state: watch::Sender::new(LoadState::default()),
             task: Mutex::new(None),
@@ -179,10 +176,9 @@ impl Search {
                     let mut groups = lock(&search.lists);
                     let mut kinds = Vec::new();
                     let mut lists = HashMap::new();
-                    let mut stamps = Stamps::default();
+                    let mut changed = Vec::new();
                     for mut group in found {
-                        ctx.observe(&mut group.items);
-                        stamps.read(&group.items, at);
+                        changed.extend(ctx.take(&mut group.items, at, None));
                         let list = groups
                             .lists
                             .remove(group.kind.as_str())
@@ -192,8 +188,9 @@ impl Search {
                         kinds.push(group.kind);
                     }
                     groups.lists = lists;
-                    groups.stamps = stamps;
                     sync_list(&search.groups, kinds);
+                    drop(groups);
+                    ctx.spread(changed);
                     None
                 }
                 Err(error) => Some(error),
@@ -210,9 +207,8 @@ impl Search {
 }
 
 impl Live for Search {
-    fn patch(&self, item: &ItemRef, state: &UserState, at: u64) {
-        let mut groups = lock(&self.lists);
-        groups.stamps.patched(item, at);
+    fn patch(&self, item: &ItemRef, state: &UserState) {
+        let groups = lock(&self.lists);
         for list in groups.lists.values() {
             patch_list(list, item, state);
         }
@@ -230,20 +226,10 @@ impl Live for Search {
         self.load();
     }
 
-    fn find(&self, item: &ItemRef) -> Option<(u64, ItemSummary)> {
+    fn holds(&self, held: &mut HashSet<ItemRef>) {
         let groups = lock(&self.lists);
-        groups
-            .lists
-            .values()
-            .find_map(|list| find_in(list, item))
-            .map(|summary| (groups.stamps.of(item), summary))
-    }
-    fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
-        let groups = lock(&self.lists);
-        groups
-            .lists
-            .values()
-            .flat_map(|list| below_in(list, parent))
-            .collect()
+        for list in groups.lists.values() {
+            held.extend(list.snapshot().into_iter().map(|summary| summary.item));
+        }
     }
 }

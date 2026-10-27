@@ -67,8 +67,9 @@ impl std::fmt::Debug for NoticeKind {
 
 /// The changes wanted for one item.
 struct Pending {
-    /// The state the server confirmed last (or the lists showed before the first change).
-    server: UserState,
+    /// The state the server confirmed last, or the lists showed before the first change; `None` when no list held the item, so its
+    /// first change is sent whatever it asks for.
+    server: Option<UserState>,
     played: Option<bool>,
     favourite: Option<bool>,
     /// The item's name for a notice, as a list showed it when the change was wanted.
@@ -86,7 +87,7 @@ struct Pending {
 impl Pending {
     /// What the lists show: the server's state with the wanted changes.
     fn shown(&self) -> UserState {
-        let mut shown = self.server.clone();
+        let mut shown = self.server.clone().unwrap_or_default();
         if let Some(played) = self.played {
             set_played(&mut shown, played);
         }
@@ -165,8 +166,6 @@ pub(super) fn parents(summary: &ItemSummary) -> Vec<ItemRef> {
 
 /// How a request ended.
 pub(super) struct Answered {
-    /// What the lists show now.
-    pub(super) shown: UserState,
     /// On failure: the item's name for the notice, and why.
     pub(super) failure: Option<(Option<String>, AuthError)>,
     /// The lists depending on the item: its series and season.
@@ -176,7 +175,8 @@ pub(super) struct Answered {
 }
 
 /// Only the items with changes not yet confirmed are kept, and a count of the changes wanted per item: what an item shows otherwise
-/// is read from the live lists, so nothing here grows with what the session loaded, only with what the user marked.
+/// is the session's store's ([`super::store::ItemStore`], which grows with what the live lists hold), so nothing here grows with
+/// what the session loaded, only with what the user marked.
 #[derive(Default)]
 pub(super) struct ItemStates {
     inner: Mutex<Inner>,
@@ -258,6 +258,7 @@ struct Estimate {
 
 impl ItemStates {
     /// Gives `summary` the state of a change still pending for it, or for its series or season.
+    #[cfg(test)]
     pub(super) fn observe(&self, summary: &mut ItemSummary) {
         self.observe_under(summary, None);
     }
@@ -286,6 +287,18 @@ impl ItemStates {
             }
         }
         summary.user = inner.shown(&summary.item, &up, summary.user.clone());
+    }
+
+    /// What `summary` (with the store's state) shows, below `parent` if given, as [`ItemStates::observe_under`] gives it, without
+    /// keeping it for a rollback.
+    pub(super) fn view(&self, summary: &ItemSummary, parent: Option<&ItemRef>) -> UserState {
+        let mut up = parents(summary);
+        up.extend(parent.cloned());
+        let inner = lock(&self.inner);
+        if let Some(pending) = inner.pending.get(&summary.item) {
+            up.extend(pending.parents.iter().cloned());
+        }
+        inner.shown(&summary.item, &up, summary.user.clone())
     }
 
     /// Keeps `below` (an item below `item`, as a list shows it before `item`'s played change) for a rollback, unless one is kept.
@@ -349,10 +362,15 @@ impl ItemStates {
     pub(super) fn pending(&self, item: &ItemRef) -> Option<UserState> {
         let inner = lock(&self.inner);
         let pending = inner.pending.get(item)?;
-        Some(inner.shown(item, &pending.parents, pending.server.clone()))
+        Some(inner.shown(
+            item,
+            &pending.parents,
+            pending.server.clone().unwrap_or_default(),
+        ))
     }
 
     /// `state` (what a list or the server gave for `item`) as the lists show it: with the changes pending for it and its estimate.
+    #[cfg(test)]
     pub(super) fn shown(&self, item: &ItemRef, state: UserState) -> UserState {
         let inner = lock(&self.inner);
         let parents = inner
@@ -363,7 +381,7 @@ impl ItemStates {
         inner.shown(item, &parents, state)
     }
 
-    /// Records a wanted change; `shown` is the item as a live list shows it, if one does, and `parents` its series and season.
+    /// Records a wanted change; `shown` is the item as the lists show it, if a list holds it, and `parents` its series and season.
     /// Returns what the lists show now, and whether a sender must start (none runs for the item).
     pub(super) fn want(
         &self,
@@ -382,9 +400,7 @@ impl ItemStates {
             .pending
             .entry(item.clone())
             .or_insert_with(|| Pending {
-                server: shown
-                    .map(|summary| summary.user.clone())
-                    .unwrap_or_default(),
+                server: shown.map(|summary| summary.user.clone()),
                 played: None,
                 favourite: None,
                 name: shown.map(|summary| summary.name.clone()),
@@ -415,11 +431,14 @@ impl ItemStates {
     pub(super) fn next(&self, item: &ItemRef) -> Option<ItemAction> {
         let mut inner = lock(&self.inner);
         let action = inner.pending.get_mut(item).and_then(|pending| {
-            if pending.played == Some(pending.server.played) {
-                pending.played = None;
-            }
-            if pending.favourite == Some(pending.server.favourite) {
-                pending.favourite = None;
+            // Unknown to the store: what the server holds is not known, so the change is sent.
+            if let Some(server) = &pending.server {
+                if pending.played == Some(server.played) {
+                    pending.played = None;
+                }
+                if pending.favourite == Some(server.favourite) {
+                    pending.favourite = None;
+                }
             }
             pending
                 .played
@@ -444,21 +463,26 @@ impl ItemStates {
         // Only the sender removes an item's changes, so they are there while it waits.
         let Some(pending) = inner.pending.get_mut(item) else {
             return Answered {
-                shown: result.clone().unwrap_or_default(),
                 failure: result.err().map(|problem| (None, problem)),
                 parents: Vec::new(),
                 rolled_back: Vec::new(),
             };
         };
         let mut rolled_back = Vec::new();
+        // On a played change's success: an estimate made before it, of the item or of what is below it, is older than the server's
+        // answer.
+        let mut superseded = None;
         let failure = match result {
             Ok(state) => {
-                pending.server = state;
+                pending.server = Some(state);
                 // The server marked everything below as well: a later failure rolls back to that.
                 if let ItemAction::SetPlayed(played) = action {
                     for below in pending.below.values_mut() {
                         set_played(&mut below.user, played);
                     }
+                    let mut done: HashSet<ItemRef> = pending.below.keys().cloned().collect();
+                    done.insert(item.clone());
+                    superseded = Some((pending.played_seq, done));
                 }
                 None
             }
@@ -474,9 +498,12 @@ impl ItemStates {
             }
         };
         let parents = pending.parents.clone();
-        let server = pending.server.clone();
+        if let Some((seq, done)) = superseded {
+            inner
+                .estimates
+                .retain(|estimated, estimate| estimate.seq > seq || !done.contains(estimated));
+        }
         Answered {
-            shown: inner.shown(item, &parents, server),
             failure,
             parents,
             rolled_back,
@@ -538,8 +565,12 @@ mod tests {
                     .1
             );
         }
-        let answered = states.answered(&item("a"), ItemAction::SetPlayed(true), Ok(played(true)));
-        assert!(!answered.shown.played, "the last wish still shows");
+        states.answered(&item("a"), ItemAction::SetPlayed(true), Ok(played(true)));
+        assert_eq!(
+            states.pending(&item("a")).map(|state| state.played),
+            Some(false),
+            "the last wish still shows"
+        );
         assert_eq!(states.next(&item("a")), Some(ItemAction::SetPlayed(false)));
         states.answered(&item("a"), ItemAction::SetPlayed(false), Ok(played(false)));
         assert_eq!(states.next(&item("a")), None);
@@ -585,7 +616,10 @@ mod tests {
             ItemAction::SetPlayed(true),
             Err(AuthError::NotSignedIn),
         );
-        assert!(!answered.shown.played);
+        assert_eq!(
+            states.pending(&item("a")).map(|state| state.played),
+            Some(false)
+        );
         assert_eq!(
             answered.failure,
             Some((Some("Example Film".into()), AuthError::NotSignedIn))

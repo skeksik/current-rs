@@ -9,7 +9,7 @@ use current_model::{ItemDetails, ItemRef, ItemSummary, MediaKind, PlayTarget, Us
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
-use super::{Context, Live, Stamps, below_in, find_in, lock, patch_list, states, sync_list};
+use super::{Context, Live, lock, patch_list, states, sync_list};
 use crate::list::ObservableList;
 
 /// How many similar items a detail page shows.
@@ -34,8 +34,8 @@ struct Details {
     similar: Arc<ObservableList<ItemSummary>>,
     /// The season whose episodes show; the first season until the user picks one.
     season: Mutex<Option<ItemRef>>,
-    /// Guards changes to the lists, and holds when the page's copies were read or patched.
-    lists: Mutex<Stamps>,
+    /// Guards changes to the lists.
+    lists: Mutex<()>,
     task: Mutex<Option<AbortHandle>>,
     me: Weak<Details>,
 }
@@ -72,7 +72,7 @@ impl DetailsView {
             episodes: ObservableList::new(),
             similar: ObservableList::new(),
             season: Mutex::new(None),
-            lists: Mutex::new(Stamps::default()),
+            lists: Mutex::new(()),
             task: Mutex::new(None),
             me: me.clone(),
         });
@@ -177,15 +177,24 @@ impl Details {
                         return;
                     };
                     // Under the guard that patches take, so a patch is never overwritten by an older state.
-                    let mut stamps = lock(&page.lists);
+                    let guard = lock(&page.lists);
+                    let mut changed = Vec::new();
                     match details {
                         Ok(mut details) => {
-                            page.ctx.states.observe(&mut details.summary);
+                            changed.extend(page.ctx.take(
+                                std::slice::from_mut(&mut details.summary),
+                                at,
+                                None,
+                            ));
                             let play = if details.summary.kind == MediaKind::SERIES {
                                 next.map(|episode| {
                                     episode
                                         .map(|mut episode| {
-                                            page.ctx.states.observe(&mut episode);
+                                            changed.extend(page.ctx.take(
+                                                std::slice::from_mut(&mut episode),
+                                                at,
+                                                None,
+                                            ));
                                             episode
                                         })
                                         .as_ref()
@@ -197,31 +206,27 @@ impl Details {
                             if let Some(play) = play {
                                 page.play.send_replace(play);
                             }
-                            stamps.read([&details.summary], at);
                             page.details.send_replace(Some(details));
                         }
                         Err(error) => failures.insert(0, error),
                     }
                     match similar {
                         Ok(mut similar) => {
-                            page.ctx.observe(&mut similar);
-                            stamps.read(&similar, at);
+                            changed.extend(page.ctx.take(&mut similar, at, None));
                             sync_list(&page.similar, similar);
                         }
                         Err(error) => failures.push(error),
                     }
                     if let Some((mut seasons, mut episodes)) = lists {
-                        // A season names no series: a played change pending for this one shows on it too.
-                        for season in &mut seasons {
-                            page.ctx.states.observe_under(season, Some(&page.item));
-                        }
-                        page.ctx.observe(&mut episodes);
-                        stamps.read(seasons.iter().chain(&episodes), at);
+                        // A season names no series: the store keeps it from this page, and a played change pending for the series
+                        // shows on it too.
+                        changed.extend(page.ctx.take(&mut seasons, at, Some(&page.item)));
+                        changed.extend(page.ctx.take(&mut episodes, at, None));
                         sync_list(&page.seasons, seasons);
                         sync_list(&page.episodes, episodes);
                     }
-                    let shown = page.shown();
-                    stamps.retain(|item| shown.contains(item));
+                    drop(guard);
+                    page.ctx.spread(changed);
                 }
                 Err(error) => failures.push(error),
             }
@@ -246,19 +251,24 @@ impl Details {
             .borrow()
             .as_ref()
             .map(|details| details.summary.item.clone());
+        let play = self
+            .play
+            .borrow()
+            .as_ref()
+            .map(|target| target.item.item.clone());
         [&self.seasons, &self.episodes, &self.similar]
             .into_iter()
             .flat_map(|list| list.snapshot())
             .map(|summary| summary.item)
             .chain(details)
+            .chain(play)
             .collect()
     }
 }
 
 impl Live for Details {
-    fn patch(&self, item: &ItemRef, state: &UserState, at: u64) {
-        let mut stamps = lock(&self.lists);
-        stamps.patched(item, at);
+    fn patch(&self, item: &ItemRef, state: &UserState) {
+        let _guard = lock(&self.lists);
         // The Play button follows its item's marks: a new resume point, or played. A series' next episode marked played is no longer
         // its next: the series is among the dependents, whose reload a second later asks for the next one (`dependents_changed`).
         self.play.send_if_modified(|play| match play {
@@ -307,39 +317,8 @@ impl Live for Details {
         self.load();
     }
 
-    fn find(&self, item: &ItemRef) -> Option<(u64, ItemSummary)> {
-        let stamps = lock(&self.lists);
-        if let Some(details) = self.details.borrow().as_ref()
-            && &details.summary.item == item
-        {
-            return Some((stamps.of(item), details.summary.clone()));
-        }
-        [&self.seasons, &self.episodes, &self.similar]
-            .into_iter()
-            .find_map(|list| find_in(list, item))
-            .map(|summary| (stamps.of(item), summary))
-    }
-
-    fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
+    fn holds(&self, held: &mut HashSet<ItemRef>) {
         let _guard = lock(&self.lists);
-        let mut below = Vec::new();
-        if let Some(details) = self.details.borrow().as_ref()
-            && states::parents(&details.summary).contains(parent)
-        {
-            below.push(details.summary.clone());
-        }
-        // This series' seasons.
-        if parent == &self.item {
-            below.extend(self.seasons.snapshot());
-        }
-        for list in [&self.episodes, &self.similar] {
-            below.extend(below_in(list, parent));
-        }
-        below
-    }
-
-    fn parent_of(&self, item: &ItemRef) -> Option<ItemRef> {
-        let _guard = lock(&self.lists);
-        find_in(&self.seasons, item).map(|_| self.item.clone())
+        held.extend(self.shown());
     }
 }
