@@ -113,6 +113,7 @@ jellyfin/jellyfin v12.2 (commit ca0f16eb), read 2026-10-27; `master` (02c2951e, 
   values were chosen from testing to improve low bitrate streams"); `GetBitDepthCompensatedBitrate` raises it for a source above
   8 bits; `ScaleBitrate` for the codecs; then "If a max bitrate was requested, don't let the scaled bitrate exceed it". So the
   encoded bitrate is the video share unless a small source's own is below it.
+  It also caps the result at 400 Mbit/s ("const int MaxSaneBitrate = 400_000_000;"), far above every step, so it is not modelled.
 - **Codec factor and low-bitrate boost** (`EncodingHelper.ScaleBitrate`, `GetVideoBitrateScaleFactor`): "hevc & vp9 - 40% more
   efficient than h.264" (0.6), "av1 - 50% more efficient than h.264" (0.5); "Don't scale the real bitrate lower than the requested
   bitrate" (`Math.Max(outputScaleFactor / inputScaleFactor, 1)`); at least ×4 up to 500 kbit/s, ×3 up to 1 Mbit/s, ×2.5 up to 2,
