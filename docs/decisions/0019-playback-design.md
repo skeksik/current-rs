@@ -4,7 +4,7 @@ Status: accepted when its PR merges; open choices decided by the owner 2026-10-2
 spike. Amended 2026-10-26 (ADR 0020): gateway streams go through the loopback relay; see "Gateways, tokens and the player".
 Amended 2026-10-27 (owner, fix/windows-ui-polish): choice 10's quality menu and a preferred quality in place of remembering; see
 "Decided by the owner", choice 10.
-Proposed amendment, for the owner (feat/quality-names-per-file): choice 10's "Names", the steps named by what the server will send
+Amended 2026-10-27 (owner, feat/quality-names-per-file): choice 10's "Names", the steps named by what the server will send
 for this file.
 Research, quotes and sources: `docs/notes/playback.md`. No code was written.
 
@@ -283,7 +283,7 @@ address without a gateway, which has none to pass.
       1 Mbit/s**. Only steps below the source's bitrate are listed: a step at or above it changes nothing.
       **Amended 2026-10-27 (owner):** the steps are **40, 20, 10, 4 and 1 Mbit/s** (4K, 1440p, 1080p, 720p and 480p at 30 fps
       without a file); a stored preferred 10 Mbit/s is listed as it is.
-    - **Names** (*proposed amendment, for the owner*, feat/quality-names-per-file): each step is named by the resolution Jellyfin
+    - **Names** (amended 2026-10-27, owner, feat/quality-names-per-file): each step is named by the resolution Jellyfin
       would send for this file, reproducing the server's rules (jellyfin/jellyfin v12.2, ca0f16eb, and master, read 2026-10-27;
       quotes in `docs/notes/playback.md`, "How the server names a step"): the audio share it sets aside (the chosen track's bitrate,
       else its default by codec, capped by the step), the 64 kbit/s floor for the video, the cap at a small source's raised video

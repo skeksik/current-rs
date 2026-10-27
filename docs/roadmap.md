@@ -253,7 +253,7 @@ Fix and polish:
       plugin, the 60 s stall timeout on a real stall; remux and the gateways were checked in the relay check (PR 81)
 - [x] Quality menu named by what the server will send for this file: model its bitrate rules in the core (audio share, codec, frame
       rate, low-bitrate boost; the Windows UI pass's research); the names assumed H.264 at 30 fps before (ADR 0019 choice 10,
-      "Names", proposed amendment for the owner)
+      "Names", amended 2026-10-27 by the owner)
 - [ ] AV1 as a transcoding target where the server has an AV1 encoder (the device profile asks `hevc,h264` today; ADR 0019)
 - [ ] MPEG-4 Part 2 (DivX, Xvid) in the engine's codec table, so it plays directly instead of being converted (a device profile change;
       the supported formats page shows "Server converts" today, ADR 0021)
