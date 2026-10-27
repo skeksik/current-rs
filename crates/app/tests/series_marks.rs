@@ -555,3 +555,84 @@ async fn a_failed_read_back_keeps_the_estimate_without_a_notice() {
     assert_eq!(lists.latest_series().unwrap().user.unplayed_count, Some(1));
     assert!(!notices.has_changed().unwrap(), "no notice");
 }
+
+/// Case 6 after the episode's own mark (the owner's run, 2026-10-27): an episode marked played from its page, then its series
+/// marked played and unmarked, shows unplayed on its page and to its Played button, after the reloads, after Back to the page and
+/// after a refresh.
+#[tokio::test]
+async fn an_episode_marked_on_its_own_follows_its_series_unmarked() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    let first = lists.item(EPISODE_IDS[0]);
+    let played = |page: &DetailsView| {
+        page.details()
+            .borrow()
+            .as_ref()
+            .map(|details| details.summary.user.played)
+    };
+    let button = || lists.browse.user_state(&first).map(|state| state.played);
+
+    lists.toggle(EPISODE_IDS[0]);
+    settle().await;
+    assert_eq!((played(&lists.episode), button()), (Some(true), Some(true)));
+    lists.toggle(SERIES_ID);
+    settle().await;
+    assert!(lists.series_played(true) && lists.episodes_played(true));
+    lists.toggle(SERIES_ID);
+    settle().await;
+    assert!(lists.series_played(false) && lists.episodes_played(false));
+    assert_eq!(played(&lists.episode), Some(false), "the episode's page");
+    assert_eq!(button(), Some(false), "what its Played button reads");
+
+    // Back to the page: a new page of it.
+    let back = lists.browse.details(&first);
+    eventually("the page again", || played(&back).is_some()).await;
+    assert_eq!(played(&back), Some(false));
+    assert_eq!(button(), Some(false), "after Back");
+    back.refresh();
+    settle().await;
+    assert_eq!(
+        (played(&back), button()),
+        (Some(false), Some(false)),
+        "after a refresh"
+    );
+
+    // The button sends what it shows: one press marks the episode played again.
+    lists.toggle(EPISODE_IDS[0]);
+    assert_eq!(button(), Some(true));
+}
+
+/// The same sequence against a slow server (the owner's run, 2026-10-27): each answer read when its request arrives and sent later,
+/// the marks 1.5 s apart, so answers and reloads overlap the next mark.
+#[tokio::test]
+async fn an_episode_marked_on_its_own_follows_its_series_on_a_slow_server() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    stand_in.set_latency(Duration::from_millis(600));
+    let first = lists.item(EPISODE_IDS[0]);
+    let gap = Duration::from_millis(1500);
+    lists.toggle(EPISODE_IDS[0]);
+    tokio::time::sleep(gap).await;
+    lists.toggle(SERIES_ID);
+    tokio::time::sleep(gap).await;
+    lists.toggle(SERIES_ID);
+    eventually("the episode unplayed everywhere", || {
+        lists.episodes_played(false)
+            && lists
+                .browse
+                .user_state(&first)
+                .is_some_and(|state| !state.played)
+    })
+    .await;
+    // After the reloads too.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(lists.episodes_played(false));
+    assert_eq!(
+        lists.browse.user_state(&first).map(|state| state.played),
+        Some(false)
+    );
+    let series = format!("/UserPlayedItems/{SERIES_ID}");
+    assert_eq!(stand_in.count(&series), 2, "one mark and one unmark");
+}

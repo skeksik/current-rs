@@ -258,6 +258,8 @@ struct State {
     cuts: Mutex<HashMap<String, usize>>,
     /// Stream bodies go out in pieces of at most this many bytes, one per [`PACE_TICK`]; 0 sends them at once.
     pace: AtomicUsize,
+    /// How long every JSON answer waits, in milliseconds, after it was read from the state on arrival: a slow server.
+    latency: AtomicUsize,
     /// Stream answers still being sent: their connection is open.
     open_streams: AtomicUsize,
     /// The path [`TRANSCODE_ITEM`]'s `TranscodingUrl` names, over [`master_playlist_path`].
@@ -452,6 +454,13 @@ impl Controls {
             piece.max(usize::from(bytes_per_second > 0)),
             Ordering::SeqCst,
         );
+    }
+
+    /// Every JSON answer is read from the state when its request arrives and sent `latency` later, as a slow server's would be.
+    pub fn set_latency(&self, latency: Duration) {
+        self.state
+            .latency
+            .store(latency.as_millis() as usize, Ordering::SeqCst);
     }
 
     /// How many stream answers are still being sent: each holds a connection open.
@@ -733,6 +742,10 @@ async fn serve(mut socket: TcpStream, state: Arc<State>, door: usize) {
         }
         None => {
             let (status, body) = answer(&state, &received);
+            let latency = state.latency.load(Ordering::SeqCst);
+            if latency > 0 {
+                tokio::time::sleep(Duration::from_millis(latency as u64)).await;
+            }
             format!(
                 "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len()
