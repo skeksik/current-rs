@@ -291,7 +291,8 @@ public sealed partial class HomePage : Page, IRefreshable
         }
         else if (row.View is { } view && _sections.FirstOrDefault(section => section.Rows.Contains(row)) is { } owner)
         {
-            Frame.Navigate(typeof(LibraryPage), new ViewArgs(owner.Server, view));
+            var args = new ViewArgs(owner.Server, view);
+            Frame.Navigate(args.Page, args);
         }
     }
 

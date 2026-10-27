@@ -44,7 +44,27 @@
                                             <TextBlock
                                                 Style="{StaticResource SectionHeaderTextBlockStyle}"
                                                 AutomationProperties.HeadingLevel="Level3"
-                                                Text="{x:Bind Title}" />
+                                                Text="{x:Bind Title}"
+                                                Visibility="{x:Bind HeaderTextVisibility}" />
+                                            <!-- A Favourites row's header links to that kind's whole list, as Home's row headers do
+                                                 (HomePage.xaml, where the margin and glyph are sourced). -->
+                                            <HyperlinkButton
+                                                Margin="-11,7,0,2"
+                                                Tag="{x:Bind}"
+                                                ToolTipService.ToolTip="{x:Bind HeaderLinkTip}"
+                                                Click="OnRowHeader"
+                                                AutomationProperties.HeadingLevel="Level3"
+                                                AutomationProperties.Name="{x:Bind Title}"
+                                                Visibility="{x:Bind HeaderLinkVisibility}">
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <TextBlock
+                                                        Style="{StaticResource SubtitleTextBlockStyle}"
+                                                        TextTrimming="CharacterEllipsis"
+                                                        TextWrapping="NoWrap"
+                                                        Text="{x:Bind Title}" />
+                                                    <FontIcon VerticalAlignment="Center" FontSize="16" Glyph="&#xE76C;" />
+                                                </StackPanel>
+                                            </HyperlinkButton>
                                             <!-- The bottom padding keeps the scroll bar off the tiles: with the 4 each item has below it, 20, the bar's
                                                  16 (ScrollBarSize, generic.xaml of Microsoft.WindowsAppSDK.WinUI 2.3.9) and a 4 gap as on Home (owner's run,
                                                  2026-10-26). -->

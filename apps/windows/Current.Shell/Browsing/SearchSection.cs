@@ -16,9 +16,11 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
     private readonly ListSubscription<string> _groups;
     private readonly ValueSubscription<LoadState> _state;
 
-    internal SearchSection(string header, SearchResults results, IUiDispatcher ui)
+    /// <param name="link">The view a row's header opens with the row's kind (the Favourites tab's rows); null for a search.</param>
+    internal SearchSection(string header, SearchResults results, IUiDispatcher ui, string? link = null)
     {
         Header = header;
+        _link = link;
         _results = results;
         _ui = ui;
         _groups = results.ObserveGroups(ui);
@@ -31,6 +33,8 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public string Header { get; }
+
+    private readonly string? _link;
 
     public Visibility HeaderVisibility => Header.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
@@ -59,7 +63,12 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
                 {
                     continue;
                 }
-                existing = new TileRow(kind, BrowseText.KindGroup(kind), items, kind is "episode" or "video");
+                existing = new TileRow(kind, BrowseText.KindGroup(kind), items, kind is "episode" or "video")
+                {
+                    View = _link,
+                    Kind = _link is null ? null : kind,
+                    HeaderLinkTip = _link is null ? "" : BrowseText.ViewLinkTip(_link, kind),
+                };
                 Rows.Insert(position, existing);
             }
             else if (Rows.IndexOf(existing) != position)

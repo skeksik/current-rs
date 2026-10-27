@@ -85,14 +85,16 @@ internal static class BrowseText
     };
 
     /// <summary>A view tab's title, as its pane item names it.</summary>
-    public static string ViewTitle(string view) => view switch
+    public static string ViewTitle(string view, string? kind = null) => (view, kind) switch
     {
-        Pages.ViewArgs.Favourites => "Favourites",
+        (Pages.ViewArgs.Favourites, _) => "Favourites",
+        (Pages.ViewArgs.Everything, { } every) => KindGroup(every),
         _ => "Recently added",
     };
 
-    /// <summary>A row header's tooltip when it opens a view tab.</summary>
-    public static string ViewLinkTip(string view) => $"Open {ViewTitle(view)}";
+    /// <summary>A row header's tooltip when it opens a view tab, or a kind's page (a Favourites row's, with its favourites ticked).</summary>
+    public static string ViewLinkTip(string view, string? kind = null) =>
+        view == Pages.ViewArgs.Everything ? $"Open {ViewTitle(view, kind)}, favourites ticked" : $"Open {ViewTitle(view, kind)}";
 
     /// <summary>A Latest row header's tooltip: where the link goes.</summary>
     public static string RecentlyAddedLinkTip(HomeRow row) =>

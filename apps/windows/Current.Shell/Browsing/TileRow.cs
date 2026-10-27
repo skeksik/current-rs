@@ -23,6 +23,9 @@ public sealed class TileRow(string key, string title, ListSubscription<ItemSumma
     /// <summary>The view tab a row across every library opens from its header (<see cref="Pages.ViewArgs"/>); null for none.</summary>
     public string? View { get; init; }
 
+    /// <summary>The media kind of that view the header opens (a Favourites row's), or null for the whole view.</summary>
+    public string? Kind { get; init; }
+
     /// <summary>Where the header link goes: the library's name and its order (BrowseText.LibraryLinkTip).</summary>
     public string HeaderLinkTip { get; init; } = "";
 

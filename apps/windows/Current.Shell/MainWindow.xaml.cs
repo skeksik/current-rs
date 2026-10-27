@@ -482,7 +482,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         }
         else if (args.InvokedItemContainer?.Tag is ViewArgs view)
         {
-            Navigate(typeof(LibraryPage), args.RecommendedNavigationTransitionInfo, view);
+            Navigate(view.Page, args.RecommendedNavigationTransitionInfo, view);
         }
         else if (args.InvokedItemContainer?.Tag is LibraryArgs library)
         {
@@ -1050,6 +1050,14 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         {
             return;
         }
+        // A view's page selects its tab: the Favourites tab's rows (on the search page) and one kind's whole list of it alike.
+        if (_shownParameter is ViewArgs shownView)
+        {
+            var tab = shownView with { Kind = null };
+            NavView.SelectedItem = new[] { FavouritesItem, RecentItem }.Concat(_libraryItems.OfType<NavigationViewItem>())
+                .FirstOrDefault(item => item.Visibility == Visibility.Visible && Equals(item.Tag, tab));
+            return;
+        }
         if (ContentFrame.SourcePageType == typeof(SearchPage))
         {
             NavView.SelectedItem = null;
@@ -1057,11 +1065,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         }
         if (ContentFrame.SourcePageType == typeof(LibraryPage))
         {
-            NavView.SelectedItem = _shownParameter is ViewArgs
-                ? new[] { FavouritesItem, RecentItem }.Concat(_libraryItems.OfType<NavigationViewItem>())
-                    .FirstOrDefault(item => item.Visibility == Visibility.Visible && Equals(item.Tag, _shownParameter))
-                : _libraryItems.OfType<NavigationViewItem>()
-                    .FirstOrDefault(item => item.Tag is LibraryArgs library && library.Shows(_shownParameter));
+            NavView.SelectedItem = _libraryItems.OfType<NavigationViewItem>()
+                .FirstOrDefault(item => item.Tag is LibraryArgs library && library.Shows(_shownParameter));
             return;
         }
         // Each page shows its own title (App.xaml, PageTitleTextBlockStyle); the navigation view's header is not used.

@@ -215,8 +215,11 @@ internal sealed class ServerBrowse : IDisposable
     /// <summary>Libraries that left the list in this session; one listed again leaves this set.</summary>
     private readonly HashSet<ItemRef> _gone = [];
 
+    private readonly IUiDispatcher _ui;
+
     public ServerBrowse(ServerRef server, ulong? sessionNumber, Browse session, IUiDispatcher ui)
     {
+        _ui = ui;
         Server = server;
         SessionNumber = sessionNumber;
         Session = session;
@@ -289,18 +292,24 @@ internal sealed class ServerBrowse : IDisposable
     /// The grid of a view across every library (<see cref="Pages.ViewArgs"/>): the Favorites or Recently added tab, opened on first use
     /// and kept as a library's grid is.
     /// </summary>
-    public LibraryGrid View(string view)
+    public LibraryGrid View(string view, string? kind = null)
     {
-        if (!_views.TryGetValue(view, out var grid))
+        var key = kind is null ? view : $"{view}/{kind}";
+        if (!_views.TryGetValue(key, out var grid))
         {
-            var query = Pages.ViewArgs.Query(view, null);
+            var query = Pages.ViewArgs.Query(view, kind);
             grid = new LibraryGrid(Session.OpenItems(query), query);
-            _views[view] = grid;
+            _views[key] = grid;
         }
         return grid;
     }
 
     private readonly Dictionary<string, LibraryGrid> _views = [];
+
+    /// <summary>The Favourites tab's rows, a row per media kind (the core's), opened on first use and kept, as Home is.</summary>
+    public SearchSection Favourites => _favourites ??= new SearchSection("", Session.Favourites(), _ui, Pages.ViewArgs.Everything);
+
+    private SearchSection? _favourites;
 
     /// <summary>Home's rows of this server, opened on first use and kept, as the grids are, so Home shows again without reloading.</summary>
     public HomeFeed Home => _home ??= Session.Home();
@@ -374,6 +383,8 @@ internal sealed class ServerBrowse : IDisposable
         _details.Clear();
         _home?.Dispose();
         _home = null;
+        _favourites?.Dispose();
+        _favourites = null;
         foreach (var grid in _grids.Values.Concat(_views.Values))
         {
             grid.Retire();
@@ -424,6 +435,9 @@ internal sealed class LibraryGrid(PagedItems items, ItemQuery query)
     }
 
     public ItemQuery Query { get; set; } = query;
+
+    /// <summary>While the grid searches, the query it showed before, which the search starts from and clearing the box gives back.</summary>
+    public ItemQuery? Browsing { get; set; }
 
     /// <summary>The View menu's choices: wide tiles instead of posters, and the title and year under each picture.</summary>
     public bool Wide { get; set; }

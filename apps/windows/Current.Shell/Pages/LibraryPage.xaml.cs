@@ -24,6 +24,9 @@ public sealed partial class LibraryPage : Page, IRefreshable
 
     private static readonly IReadOnlyList<string?> Filters = ItemQuery.FilterChoices;
 
+    /// <summary>The filters ticked on or off beside that choice (ItemQuery.ToggleFilterChoices): favourites.</summary>
+    private static readonly IReadOnlyList<string> Toggles = ItemQuery.ToggleFilterChoices;
+
     /// <summary>A sort's name in the menu; a key Current has no name for shows as the core gave it.</summary>
     private static string SortName(string key) => key switch
     {
@@ -83,6 +86,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
     /// <summary>The view across every library shown (<see cref="ViewArgs"/>), or null for a library.</summary>
     private string? _view;
 
+
     /// <summary>
     /// The Filter menu's media types, for a view across every library (owner, 2026-10-26): every type, then the core's kinds, before
     /// the menu's filters and a separator. Glyphs: Segoe Fluent Icons E8A9 "ViewAll", E8B2 "Movies" and E7F4 "TVMonitor", the films
@@ -136,11 +140,11 @@ public sealed partial class LibraryPage : Page, IRefreshable
         }
     }
 
-    /// <summary>Shows the Filter menu's played and favourite filters, or hides them with the separator before them.</summary>
+    /// <summary>Shows the Filter menu's played choice and favourites tick, or hides them with the separator before them.</summary>
     private void ShowFilterItems(bool show)
     {
         var visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var item in _filterItems)
+        foreach (var item in _filterItems.Concat<MenuFlyoutItemBase>(_toggleItems.Select(toggle => toggle.Item)).Append(_toggleSeparator))
         {
             item.Visibility = visibility;
         }
@@ -166,6 +170,10 @@ public sealed partial class LibraryPage : Page, IRefreshable
     private readonly List<RadioMenuFlyoutItem> _orderItems = [];
     private readonly List<RadioMenuFlyoutItem> _filterItems = [];
 
+    /// <summary>The Filter menu's ticks after the played choice (owner, 2026-10-27), and the separator between them.</summary>
+    private readonly List<(ToggleMenuFlyoutItem Item, string Filter)> _toggleItems = [];
+    private readonly MenuFlyoutSeparator _toggleSeparator = new();
+
     public LibraryPage()
     {
         InitializeComponent();
@@ -188,8 +196,22 @@ public sealed partial class LibraryPage : Page, IRefreshable
         foreach (var filter in Filters)
         {
             var item = MenuItem(FilterName(filter), FilterGlyph(filter), "filter");
-            item.Click += (_, _) => Choose(query => query with { Filters = filter is null ? [] : [filter] });
+            item.Click += (_, _) => Choose(query => query.WithFilter(filter));
             _filterItems.Add(item);
+            FilterMenu.Items.Add(item);
+        }
+        // Favourites as a tick of their own, on or off whatever the choice above: a ToggleMenuFlyoutItem, "Switching an option on or
+        // off" ("Menu flyout and menu bar", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-27).
+        FilterMenu.Items.Add(_toggleSeparator);
+        foreach (var toggle in Toggles)
+        {
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = FilterName(toggle),
+                Icon = FilterGlyph(toggle) is { } glyph ? new FontIcon { Glyph = glyph } : null,
+            };
+            item.Click += (_, _) => Choose(query => query.WithToggle(toggle, item.IsChecked));
+            _toggleItems.Add((item, toggle));
             FilterMenu.Items.Add(item);
         }
         ItemActions.Attach(Items, item => Frame.Navigate(typeof(DetailsPage), new DetailsArgs(item.Item)));
@@ -239,7 +261,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
                 first = first with { Sort = [sort.Key], Order = sort.Order };
             }
             // Only filters the menu still offers: one remembered from an older version is dropped.
-            if (remembered?.Filters is { } filters && filters.All(filter => Filters.Contains(filter)))
+            if (remembered?.Filters is { } filters && filters.All(filter => Filters.Contains(filter) || Toggles.Contains(filter)))
             {
                 first = first with { Filters = filters };
             }
@@ -283,21 +305,22 @@ public sealed partial class LibraryPage : Page, IRefreshable
             EmptyText.Visibility = Visibility.Visible;
             return;
         }
-        var title = BrowseText.ViewTitle(view.View);
+        var title = BrowseText.ViewTitle(view.View, view.Kind);
         TitleText.Text = title;
         _view = view.View;
-        ShowKindItems(true);
-        // Favourites are already a filter: its menu narrows by media type only (owner, 2026-10-26).
-        ShowFilterItems(view.View != ViewArgs.Favourites);
+        // A Favourites row's header opens its kind's page with the favourites tick on (owner, 2026-10-27).
+        var first = view.Favourite && view.Kind is { } favouriteKind ? ItemQuery.Favourites(favouriteKind) : ViewArgs.Query(view.View, view.Kind);
+        // Recently added narrows by media type in its Filter menu; a kind's page is one type already.
+        ShowKindItems(view.Kind is null);
+        ShowFilterItems(true);
         ShowSearchName(title);
-        _grid = server.View(view.View);
+        _grid = server.View(view.View, view.Kind);
         _grid.Bind();
         if (mode is not (NavigationMode.Back or NavigationMode.Forward))
         {
             _grid.FirstVisible = 0;
             _grid.Wide = false;
             _grid.ShowsTitles = true;
-            var first = ViewArgs.Query(view.View, null);
             if (!SameChoices(_grid.Query, first))
             {
                 _grid.Query = first;
@@ -397,9 +420,10 @@ public sealed partial class LibraryPage : Page, IRefreshable
             return;
         }
         LoadingRing.IsActive = state.Loading && state.Total == 0;
-        CountText.Text = state.Total > 0
+        // A search that fills the server's window says so instead of a count that would only be the window's size (the core decides).
+        CountText.Text = _grid?.Query.SearchNote(state.Total) ?? (state.Total > 0
             ? (state.Total == 1 ? "1 item" : $"{state.Total.ToString("N0", System.Globalization.CultureInfo.CurrentCulture)} items")
-            : "";
+            : "");
         EmptyText.Visibility = !state.Loading && state.Total == 0 && state.Failed is null ? Visibility.Visible : Visibility.Collapsed;
         if (state.Failed is { } failed)
         {
@@ -438,7 +462,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
             LibrarySearch.Text = query.SearchTerm ?? "";
         }
         var sort = Math.Max(0, Sorts.ToList().FindIndex(sort => query.Sort.FirstOrDefault() == sort.Key));
-        var filter = Math.Max(0, Filters.ToList().IndexOf(query.Filters.FirstOrDefault()));
+        var filter = Math.Max(0, Filters.ToList().IndexOf(query.Filters.FirstOrDefault(Filters.Contains)));
         for (var i = 0; i < _sortItems.Count; i++)
         {
             _sortItems[i].IsChecked = i == sort;
@@ -449,12 +473,31 @@ public sealed partial class LibraryPage : Page, IRefreshable
         {
             _filterItems[i].IsChecked = i == filter;
         }
+        foreach (var (item, toggle) in _toggleItems)
+        {
+            item.IsChecked = query.Filters.Contains(toggle);
+        }
         // A view narrowed to one kind lists that kind only; otherwise it is every type.
         var single = query.Kinds.Count == 1 ? query.Kinds[0] : null;
         foreach (var (item, kind) in _kindItems)
         {
             item.IsChecked = kind == single;
         }
+        // While it searches the results come by relevance, unfiltered: Sort and Filter are off, and say why (the core decides).
+        var tools = query.Tools();
+        ShowTool(SortButton, SortTip, tools.SortAvailable, tools.SortTooltip ?? "Sort");
+        ShowTool(FilterButton, FilterTip, tools.FilterAvailable, tools.FilterTooltip ?? "Filter");
+    }
+
+    /// <summary>
+    /// A command button on or off, its tooltip on the area around it: a disabled control gets no pointer input, so its own tooltip would
+    /// not show (not verified in the docs; seen in the app, 2026-10-27). Narrator reads the reason as the button's help text.
+    /// </summary>
+    private static void ShowTool(Control button, FrameworkElement area, bool available, string tip)
+    {
+        button.IsEnabled = available;
+        ToolTipService.SetToolTip(area, tip);
+        AutomationProperties.SetHelpText(button, available ? "" : tip);
     }
 
     /// <summary>Whether two queries sort and filter alike (the records compare their lists by reference).</summary>
@@ -511,14 +554,19 @@ public sealed partial class LibraryPage : Page, IRefreshable
         Search(args.QueryText);
     }
 
-    /// <summary>The grid searching for <paramref name="text"/> (the core's rule: trimmed, none when blank), from the top.</summary>
+    /// <summary>
+    /// The grid searching for <paramref name="text"/> from the query it showed before searching (the core's rule: trimmed, by relevance,
+    /// no filter; that query back when blank), from the top.
+    /// </summary>
     private void Search(string text)
     {
         if (_grid is null)
         {
             return;
         }
-        var query = _grid.Query.Searching(text);
+        var browsing = _grid.Browsing ?? _grid.Query;
+        var query = browsing.Searching(text);
+        _grid.Browsing = query.SearchTerm is null ? null : browsing;
         if (SameChoices(query, _grid.Query))
         {
             return;
@@ -526,6 +574,8 @@ public sealed partial class LibraryPage : Page, IRefreshable
         _grid.Query = query;
         _grid.FirstVisible = 0;
         _grid.Items.SetQuery(query);
+        ShowQuery(query);
+        ShowState();
     }
 
     private void OnFindAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs e) =>

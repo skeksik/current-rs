@@ -47,18 +47,24 @@
                     QueryIcon="Find"
                     TextChanged="OnSearchTextChanged"
                     QuerySubmitted="OnSearchSubmitted" />
-                <DropDownButton x:Name="SortButton" AutomationProperties.Name="Sort" ToolTipService.ToolTip="Sort">
-                    <FontIcon Glyph="&#xE8CB;" FontSize="16" />
-                    <DropDownButton.Flyout>
-                        <MenuFlyout x:Name="SortMenu" Placement="BottomEdgeAlignedRight" />
-                    </DropDownButton.Flyout>
-                </DropDownButton>
-                <DropDownButton x:Name="FilterButton" AutomationProperties.Name="Filter" ToolTipService.ToolTip="Filter">
-                    <FontIcon Glyph="&#xE71C;" FontSize="16" />
-                    <DropDownButton.Flyout>
-                        <MenuFlyout x:Name="FilterMenu" Placement="BottomEdgeAlignedRight" />
-                    </DropDownButton.Flyout>
-                </DropDownButton>
+                <!-- Sort and Filter are off while the box has text (the core's grid tools); their tooltip sits on a clear area
+                     around each, as a disabled button gets no pointer input. -->
+                <Grid x:Name="SortTip" Background="Transparent" ToolTipService.ToolTip="Sort">
+                    <DropDownButton x:Name="SortButton" AutomationProperties.Name="Sort">
+                        <FontIcon Glyph="&#xE8CB;" FontSize="16" />
+                        <DropDownButton.Flyout>
+                            <MenuFlyout x:Name="SortMenu" Placement="BottomEdgeAlignedRight" />
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
+                </Grid>
+                <Grid x:Name="FilterTip" Background="Transparent" ToolTipService.ToolTip="Filter">
+                    <DropDownButton x:Name="FilterButton" AutomationProperties.Name="Filter">
+                        <FontIcon Glyph="&#xE71C;" FontSize="16" />
+                        <DropDownButton.Flyout>
+                            <MenuFlyout x:Name="FilterMenu" Placement="BottomEdgeAlignedRight" />
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
+                </Grid>
                 <DropDownButton x:Name="ViewButton" AutomationProperties.Name="View" ToolTipService.ToolTip="View">
                     <FontIcon Glyph="&#xF0E2;" FontSize="16" />
                     <DropDownButton.Flyout>
