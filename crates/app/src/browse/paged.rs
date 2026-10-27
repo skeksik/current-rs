@@ -16,7 +16,7 @@ use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
 use super::libraries::might_be_gone;
-use super::{Context, Live, lock, states};
+use super::{Context, Live, Stamps, lock, states};
 use crate::list::{ObservableList, VectorDiff};
 
 /// How many items one request reads (what jellyfin-web uses; `docs/notes/jellyfin-browse.md`).
@@ -85,6 +85,8 @@ enum Page {
 
 struct Flight {
     id: u64,
+    /// When its request went out ([`Context::tick`]).
+    at: u64,
     task: AbortHandle,
     with_total: bool,
     auto: bool,
@@ -103,6 +105,8 @@ struct Control {
     error: Option<AuthError>,
     /// The slots of each loaded item, for played and favourite patches.
     index: HashMap<ItemRef, Vec<usize>>,
+    /// When each loaded item's copy was read or patched.
+    stamps: Stamps,
     next_id: u64,
 }
 
@@ -118,6 +122,7 @@ impl Control {
             refresh_wanted: false,
             error: None,
             index: HashMap::new(),
+            stamps: Stamps::default(),
             next_id: 0,
         }
     }
@@ -333,6 +338,7 @@ impl Paged {
     fn launch(&self, control: &mut Control, page: usize, with_total: bool, auto: bool) {
         control.next_id += 1;
         let id = control.next_id;
+        let at = self.ctx.tick();
         let query = control.query.clone();
         let ctx = self.ctx.clone();
         let me = self.me.clone();
@@ -368,6 +374,7 @@ impl Paged {
             page,
             Flight {
                 id,
+                at,
                 task,
                 with_total,
                 auto,
@@ -388,7 +395,7 @@ impl Paged {
             return;
         };
         match result {
-            Ok(answer) if !control.started => self.start(&mut control, answer),
+            Ok(answer) if !control.started => self.start(&mut control, answer, flight.at),
             Ok(answer) => {
                 if flight.with_total {
                     self.resize(&mut control, answer.total);
@@ -399,7 +406,7 @@ impl Paged {
                 {
                     control.refresh_wanted = true;
                 }
-                self.fill(&mut control, page, answer.items);
+                self.fill(&mut control, page, answer.items, flight.at);
                 if !control
                     .pages
                     .iter()
@@ -443,7 +450,7 @@ impl Paged {
     }
 
     /// The first page answered: the list becomes `total` slots, page 0 filled and the rest loading.
-    fn start(&self, control: &mut Control, answer: Answer) {
+    fn start(&self, control: &mut Control, answer: Answer, at: u64) {
         let total = answer
             .total
             .map_or(answer.items.len(), |total| total as usize);
@@ -451,6 +458,8 @@ impl Paged {
         items.truncate(PAGE_SIZE.min(total));
         self.ctx.observe(&mut items);
         control.index.clear();
+        control.stamps = Stamps::default();
+        control.stamps.read(&items, at);
         for (index, item) in items.iter().enumerate() {
             control
                 .index
@@ -518,12 +527,13 @@ impl Paged {
     }
 
     /// Sets the page's slots whose item changed, in one batch.
-    fn fill(&self, control: &mut Control, page: usize, mut items: Vec<ItemSummary>) {
+    fn fill(&self, control: &mut Control, page: usize, mut items: Vec<ItemSummary>, at: u64) {
         if page >= control.pages.len() {
             return;
         }
         items.truncate(page_range(page, control.total).len());
         self.ctx.observe(&mut items);
+        control.stamps.read(&items, at);
         let start = page * PAGE_SIZE;
         let mut diffs = Vec::new();
         for (offset, item) in items.into_iter().enumerate() {
@@ -547,6 +557,8 @@ impl Paged {
             diffs.push(VectorDiff::Set { index, value });
         }
         control.index.retain(|_, indices| !indices.is_empty());
+        let index = &control.index;
+        control.stamps.retain(|item| index.contains_key(item));
         control.pages[page] = Page::Loaded { stale: false };
         let _ = self.slots.change_many(diffs);
     }
@@ -566,8 +578,9 @@ impl Paged {
 }
 
 impl Live for Paged {
-    fn patch(&self, item: &ItemRef, state: &UserState) {
-        let control = lock(&self.control);
+    fn patch(&self, item: &ItemRef, state: &UserState, at: u64) {
+        let mut control = lock(&self.control);
+        control.stamps.patched(item, at);
         let Some(indices) = control.index.get(item) else {
             return;
         };
@@ -606,7 +619,7 @@ impl Live for Paged {
         Paged::refresh(self);
     }
 
-    fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
+    fn find(&self, item: &ItemRef) -> Option<(u64, ItemSummary)> {
         let control = lock(&self.control);
         control
             .index
@@ -616,6 +629,7 @@ impl Live for Paged {
                 Some(Slot::Item(summary)) if &summary.item == item => Some(*summary),
                 _ => None,
             })
+            .map(|summary| (control.stamps.of(item), summary))
     }
     fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
         let _control = lock(&self.control);

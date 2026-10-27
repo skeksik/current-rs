@@ -9,7 +9,7 @@ use current_model::{ItemDetails, ItemRef, ItemSummary, MediaKind, PlayTarget, Us
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
-use super::{Context, Live, below_in, find_in, lock, patch_list, states, sync_list};
+use super::{Context, Live, Stamps, below_in, find_in, lock, patch_list, states, sync_list};
 use crate::list::ObservableList;
 
 /// How many similar items a detail page shows.
@@ -34,8 +34,8 @@ struct Details {
     similar: Arc<ObservableList<ItemSummary>>,
     /// The season whose episodes show; the first season until the user picks one.
     season: Mutex<Option<ItemRef>>,
-    /// Guards changes to the lists.
-    lists: Mutex<()>,
+    /// Guards changes to the lists, and holds when the page's copies were read or patched.
+    lists: Mutex<Stamps>,
     task: Mutex<Option<AbortHandle>>,
     me: Weak<Details>,
 }
@@ -72,7 +72,7 @@ impl DetailsView {
             episodes: ObservableList::new(),
             similar: ObservableList::new(),
             season: Mutex::new(None),
-            lists: Mutex::new(()),
+            lists: Mutex::new(Stamps::default()),
             task: Mutex::new(None),
             me: me.clone(),
         });
@@ -134,6 +134,7 @@ impl Details {
         let item = self.item.clone();
         let season = lock(&self.season).clone();
         self.state.send_modify(|state| state.loading = true);
+        let at = self.ctx.tick();
         let task = self.ctx.spawn(async move {
             let mut failures = Vec::new();
             match ctx.client() {
@@ -176,7 +177,7 @@ impl Details {
                         return;
                     };
                     // Under the guard that patches take, so a patch is never overwritten by an older state.
-                    let _guard = lock(&page.lists);
+                    let mut stamps = lock(&page.lists);
                     match details {
                         Ok(mut details) => {
                             page.ctx.states.observe(&mut details.summary);
@@ -196,6 +197,7 @@ impl Details {
                             if let Some(play) = play {
                                 page.play.send_replace(play);
                             }
+                            stamps.read([&details.summary], at);
                             page.details.send_replace(Some(details));
                         }
                         Err(error) => failures.insert(0, error),
@@ -203,6 +205,7 @@ impl Details {
                     match similar {
                         Ok(mut similar) => {
                             page.ctx.observe(&mut similar);
+                            stamps.read(&similar, at);
                             sync_list(&page.similar, similar);
                         }
                         Err(error) => failures.push(error),
@@ -213,9 +216,12 @@ impl Details {
                             page.ctx.states.observe_under(season, Some(&page.item));
                         }
                         page.ctx.observe(&mut episodes);
+                        stamps.read(seasons.iter().chain(&episodes), at);
                         sync_list(&page.seasons, seasons);
                         sync_list(&page.episodes, episodes);
                     }
+                    let shown = page.shown();
+                    stamps.retain(|item| shown.contains(item));
                 }
                 Err(error) => failures.push(error),
             }
@@ -232,9 +238,27 @@ impl Details {
     }
 }
 
+impl Details {
+    /// Every item the page shows.
+    fn shown(&self) -> HashSet<ItemRef> {
+        let details = self
+            .details
+            .borrow()
+            .as_ref()
+            .map(|details| details.summary.item.clone());
+        [&self.seasons, &self.episodes, &self.similar]
+            .into_iter()
+            .flat_map(|list| list.snapshot())
+            .map(|summary| summary.item)
+            .chain(details)
+            .collect()
+    }
+}
+
 impl Live for Details {
-    fn patch(&self, item: &ItemRef, state: &UserState) {
-        let _guard = lock(&self.lists);
+    fn patch(&self, item: &ItemRef, state: &UserState, at: u64) {
+        let mut stamps = lock(&self.lists);
+        stamps.patched(item, at);
         // The Play button follows its item's marks: a new resume point, or played. A series' next episode marked played is no longer
         // its next: the series is among the dependents, whose reload a second later asks for the next one (`dependents_changed`).
         self.play.send_if_modified(|play| match play {
@@ -283,16 +307,17 @@ impl Live for Details {
         self.load();
     }
 
-    fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
-        let _guard = lock(&self.lists);
+    fn find(&self, item: &ItemRef) -> Option<(u64, ItemSummary)> {
+        let stamps = lock(&self.lists);
         if let Some(details) = self.details.borrow().as_ref()
             && &details.summary.item == item
         {
-            return Some(details.summary.clone());
+            return Some((stamps.of(item), details.summary.clone()));
         }
         [&self.seasons, &self.episodes, &self.similar]
             .into_iter()
             .find_map(|list| find_in(list, item))
+            .map(|summary| (stamps.of(item), summary))
     }
 
     fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {

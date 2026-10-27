@@ -83,19 +83,50 @@ pub const DEPENDENT_RELOAD_DELAY: Duration = Duration::from_secs(1);
 
 /// What every live list does when its session's items change.
 pub(crate) trait Live: Send + Sync {
-    /// `item`'s user state is now `state`: patch every slot that shows it.
-    fn patch(&self, item: &ItemRef, state: &UserState);
+    /// `item`'s user state is now `state`, at `at` on the session's clock ([`Context::tick`]): patch every slot that shows it.
+    fn patch(&self, item: &ItemRef, state: &UserState, at: u64);
     /// Something under `items` changed (a played mark below a series, playback stopped): reload what depends on them.
     fn dependents_changed(&self, items: &HashSet<ItemRef>);
     /// Read the list again, keeping what it shows until the answers arrive.
     fn refresh(&self);
-    /// `item` as the list shows it, if it does.
-    fn find(&self, item: &ItemRef) -> Option<ItemSummary>;
+    /// `item` as the list shows it, if it does, and when that copy was read or patched ([`Stamps`]).
+    fn find(&self, item: &ItemRef) -> Option<(u64, ItemSummary)>;
     /// What the list shows below `parent`: the episodes whose series or season it is, and on a series' page its seasons.
     fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary>;
     /// The series of `item` where the item does not name it (a season on its series' page), if the list knows it.
     fn parent_of(&self, _item: &ItemRef) -> Option<ItemRef> {
         None
+    }
+}
+
+/// When a list's copy of each item it shows was read (when its request went out) or last patched, on the session's clock
+/// ([`Context::tick`]). Where two lists' copies of an item differ (one read after the server changed it, another before), the newer
+/// one answers [`Browse::user_state`]: the first list holding the item may be the older (the owner's run, 2026-10-27).
+#[derive(Default)]
+pub(super) struct Stamps(HashMap<ItemRef, u64>);
+
+impl Stamps {
+    /// The list's copies of `items` were read at `at`.
+    fn read<'a>(&mut self, items: impl IntoIterator<Item = &'a ItemSummary>, at: u64) {
+        for summary in items {
+            self.0.insert(summary.item.clone(), at);
+        }
+    }
+
+    /// The list's copies of `item`, if it shows any, were patched at `at`.
+    fn patched(&mut self, item: &ItemRef, at: u64) {
+        if let Some(stamp) = self.0.get_mut(item) {
+            *stamp = (*stamp).max(at);
+        }
+    }
+
+    /// Keeps only the items `shows` still holds.
+    fn retain(&mut self, shows: impl Fn(&ItemRef) -> bool) {
+        self.0.retain(|item, _| shows(item));
+    }
+
+    fn of(&self, item: &ItemRef) -> u64 {
+        self.0.get(item).copied().unwrap_or(0)
     }
 }
 
@@ -175,6 +206,7 @@ impl Hub {
             publishing: Mutex::new(()),
             dependents: Mutex::new(Dependents::default()),
             libraries: Libraries::default(),
+            clock: AtomicU64::new(0),
         });
         contexts.insert(server.clone(), Arc::downgrade(&context));
         context.start_libraries(shared.capabilities.subscribe());
@@ -230,6 +262,8 @@ pub(crate) struct Context {
     publishing: Mutex<()>,
     dependents: Mutex<Dependents>,
     libraries: Libraries,
+    /// Orders the lists' reads and patches ([`Stamps`]).
+    clock: AtomicU64,
 }
 
 impl Drop for Context {
@@ -297,9 +331,18 @@ impl Context {
         }
     }
 
-    /// `item` as the first live list that shows it does.
+    /// The next time on the session's clock: a list takes it when its request goes out, and every list when a patch is sent.
+    fn tick(&self) -> u64 {
+        self.clock.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// `item` as the live list whose copy of it was read or patched last shows it.
     fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
-        self.lives().iter().find_map(|live| live.find(item))
+        self.lives()
+            .iter()
+            .filter_map(|live| live.find(item))
+            .max_by_key(|(at, _)| *at)
+            .map(|(_, summary)| summary)
     }
 
     /// The series and season of `item`: its own links, else what a live list knows (a season's series).
@@ -329,8 +372,9 @@ impl Context {
     fn publish_below(&self, mut summary: ItemSummary, parent: &ItemRef) {
         let _order = lock(&self.publishing);
         self.states.observe_under(&mut summary, Some(parent));
+        let at = self.tick();
         for live in self.lives() {
-            live.patch(&summary.item, &summary.user);
+            live.patch(&summary.item, &summary.user, at);
         }
     }
 
@@ -379,8 +423,9 @@ impl Context {
             .states
             .pending(item)
             .unwrap_or_else(|| self.states.shown(item, settled));
+        let at = self.tick();
         for live in self.lives() {
-            live.patch(item, &state);
+            live.patch(item, &state, at);
         }
     }
 
@@ -621,7 +666,7 @@ impl Browse {
         self.ctx.want(item, ItemAction::SetFavourite(favourite));
     }
 
-    /// `item`'s state as the lists show it, if a list loaded it.
+    /// `item`'s state as the lists show it, if a list loaded it: a change still pending for it, else the copy read or patched last.
     pub fn user_state(&self, item: &ItemRef) -> Option<UserState> {
         self.ctx
             .states

@@ -725,3 +725,54 @@ async fn an_episode_favourite_shows_on_its_page() {
         );
     }
 }
+
+/// Where two lists' copies of an item differ, the Played button reads the copy read last, not the first list holding the item: here
+/// the episode is marked on another device between two reads.
+#[tokio::test]
+async fn the_copy_read_last_answers_the_played_button() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let item = |id: &str| ItemRef::new(server.clone(), ItemId::new(id));
+    let first = item(EPISODE_IDS[0]);
+    let button = || browse.user_state(&first).map(|state| state.played);
+    let episode = browse.details(&first);
+    eventually("the episode's page", || {
+        episode.details().borrow().is_some() && !episode.state().borrow().loading
+    })
+    .await;
+    assert_eq!(button(), Some(false));
+
+    stand_in.set_played_on_server(EPISODE_IDS[0], true);
+    let series = browse.details(&item(SERIES_ID));
+    eventually("the series' page", || {
+        series.episodes().len() == 2 && !series.state().borrow().loading
+    })
+    .await;
+    // The episode's page still shows what it read first; the series' page read the new mark.
+    let page = || {
+        episode
+            .details()
+            .borrow()
+            .as_ref()
+            .map(|details| details.summary.user.played)
+    };
+    assert_eq!(page(), Some(false));
+    assert!(series.episodes().snapshot()[0].user.played);
+    assert_eq!(button(), Some(true), "the copy read last");
+
+    stand_in.set_played_on_server(EPISODE_IDS[0], false);
+    episode.refresh();
+    eventually("the episode's page again", || {
+        page() == Some(false) && !episode.state().borrow().loading
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(series.episodes().snapshot()[0].user.played);
+    assert_eq!(button(), Some(false), "the page read again is newer");
+
+    // A patch is newer than both reads.
+    browse.set_played(&first, true);
+    assert_eq!(button(), Some(true));
+}
