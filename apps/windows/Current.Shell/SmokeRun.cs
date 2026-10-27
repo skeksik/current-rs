@@ -311,15 +311,6 @@ internal static class SmokeRun
             page?.SearchFor("");
             check(page is { SortAndFilterAvailable: true }, "clearing the search turns them on again");
 
-            // The Favourites tab, a row per kind (the stand-in counts every item a favourite), and the Recently added grid.
-            window.ShowView(new ViewArgs(server.Server, ViewArgs.Favourites));
-            var rows = await WaitUntilAsync(() => window.ShownPage is SearchPage { RowCount: > 0 });
-            check(rows, $"the Favourites tab shows its rows ({(window.ShownPage as SearchPage)?.RowCount ?? 0})");
-            window.ShowView(new ViewArgs(server.Server, ViewArgs.RecentlyAdded));
-            var recent = await WaitUntilAsync(() => window.ShownPage is LibraryPage { Slots.Count: > 0 } recentPage
-                && recentPage.Slots[0].Slot is Slot.Item);
-            check(recent, "the Recently added tab shows its grid");
-
             // Libraries that change on the server: one added shows in the pane after a refresh; the films library removed while its
             // page shows sends the page back to Home with a notice, and the user stays signed in.
             await SendAsync(standIn, $"library add {AddedLibraryId} examplekind Example Added");
@@ -346,6 +337,15 @@ internal static class SmokeRun
             {
                 check(false, "the navigation lists the films library");
             }
+
+            // The Favourites tab, a row per kind (the stand-in counts every item a favourite), and the Recently added grid.
+            window.ShowView(new ViewArgs(server.Server, ViewArgs.Favourites));
+            var rows = await WaitUntilAsync(() => window.ShownPage is SearchPage { RowCount: > 0 });
+            check(rows, $"the Favourites tab shows its rows ({(window.ShownPage as SearchPage)?.RowCount ?? 0})");
+            window.ShowView(new ViewArgs(server.Server, ViewArgs.RecentlyAdded));
+            var recent = await WaitUntilAsync(() => window.ShownPage is LibraryPage { Slots.Count: > 0 } recentPage
+                && recentPage.Slots[0].Slot is Slot.Item);
+            check(recent, "the Recently added tab shows its grid");
             // Off the grid before its session goes: the page lets go of its slots.
             window.ShowSettings();
         }
