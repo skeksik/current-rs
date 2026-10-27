@@ -76,6 +76,13 @@ pub use player::{
     QualityMenuItem, SwapChain, TIMELINE_INTERVAL, VideoOutput, bitrate_label,
     fallback_quality_entries, player_engine, quality_label, quality_menu,
 };
+// The player's words and its problems (ADR 0019), worded once for every UI.
+pub use player::{
+    NO_AUDIO_TRACKS, PanelSizes, PlaybackProblem, PlayerProblem, SUBTITLES_OFF, countdown_text,
+    elapsed_label, episode_line, info_panel_lines, plan_note_text, playback_problem_text,
+    player_problem_text, position_label, reason_text, remaining_label, route_name, skip_label,
+    spoken_time, time_label, track_name,
+};
 /// `current-playback`'s values that the player publishes.
 pub mod playback {
     pub use current_playback::{

@@ -177,6 +177,19 @@ public sealed class PlayerSession : IAsyncDisposable
         PlayerMap.From(await CoreCall.RunUncancellableAsync(() => Open.PlaybackInfo()).ConfigureAwait(false));
 
     /// <summary>
+    /// The playback info panel's lines as the core words them, an empty one between groups: the information now, the facts of the
+    /// display the window is on (null when there are none) and the panel's sizes as the window measures them. Numbers with decimals
+    /// use the decimal separator passed to <see cref="PlaybackExtensions.SetDecimalSeparator"/>. No URL.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> PlaybackInfoLinesAsync(DisplayFacts? display, PanelSizes panel)
+    {
+        ArgumentNullException.ThrowIfNull(panel);
+        var ffiDisplay = display is { } facts ? PlayerMap.ToFfi(facts) : null;
+        return await CoreCall.RunUncancellableAsync(() => Open.PlaybackInfoLines(ffiDisplay, PlayerWordsMap.ToFfi(panel)))
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Stops the item (reported to the server, best effort), gives the swap chain back and shuts the engine down; returns once it is
     /// gone. Detach the panel first. The subscriptions end.
     /// </summary>

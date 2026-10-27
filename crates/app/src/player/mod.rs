@@ -25,6 +25,7 @@
 
 mod backend;
 mod driver;
+mod info_panel;
 mod known_caps;
 mod labels;
 #[cfg(test)]
@@ -32,6 +33,7 @@ mod live_tests;
 mod mpv;
 mod now_playing;
 mod prefs;
+mod problem;
 mod relay;
 mod server;
 #[cfg(any(test, feature = "test-engine"))]
@@ -39,6 +41,7 @@ pub mod test_engine;
 // With libmpv built in, players use it: these tests need the test engine.
 #[cfg(all(test, not(feature = "libmpv")))]
 mod tests;
+mod words;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,12 +51,19 @@ use current_playback::{AutoSkip, PlaybackDetails, PlayerStatus, Quality};
 use tokio::sync::{mpsc, oneshot, watch};
 
 pub use backend::{CompositionSize, DisplayFacts, EngineOutput, SwapChain, VideoOutput};
+pub use info_panel::{PanelSizes, info_panel_lines};
 pub use known_caps::EngineReport;
 pub use labels::{
     NumberFormat, QualityEntry, QualityMenuItem, bitrate_label, fallback_quality_entries,
     quality_label, quality_menu,
 };
 pub use now_playing::{MediaStatus, NowPlaying, TIMELINE_INTERVAL};
+pub use problem::{PlaybackProblem, PlayerProblem};
+pub use words::{
+    NO_AUDIO_TRACKS, SUBTITLES_OFF, countdown_text, elapsed_label, episode_line, plan_note_text,
+    playback_problem_text, player_problem_text, position_label, reason_text, remaining_label,
+    route_name, skip_label, spoken_time, time_label, track_name,
+};
 
 pub(crate) use driver::{Context, open};
 pub(crate) use known_caps::KnownCapabilities;

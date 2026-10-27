@@ -18,6 +18,7 @@ use crate::player_records::{
     PlaybackSettingsSnapshot, PlayerEngineKind, PlayerStateSnapshot, QualityChoice,
     QualityOptionInfo, SubtitleSelection,
 };
+use crate::player_words::PanelSizes;
 use crate::subscribe::{self, LiveListeners};
 use crate::{Core, CoreError, TaskHandle};
 
@@ -86,6 +87,8 @@ fn player_error(error: &current_app::PlayerError) -> CoreError {
 #[derive(uniffi::Object)]
 pub struct Player {
     player: Arc<current_app::Player>,
+    /// For the UI's number format (the info panel's lines).
+    app: Arc<current_app::App>,
     runtime: Handle,
     listeners: LiveListeners,
 }
@@ -93,11 +96,13 @@ pub struct Player {
 impl Player {
     pub(crate) fn new(
         player: current_app::Player,
+        app: Arc<current_app::App>,
         runtime: Handle,
         listeners: LiveListeners,
     ) -> Self {
         Self {
             player: Arc::new(player),
+            app,
             runtime,
             listeners,
         }
@@ -345,6 +350,7 @@ impl Core {
             .map_err(|error| player_error(&error))?;
         Ok(Arc::new(Player::new(
             player,
+            self.app.clone(),
             self.runtime.clone(),
             self.listeners.clone(),
         )))
@@ -451,5 +457,38 @@ impl Core {
             .map_err(|error| CoreError::Store {
                 problem: (&error).into(),
             })
+    }
+}
+
+// The playback info panel's lines (ADR 0019): worded by the core (`current_app::info_panel_lines`).
+#[uniffi::export]
+impl Player {
+    /// The playback info panel's lines, an empty one between groups: the information now, with the facts of the display the window
+    /// is on (`None` when the platform has none) and the panel's sizes as the platform measures them. Numbers with decimals use the
+    /// UI's decimal separator ([`Core::set_decimal_separator`]). No URL.
+    ///
+    /// # Errors
+    /// [`CoreError::Player`] with `Closed`.
+    pub async fn playback_info_lines(
+        &self,
+        display: Option<DisplayFacts>,
+        panel: PanelSizes,
+    ) -> Result<Vec<String>, CoreError> {
+        let player = self.player.clone();
+        let info = self
+            .runtime
+            .spawn(async move { player.playback_info().await })
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| player_error(&error))?;
+        let display = display.map(current_app::DisplayFacts::from);
+        Ok(current_app::info_panel_lines(
+            &info,
+            display.as_ref(),
+            &(&panel).into(),
+            &self.app.number_format(),
+        ))
     }
 }
