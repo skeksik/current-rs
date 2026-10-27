@@ -339,10 +339,10 @@ internal static class SmokeRun
             }
 
             // The Favourites tab, a row per kind (the stand-in counts every item a favourite), and the Recently added grid.
-            window.ShowView(new ViewArgs(server.Server, ViewArgs.Favourites));
+            window.ShowView(new ViewArgs(server.Server, BrowseView.Favourites));
             var rows = await WaitUntilAsync(() => window.ShownPage is SearchPage { RowCount: > 0 });
             check(rows, $"the Favourites tab shows its rows ({(window.ShownPage as SearchPage)?.RowCount ?? 0})");
-            window.ShowView(new ViewArgs(server.Server, ViewArgs.RecentlyAdded));
+            window.ShowView(new ViewArgs(server.Server, BrowseView.RecentlyAdded));
             var recent = await WaitUntilAsync(() => window.ShownPage is LibraryPage { Slots.Count: > 0 } recentPage
                 && recentPage.Slots[0].Slot is Slot.Item);
             check(recent, "the Recently added tab shows its grid");

@@ -893,8 +893,8 @@ public sealed partial class PlayerView : UserControl
     private object? _qualityItem;
 
     /// <summary>
-    /// Fills the menu at once with the entries last named (or the bare steps the first time), then asks the core for the version
-    /// playing and fills it again if they changed. async void, as event handlers are: it catches everything itself.
+    /// Fills the menu at once with the entries last named (or the core's bare steps the first time), then asks the core for the
+    /// version playing and fills it again if they changed. async void, as event handlers are: it catches everything itself.
     /// </summary>
     private async void OnQualityMenuOpening(object sender, object e)
     {
@@ -903,8 +903,7 @@ public sealed partial class PlayerView : UserControl
             QualityMenu.Items.Clear();
             return;
         }
-        var shown = _qualityOptions ?? [.. new QualityChoice[] { new QualityChoice.Maximum() }.Concat(core.QualitySteps())
-            .Select(quality => new QualityOption(quality, null, (quality as QualityChoice.Bitrate)?.BitsPerSecond))];
+        var shown = _qualityOptions;
         FillQualityMenu(core, shown);
         if (_session is not { } session)
         {
@@ -913,7 +912,7 @@ public sealed partial class PlayerView : UserControl
         try
         {
             var options = await session.QualityOptionsAsync(core.PlaybackSettings().ShowsAllQualities);
-            if (!options.SequenceEqual(shown))
+            if (shown is null || !options.SequenceEqual(shown))
             {
                 _qualityOptions = options;
                 FillQualityMenu(core, options);
@@ -925,30 +924,23 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
-    private void FillQualityMenu(CoreHost core, IReadOnlyList<QualityOption> options)
+    /// <summary>
+    /// The core's menu for <paramref name="options"/> (null: the bare steps) at the quality in use: a limit below every entry is listed
+    /// as its own entry, checked, so the menu never claims Original while the stream is capped (the manager's review, S1, 2026-10-27).
+    /// </summary>
+    private void FillQualityMenu(CoreHost core, IReadOnlyList<QualityOption>? options)
     {
         QualityMenu.Items.Clear();
         var withResolution = core.PlaybackSettings().ShowsQualityResolution;
-        // The core plays each item at an entry of its menu (the highest not above the preferred quality), or at the preferred bitrate
-        // itself when every entry is above it: that limit is listed as its own entry, checked, so the menu never claims Original while
-        // the stream is capped (the manager's review, S1, 2026-10-27).
-        var current = State.Quality;
-        if (current is QualityChoice.Bitrate limit && !options.Any(option => option.Quality == current))
-        {
-            // In bitrate order among the steps (Original stays first): a 10 Mbit/s limit sits between 20 and 4 (review 2).
-            var at = options.Select((option, index) => (option, index))
-                .FirstOrDefault(entry => entry.index > 0 && entry.option.Bitrate < limit.BitsPerSecond, (null!, options.Count)).index;
-            options = [.. options.Take(at), new QualityOption(current, null, limit.BitsPerSecond), .. options.Skip(at)];
-        }
-        foreach (var option in options)
+        foreach (var entry in core.QualityMenu(options, State.Quality, withResolution))
         {
             var item = new RadioMenuFlyoutItem
             {
-                Text = PlayerText.Quality(option, withResolution),
+                Text = entry.Label,
                 GroupName = "quality",
-                IsChecked = option.Quality == current,
+                IsChecked = entry.Checked,
             };
-            var chosen = option.Quality;
+            var chosen = entry.Option.Quality;
             item.Click += (_, _) => Long(ct => _session?.SetQualityAsync(chosen, ct) ?? Task.CompletedTask);
             QualityMenu.Items.Add(item);
         }
@@ -980,7 +972,10 @@ public sealed partial class PlayerView : UserControl
         try
         {
             var info = await session.PlaybackInfoAsync();
-            InfoText.Text = InfoLines(info);
+            if (App.Core is { } core)
+            {
+                InfoText.Text = InfoLines(core, info);
+            }
         }
         catch (PlayerException)
         {
@@ -993,7 +988,7 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>The playback info as lines: route, reasons, notes, the source and its streams, the server's transcode, the engine's
     /// output, and the display the window is on. No URL: the record holds none.</summary>
-    private string InfoLines(PlaybackInfo info)
+    private string InfoLines(CoreHost core, PlaybackInfo info)
     {
         var text = new StringBuilder();
         void Line(string line) => text.AppendLine(line);
@@ -1008,12 +1003,12 @@ public sealed partial class PlayerView : UserControl
         }
         foreach (var note in info.Notes)
         {
-            Line($"• {PlayerText.Note(note)}");
+            Line($"• {PlayerText.Note(core, note)}");
         }
         if (info.Source is { } source)
         {
             Line("");
-            Line(Join("Source", source.Container, source.Bitrate is { } bitrate ? PlayerText.Bitrate(bitrate) : null,
+            Line(Join("Source", source.Container, source.Bitrate is { } bitrate ? core.BitrateLabel(bitrate) : null,
                 source.Size is { } size ? $"{size / 1_000_000_000.0:0.0} GB" : null));
             foreach (var stream in source.Streams)
             {
@@ -1029,7 +1024,7 @@ public sealed partial class PlayerView : UserControl
         {
             Line("");
             Line(Join("Server", t.VideoDirect ? "video copied" : $"video to {t.VideoCodec}", t.AudioDirect ? "audio copied" : $"audio to {t.AudioCodec}",
-                t.Container, t.Bitrate is { } bitrate ? PlayerText.Bitrate(bitrate) : null,
+                t.Container, t.Bitrate is { } bitrate ? core.BitrateLabel(bitrate) : null,
                 t.Width is { } w && t.Height is { } h ? $"{w}×{h}" : null, t.FrameRate is { } fps ? $"{fps:0.###} fps" : null,
                 t.HardwareAcceleration, t.Completion is { } done ? $"{done:0}% done" : null));
             foreach (var reason in t.Reasons)

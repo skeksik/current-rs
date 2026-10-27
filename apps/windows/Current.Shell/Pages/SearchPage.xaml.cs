@@ -37,7 +37,7 @@ public sealed partial class SearchPage : Page, IRefreshable
         if (e.Parameter is ViewArgs view)
         {
             _view = view;
-            TitleText.Text = BrowseText.ViewTitle(view.View);
+            TitleText.Text = Views.Title(view.View);
             if (App.Browsing?.Find(view.Server) is { } server)
             {
                 Add(server.Favourites);
@@ -102,7 +102,8 @@ public sealed partial class SearchPage : Page, IRefreshable
         var failed = _sections.Select(section => section.State.Failed).FirstOrDefault(problem => problem is not null);
         LoadingRing.IsActive = loading && found == 0;
         var text = _view is not null
-            ? (found > 0 || loading ? "" : failed is not null ? $"Couldn't load favourites. {BrowseText.Problem(failed)}" : "No favourites yet")
+            ? (BrowseLabels.FavouritesStatus(found, loading, failed is not null) is not { } status ? ""
+                : failed is not null ? $"{status} {BrowseText.Problem(failed)}" : status)
             : found > 0 ? ""
             : loading ? "Searching…"
             : failed is not null ? $"Couldn't search. {BrowseText.Problem(failed)}"
@@ -142,7 +143,7 @@ public sealed partial class SearchPage : Page, IRefreshable
     {
         if ((sender as FrameworkElement)?.Tag is TileRow { View: { } view } row && _view is { } shown)
         {
-            var args = new ViewArgs(shown.Server, view, row.Kind, Favourite: true);
+            var args = new ViewArgs(shown.Server, view, row.Kind, row.Favourite);
             Frame.Navigate(args.Page, args);
         }
     }

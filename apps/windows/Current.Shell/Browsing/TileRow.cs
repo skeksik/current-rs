@@ -7,27 +7,30 @@ using Microsoft.UI.Xaml.Controls;
 namespace Current.Shell.Browsing;
 
 /// <summary>
-/// One titled row of tiles that scrolls sideways: a Home row or a search group. Its items are the core's list, mirrored on the UI
-/// thread. Public, because x:DataType needs a public type.
+/// One titled row of tiles that scrolls sideways: a Home row or a search group, as the core shows it (<see cref="RowDisplay"/>: its
+/// title, its tiles' shape and where its header goes). Its items are the core's list, mirrored on the UI thread. Public, because
+/// x:DataType needs a public type.
 /// </summary>
-public sealed class TileRow(string key, string title, ListSubscription<ItemSummary> items, bool wide, ItemRef? library = null)
-    : IDisposable
+public sealed class TileRow(string key, RowDisplay display, ListSubscription<ItemSummary> items) : IDisposable
 {
     public string Key { get; } = key;
 
-    public string Title { get; } = title;
+    public string Title { get; } = display.Title;
 
     /// <summary>The library a Latest row shows, whose grid its header opens; null for a row without a page of its own.</summary>
-    public ItemRef? Library { get; } = library;
+    public ItemRef? Library { get; } = (display.Link?.Target as RowTarget.OpenLibrary)?.Library;
 
-    /// <summary>The view tab a row across every library opens from its header (<see cref="Pages.ViewArgs"/>); null for none.</summary>
-    public string? View { get; init; }
+    /// <summary>The view a row across every library opens from its header (<see cref="Pages.ViewArgs"/>); null for none.</summary>
+    public BrowseView? View { get; } = (display.Link?.Target as RowTarget.OpenView)?.View;
 
     /// <summary>The media kind of that view the header opens (a Favourites row's), or null for the whole view.</summary>
-    public string? Kind { get; init; }
+    public string? Kind { get; } = (display.Link?.Target as RowTarget.OpenView)?.Kind;
 
-    /// <summary>Where the header link goes: the library's name and its order (BrowseText.LibraryLinkTip).</summary>
-    public string HeaderLinkTip { get; init; } = "";
+    /// <summary>Whether that view opens with its favourites tick on (a Favourites row's).</summary>
+    public bool Favourite { get; } = (display.Link?.Target as RowTarget.OpenView)?.Favourite ?? false;
+
+    /// <summary>Where the header link goes, as the core words it ("Open Movies, newest first"); empty for a row without a link.</summary>
+    public string HeaderLinkTip { get; } = display.Link?.Tooltip ?? "";
 
     public Visibility HeaderLinkVisibility => Library is null && View is null ? Visibility.Collapsed : Visibility.Visible;
 
@@ -38,9 +41,9 @@ public sealed class TileRow(string key, string title, ListSubscription<ItemSumma
 
     internal ListSubscription<ItemSummary> Subscription { get; } = items;
 
-    /// <summary>Wide tiles (16:9) for rows of episodes, posters otherwise.</summary>
+    /// <summary>Wide tiles (16:9) or posters, as the core shapes the row.</summary>
     public DataTemplate ItemTemplate { get; } =
-        (DataTemplate)Application.Current.Resources[wide ? "WideTileTemplate" : "PosterTileTemplate"];
+        (DataTemplate)Application.Current.Resources[display.Wide ? "WideTileTemplate" : "PosterTileTemplate"];
 
     public void Dispose()
     {
@@ -111,20 +114,7 @@ public sealed class HomeSection : INotifyPropertyChanged, IDisposable
                 {
                     continue;
                 }
-                // Wide tiles for the rows of episodes (continue watching, next up); posters for the rest.
-                var view = row.Kind switch
-                {
-                    HomeRowKind.RecentlyAdded => Pages.ViewArgs.RecentlyAdded,
-                    HomeRowKind.Favourites => Pages.ViewArgs.Favourites,
-                    _ => null,
-                };
-                existing = new TileRow(
-                    row.Key, BrowseText.RowTitle(row), items, row.Kind is HomeRowKind.ContinueWatching or HomeRowKind.NextUp,
-                    row.Kind == HomeRowKind.Latest ? row.Library : null)
-                {
-                    View = view,
-                    HeaderLinkTip = view is null ? BrowseText.RecentlyAddedLinkTip(row) : BrowseText.ViewLinkTip(view),
-                };
+                existing = new TileRow(row.Key, Views.ForHomeRow(row), items);
                 Rows.Insert(position, existing);
             }
             else if (Rows.IndexOf(existing) != position)

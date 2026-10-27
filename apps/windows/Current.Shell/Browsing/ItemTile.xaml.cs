@@ -154,7 +154,7 @@ public sealed partial class ItemTile : UserControl
         var progress = user is { Played: false, Progress: > 0 and < 1 } ? user.Progress : null;
         ProgressPart.Visibility = progress is null ? Visibility.Collapsed : Visibility.Visible;
         Progress.Value = progress ?? 0;
-        TimeLeftText.Text = timeLeft is { } left ? BrowseText.ShortTime(left) : "";
+        TimeLeftText.Text = timeLeft is { } left ? BrowseLabels.TimeLeftShort(left) : "";
     }
 
     /// <summary>The artwork for the tile's shape, as the core picks it (ItemSummary.Poster and Wide).</summary>

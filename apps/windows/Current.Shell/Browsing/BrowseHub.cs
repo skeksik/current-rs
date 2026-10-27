@@ -292,12 +292,12 @@ internal sealed class ServerBrowse : IDisposable
     /// The grid of a view across every library (<see cref="Pages.ViewArgs"/>): the Favorites or Recently added tab, opened on first use
     /// and kept as a library's grid is.
     /// </summary>
-    public LibraryGrid View(string view, string? kind = null)
+    public LibraryGrid View(BrowseView view, string? kind = null)
     {
-        var key = kind is null ? view : $"{view}/{kind}";
+        var key = kind is null ? view.ToString() : $"{view}/{kind}";
         if (!_views.TryGetValue(key, out var grid))
         {
-            var query = Pages.ViewArgs.Query(view, kind);
+            var query = Views.Query(view, kind);
             grid = new LibraryGrid(Session.OpenItems(query), query);
             _views[key] = grid;
         }
@@ -307,7 +307,7 @@ internal sealed class ServerBrowse : IDisposable
     private readonly Dictionary<string, LibraryGrid> _views = [];
 
     /// <summary>The Favourites tab's rows, a row per media kind (the core's), opened on first use and kept, as Home is.</summary>
-    public SearchSection Favourites => _favourites ??= new SearchSection("", Session.Favourites(), _ui, Pages.ViewArgs.Everything);
+    public SearchSection Favourites => _favourites ??= new SearchSection("", Session.Favourites(), _ui, BrowseView.Everything);
 
     private SearchSection? _favourites;
 

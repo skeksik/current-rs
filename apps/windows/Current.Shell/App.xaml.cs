@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Current.Bindings;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
@@ -161,6 +162,9 @@ public partial class App : Application
             core.Dispose();
             core = null;
         }
+        // The region's decimal separator for the core's labels with decimals ("26,1 Mbit/s"), as the app wrote numbers before: in
+        // the current culture.
+        core?.SetDecimalSeparator(CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator);
         Core = core;
         if (core is not null)
         {
