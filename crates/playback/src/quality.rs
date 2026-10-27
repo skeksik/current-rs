@@ -1,5 +1,6 @@
-//! The quality limit (ADR 0019, choice 10): "Maximum" by default, plus a per-playback menu remembered separately for local and
-//! internet addresses. No automatic bandwidth test.
+//! The quality limit (ADR 0019, choice 10): a preferred quality in Settings, "Maximum" by default and the same for local and internet
+//! addresses, and a per-playback menu whose pick changes only the item playing (owner, 2026-10-27). Each item plays at the highest
+//! entry of its own menu that is not above the preferred quality ([`snap_quality`]). No automatic bandwidth test.
 //!
 //! The menu names each choice by the resolution the Jellyfin server would send it at and its bitrate (owner, 2026-10-26): the widest
 //! picture the server sends at a bitrate is its `ResolutionNormalizer` table, and a picture's name its
@@ -56,6 +57,12 @@ impl Quality {
             Quality::Maximum => false,
             Quality::Bitrate(limit) => bitrate.is_none_or(|bitrate| bitrate > limit),
         }
+    }
+
+    /// Whether `self` and `other` have the server send the same for a source of `bitrate`: they are equal, or neither limits it
+    /// ([`Quality::limits`]).
+    pub fn sends_same(self, other: Quality, bitrate: Option<u32>) -> bool {
+        self == other || (!self.limits(bitrate) && !other.limits(bitrate))
     }
 }
 
@@ -168,26 +175,30 @@ pub fn quality_options(source: Option<&MediaSource>, all: bool) -> Vec<QualityOp
     options
 }
 
-/// The quality remembered per kind of address. The composition root loads and saves it (task 4); the controller reads it and says when
-/// the user changes it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct QualityMemory {
-    pub local: Quality,
-    pub internet: Quality,
+/// The entry of `source`'s quality menu ([`quality_options`], `all` as there) an item plays at for the `preferred` quality: the highest
+/// entry not above it, so never more than the user chose (owner, 2026-10-27). "Maximum" stays "Maximum" whatever the original's
+/// bitrate; a preferred bitrate at or above the original's gives "Maximum" (the original). Without the source's bitrate (none planned
+/// yet, or the server gave none) the preferred quality as is, and so too when every entry is above it (a preferred step below the
+/// menu's lowest).
+pub fn snap_quality(preferred: Quality, source: Option<&MediaSource>, all: bool) -> Quality {
+    let Quality::Bitrate(limit) = preferred else {
+        return Quality::Maximum;
+    };
+    if source.and_then(|source| source.bitrate).is_none() {
+        return preferred;
+    }
+    quality_options(source, all)
+        .iter()
+        .find(|option| option.bitrate.is_some_and(|bitrate| bitrate <= limit))
+        .map_or(preferred, |option| option.quality)
 }
 
-impl QualityMemory {
-    pub fn for_address(&self, local: bool) -> Quality {
-        if local { self.local } else { self.internet }
-    }
-
-    pub fn set(&mut self, local: bool, quality: Quality) {
-        if local {
-            self.local = quality;
-        } else {
-            self.internet = quality;
-        }
-    }
+/// Settings' quality choices, which the composition root loads and gives the controller: the preferred quality and whether the menu
+/// lists every step ("Show all quality options"), which together pick the entry each item plays at ([`snap_quality`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct QualityPreference {
+    pub preferred: Quality,
+    pub all: bool,
 }
 
 #[cfg(test)]
@@ -269,6 +280,20 @@ mod tests {
     }
 
     #[test]
+    fn a_step_at_the_original_s_bitrate_is_not_offered() {
+        // An original at exactly 4 Mbit/s: the 4 Mbit/s step would send the same, so only the steps below it follow "Original".
+        let options = quality_options(Some(&source(1280, 720, 4_000_000)), false);
+        assert_eq!(
+            names(&options),
+            [
+                (Some("720p"), Some(4_000_000)),
+                (Some("480p"), Some(1_000_000))
+            ]
+        );
+        assert_eq!(options[0].quality, Quality::Maximum);
+    }
+
+    #[test]
     fn the_common_steps_are_named_as_the_server_sends_them() {
         let options = quality_options(Some(&source(3840, 2160, 60_000_000)), false);
         assert_eq!(
@@ -330,11 +355,66 @@ mod tests {
     }
 
     #[test]
-    fn local_and_internet_are_remembered_apart() {
-        let mut memory = QualityMemory::default();
-        assert_eq!(memory.for_address(true), Quality::Maximum);
-        memory.set(false, Quality::Bitrate(4_000_000));
-        assert_eq!(memory.for_address(true), Quality::Maximum);
-        assert_eq!(memory.for_address(false), Quality::Bitrate(4_000_000));
+    fn two_limits_send_the_same_when_neither_applies() {
+        let source = Some(20_000_000);
+        assert!(Quality::Maximum.sends_same(Quality::Bitrate(40_000_000), source));
+        assert!(Quality::Bitrate(4_000_000).sends_same(Quality::Bitrate(4_000_000), source));
+        assert!(!Quality::Bitrate(10_000_000).sends_same(Quality::Bitrate(4_000_000), source));
+        assert!(!Quality::Maximum.sends_same(Quality::Bitrate(10_000_000), source));
+        // Without a known bitrate every limit applies.
+        assert!(!Quality::Maximum.sends_same(Quality::Bitrate(40_000_000), None));
+    }
+
+    fn mbit(megabits: u32) -> Quality {
+        Quality::Bitrate(megabits * 1_000_000)
+    }
+
+    #[test]
+    fn an_item_plays_at_the_highest_entry_not_above_the_preferred_quality() {
+        // The menu: Original (5.6), 720p at 4, 480p at 1. 5.6 is not above 20: the original.
+        let small = source(1920, 1080, 5_600_000);
+        assert_eq!(
+            snap_quality(mbit(20), Some(&small), false),
+            Quality::Maximum
+        );
+        // The menu: Original (26), 1080p at 20, 720p at 4, 480p at 1.
+        let large = source(1920, 1080, 26_000_000);
+        assert_eq!(snap_quality(mbit(10), Some(&large), false), mbit(4));
+        assert_eq!(snap_quality(mbit(20), Some(&large), false), mbit(20));
+        assert_eq!(
+            snap_quality(mbit(26), Some(&large), false),
+            Quality::Maximum
+        );
+        // With every step listed, 10 is an entry of its own.
+        assert_eq!(snap_quality(mbit(10), Some(&large), true), mbit(10));
+        assert_eq!(snap_quality(mbit(9), Some(&large), true), mbit(8));
+    }
+
+    #[test]
+    fn maximum_stays_maximum_whatever_the_original() {
+        let huge = source(3840, 2160, 120_000_000);
+        assert_eq!(
+            snap_quality(Quality::Maximum, Some(&huge), false),
+            Quality::Maximum
+        );
+        assert_eq!(snap_quality(Quality::Maximum, None, true), Quality::Maximum);
+    }
+
+    #[test]
+    fn without_the_source_s_bitrate_the_preferred_quality_is_used_as_is() {
+        assert_eq!(snap_quality(mbit(10), None, false), mbit(10));
+        let mut unknown = source(1920, 1080, 1);
+        unknown.bitrate = None;
+        assert_eq!(snap_quality(mbit(10), Some(&unknown), false), mbit(10));
+    }
+
+    #[test]
+    fn a_preferred_quality_below_every_entry_is_used_as_is() {
+        // The common menu's lowest is 1 Mbit/s; 420 kbit/s is a step of the full list only.
+        let large = source(1920, 1080, 26_000_000);
+        assert_eq!(
+            snap_quality(Quality::Bitrate(420_000), Some(&large), false),
+            Quality::Bitrate(420_000)
+        );
     }
 }

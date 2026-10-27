@@ -161,7 +161,8 @@ impl Player {
             .select_subtitle(subtitle.into()))
     }
 
-    /// The quality for the kind of address in use, remembered for it (local or internet); plays on at the position with it.
+    /// The quality of the item playing, as picked; plays on at the position with it. Not saved: the next item plays at the preferred
+    /// quality ([`Core::set_preferred_quality`]).
     ///
     /// # Errors
     /// As [`Player::select_audio`].
@@ -352,6 +353,7 @@ impl Core {
     /// Settings → Playback now.
     pub fn playback_settings(&self) -> PlaybackSettingsSnapshot {
         PlaybackSettingsSnapshot::new(
+            self.app.preferred_quality().into(),
             self.app.auto_skip().borrow().clone(),
             self.app.quality_resolution(),
             self.app.quality_all(),
@@ -370,6 +372,24 @@ impl Core {
             Vec::new()
         };
         self.set_auto_skip(kinds).await
+    }
+
+    /// The Settings choice "Preferred quality": each item plays at the highest entry of its quality menu that is not above it, on local
+    /// and internet addresses alike. Saved at once on the core's blocking pool; it applies from the next item played.
+    ///
+    /// # Errors
+    /// [`CoreError::Store`] if the settings could not be saved: the setting stands for this run.
+    pub async fn set_preferred_quality(&self, quality: QualityChoice) -> Result<(), CoreError> {
+        let app = self.app.clone();
+        self.runtime
+            .spawn_blocking(move || app.set_preferred_quality(quality.into()))
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| CoreError::Store {
+                problem: (&error).into(),
+            })
     }
 
     /// The Settings switch "Show resolution in quality menu". Saved at once on the core's blocking pool.

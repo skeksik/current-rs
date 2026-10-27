@@ -11,7 +11,7 @@ use crate::clock::Clock;
 use crate::controller::{Controller, PROGRESS_INTERVAL, STALL_TIMEOUT};
 use crate::engine::{EndReason, EngineEvent, EngineTrack};
 use crate::planner::PlanNote;
-use crate::quality::{Quality, QualityMemory};
+use crate::quality::{Quality, QualityPreference};
 use crate::server::{ProgressReport, StopReport, TranscodePermissions};
 use crate::status::{AutoSkip, PlayerEvent, PlayerStatus};
 use crate::test_support::{
@@ -41,7 +41,7 @@ impl Harness {
             engine,
             server.clone(),
             clock.clone(),
-            QualityMemory::default(),
+            QualityPreference::default(),
             auto_skip,
         );
         Self {
@@ -953,7 +953,7 @@ fn the_position_is_published_at_most_4_times_a_second_and_changes_at_once() {
 }
 
 #[test]
-fn a_quality_change_is_remembered_for_the_address_kind_and_re_plans() {
+fn a_quality_change_re_plans_the_item_playing_only() {
     let mut player = Harness::playing(AutoSkip::off());
     player.server.answer(Ok(answer(
         hls(StreamAction::Transcode, StreamAction::Copy),
@@ -961,18 +961,6 @@ fn a_quality_change_is_remembered_for_the_address_kind_and_re_plans() {
     )));
     player.at(200);
     block_on(player.player.set_quality(Quality::Bitrate(8_000_000)));
-    let events = player.events();
-    assert!(events.contains(&PlayerEvent::QualityChanged {
-        local: true,
-        quality: Quality::Bitrate(8_000_000),
-    }));
-    assert_eq!(
-        player.player.quality_memory(),
-        QualityMemory {
-            local: Quality::Bitrate(8_000_000),
-            internet: Quality::Maximum,
-        }
-    );
     let requests = player.requests();
     assert_eq!(requests[1].1.quality, Quality::Bitrate(8_000_000));
     assert_eq!(requests[1].1.start, secs(200));
@@ -982,10 +970,112 @@ fn a_quality_change_is_remembered_for_the_address_kind_and_re_plans() {
         .and_then(|d| d.plan)
         .map(|p| p.reasons);
     assert_eq!(reasons, Some(vec![RouteReason::QUALITY_LIMIT]));
-
-    // On an internet address the other memory is used.
-    player.server.state().local = false;
+    assert_eq!(player.player.status().quality, Quality::Bitrate(8_000_000));
+    // The pick is not kept as a preference: the next item plays at the preferred quality.
+    assert_eq!(
+        player.player.quality_preference(),
+        QualityPreference::default()
+    );
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    assert_eq!(player.requests()[2].1.quality, Quality::Maximum);
     assert_eq!(player.player.status().quality, Quality::Maximum);
+}
+
+/// Plays e1 with the preferred quality, the fake server's source at 20 Mbit/s: the plan requests and the quality in use.
+fn play_preferring(preferred: Quality, all: bool) -> (Harness, Vec<crate::server::PlanRequest>) {
+    let mut player = Harness::new(AutoSkip::off());
+    player
+        .player
+        .set_quality_preference(QualityPreference { preferred, all });
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    let requests = player
+        .requests()
+        .into_iter()
+        .map(|(_, request)| request)
+        .collect();
+    (player, requests)
+}
+
+#[test]
+fn a_preferred_quality_between_entries_plans_once_more_at_the_entry_below() {
+    // The menu of a 20 Mbit/s source: the original, 720p at 4 and 480p at 1 (20 itself would change nothing).
+    let (mut player, requests) = play_preferring(Quality::Bitrate(10_000_000), false);
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].quality, Quality::Bitrate(10_000_000));
+    assert_eq!(requests[0].media_source, None);
+    // The same version, at the entry.
+    assert_eq!(requests[1].quality, Quality::Bitrate(4_000_000));
+    assert_eq!(requests[1].media_source.as_deref(), Some("source-1"));
+    assert_eq!(player.player.status().quality, Quality::Bitrate(4_000_000));
+    // The engine loads the second plan only.
+    let loads = player
+        .commands()
+        .into_iter()
+        .filter(|command| matches!(command, Command::Load(_)))
+        .count();
+    assert_eq!(loads, 1);
+    player.start();
+    let reports = player.reports();
+    let [(_, Report::Start(start))] = reports.as_slice() else {
+        panic!("one start report: {reports:?}");
+    };
+    assert_eq!(start.play_session_id, "ps-2");
+}
+
+#[test]
+fn a_preferred_quality_that_is_an_entry_plans_once() {
+    let (player, requests) = play_preferring(Quality::Bitrate(4_000_000), false);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(player.player.status().quality, Quality::Bitrate(4_000_000));
+    // With every step listed, 10 Mbit/s is an entry too.
+    let (player, requests) = play_preferring(Quality::Bitrate(10_000_000), true);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(player.player.status().quality, Quality::Bitrate(10_000_000));
+}
+
+#[test]
+fn a_preferred_quality_at_or_above_the_original_plays_the_original_with_one_plan() {
+    for preferred in [
+        Quality::Bitrate(40_000_000),
+        Quality::Bitrate(20_000_000),
+        Quality::Maximum,
+    ] {
+        let (player, requests) = play_preferring(preferred, false);
+        // The server sends the original either way: no second plan.
+        assert_eq!(requests.len(), 1, "{preferred:?}");
+        assert_eq!(requests[0].quality, preferred);
+        // The menu's "Maximum" is the entry in use.
+        assert_eq!(player.player.status().quality, Quality::Maximum);
+    }
+}
+
+#[test]
+fn a_source_without_a_bitrate_plays_at_the_preferred_quality() {
+    let mut player = Harness::new(AutoSkip::off());
+    let mut unknown = answer(Route::DirectPlay, vec![]);
+    unknown.source.bitrate = None;
+    player.server.answer(Ok(unknown));
+    player.player.set_quality_preference(QualityPreference {
+        preferred: Quality::Bitrate(10_000_000),
+        all: false,
+    });
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    assert_eq!(player.requests().len(), 1);
+    assert_eq!(player.player.status().quality, Quality::Bitrate(10_000_000));
+}
+
+#[test]
+fn a_track_change_or_the_fallback_keeps_the_entry_without_snapping_again() {
+    let (mut player, _) = play_preferring(Quality::Bitrate(10_000_000), false);
+    player.start();
+    player.event(EngineEvent::Ended(EndReason::Error(
+        EngineErrorKind::DECODER_FAILED,
+    )));
+    let requests = player.requests();
+    // Two for the start, one for the fallback, at the entry.
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[2].1.quality, Quality::Bitrate(4_000_000));
+    assert!(!requests[2].1.direct_play);
 }
 
 #[test]

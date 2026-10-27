@@ -393,7 +393,8 @@ pub struct PlayerStateSnapshot {
     /// The segment under the position.
     pub segment: Option<SegmentInfo>,
     pub next: Option<NextEpisodeInfo>,
-    /// The quality limit for the kind of address in use.
+    /// The quality in use: the entry of the item's quality menu it plays at (the highest not above the preferred quality), or the
+    /// user's pick for it; the preferred quality while no item is playing. The menu ticks it.
     pub quality: QualityChoice,
     pub volume: u8,
     pub muted: bool,
@@ -706,6 +707,8 @@ impl From<&PlaybackInfo> for PlaybackInfoSnapshot {
 /// Settings → Playback (ADR 0019, choice 8).
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct PlaybackSettingsSnapshot {
+    /// "Preferred quality": the most each item plays at, on local and internet addresses alike ("Maximum" by default).
+    pub preferred_quality: QualityChoice,
     /// The segment kinds skipped automatically, by open name; empty when off (the default).
     pub auto_skip: Vec<String>,
     /// Whether intros and credits (`intro` and `outro`) are skipped: what the Settings switch shows.
@@ -718,12 +721,14 @@ pub struct PlaybackSettingsSnapshot {
 
 impl PlaybackSettingsSnapshot {
     pub(crate) fn new(
+        preferred_quality: QualityChoice,
         auto_skip: Vec<String>,
         shows_quality_resolution: bool,
         shows_all_qualities: bool,
     ) -> Self {
         let has = |kind: &str| auto_skip.iter().any(|k| k == kind);
         Self {
+            preferred_quality,
             skips_intros_and_credits: has("intro") && has("outro"),
             auto_skip,
             shows_quality_resolution,

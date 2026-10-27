@@ -1,9 +1,11 @@
-//! The playback settings in `settings.json` (ADR 0019, choices 8 and 10): the quality remembered for local and for internet addresses,
-//! and the kinds of segment skipped automatically. All open values (ADR 0013): a value this version cannot read reads as the default
+//! The playback settings in `settings.json` (ADR 0019, choices 8 and 10): the preferred quality, the quality menu's switches, and
+//! the kinds of segment skipped automatically. All open values (ADR 0013): a value this version cannot read reads as the default
 //! and is written back unchanged until the setting is changed here, and fields this version does not know are kept.
 //!
-//! The file keeps them under `playback`: `{"quality_local": "maximum" | <bits per second>, "quality_internet": ..., "auto_skip":
-//! ["intro", "outro", ...], "quality_resolution": false, "quality_all": true}`, each left out at its default.
+//! The file keeps them under `playback`: `{"quality_preferred": "maximum" | <bits per second>, "auto_skip": ["intro", "outro", ...],
+//! "quality_resolution": false, "quality_all": true}`, each left out at its default. Older versions remembered the last quality picked,
+//! per kind of address, in `quality_local` and `quality_internet` (same values): still read and written back as they are, so older and
+//! newer versions share the file, but nothing uses them any more (owner, 2026-10-27).
 
 use serde_json::{Map, Value};
 
@@ -40,6 +42,7 @@ impl StreamQuality {
 
 const QUALITY_LOCAL: &str = "quality_local";
 const QUALITY_INTERNET: &str = "quality_internet";
+const QUALITY_PREFERRED: &str = "quality_preferred";
 const AUTO_SKIP: &str = "auto_skip";
 const QUALITY_RESOLUTION: &str = "quality_resolution";
 const QUALITY_ALL: &str = "quality_all";
@@ -47,8 +50,13 @@ const QUALITY_ALL: &str = "quality_all";
 /// The playback settings. "Maximum", no automatic skipping, and the quality menu naming resolutions by default.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlaybackSettings {
+    /// What older versions remembered for local addresses; kept for them, unused here.
     pub quality_local: StreamQuality,
+    /// What older versions remembered for internet addresses; kept for them, unused here.
     pub quality_internet: StreamQuality,
+    /// "Preferred quality": the most each item plays at, on local and internet addresses alike (owner, 2026-10-27); "Maximum" by
+    /// default.
+    pub quality_preferred: StreamQuality,
     /// The segment kinds skipped automatically, by their names in `current-model` (`intro`, `outro`, ...); empty when off. Kinds this
     /// version does not know are kept.
     pub auto_skip: Vec<String>,
@@ -67,6 +75,7 @@ impl Default for PlaybackSettings {
         Self {
             quality_local: StreamQuality::default(),
             quality_internet: StreamQuality::default(),
+            quality_preferred: StreamQuality::default(),
             auto_skip: Vec::new(),
             quality_resolution: true,
             quality_all: false,
@@ -109,6 +118,7 @@ impl PlaybackSettings {
             Self {
                 quality_local: quality(QUALITY_LOCAL),
                 quality_internet: quality(QUALITY_INTERNET),
+                quality_preferred: quality(QUALITY_PREFERRED),
                 auto_skip,
                 quality_resolution,
                 quality_all,
@@ -125,6 +135,9 @@ impl PlaybackSettings {
         }
         if self.quality_internet != before.quality_internet {
             self.stored.remove(QUALITY_INTERNET);
+        }
+        if self.quality_preferred != before.quality_preferred {
+            self.stored.remove(QUALITY_PREFERRED);
         }
         if self.auto_skip != before.auto_skip {
             self.stored.remove(AUTO_SKIP);
@@ -167,6 +180,11 @@ impl PlaybackSettings {
             QUALITY_INTERNET,
             quality_readable(QUALITY_INTERNET),
             quality(self.quality_internet),
+        );
+        set(
+            QUALITY_PREFERRED,
+            quality_readable(QUALITY_PREFERRED),
+            quality(self.quality_preferred),
         );
         let skip_readable = self.stored.get(AUTO_SKIP).is_none_or(
             |value| matches!(value, Value::Array(kinds) if kinds.iter().all(Value::is_string)),
@@ -217,6 +235,39 @@ mod tests {
         // "maximum" was stored explicitly and still reads: written as the default, which is left out.
         assert_eq!(changed.write(), None);
         assert_eq!(PlaybackSettings::default().write(), None);
+    }
+
+    #[test]
+    fn the_preferred_quality_is_maximum_unless_set() {
+        assert_eq!(
+            PlaybackSettings::default().quality_preferred,
+            StreamQuality::Maximum
+        );
+        let set = read(r#"{"quality_preferred": 10000000}"#);
+        assert_eq!(set.quality_preferred, StreamQuality::Bitrate(10_000_000));
+        assert_eq!(set.write().unwrap()["quality_preferred"], 10_000_000);
+        let mut maximum = set.clone();
+        maximum.quality_preferred = StreamQuality::Maximum;
+        maximum.changed_from(&set);
+        assert_eq!(maximum.write(), None);
+        // A value this version cannot read reads as "Maximum" and is kept until changed here.
+        let odd = read(r#"{"quality_preferred": "automatic"}"#);
+        assert_eq!(odd.quality_preferred, StreamQuality::Maximum);
+        assert_eq!(odd.write().unwrap()["quality_preferred"], "automatic");
+    }
+
+    #[test]
+    fn the_qualities_older_versions_remembered_are_kept_beside_the_preferred_one() {
+        let settings = read(r#"{"quality_local": 4000000, "quality_internet": 1000000}"#);
+        // Not the preferred quality: they were the last picks, which are no longer remembered.
+        assert_eq!(settings.quality_preferred, StreamQuality::Maximum);
+        let mut changed = settings.clone();
+        changed.quality_preferred = StreamQuality::Bitrate(20_000_000);
+        changed.changed_from(&settings);
+        let written = changed.write().unwrap();
+        assert_eq!(written["quality_local"], 4_000_000);
+        assert_eq!(written["quality_internet"], 1_000_000);
+        assert_eq!(written["quality_preferred"], 20_000_000);
     }
 
     #[test]

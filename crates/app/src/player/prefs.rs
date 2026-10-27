@@ -1,17 +1,18 @@
-//! The playback settings while the app runs (ADR 0019, choices 8 and 10): the quality remembered for local and internet addresses,
-//! saved when the user picks one, and the automatic skipping, which live players follow at once. Saved in `settings.json` when the app
-//! has a data folder (`current-store`'s open values), else for the run only.
+//! The playback settings while the app runs (ADR 0019, choices 8 and 10): the preferred quality and the quality menu's switches,
+//! which players read for each item they play, and the automatic skipping, which live players follow at once. A quality picked in the
+//! player is not saved: it changes only the item playing (owner, 2026-10-27). Saved in `settings.json` when the app has a data folder
+//! (`current-store`'s open values), else for the run only.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 
-use current_playback::{Quality, QualityMemory};
+use current_playback::{Quality, QualityPreference};
 use current_store::{SettingsStore, StoreError, StreamQuality};
 use tokio::sync::watch;
 
 use crate::session::Shared;
 
 pub(crate) struct PlaybackPrefs {
-    quality: Mutex<QualityMemory>,
+    preferred_quality: watch::Sender<Quality>,
     auto_skip: watch::Sender<Vec<String>>,
     quality_resolution: watch::Sender<bool>,
     quality_all: watch::Sender<bool>,
@@ -39,10 +40,7 @@ impl PlaybackPrefs {
             .map(|store| store.get().playback)
             .unwrap_or_default();
         Self {
-            quality: Mutex::new(QualityMemory {
-                local: quality(playback.quality_local),
-                internet: quality(playback.quality_internet),
-            }),
+            preferred_quality: watch::Sender::new(quality(playback.quality_preferred)),
             auto_skip: watch::Sender::new(playback.auto_skip),
             quality_resolution: watch::Sender::new(playback.quality_resolution),
             quality_all: watch::Sender::new(playback.quality_all),
@@ -50,8 +48,34 @@ impl PlaybackPrefs {
         }
     }
 
-    pub(crate) fn quality(&self) -> QualityMemory {
-        *self.quality.lock().unwrap_or_else(PoisonError::into_inner)
+    /// The preferred quality; "Maximum" by default.
+    pub(crate) fn preferred_quality(&self) -> Quality {
+        *self.preferred_quality.borrow()
+    }
+
+    /// Sets the preferred quality and saves it. Blocking file I/O. It applies from the next item played, also when the save fails (the
+    /// error says so; the setting stands for this run).
+    pub(crate) fn set_preferred_quality(
+        &self,
+        shared: &Shared,
+        preferred: Quality,
+    ) -> Result<(), StoreError> {
+        let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        self.preferred_quality.send_replace(preferred);
+        match &shared.storage {
+            Some(storage) => storage
+                .settings
+                .update(|settings| settings.playback.quality_preferred = stored(preferred)),
+            None => Ok(()),
+        }
+    }
+
+    /// What a player plays each item at: the preferred quality, snapped to the item's quality menu as Settings lists it.
+    pub(crate) fn quality_preference(&self) -> QualityPreference {
+        QualityPreference {
+            preferred: self.preferred_quality(),
+            all: self.quality_all(),
+        }
     }
 
     /// The segment kinds skipped automatically, by name; empty when off.
@@ -97,33 +121,6 @@ impl PlaybackPrefs {
                 .update(|settings| settings.playback.quality_all = all),
             None => Ok(()),
         }
-    }
-
-    /// Remembers `quality` for the kind of address and saves it in the background; a failed save keeps it for the run.
-    pub(crate) fn save_quality(
-        self: &Arc<Self>,
-        shared: &Arc<Shared>,
-        local: bool,
-        quality: Quality,
-    ) {
-        self.quality
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .set(local, quality);
-        let prefs = self.clone();
-        let shared = shared.clone();
-        // Blocking file I/O, off the workers. Nothing to tell the player when it fails: the choice stands for this run.
-        tokio::task::spawn_blocking(move || {
-            let Some(storage) = &shared.storage else {
-                return;
-            };
-            let _guard = prefs.write.lock().unwrap_or_else(PoisonError::into_inner);
-            let memory = prefs.quality();
-            let _ = storage.settings.update(|settings| {
-                settings.playback.quality_local = stored(memory.local);
-                settings.playback.quality_internet = stored(memory.internet);
-            });
-        });
     }
 
     /// Sets the automatic skipping and saves it. Blocking file I/O. Live players follow it at once, also when the save fails (the error
