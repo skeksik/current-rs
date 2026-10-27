@@ -221,10 +221,14 @@ public sealed record PlaybackInfo(
     RouteInfo? Route, IReadOnlyList<string> Reasons, SourceInfo? Source, IReadOnlyList<PlanNote> Notes, TranscodingInfo? Transcoding,
     EngineOutputInfo Engine);
 
-/// <summary>Settings → Playback (ADR 0019): <c>SkipsIntrosAndCredits</c> is what the switch shows.</summary>
+/// <summary>
+/// Settings → Playback (ADR 0019): <c>SkipsIntrosAndCredits</c> is what the switch shows. <c>PreferredQuality</c> is "Preferred
+/// quality": each item plays at the highest entry of its quality menu that is not above it, on local and internet addresses alike.
+/// </summary>
 public sealed record PlaybackSettings(
     IReadOnlyList<string> AutoSkip,
     bool SkipsIntrosAndCredits,
+    QualityChoice PreferredQuality,
     bool ShowsQualityResolution = true,
     bool ShowsAllQualities = false);
 
@@ -413,7 +417,9 @@ internal static class PlayerMap
             info.Engine.Primaries, info.Engine.Transfer));
 
     public static PlaybackSettings From(Ffi.PlaybackSettingsSnapshot settings) =>
-        new(settings.AutoSkip, settings.SkipsIntrosAndCredits, settings.ShowsQualityResolution, settings.ShowsAllQualities);
+        new(
+            settings.AutoSkip, settings.SkipsIntrosAndCredits, From(settings.PreferredQuality), settings.ShowsQualityResolution,
+            settings.ShowsAllQualities);
 
     public static QualityOption From(Ffi.QualityOptionInfo option) => new(From(option.Quality), option.Resolution, option.Bitrate);
 }

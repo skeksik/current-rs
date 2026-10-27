@@ -280,6 +280,20 @@ mod tests {
     }
 
     #[test]
+    fn a_step_at_the_original_s_bitrate_is_not_offered() {
+        // An original at exactly 4 Mbit/s: the 4 Mbit/s step would send the same, so only the steps below it follow "Original".
+        let options = quality_options(Some(&source(1280, 720, 4_000_000)), false);
+        assert_eq!(
+            names(&options),
+            [
+                (Some("720p"), Some(4_000_000)),
+                (Some("480p"), Some(1_000_000))
+            ]
+        );
+        assert_eq!(options[0].quality, Quality::Maximum);
+    }
+
+    #[test]
     fn the_common_steps_are_named_as_the_server_sends_them() {
         let options = quality_options(Some(&source(3840, 2160, 60_000_000)), false);
         assert_eq!(

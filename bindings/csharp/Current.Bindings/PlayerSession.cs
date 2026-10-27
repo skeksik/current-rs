@@ -122,7 +122,10 @@ public sealed class PlayerSession : IAsyncDisposable
     public Task SelectSubtitleAsync(SubtitleSelection subtitle, CancellationToken ct = default) =>
         CoreCall.RunVoidAsync(token => Open.SelectSubtitle(PlayerMap.ToFfi(subtitle), token), ct);
 
-    /// <summary>The quality for the kind of address in use, remembered for it (local or internet).</summary>
+    /// <summary>
+    /// The quality of the item playing, as picked; plays on at the position with it. Not saved: the next item plays at the preferred
+    /// quality (<see cref="PlaybackExtensions.SetPreferredQualityAsync"/>).
+    /// </summary>
     public Task SetQualityAsync(QualityChoice quality, CancellationToken ct = default) =>
         CoreCall.RunVoidAsync(token => Open.SetQuality(PlayerMap.ToFfi(quality), token), ct);
 
@@ -228,6 +231,18 @@ public static class PlaybackExtensions
         CoreCall.RunUncancellableAsync(async () =>
         {
             await core.Core.SetSkipIntrosAndCredits(skip).ConfigureAwait(false);
+            return true;
+        });
+
+    /// <summary>
+    /// The Settings choice "Preferred quality": each item plays at the highest entry of its quality menu that is not above it, on local
+    /// and internet addresses alike. Saved at once; it applies from the next item played.
+    /// </summary>
+    /// <exception cref="CoreStoreException">The settings could not be saved: the setting stands for this run.</exception>
+    public static Task SetPreferredQualityAsync(this CoreHost core, QualityChoice quality) =>
+        CoreCall.RunUncancellableAsync(async () =>
+        {
+            await core.Core.SetPreferredQuality(PlayerMap.ToFfi(quality)).ConfigureAwait(false);
             return true;
         });
 
