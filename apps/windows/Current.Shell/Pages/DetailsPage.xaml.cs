@@ -15,7 +15,7 @@ namespace Current.Shell.Pages;
 /// new page to the view it had, with the season chosen in it, and scrolls to where the page was. Play, Resume and "Play from the
 /// beginning" come first among the actions, from the core's PlayTarget (ADR 0019, task 5); the player opens over the page.
 /// </summary>
-public sealed partial class DetailsPage : Page
+public sealed partial class DetailsPage : Page, IRefreshable
 {
     /// <summary>The backdrop's height at most, in view pixels: provisional, as the tile sizes are (App.xaml).</summary>
     private const double MaxBackdropHeight = 360;
@@ -465,7 +465,10 @@ public sealed partial class DetailsPage : Page
     private void OnRefreshAccelerator(Microsoft.UI.Xaml.Input.KeyboardAccelerator sender,
         Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
     {
-        _view?.Refresh();
+        Refresh();
         args.Handled = _view is not null;
     }
+
+    /// <summary>The title bar's Refresh button, as F5.</summary>
+    public void Refresh() => _view?.Refresh();
 }
