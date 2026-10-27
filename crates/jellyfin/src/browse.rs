@@ -660,7 +660,7 @@ fn aspect_ratio(ratio: f64) -> Option<AspectRatio> {
     })
 }
 
-fn user_state(data: Option<UserItemDataDto>) -> UserState {
+pub(crate) fn user_state(data: Option<UserItemDataDto>) -> UserState {
     let Some(data) = data else {
         return UserState::default();
     };

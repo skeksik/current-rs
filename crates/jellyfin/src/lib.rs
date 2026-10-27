@@ -18,6 +18,7 @@ mod client;
 mod discovery;
 mod gateway;
 mod image;
+mod live;
 mod playback;
 mod playback_wire;
 mod player;
@@ -42,6 +43,7 @@ pub use discovery::{
 };
 pub use gateway::{GatewayAnswer, Realm};
 pub use image::{ImageError, ImageRequest};
+pub use live::{LiveMessage, LiveSocket};
 pub use playback::{
     MAXIMUM_STREAMING_BITRATE, PlayableStream, PlaybackAnswer, PlaybackError, PlaybackRequest,
     ProgressReport, STOP_REPORT_TIMEOUT, SourceAnswer, StopReport, StreamUrl,
