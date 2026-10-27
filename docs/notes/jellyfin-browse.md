@@ -378,6 +378,27 @@ belong to ADR 0019 and spike/playback-design, and ADR 0018 does not define them:
 ADR 0018's `MediaSummary` names its fields so ADR 0019's stream types can extend them (a `StreamSummary` for one stream per kind that
 ADR 0019 may replace with its full type).
 
+## 7. Upstream bugs and our workarounds
+
+### An episode's own read keeps a mark its series' sweep undid
+- **Steps** (the owner's run, 2026-10-27, on a one-season series): on the series' page, mark an episode played from its tile; mark
+  the series played; unmark the series; refresh. The episode's tile (a list read) shows unplayed; its details page (`GET
+  Items/{id}`) still shows played, after a refresh too, until the server drops the item from its cache.
+- **Why**: `GET Items/{id}` and `GET UserItems/{id}/UserData` take the item from `LibraryManager.GetItemById` ("`if
+  (_cache.TryGet(id, out var item))`", an LRU of `BaseItem`s) and read its user data from that instance
+  (`UserDataManager.GetUserData`: "`ResolveUserDataRow(item, item.UserData?.Where(e => e.UserId.Equals(user.Id)))`"). `SaveUserData`
+  reloads only the instance it saved through ("`// rehydrate the cached userdata`"); `Folder.MarkPlayed` and `MarkUnplayed` save the
+  instances `GetItemList` loads, so the cached episode keeps what its own mark saved. Lists (`DtoService.GetBaseItemDtos`) read user
+  data through `GetUserDataBatch`, which reads the per-user cache every save updates, so they are right.
+- **Versions**: seen on 12.3 (the owner's server, 2026-10-27; source at tag 06de749, read 2026-10-27). 12.2 (ca0f16eb) has the same lines, from
+  the source; not seen on a 12.2 server.
+- **Workaround**: a detail page takes the item's marks from `GET Items?ids={id}`, sent with `GET Items/{id}`
+  (`JellyfinClient::details`, `crates/jellyfin/src/browse.rs`); the stand-in models the bug (`tools/jellyfin-stand-in/src/library.rs`)
+  and `crates/app/tests/series_marks.rs` tests it. Our series' and season's read-backs (`UserItems/{id}/UserData`) are not affected:
+  their marks are derived by count queries (`Folder.FillUserDataDtoValues`).
+- **Removal**: the workaround and the stand-in's model go once a single-item read serves fresh user data after a folder's sweep;
+  re-check on each new server baseline. Reporting it upstream is the owner's call.
+
 ## Sources
 - Jellyfin server `v12.2` (ca0f16eb): `Jellyfin.Api/Controllers/{UserViewsController, ItemsController, UserLibraryController,
   TvShowsController, LibraryController, SearchController, PlaystateController, ImageController}.cs`,

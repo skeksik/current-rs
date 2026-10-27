@@ -241,14 +241,19 @@ Fix and polish:
       piece); the search page's status lines ("Searching…", "No results", "Couldn't search."). Icon glyphs stay with each platform
       (PRs 93 and 94)
 - [ ] Times of 24 h or more wrap in the player's time labels (h:mm:ss)
-- [ ] Played marks between a series and its episodes keep a stale mark until a refresh (owner's run, 2026-10-26; each needs a failing
+- [x] Played marks between a series and its episodes keep a stale mark until a refresh (owner's run, 2026-10-26; each needs a failing
       test against the stand-in first): (1) marking a series played marks its episodes, but the series' own mark disappears; (2)
       unmarking a series leaves its episodes marked; (3) marking every episode played leaves the series unmarked; (4) a series marked
       through its episodes needs two clicks on Played to unmark; (5) a newly marked series keeps its poster's unplayed count and
       progress bar; (6) after unmarking a series, its episodes' tiles show unmarked but an episode's details page still shows it
       played; (7) finishing an episode does not bring up Next up on Home. Cases 1 to 6 fixed in the core with tests (PR 83;
-      ADR 0018 section 5 point 6, amended 2026-10-27 by the owner). Case 7 already passes in the core against a Jellyfin-like stand-in; the owner re-checks
-      it on their PC, then this is ticked
+      ADR 0018 section 5 point 6, amended 2026-10-27 by the owner). Case 7 passed live on the owner's PC: Next up after finishing
+      an episode, after stopping at 95% or more, and Continue watching after stopping halfway, at main e439dd4 (owner,
+      2026-10-27). Case 6 reopened for a new sequence (owner, 2026-10-27): an episode marked played on its own, then its series
+      marked and unmarked, still showed played on its page and to its Played button, while its tile showed unplayed. Jellyfin
+      answers an item's own read from a cached instance that the series' sweep does not save (v12.3); fixed in
+      fix/episode-mark-after-series-unmark: a detail page takes its marks from a list read, and the Played button reads the copy
+      read or patched last. The owner re-checks the sequence on their PC after merge
 - [ ] The M2 device checks still open (see M2): Dolby Vision profiles 5, 7 and 8, HDR10+, 120 Hz, intro and credits skip with a segment
       plugin, the 60 s stall timeout on a real stall; remux and the gateways were checked in the relay check (PR 81)
 - [x] Quality menu named by what the server will send for this file: model its bitrate rules in the core (audio share, codec, frame

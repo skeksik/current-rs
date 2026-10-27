@@ -16,7 +16,7 @@ use current_model::{CollectionKind, ItemQuery, ItemRef, ItemSummary, Library, Us
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 
-use super::{Context, Live, below_in, find_in, lock, patch_list, sync_list};
+use super::{Context, Live, Stamps, below_in, find_in, lock, patch_list, sync_list};
 use crate::list::ObservableList;
 
 /// How many items each row asks for (what jellyfin-web asks; `docs/notes/jellyfin-browse.md`).
@@ -165,6 +165,8 @@ struct Rows {
     /// Every row's key in Home's order, from the last load of the libraries.
     order: Vec<String>,
     lists: HashMap<String, Arc<ObservableList<ItemSummary>>>,
+    /// When each row's copies were read or patched: the rows are read one request each.
+    stamps: HashMap<String, Stamps>,
 }
 
 /// One kind of load: every row, or only the rows that depend on played marks.
@@ -241,6 +243,7 @@ impl HomeFeed {
                     Spec::SeenRecently.key(),
                 ],
                 lists: HashMap::new(),
+                stamps: HashMap::new(),
             }),
             state: watch::Sender::new(HomeState::default()),
             loads: Mutex::new(Loads::default()),
@@ -318,10 +321,10 @@ impl Home {
                 Ok(client) => {
                     let mut rows = JoinSet::new();
                     for spec in DEPENDENT {
-                        spawn_row(&mut rows, &client, spec);
+                        spawn_row(&mut rows, &ctx, &client, spec);
                     }
                     if full {
-                        spawn_row(&mut rows, &client, Spec::RecentlyAdded);
+                        spawn_row(&mut rows, &ctx, &client, Spec::RecentlyAdded);
                         // The navigation's list takes them too, so the navigation follows what Home shows.
                         match ctx.libraries_joined().await {
                             Ok(libraries) => {
@@ -338,7 +341,7 @@ impl Home {
                                 {
                                     let spec = Spec::Latest(library);
                                     keys.push(spec.key());
-                                    spawn_row(&mut rows, &client, spec);
+                                    spawn_row(&mut rows, &ctx, &client, spec);
                                 }
                                 keys.push(Spec::SeenRecently.key());
                                 if let Some(home) = me.upgrade() {
@@ -350,14 +353,14 @@ impl Home {
                         }
                     }
                     while let Some(joined) = rows.join_next().await {
-                        let Ok((spec, result)) = joined else {
+                        let Ok((spec, at, result)) = joined else {
                             continue;
                         };
                         let Some(home) = me.upgrade() else {
                             return;
                         };
                         match result {
-                            Ok(items) => home.apply(&spec, items),
+                            Ok(items) => home.apply(&spec, items, at),
                             Err(error) => failures.push(error),
                         }
                     }
@@ -412,19 +415,23 @@ impl Home {
         });
     }
 
-    /// A row answered: shown in its place with `items`, or gone without items.
-    fn apply(&self, spec: &Spec, mut items: Vec<ItemSummary>) {
+    /// A row answered `items`, read at `read`: shown in its place, or gone without items.
+    fn apply(&self, spec: &Spec, mut items: Vec<ItemSummary>, read: u64) {
         let key = spec.key();
         let mut rows = lock(&self.lists);
         let at = self.rows.snapshot().iter().position(|row| row.key == key);
         if items.is_empty() {
             rows.lists.remove(&key);
+            rows.stamps.remove(&key);
             if let Some(at) = at {
                 let _ = self.rows.remove(at);
             }
             return;
         }
         self.ctx.observe(&mut items);
+        let mut stamps = Stamps::default();
+        stamps.read(&items, read);
+        rows.stamps.insert(key.clone(), stamps);
         let list = rows
             .lists
             .entry(key.clone())
@@ -464,6 +471,7 @@ impl Home {
         for (at, row) in snapshot.iter().enumerate().rev() {
             if !order.contains(&row.key) {
                 rows.lists.remove(&row.key);
+                rows.stamps.remove(&row.key);
                 let _ = self.rows.remove(at);
             }
         }
@@ -478,21 +486,29 @@ fn load_generation(loads: &Loads, full: bool) -> u64 {
     }
 }
 
+/// A row's answer, and when its request went out ([`Context::tick`]).
+type RowAnswer = (Spec, u64, Result<Vec<ItemSummary>, AuthError>);
+
 fn spawn_row(
-    rows: &mut JoinSet<(Spec, Result<Vec<ItemSummary>, AuthError>)>,
+    rows: &mut JoinSet<RowAnswer>,
+    ctx: &Context,
     client: &Arc<JellyfinClient>,
     spec: Spec,
 ) {
     let client = client.clone();
+    let at = ctx.tick();
     rows.spawn(async move {
         let result = spec.load(&client).await;
-        (spec, result)
+        (spec, at, result)
     });
 }
 
 impl Live for Home {
-    fn patch(&self, item: &ItemRef, state: &UserState) {
-        let rows = lock(&self.lists);
+    fn patch(&self, item: &ItemRef, state: &UserState, at: u64) {
+        let mut rows = lock(&self.lists);
+        for stamps in rows.stamps.values_mut() {
+            stamps.patched(item, at);
+        }
         for list in rows.lists.values() {
             patch_list(list, item, state);
         }
@@ -507,9 +523,15 @@ impl Live for Home {
         self.load(true);
     }
 
-    fn find(&self, item: &ItemRef) -> Option<ItemSummary> {
+    fn find(&self, item: &ItemRef) -> Option<(u64, ItemSummary)> {
         let rows = lock(&self.lists);
-        rows.lists.values().find_map(|list| find_in(list, item))
+        rows.lists
+            .iter()
+            .filter_map(|(key, list)| {
+                let at = rows.stamps.get(key).map_or(0, |stamps| stamps.of(item));
+                Some((at, find_in(list, item)?))
+            })
+            .max_by_key(|(at, _)| *at)
     }
     fn find_below(&self, parent: &ItemRef) -> Vec<ItemSummary> {
         let rows = lock(&self.lists);

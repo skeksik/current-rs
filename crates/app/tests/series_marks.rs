@@ -555,3 +555,224 @@ async fn a_failed_read_back_keeps_the_estimate_without_a_notice() {
     assert_eq!(lists.latest_series().unwrap().user.unplayed_count, Some(1));
     assert!(!notices.has_changed().unwrap(), "no notice");
 }
+
+/// Case 6 after the episode's own mark (the owner's run, 2026-10-27): an episode marked played from its page, then its series
+/// marked played and unmarked, shows unplayed on its page and to its Played button, after the reloads, after Back to the page and
+/// after a refresh.
+#[tokio::test]
+async fn an_episode_marked_on_its_own_follows_its_series_unmarked() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    let first = lists.item(EPISODE_IDS[0]);
+    let played = |page: &DetailsView| {
+        page.details()
+            .borrow()
+            .as_ref()
+            .map(|details| details.summary.user.played)
+    };
+    let button = || lists.browse.user_state(&first).map(|state| state.played);
+
+    lists.toggle(EPISODE_IDS[0]);
+    settle().await;
+    assert_eq!((played(&lists.episode), button()), (Some(true), Some(true)));
+    lists.toggle(SERIES_ID);
+    settle().await;
+    assert!(lists.series_played(true) && lists.episodes_played(true));
+    lists.toggle(SERIES_ID);
+    settle().await;
+    assert!(lists.series_played(false) && lists.episodes_played(false));
+    assert_eq!(played(&lists.episode), Some(false), "the episode's page");
+    assert_eq!(button(), Some(false), "what its Played button reads");
+
+    // Back to the page: a new page of it.
+    let back = lists.browse.details(&first);
+    eventually("the page again", || played(&back).is_some()).await;
+    assert_eq!(played(&back), Some(false));
+    assert_eq!(button(), Some(false), "after Back");
+    back.refresh();
+    settle().await;
+    assert_eq!(
+        (played(&back), button()),
+        (Some(false), Some(false)),
+        "after a refresh"
+    );
+
+    // The button sends what it shows: one press marks the episode played again.
+    lists.toggle(EPISODE_IDS[0]);
+    assert_eq!(button(), Some(true));
+}
+
+/// The same sequence against a slow server (the owner's run, 2026-10-27): each answer read when its request arrives and sent later,
+/// the marks 1.5 s apart, so answers and reloads overlap the next mark.
+#[tokio::test]
+async fn an_episode_marked_on_its_own_follows_its_series_on_a_slow_server() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    stand_in.set_latency(Duration::from_millis(600));
+    let first = lists.item(EPISODE_IDS[0]);
+    let gap = Duration::from_millis(1500);
+    lists.toggle(EPISODE_IDS[0]);
+    tokio::time::sleep(gap).await;
+    lists.toggle(SERIES_ID);
+    tokio::time::sleep(gap).await;
+    lists.toggle(SERIES_ID);
+    eventually("the episode unplayed everywhere", || {
+        lists.episodes_played(false)
+            && lists
+                .browse
+                .user_state(&first)
+                .is_some_and(|state| !state.played)
+    })
+    .await;
+    // After the reloads too.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(lists.episodes_played(false));
+    assert_eq!(
+        lists.browse.user_state(&first).map(|state| state.played),
+        Some(false)
+    );
+    let series = format!("/UserPlayedItems/{SERIES_ID}");
+    assert_eq!(stand_in.count(&series), 2, "one mark and one unmark");
+}
+
+/// Case 6 on the owner's second path (2026-10-27): on the series' page, an episode marked from its list, then the series marked and
+/// unmarked. Jellyfin's single-item read of the episode answers its cached instance, which only the episode's own mark saved: the
+/// episode's page, its tile and its Played button show unplayed all the same.
+#[tokio::test]
+async fn an_episode_marked_from_its_series_page_follows_its_series_unmarked() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let item = |id: &str| ItemRef::new(server.clone(), ItemId::new(id));
+    let series = browse.details(&item(SERIES_ID));
+    eventually("the series' page", || {
+        series.episodes().len() == 2 && !series.state().borrow().loading
+    })
+    .await;
+    let first = item(EPISODE_IDS[0]);
+    let toggle = |target: &ItemRef| {
+        let state = browse.user_state(target).expect("a loaded item");
+        browse.set_played(target, !state.played);
+    };
+    toggle(&first);
+    settle().await;
+    toggle(&item(SERIES_ID));
+    settle().await;
+    toggle(&item(SERIES_ID));
+    settle().await;
+    series.refresh();
+    settle().await;
+    let tile = || series.episodes().snapshot()[0].user.played;
+    assert!(!tile(), "the tile");
+
+    let page = browse.details(&first);
+    eventually("the episode's page", || {
+        page.details().borrow().is_some() && !page.state().borrow().loading
+    })
+    .await;
+    let played = || {
+        page.details()
+            .borrow()
+            .as_ref()
+            .map(|details| details.summary.user.played)
+    };
+    assert_eq!(played(), Some(false), "the episode's page");
+    assert_eq!(
+        browse.user_state(&first).map(|state| state.played),
+        Some(false),
+        "what the tile's menu and the page's Played button read"
+    );
+    page.refresh();
+    settle().await;
+    assert_eq!(played(), Some(false), "after a refresh");
+    assert!(!tile());
+    assert_eq!(
+        browse.user_state(&first).map(|state| state.played),
+        Some(false)
+    );
+}
+
+/// The same shape for a favourite: an episode's favourite is only ever saved through its own instance, so its page follows it.
+#[tokio::test]
+async fn an_episode_favourite_shows_on_its_page() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    let first = lists.item(EPISODE_IDS[0]);
+    for favourite in [true, false] {
+        lists.browse.set_favourite(&first, favourite);
+        settle().await;
+        lists.episode.refresh();
+        lists.series.refresh();
+        settle().await;
+        let page = lists
+            .episode
+            .details()
+            .borrow()
+            .as_ref()
+            .map(|details| details.summary.user.favourite);
+        assert_eq!(page, Some(favourite));
+        assert_eq!(
+            lists.series.episodes().snapshot()[0].user.favourite,
+            favourite
+        );
+        assert_eq!(
+            lists.browse.user_state(&first).map(|state| state.favourite),
+            Some(favourite)
+        );
+    }
+}
+
+/// Where two lists' copies of an item differ, the Played button reads the copy read last, not the first list holding the item: here
+/// the episode is marked on another device between two reads.
+#[tokio::test]
+async fn the_copy_read_last_answers_the_played_button() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let item = |id: &str| ItemRef::new(server.clone(), ItemId::new(id));
+    let first = item(EPISODE_IDS[0]);
+    let button = || browse.user_state(&first).map(|state| state.played);
+    let episode = browse.details(&first);
+    eventually("the episode's page", || {
+        episode.details().borrow().is_some() && !episode.state().borrow().loading
+    })
+    .await;
+    assert_eq!(button(), Some(false));
+
+    stand_in.set_played_on_server(EPISODE_IDS[0], true);
+    let series = browse.details(&item(SERIES_ID));
+    eventually("the series' page", || {
+        series.episodes().len() == 2 && !series.state().borrow().loading
+    })
+    .await;
+    // The episode's page still shows what it read first; the series' page read the new mark.
+    let page = || {
+        episode
+            .details()
+            .borrow()
+            .as_ref()
+            .map(|details| details.summary.user.played)
+    };
+    assert_eq!(page(), Some(false));
+    assert!(series.episodes().snapshot()[0].user.played);
+    assert_eq!(button(), Some(true), "the copy read last");
+
+    stand_in.set_played_on_server(EPISODE_IDS[0], false);
+    episode.refresh();
+    eventually("the episode's page again", || {
+        page() == Some(false) && !episode.state().borrow().loading
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(series.episodes().snapshot()[0].user.played);
+    assert_eq!(button(), Some(false), "the page read again is newer");
+
+    // A patch is newer than both reads.
+    browse.set_played(&first, true);
+    assert_eq!(button(), Some(true));
+}

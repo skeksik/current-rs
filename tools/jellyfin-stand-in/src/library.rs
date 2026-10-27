@@ -8,6 +8,17 @@
 //! total - played`, `PlayedPercentage = played / total * 100`, `Played = playedCount >= totalCount`); Next up lists a series only once
 //! one of its episodes was played (`NextUpService.GetNextUpSeriesKeys`: `LastPlayedDate != null && LastPlayedDate >= dateCutoff`);
 //! and a stop report near the end marks the item played (`UserDataManager.UpdatePlayState`: "mark as completed close to the end").
+//!
+//! Models an upstream Jellyfin bug, which `JellyfinClient::details` works around (`docs/notes/jellyfin-browse.md`, "Upstream bugs and
+//! our workarounds"): a single-item read of an episode or film answers from the server's cached instance of it, which a folder's sweep
+//! does not update (Jellyfin v12.3, tag 06de749, read 2026-10-27; v12.2 at ca0f16eb has the same lines): `GET Items/{id}` and `GET UserItems/{id}/UserData` take the item from
+//! `LibraryManager.GetItemById` ("`if (_cache.TryGet(id, out var item))`", an LRU of `BaseItem`s) and read its user data from that
+//! instance (`UserDataManager.GetUserData`: "`ResolveUserDataRow(item, item.UserData?.Where(...))`"); `SaveUserData` reloads only the
+//! instance it was given ("`// rehydrate the cached userdata`"), and `Folder.MarkUnplayed` saves the instances `GetItemList` loads. A
+//! list (`GET Items`, `Shows/{id}/Episodes`) reads every item's user data fresh, through `GetUserDataBatch`, which reads the per-user
+//! cache every save updates. The stand-in caches an instance on its first single-item read or a mark or stop on its own id; Jellyfin
+//! also caches items as a scan creates them (`RegisterItem` from `CreateItems`), and evicts some: not modelled. The model can go with
+//! the workaround, once a single-item read serves fresh user data after a folder's sweep: re-check on each new server baseline.
 
 use std::collections::{HashMap, HashSet};
 
@@ -147,6 +158,15 @@ pub(crate) struct Marks {
     /// When each item was last played, as a count that only goes up: Jellyfin's `LastPlayedDate`.
     last_played: HashMap<String, u64>,
     clock: u64,
+    /// The cached instances of items that are not folders: their user data as last loaded or saved through them.
+    instances: HashMap<String, Instance>,
+}
+
+/// What a cached instance holds of an item's user data.
+#[derive(Clone, Copy)]
+struct Instance {
+    played: bool,
+    favourite: bool,
 }
 
 impl Marks {
@@ -179,6 +199,12 @@ impl Marks {
     /// now if it played to its end or kept a position (`SessionManager.OnPlaybackStopped`: "`if (playedToCompletion ||
     /// data.PlaybackPositionTicks > 0) data.LastPlayedDate = DateTime.UtcNow`"). The stand-in keeps no resume point itself.
     pub(crate) fn stopped(&mut self, id: &str, position_ticks: i64, failed: bool) {
+        self.stop(id, position_ticks, failed);
+        // `SessionManager.OnPlaybackStopped` saves the item it took from `GetItemById`.
+        self.rehydrate(id);
+    }
+
+    fn stop(&mut self, id: &str, position_ticks: i64, failed: bool) {
         let Some(runtime) = find(id).and_then(runtime_ticks).filter(|ticks| *ticks > 0) else {
             return;
         };
@@ -199,6 +225,28 @@ impl Marks {
             self.clock += 1;
             self.last_played.insert(id.to_owned(), self.clock);
         }
+    }
+}
+
+impl Marks {
+    /// A mark saved through `id`'s own instance, which `GetItemById` caches if it was not: it holds the saved state.
+    pub(crate) fn rehydrate(&mut self, id: &str) {
+        if find(id).is_some_and(|item| !is_folder(item)) {
+            let saved = Instance {
+                played: self.played.contains(id),
+                favourite: self.favourite.contains(id),
+            };
+            self.instances.insert(id.to_owned(), saved);
+        }
+    }
+
+    /// `id`'s cached instance, loaded with what the database holds now on its first read.
+    fn instance(&mut self, id: &str) -> Instance {
+        let fresh = Instance {
+            played: self.played.contains(id),
+            favourite: self.favourite.contains(id),
+        };
+        *self.instances.entry(id.to_owned()).or_insert(fresh)
     }
 }
 
@@ -281,6 +329,9 @@ pub(crate) fn answer(
     if request.method != "GET" {
         return None;
     }
+    if let Some(answer) = single_item(request, marks) {
+        return Some(answer);
+    }
     let marks = &*marks;
     let answer = match path {
         "/UserViews" => {
@@ -312,7 +363,7 @@ pub(crate) fn answer(
                 .collect();
             (200, result(&next, 0, None))
         }
-        _ => return item_user_data(path, marks).or_else(|| item_paths(request, marks)),
+        _ => return item_paths(request, marks),
     };
     Some(answer)
 }
@@ -344,29 +395,53 @@ fn item_paths(request: &Browse<'_>, marks: &Marks) -> Option<(u16, String)> {
         return Some((200, result(&children, 0, Some(total))));
     }
     let rest = request.path.strip_prefix("/Items/")?;
-    let (id, similar) = match rest.split_once('/') {
-        Some((id, "Similar")) => (id, true),
-        Some(_) => return None,
-        None => (rest, false),
+    // `Items/{id}` itself is a single-item read ([`single_item`]).
+    let Some((id, "Similar")) = rest.split_once('/') else {
+        return None;
     };
     let Some(item) = find(id) else {
         return Some((404, String::new()));
     };
-    if similar {
-        let others: Vec<String> = ITEMS
-            .iter()
-            .filter(|other| other.kind == item.kind && other.id != item.id)
-            .map(|other| record(other, marks, ""))
-            .collect();
-        let total = others.len();
-        return Some((200, result(&others, 0, Some(total))));
+    let others: Vec<String> = ITEMS
+        .iter()
+        .filter(|other| other.kind == item.kind && other.id != item.id)
+        .map(|other| record(other, marks, ""))
+        .collect();
+    let total = others.len();
+    Some((200, result(&others, 0, Some(total))))
+}
+
+/// `GET Items/{id}` and `GET UserItems/{id}/UserData`: an item that is not a folder answers its cached instance's user data.
+fn single_item(request: &Browse<'_>, marks: &mut Marks) -> Option<(u16, String)> {
+    let path = request.path;
+    let (id, whole) = match path.strip_prefix("/UserItems/") {
+        Some(rest) => (rest.strip_suffix("/UserData")?, false),
+        None => {
+            let id = path.strip_prefix("/Items/")?;
+            (id, true)
+        }
+    };
+    if id.contains('/') || id == "Latest" {
+        return None;
+    }
+    let Some(item) = find(id) else {
+        return Some((404, String::new()));
+    };
+    let data = if is_folder(item) {
+        user_data(id, marks)
+    } else {
+        let instance = marks.instance(id);
+        leaf_user_data(id, instance.played, instance.favourite)
+    };
+    if !whole {
+        return Some((200, data));
     }
     let extra = if id == FILM_IDS[0] {
         format!(",{FILM_DETAILS}")
     } else {
         String::new()
     };
-    Some((200, record(item, marks, &extra)))
+    Some((200, record_with(item, extra.as_str(), &data)))
 }
 
 /// `GET Items`: parent, kinds, a person's items (`personIds`), search term, paging and the total, sorted by name (Jellyfin orders a
@@ -381,9 +456,13 @@ fn items(request: &Browse<'_>, marks: &Marks) -> (u16, String) {
         .param("personIds")
         .map(|people| people.split(',').collect());
     let term = request.param("searchTerm").map(str::to_lowercase);
+    // `ids` asks for those items wherever they are (`Folder.GetItems`: "`if (query.ItemIds.Length > 0)`", then
+    // `LibraryManager.GetItemsResult(query)`; v12.3, read 2026-10-27).
+    let ids: Option<Vec<&str>> = request.param("ids").map(|ids| ids.split(',').collect());
     let mut found: Vec<&Item> = ITEMS
         .iter()
         .filter(|item| match parent {
+            _ if let Some(ids) = &ids => ids.contains(&item.id),
             // A person is in no library.
             _ if item.kind == "Person" => {
                 parent.is_none()
@@ -529,6 +608,10 @@ fn result(items: &[String], start: usize, total: Option<usize>) -> String {
 }
 
 fn record(item: &Item, marks: &Marks, extra: &str) -> String {
+    record_with(item, extra, &user_data(item.id, marks))
+}
+
+fn record_with(item: &Item, extra: &str, user_data: &str) -> String {
     format!(
         r#"{{"Name":"{}","ServerId":"{}","Id":"{}","Type":"{}",{}{extra},"UserData":{}}}"#,
         item.name,
@@ -536,7 +619,7 @@ fn record(item: &Item, marks: &Marks, extra: &str) -> String {
         item.id,
         item.kind,
         item.fields,
-        user_data(item.id, marks)
+        user_data
     )
 }
 
@@ -563,7 +646,11 @@ fn user_data(id: &str, marks: &Marks) -> String {
             played >= total
         );
     }
-    let played = marks.played.contains(id);
+    leaf_user_data(id, marks.played.contains(id), favourite)
+}
+
+/// The user data of an item that is not a folder.
+fn leaf_user_data(id: &str, played: bool, favourite: bool) -> String {
     // The second film is half watched until it is marked played.
     let (position, percentage) = if id == FILM_IDS[1] && !played {
         (27_000_000_000_i64, ",\"PlayedPercentage\":50")
@@ -602,16 +689,7 @@ fn mark(marks: &mut Marks, which: Mark, id: &str, method: &str) -> (u16, String)
             marks.favourite.remove(id);
         }
     }
+    // Saved through the item's own instance (`PlaystateController` and `UserLibraryController` take it from `GetItemById`).
+    marks.rehydrate(id);
     (200, user_data(id, marks))
-}
-
-/// `GET UserItems/{id}/UserData`: the item's user data, as the mark requests answer it (`ItemsController.GetItemUserData`).
-fn item_user_data(path: &str, marks: &Marks) -> Option<(u16, String)> {
-    let id = path
-        .strip_prefix("/UserItems/")?
-        .strip_suffix("/UserData")?;
-    Some(match find(id) {
-        Some(_) => (200, user_data(id, marks)),
-        None => (404, String::new()),
-    })
 }

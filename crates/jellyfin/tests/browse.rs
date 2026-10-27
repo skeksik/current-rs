@@ -656,11 +656,23 @@ const DETAILS: &str = r#"{"Name":"Example Film","OriginalTitle":"Example Origina
 
 #[tokio::test]
 async fn details_map_every_field() {
-    let stand_in = StandIn::answering(DETAILS).await;
+    let stand_in = StandIn::start(|request| match request.path.as_str() {
+        "/Items" => (500, String::new()),
+        _ => (200, DETAILS.to_owned()),
+    })
+    .await;
     let details = client(&stand_in).details(&item(MOVIE)).await.unwrap();
-    let request = stand_in.only();
-    assert_eq!(request.path, format!("/Items/{MOVIE}"));
-    assert!(request.query.is_empty());
+    let mut received = stand_in.received();
+    received.sort_by(|a, b| a.path.cmp(&b.path));
+    assert_eq!(received.len(), 2, "{received:?}");
+    assert_eq!(received[1].path, format!("/Items/{MOVIE}"));
+    assert!(received[1].query.is_empty());
+    // The marks as a list reads them: it failed here, so the item's own stand.
+    assert_eq!(received[0].path, "/Items");
+    assert_eq!(
+        received[0].query.get("ids").map(String::as_str),
+        Some(MOVIE)
+    );
 
     assert_eq!(details.summary.name, "Example Film");
     assert!(details.summary.user.played);
@@ -715,6 +727,44 @@ async fn details_map_every_field() {
     assert_eq!(media.audio[1].language.as_deref(), Some("fra"));
     assert_eq!(media.subtitles.len(), 1);
     assert_eq!(media.subtitles[0].label, "English - SUBRIP");
+}
+
+/// The single-item read answers the server's cached instance of the item, which a mark on its series does not save (Jellyfin v12.3,
+/// `LibraryManager.GetItemById`): the marks come from a list read of it, as its other fields do not.
+#[tokio::test]
+async fn details_take_their_marks_from_a_list_read() {
+    let stand_in = StandIn::start(|request| match request.path.as_str() {
+        "/Items" => (
+            200,
+            format!(
+                r#"{{"Items":[{{"Name":"Example Film","Id":"{MOVIE}","Type":"Movie",
+                    "UserData":{{"PlaybackPositionTicks":0,"PlayCount":0,"IsFavorite":true,"Played":false}}}}]}}"#
+            ),
+        ),
+        _ => (200, DETAILS.to_owned()),
+    })
+    .await;
+    let details = client(&stand_in).details(&item(MOVIE)).await.unwrap();
+    assert!(!details.summary.user.played, "the list's marks");
+    assert!(details.summary.user.favourite);
+    assert_eq!(details.overview.as_deref(), Some("An example overview."));
+
+    // A list that leaves the item out changes nothing.
+    let stand_in = StandIn::start(|request| match request.path.as_str() {
+        "/Items" => (200, r#"{"Items":[]}"#.to_owned()),
+        _ => (200, DETAILS.to_owned()),
+    })
+    .await;
+    let details = client(&stand_in).details(&item(MOVIE)).await.unwrap();
+    assert!(details.summary.user.played);
+
+    // The item's own read failing fails the details.
+    let stand_in = StandIn::start(|request| match request.path.as_str() {
+        "/Items" => (200, r#"{"Items":[]}"#.to_owned()),
+        _ => (500, String::new()),
+    })
+    .await;
+    assert!(client(&stand_in).details(&item(MOVIE)).await.is_err());
 }
 
 #[tokio::test]
