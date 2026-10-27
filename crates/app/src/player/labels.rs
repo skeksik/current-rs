@@ -213,6 +213,7 @@ mod tests {
                 ("Original", true),
                 ("40 Mbit/s", false),
                 ("20 Mbit/s", false),
+                ("10 Mbit/s", false),
                 ("4 Mbit/s", false),
                 ("1 Mbit/s", false),
             ]
@@ -221,14 +222,15 @@ mod tests {
 
     #[test]
     fn a_limit_below_or_between_the_entries_is_listed_and_checked() {
-        let menu = quality_menu(None, Quality::Bitrate(10_000_000), true, &dot());
+        let menu = quality_menu(None, Quality::Bitrate(15_000_000), true, &dot());
         assert_eq!(
             labels(&menu),
             [
                 ("Original", false),
                 ("40 Mbit/s", false),
                 ("20 Mbit/s", false),
-                ("10 Mbit/s", true),
+                ("15 Mbit/s", true),
+                ("10 Mbit/s", false),
                 ("4 Mbit/s", false),
                 ("1 Mbit/s", false),
             ]
@@ -241,8 +243,8 @@ mod tests {
         assert!(menu.last().is_some_and(|item| item.checked));
         // An entry of the menu is checked, not added again.
         let menu = quality_menu(None, Quality::Bitrate(4_000_000), true, &dot());
-        assert_eq!(menu.len(), 5);
-        assert!(menu[3].checked);
+        assert_eq!(menu.len(), 6);
+        assert!(menu[4].checked);
     }
 
     #[test]

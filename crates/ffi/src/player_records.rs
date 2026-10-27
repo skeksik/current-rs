@@ -900,7 +900,7 @@ mod tests {
         core.set_decimal_separator(",".into());
         assert_eq!(core.bitrate_label(1_500_000), "1,5 Mbit/s");
         let fallback = core.quality_menu(None, QualityChoice::Maximum, true);
-        assert_eq!(fallback.len(), 5);
+        assert_eq!(fallback.len(), 6);
         assert!(fallback[0].checked);
         assert_eq!(fallback[0].label, "Original");
     }

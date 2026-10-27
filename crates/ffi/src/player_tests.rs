@@ -328,15 +328,16 @@ fn the_playback_settings_switch_skipping() {
     assert_eq!(core.playback_settings().preferred_quality, preferred);
     // A step the short list does not offer is stored as the nearest it does, so Settings always has one selected.
     block_on(core.set_preferred_quality(QualityChoice::Bitrate {
-        bits_per_second: 10_000_000,
+        bits_per_second: 15_000_000,
     }))
     .unwrap();
-    assert_eq!(
-        core.playback_settings().preferred_quality,
-        QualityChoice::Bitrate {
-            bits_per_second: 4_000_000
-        }
-    );
+    let ten = QualityChoice::Bitrate {
+        bits_per_second: 10_000_000,
+    };
+    assert_eq!(core.playback_settings().preferred_quality, ten);
+    // 10 Mbit/s is a common step (owner, 2026-10-27): stored as it is.
+    block_on(core.set_preferred_quality(ten)).unwrap();
+    assert_eq!(core.playback_settings().preferred_quality, ten);
     // No bitrate is no limit: "Maximum", as the settings file reads it.
     block_on(core.set_preferred_quality(QualityChoice::Bitrate { bits_per_second: 0 })).unwrap();
     assert_eq!(
@@ -347,7 +348,7 @@ fn the_playback_settings_switch_skipping() {
     assert!(core.playback_settings().shows_all_qualities);
     // A step only "Show all" lists, then the switch off: the nearest listed step not above it, 4 Mbit/s.
     block_on(core.set_preferred_quality(QualityChoice::Bitrate {
-        bits_per_second: 10_000_000,
+        bits_per_second: 8_000_000,
     }))
     .unwrap();
     block_on(core.set_show_all_qualities(false)).unwrap();

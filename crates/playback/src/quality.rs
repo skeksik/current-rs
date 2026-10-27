@@ -21,11 +21,13 @@ pub enum Quality {
 }
 
 impl Quality {
-    /// The menu's common steps below "Maximum", highest first (owner, 2026-10-26): 4K, 1080p, 720p and 480p, each at a bitrate the
-    /// server's table names so: 3840, 2560 (which the server calls 1080p), 1280 and 768 wide.
-    pub const STEPS: [Quality; 4] = [
+    /// The menu's common steps below "Maximum", highest first (owner, 2026-10-26; 10 Mbit/s added 2026-10-27): 4K, 1440p, 1080p,
+    /// 720p and 480p, each at a bitrate the server's table gives that width for H.264 at 30 fps without a file: 3840, 2560, 1920,
+    /// 1280 and 768 wide.
+    pub const STEPS: [Quality; 5] = [
         Quality::Bitrate(40_000_000),
         Quality::Bitrate(20_000_000),
+        Quality::Bitrate(10_000_000),
         Quality::Bitrate(4_000_000),
         Quality::Bitrate(1_000_000),
     ];
@@ -332,10 +334,11 @@ fn sent_picture(source: &MediaSource, target: &QualityTarget<'_>, max: i64) -> O
     }
 }
 
-/// A picture's name as the Jellyfin server gives it (`MediaBrowser.Model/Entities/MediaStream.cs`, `GetResolutionText`, progressive):
-/// by its width, with its height no more than the size's; `None` for one larger than 8K.
+/// A picture's name as the Jellyfin server gives it (`MediaBrowser.Model/Entities/MediaStream.cs`, `GetResolutionText`, progressive),
+/// except that 2560 wide is "1440p", not "1080p": by its width, with its height no more than the size's; `None` for one larger than
+/// 8K.
 pub fn resolution_name(width: u32, height: u32) -> Option<&'static str> {
-    const NAMES: [(u32, u32, &str); 13] = [
+    const NAMES: [(u32, u32, &str); 14] = [
         (256, 144, "144p"),
         (426, 240, "240p"),
         (640, 360, "360p"),
@@ -345,8 +348,11 @@ pub fn resolution_name(width: u32, height: u32) -> Option<&'static str> {
         (960, 544, "540p"),
         (1024, 576, "576p"),
         (1280, 962, "720p"),
-        // Up to 2560 × 1440: the server counts ultra-wide 1080p (2560 × 1080) and WQHD as 1080p.
-        (2560, 1440, "1080p"),
+        // The server names anything up to 2560 × 1440 "1080p". Current departs from it here (owner, 2026-10-27; ADR 0022, item 6):
+        // the menu says what really streams, as the info panel shows it, so a picture 2560 wide is "1440p". Named by width class, as
+        // the server's table is: a 2.39:1 picture 2560 wide (2560 × 1072) and an ultra-wide 2560 × 1080 are "1440p" too.
+        (1920, 1440, "1080p"),
+        (2560, 1440, "1440p"),
         (4096, 3072, "4K"),
         (8192, 6144, "8K"),
         (u32::MAX, u32::MAX, ""),
@@ -490,8 +496,11 @@ mod tests {
     #[test]
     fn pictures_are_named_as_the_server_names_them() {
         assert_eq!(resolution_name(3840, 2160), Some("4K"));
-        assert_eq!(resolution_name(2560, 1440), Some("1080p"));
-        assert_eq!(resolution_name(2560, 1080), Some("1080p"));
+        // Current's departure: 2560 wide is "1440p", whatever its height (the server says "1080p").
+        assert_eq!(resolution_name(2560, 1440), Some("1440p"));
+        assert_eq!(resolution_name(2560, 1072), Some("1440p"));
+        assert_eq!(resolution_name(2560, 1080), Some("1440p"));
+        assert_eq!(resolution_name(1920, 1440), Some("1080p"));
         assert_eq!(resolution_name(1920, 1080), Some("1080p"));
         assert_eq!(resolution_name(1920, 800), Some("1080p"));
         assert_eq!(resolution_name(1280, 720), Some("720p"));
@@ -574,12 +583,15 @@ mod tests {
 
     #[test]
     fn a_preferred_step_the_common_list_lacks_moves_to_the_nearest_below() {
-        // "Show all" off with 10 Mbit/s preferred: 4 (20 would be above it).
-        assert_eq!(listed_quality(mbit(10), false), mbit(4));
+        // "Show all" off with 15 Mbit/s preferred: 10 (20 would be above it).
+        assert_eq!(listed_quality(mbit(15), false), mbit(10));
+        assert_eq!(listed_quality(mbit(8), false), mbit(4));
         assert_eq!(listed_quality(mbit(60), false), mbit(40));
         assert_eq!(listed_quality(Quality::Bitrate(500_000), false), mbit(1));
         // Listed steps and Original stay.
         assert_eq!(listed_quality(mbit(20), false), mbit(20));
+        // A stored 10 Mbit/s is a common step now (owner, 2026-10-27): listed as it is.
+        assert_eq!(listed_quality(mbit(10), false), mbit(10));
         assert_eq!(listed_quality(Quality::Maximum, false), Quality::Maximum);
         assert_eq!(listed_quality(mbit(10), true), mbit(10));
     }
@@ -614,8 +626,9 @@ mod tests {
             [
                 (Some("4K"), Some(60_000_000)),
                 (Some("4K"), Some(40_000_000)),
-                // 20 Mbit/s: 2560 wide, which the server calls 1080p.
-                (Some("1080p"), Some(20_000_000)),
+                // 20 Mbit/s: 2560 wide, which the server calls 1080p and Current 1440p.
+                (Some("1440p"), Some(20_000_000)),
+                (Some("1080p"), Some(10_000_000)),
                 (Some("720p"), Some(4_000_000)),
                 (Some("540p"), Some(1_000_000)),
             ]
@@ -669,7 +682,8 @@ mod tests {
             names(&options[1..]),
             [
                 (Some("4K"), Some(40_000_000)),
-                (Some("1080p"), Some(20_000_000)),
+                (Some("1440p"), Some(20_000_000)),
+                (Some("1080p"), Some(10_000_000)),
                 (Some("720p"), Some(4_000_000)),
                 (Some("480p"), Some(1_000_000)),
             ]
@@ -699,16 +713,18 @@ mod tests {
             snap_quality(mbit(20), Some(&small), false),
             Quality::Maximum
         );
-        // The menu: Original (26), 1080p at 20, 720p at 4, 480p at 1.
+        // The menu: Original (26), 1080p at 20 and 10, 720p at 4, 540p at 1.
         let large = source(1920, 1080, 26_000_000);
-        assert_eq!(snap_quality(mbit(10), Some(&large), false), mbit(4));
+        assert_eq!(snap_quality(mbit(15), Some(&large), false), mbit(10));
+        assert_eq!(snap_quality(mbit(10), Some(&large), false), mbit(10));
+        assert_eq!(snap_quality(mbit(9), Some(&large), false), mbit(4));
         assert_eq!(snap_quality(mbit(20), Some(&large), false), mbit(20));
         assert_eq!(
             snap_quality(mbit(26), Some(&large), false),
             Quality::Maximum
         );
-        // With every step listed, 10 is an entry of its own.
-        assert_eq!(snap_quality(mbit(10), Some(&large), true), mbit(10));
+        // With every step listed, 15 is an entry of its own.
+        assert_eq!(snap_quality(mbit(15), Some(&large), true), mbit(15));
         assert_eq!(snap_quality(mbit(9), Some(&large), true), mbit(8));
     }
 
@@ -1070,6 +1086,7 @@ mod tests {
         assert_eq!(
             film.steps(&hevc, false),
             [
+                (Some("1080p"), Some(10_000_000)),
                 (Some("1080p"), Some(4_000_000)),
                 // At 1 Mbit/s the low-bitrate boost (×3) is above HEVC's ×1.67, so the codec changes nothing there.
                 (Some("540p"), Some(1_000_000))
@@ -1078,6 +1095,7 @@ mod tests {
         assert_eq!(
             film.steps(&h264_out(), false),
             [
+                (Some("1080p"), Some(10_000_000)),
                 (Some("720p"), Some(4_000_000)),
                 (Some("540p"), Some(1_000_000))
             ]
@@ -1124,22 +1142,24 @@ mod tests {
             .video(Codec::H264, 8, 10_000_000)
             .audio(Codec::AC3, 6, Some(640_000));
         assert_eq!(
-            film.steps(&h264_out(), false)[1],
+            film.steps(&h264_out(), false)[2],
             (Some("540p"), Some(1_000_000))
         );
     }
 
     #[test]
-    fn a_4k_file_at_60_fps_is_sent_at_1080p_at_40_mbits() {
-        // 40 Mbit/s less 640 for E-AC-3 is 39.36, ×0.707 for 60 fps: 27.8, so 2560 wide, which the server calls 1080p.
+    fn a_4k_file_at_60_fps_is_sent_at_1440p_at_40_mbits() {
+        // 40 Mbit/s less 640 for E-AC-3 is 39.36, ×0.707 for 60 fps: 27.8, so 2560 wide: 1440p (the server calls it 1080p). At
+        // 10 Mbit/s, 9.36 ×0.707 is 6.62: 1920 wide.
         let file = File::new(3840, 2160, 59.94, 46_000_000)
             .video(Codec::HEVC, 10, 45_000_000)
             .audio(Codec::EAC3, 6, Some(640_000));
         assert_eq!(
             file.steps(&h264_out(), false),
             [
-                (Some("1080p"), Some(40_000_000)),
-                (Some("1080p"), Some(20_000_000)),
+                (Some("1440p"), Some(40_000_000)),
+                (Some("1440p"), Some(20_000_000)),
+                (Some("1080p"), Some(10_000_000)),
                 (Some("540p"), Some(4_000_000)),
                 (Some("540p"), Some(1_000_000)),
             ]
