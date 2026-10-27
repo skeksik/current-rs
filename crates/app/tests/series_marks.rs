@@ -778,3 +778,34 @@ async fn the_copy_read_last_answers_the_played_button() {
     browse.set_played(&first, true);
     assert_eq!(button(), Some(true));
 }
+
+/// D6, an upstream Jellyfin bug: after its series was unmarked, a favourite on an episode marked on its own before must not make it
+/// played again on the server. Jellyfin saves the favourite with the user data its cached instance of the episode still holds, which
+/// the series' sweep left played (the stand-in models it: `Marks::write_back`).
+#[tokio::test]
+async fn a_favourite_after_a_series_unmark_keeps_the_episode_unplayed_on_the_server() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let lists = Lists::open(&stand_in, &app).await;
+    let first = lists.item(EPISODE_IDS[0]);
+    lists.toggle(EPISODE_IDS[0]);
+    settle().await;
+    lists.toggle(SERIES_ID);
+    settle().await;
+    lists.toggle(SERIES_ID);
+    settle().await;
+    assert!(lists.episodes_played(false));
+
+    lists.browse.set_favourite(&first, true);
+    settle().await;
+    // A list read: what the server's database holds now.
+    lists.series.refresh();
+    settle().await;
+    let episode = lists.series.episodes().snapshot()[0].clone();
+    assert!(episode.user.favourite);
+    assert!(
+        !episode.user.played,
+        "the sweep's unmark stays on the server"
+    );
+    assert!(lists.episodes_played(false));
+}

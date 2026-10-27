@@ -1077,6 +1077,11 @@ fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
             lock(&state.reports).push((path.to_owned(), received.body.clone()));
             // Jellyfin takes the stop into the user's data before it answers (`SessionManager.OnPlaybackStopped`, awaited by
             // `PlaystateController.ReportPlaybackStopped`).
+            if path == "/Sessions/Playing"
+                && let Some(item) = json_string(&received.body, "ItemId")
+            {
+                lock(&state.marks).started(&item);
+            }
             if path == "/Sessions/Playing/Stopped"
                 && let Some(item) = json_string(&received.body, "ItemId")
             {

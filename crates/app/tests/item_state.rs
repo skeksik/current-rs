@@ -325,3 +325,38 @@ async fn a_change_for_an_item_no_list_holds_is_sent() {
     let page = session.details(FILM_IDS[0]).await;
     assert_eq!(on_page(&page).map(|state| state.favourite), Some(false));
 }
+
+/// Resync on focus (owner, 2026-10-27): Home and a grid shown again within five minutes (no refresh then) show a mark made on
+/// another device meanwhile, and so does every page once the app returns to the foreground.
+#[tokio::test]
+async fn a_page_shown_again_shows_a_change_made_elsewhere() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let session = Session::open(&stand_in, &app).await;
+    let film = session.item(FILM_IDS[0]);
+    let home = session.home().await;
+    let grid = session.grid(FILMS_LIBRARY_ID, FILM_IDS.len()).await;
+    home.hidden();
+    grid.hidden();
+
+    stand_in.set_played_on_server(FILM_IDS[0], true);
+    assert!(!home.shown(), "shown again within five minutes: no refresh");
+    eventually("Home shows the change", || {
+        played(latest_films(&home, &film)) == Some(true)
+    })
+    .await;
+    assert!(!grid.shown());
+    eventually("the grid shows the change", || {
+        played(in_grid(&grid, &film)) == Some(true)
+    })
+    .await;
+
+    // The app returns to the foreground: a page kept for Back shows it too.
+    let kept = session.details(FILM_IDS[2]).await;
+    stand_in.set_played_on_server(FILM_IDS[2], true);
+    app.returned_to_foreground();
+    eventually("the kept page shows the change", || {
+        played(on_page(&kept)) == Some(true)
+    })
+    .await;
+}

@@ -222,6 +222,7 @@ impl Marks {
     /// now if it played to its end or kept a position (`SessionManager.OnPlaybackStopped`: "`if (playedToCompletion ||
     /// data.PlaybackPositionTicks > 0) data.LastPlayedDate = DateTime.UtcNow`"). The stand-in keeps no resume point itself.
     pub(crate) fn stopped(&mut self, id: &str, position_ticks: i64, failed: bool) {
+        self.write_back(id);
         self.stop(id, position_ticks, failed);
         // `SessionManager.OnPlaybackStopped` saves the item it took from `GetItemById`.
         self.rehydrate(id);
@@ -252,6 +253,13 @@ impl Marks {
 }
 
 impl Marks {
+    /// A playback start report for `id` (`SessionManager.OnPlaybackStart(User, BaseItem)`), saved through the item
+    /// `GetNowPlayingItem` took from `GetItemById`: what its instance holds goes back into the database ([`Marks::write_back`]).
+    pub(crate) fn started(&mut self, id: &str) {
+        self.write_back(id);
+        self.rehydrate(id);
+    }
+
     /// A mark saved through `id`'s own instance, which `GetItemById` caches if it was not: it holds the saved state.
     pub(crate) fn rehydrate(&mut self, id: &str) {
         if find(id).is_some_and(|item| !is_folder(item)) {
@@ -260,6 +268,26 @@ impl Marks {
                 favourite: self.favourite.contains(id),
             };
             self.instances.insert(id.to_owned(), saved);
+        }
+    }
+
+    /// A write through `id`'s cached instance, if it has one: Jellyfin reads the user data to change from the instance
+    /// (`UserDataManager.GetUserData`: "`ResolveUserDataRow(item, item.UserData?.Where(e => e.UserId.Equals(user.Id)))`") and saves
+    /// the whole row (`SaveUserData`: "`dbContext.UserData.Attach(userDataEntry).State = EntityState.Modified`"), so a played mark a
+    /// folder's sweep left out of the instance goes back into the database. Done by a favourite (`UserLibraryController.MarkFavorite`:
+    /// "`var data = _userDataRepository.GetUserData(user, item); data.IsFavorite = isFavorite;`"), a playback start
+    /// (`SessionManager.OnPlaybackStart(User, BaseItem)`: "`var data = _userDataManager.GetUserData(user, item); data.PlayCount++;`")
+    /// and a progress or stop report (`OnPlaybackProgress`, `OnPlaybackStopped`, through `UpdatePlayState`, which sets `Played` only
+    /// near the end). Jellyfin v12.3 (tag 06de749) and v12.2 (ca0f16eb), read 2026-10-27; seen in the source only, not on a server.
+    /// An upstream bug the client works around (`docs/notes/jellyfin-browse.md`, "Upstream bugs and our workarounds").
+    pub(crate) fn write_back(&mut self, id: &str) {
+        let Some(instance) = self.instances.get(id).copied() else {
+            return;
+        };
+        if instance.played {
+            self.played.insert(id.to_owned());
+        } else {
+            self.played.remove(id);
         }
     }
 
@@ -712,9 +740,11 @@ fn mark(marks: &mut Marks, which: Mark, id: &str, method: &str) -> (u16, String)
     match which {
         Mark::Played => marks.set_played(id, on),
         Mark::Favourite if on => {
+            marks.write_back(id);
             marks.favourite.insert(id.to_owned());
         }
         Mark::Favourite => {
+            marks.write_back(id);
             marks.favourite.remove(id);
         }
     }
