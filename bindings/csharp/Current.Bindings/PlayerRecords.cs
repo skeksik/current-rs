@@ -238,6 +238,10 @@ public sealed record PlaybackSettings(
 /// </summary>
 public sealed record QualityOption(QualityChoice Quality, string? Resolution, uint? Bitrate);
 
+/// <summary>One line of the quality menu (the core's): its entry, its label ("Original · 4K · 26.1 Mbit/s") and whether it is the
+/// quality in use, its radio item checked.</summary>
+public sealed record QualityMenuEntry(QualityOption Option, string Label, bool Checked);
+
 internal static class PlayerMap
 {
     private static TimeSpan Ms(ulong ms) => TimeSpan.FromMilliseconds(ms);
@@ -422,4 +426,8 @@ internal static class PlayerMap
             settings.ShowsAllQualities);
 
     public static QualityOption From(Ffi.QualityOptionInfo option) => new(From(option.Quality), option.Resolution, option.Bitrate);
+
+    public static Ffi.QualityOptionInfo ToFfi(QualityOption option) => new(ToFfi(option.Quality), option.Resolution, option.Bitrate);
+
+    public static QualityMenuEntry From(Ffi.QualityMenuEntry entry) => new(From(entry.Option), entry.Label, entry.Checked);
 }

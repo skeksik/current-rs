@@ -11,6 +11,7 @@ use current_model::{
     StreamAction, StreamProtocol, SubtitleChoice, TranscodingFacts,
 };
 
+use crate::Core;
 use crate::browse::ItemRef;
 
 fn millis(duration: Duration) -> u64 {
@@ -753,5 +754,112 @@ impl From<&current_app::playback::QualityOption> for QualityOptionInfo {
             resolution: option.resolution.map(str::to_owned),
             bitrate: option.bitrate,
         }
+    }
+}
+
+impl From<&QualityOptionInfo> for current_app::QualityEntry {
+    fn from(option: &QualityOptionInfo) -> Self {
+        Self {
+            quality: option.quality.into(),
+            resolution: option.resolution.clone(),
+            bitrate: option.bitrate,
+        }
+    }
+}
+
+/// One line of the quality menu: its entry, its label ("Original · 4K · 26.1 Mbit/s") and whether it is the quality in use (its
+/// radio item checked).
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct QualityMenuEntry {
+    pub option: QualityOptionInfo,
+    pub label: String,
+    pub checked: bool,
+}
+
+#[uniffi::export]
+impl Core {
+    /// The UI's decimal separator ("." or ",", from the user's region), for the labels with decimals: a platform fact passed once
+    /// at start. "." until then; an empty one changes nothing.
+    pub fn set_decimal_separator(&self, separator: String) {
+        self.app.set_decimal_separator(&separator);
+    }
+
+    /// A bitrate as the player shows it: "40 Mbit/s", "1.5 Mbit/s" (with the UI's decimal separator), "720 kbit/s" below 1 Mbit/s.
+    pub fn bitrate_label(&self, bits_per_second: u32) -> String {
+        current_app::bitrate_label(bits_per_second, &self.app.number_format())
+    }
+
+    /// A quality entry's label: "Original · 1080p · 5.2 Mbit/s", "720p · 4 Mbit/s", without the resolution unless `with_resolution`
+    /// (Settings' "Show resolution in quality menu"); the parts not known are left out.
+    pub fn quality_label(&self, option: QualityOptionInfo, with_resolution: bool) -> String {
+        current_app::quality_label(
+            &(&option).into(),
+            with_resolution,
+            &self.app.number_format(),
+        )
+    }
+
+    /// The quality menu while playing at `current`: `options` as [`crate::Player::quality_options`] named them for the
+    /// version playing, or `None` before then for "Original" and the common steps. A limit below or between the entries is listed
+    /// as its own entry in bitrate order ("Original" stays first); the entry in use is checked.
+    pub fn quality_menu(
+        &self,
+        options: Option<Vec<QualityOptionInfo>>,
+        current: QualityChoice,
+        with_resolution: bool,
+    ) -> Vec<QualityMenuEntry> {
+        let entries = options.map(|options| options.iter().map(Into::into).collect());
+        current_app::quality_menu(
+            entries,
+            current.into(),
+            with_resolution,
+            &self.app.number_format(),
+        )
+        .into_iter()
+        .map(|item| QualityMenuEntry {
+            option: QualityOptionInfo {
+                quality: item.entry.quality.into(),
+                resolution: item.entry.resolution,
+                bitrate: item.entry.bitrate,
+            },
+            label: item.label,
+            checked: item.checked,
+        })
+        .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_quality_menu_is_labelled_with_the_uis_decimal_separator() {
+        let core = Core::new().unwrap();
+        let menu = core.quality_menu(
+            Some(vec![QualityOptionInfo {
+                quality: QualityChoice::Maximum,
+                resolution: Some("4K".into()),
+                bitrate: Some(26_100_000),
+            }]),
+            QualityChoice::Bitrate {
+                bits_per_second: 10_000_000,
+            },
+            true,
+        );
+        let labels: Vec<(&str, bool)> = menu
+            .iter()
+            .map(|entry| (entry.label.as_str(), entry.checked))
+            .collect();
+        assert_eq!(
+            labels,
+            [("Original · 4K · 26.1 Mbit/s", false), ("10 Mbit/s", true)]
+        );
+        core.set_decimal_separator(",".into());
+        assert_eq!(core.bitrate_label(1_500_000), "1,5 Mbit/s");
+        let fallback = core.quality_menu(None, QualityChoice::Maximum, true);
+        assert_eq!(fallback.len(), 5);
+        assert!(fallback[0].checked);
+        assert_eq!(fallback[0].label, "Original");
     }
 }

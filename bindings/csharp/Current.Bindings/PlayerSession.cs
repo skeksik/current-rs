@@ -275,6 +275,41 @@ public static class PlaybackExtensions
     /// <summary>The steps of the quality menu after "Maximum", highest first.</summary>
     public static IReadOnlyList<QualityChoice> QualitySteps(this CoreHost core) =>
         Array.ConvertAll(Ffi.CurrentFfiMethods.QualitySteps(), step => PlayerMap.From(step));
+
+    /// <summary>
+    /// The platform's decimal separator, for the core's labels with decimals ("26,1 Mbit/s" in a region that writes a comma): pass
+    /// it once at start. "." until then; an empty one changes nothing.
+    /// </summary>
+    public static void SetDecimalSeparator(this CoreHost core, string separator)
+    {
+        ArgumentNullException.ThrowIfNull(separator);
+        core.Core.SetDecimalSeparator(separator);
+    }
+
+    /// <summary>A bitrate as the player shows it: "40 Mbit/s", "1.5 Mbit/s", "720 kbit/s" below 1 Mbit/s (the core's words).</summary>
+    public static string BitrateLabel(this CoreHost core, uint bitsPerSecond) => core.Core.BitrateLabel(bitsPerSecond);
+
+    /// <summary>A quality entry's label: "Original · 1080p · 5.2 Mbit/s", "720p · 4 Mbit/s", without the resolution unless
+    /// <paramref name="withResolution"/>; the parts not known are left out (the core's words).</summary>
+    public static string QualityLabel(this CoreHost core, QualityOption option, bool withResolution)
+    {
+        ArgumentNullException.ThrowIfNull(option);
+        return core.Core.QualityLabel(PlayerMap.ToFfi(option), withResolution);
+    }
+
+    /// <summary>
+    /// The quality menu while playing at <paramref name="current"/> (the core decides): <paramref name="options"/> as
+    /// <see cref="PlayerSession.QualityOptionsAsync"/> named them, or null before then for Original and the common steps. A limit
+    /// below or between the entries is listed as its own entry; the entry in use is checked.
+    /// </summary>
+    public static IReadOnlyList<QualityMenuEntry> QualityMenu(
+        this CoreHost core, IReadOnlyList<QualityOption>? options, QualityChoice current, bool withResolution)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        var menu = core.Core.QualityMenu(
+            options?.Select(option => PlayerMap.ToFfi(option)).ToArray(), PlayerMap.ToFfi(current), withResolution);
+        return Array.ConvertAll(menu, entry => PlayerMap.From(entry));
+    }
 }
 
 internal sealed class PlayerStateForwarder(ValueSubscription<PlayerState> target, IUiDispatcher ui)

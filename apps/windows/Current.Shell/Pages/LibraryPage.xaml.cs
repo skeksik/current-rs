@@ -27,24 +27,10 @@ public sealed partial class LibraryPage : Page, IRefreshable
     /// <summary>The filters ticked on or off beside that choice (ItemQuery.ToggleFilterChoices): favourites.</summary>
     private static readonly IReadOnlyList<string> Toggles = ItemQuery.ToggleFilterChoices;
 
-    /// <summary>A sort's name in the menu; a key Current has no name for shows as the core gave it.</summary>
-    private static string SortName(string key) => key switch
-    {
-        "sort_name" => "Name",
-        "date_created" => "Date added",
-        "premiere_date" => "Release date",
-        "community_rating" => "Rating",
-        _ => key,
-    };
+    /// <summary>A sort's and a filter's name in the menus, as the core names them.</summary>
+    private static string SortName(string key) => BrowseLabels.SortName(key);
 
-    private static string FilterName(string? filter) => filter switch
-    {
-        null => "All",
-        "unplayed" => "Unplayed",
-        "played" => "Played",
-        "favourite" => "Favourites",
-        _ => filter,
-    };
+    private static string FilterName(string? filter) => BrowseLabels.FilterName(filter);
 
     // The menu items' icons, as Photos' sort menu has them (owner, 2026-10-26), from Segoe Fluent Icons ("Segoe Fluent Icons font",
     // learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26): E8D2 Font, E787 Calendar, E8B2 Movies, E734 FavoriteStar, E74A Up,
@@ -84,24 +70,18 @@ public sealed partial class LibraryPage : Page, IRefreshable
     private ValueSubscription<PagedState>? _state;
 
     /// <summary>The view across every library shown (<see cref="ViewArgs"/>), or null for a library.</summary>
-    private string? _view;
+    private BrowseView? _view;
 
 
     /// <summary>
-    /// The Filter menu's media types, for a view across every library (owner, 2026-10-26): every type, then the core's kinds, before
-    /// the menu's filters and a separator. Glyphs: Segoe Fluent Icons E8A9 "ViewAll", E8B2 "Movies" and E7F4 "TVMonitor", the films
-    /// and TV libraries' ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26).
+    /// The Filter menu's media types, for a view across every library (owner, 2026-10-26): the core's (Views.FilterMenu), every type
+    /// first, before the menu's filters and a separator. Glyphs: Segoe Fluent Icons E8A9 "ViewAll", E8B2 "Movies" and E7F4
+    /// "TVMonitor", the films and TV libraries' ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-26).
     /// </summary>
     private readonly List<MenuFlyoutItemBase> _kindEntries = [];
     private readonly List<(RadioMenuFlyoutItem Item, string? Kind)> _kindItems = [];
 
-    private static string KindName(string? kind) => kind switch
-    {
-        null => "All types",
-        "movie" => "Movies",
-        "series" => "Series",
-        _ => kind,
-    };
+    private static string KindName(string? kind) => BrowseLabels.KindChoice(kind);
 
     private static string? KindGlyph(string? kind) => kind switch
     {
@@ -111,20 +91,29 @@ public sealed partial class LibraryPage : Page, IRefreshable
         _ => null,
     };
 
-    /// <summary>Puts the media types at the top of the Filter menu, or takes them out (a library).</summary>
-    private void ShowKindItems(bool show)
+    /// <summary>The Filter menu as the core lays it out for <paramref name="view"/> (null: a library) narrowed to
+    /// <paramref name="kind"/>.</summary>
+    private void ShowFilterMenu(BrowseView? view, string? kind)
+    {
+        var menu = Views.FilterMenu(view, kind);
+        ShowKindItems(menu.Kinds);
+        ShowFilterItems(menu.Filters);
+    }
+
+    /// <summary>Puts the media types at the top of the Filter menu, or takes them out (none given).</summary>
+    private void ShowKindItems(IReadOnlyList<string?> kinds)
     {
         foreach (var entry in _kindEntries)
         {
             FilterMenu.Items.Remove(entry);
         }
-        if (!show)
+        if (kinds.Count == 0)
         {
             return;
         }
         if (_kindEntries.Count == 0)
         {
-            foreach (var kind in new string?[] { null }.Concat(ItemQuery.ViewKindChoices))
+            foreach (var kind in kinds)
             {
                 var item = MenuItem(KindName(kind), KindGlyph(kind), "kind");
                 var chosen = kind;
@@ -161,7 +150,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
         {
             return;
         }
-        var narrowed = ViewArgs.Query(view, kind);
+        var narrowed = Views.Query(view, kind);
         Choose(query => query with { Kinds = narrowed.Kinds });
     }
 
@@ -235,8 +224,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
         }
         var library = App.Browsing.FindLibrary(args.Library.Item) ?? args.Library;
         _view = null;
-        ShowKindItems(false);
-        ShowFilterItems(true);
+        ShowFilterMenu(null, null);
         TitleText.Text = library.Name;
         ShowSearchName(library.Name);
         _library = library.Item;
@@ -250,21 +238,13 @@ public sealed partial class LibraryPage : Page, IRefreshable
         if (e.NavigationMode is not (NavigationMode.Back or NavigationMode.Forward))
         {
             _grid.FirstVisible = 0;
-            // What the library opens with: a Home row's own query as it is, else the library's first query with the sort, filter and
-            // view last chosen here, each while Settings remembers it (the core's rule).
-            var remembered = args.Query is null ? App.Core?.LibraryChoicesFor(library.Item) : null;
-            _grid.Wide = remembered?.View?.Tile == LibraryView.Wide;
-            _grid.ShowsTitles = remembered?.View?.ShowTitles ?? true;
-            var first = args.Query ?? ItemQuery.ForLibrary(library);
-            if (remembered?.Sort is { } sort)
-            {
-                first = first with { Sort = [sort.Key], Order = sort.Order };
-            }
-            // Only filters the menu still offers: one remembered from an older version is dropped.
-            if (remembered?.Filters is { } filters && filters.All(filter => Filters.Contains(filter) || Toggles.Contains(filter)))
-            {
-                first = first with { Filters = filters };
-            }
+            // What the library opens with, the core's rule: a Home row's own query as it is, else the library's first query with the
+            // sort, filter and view last chosen here, each while Settings remembers it, filters the menu no longer offers dropped.
+            var opening = App.Core?.LibraryOpening(library, args.Query)
+                ?? new GridOpening(args.Query ?? ItemQuery.ForLibrary(library), Wide: false, ShowTitles: true);
+            _grid.Wide = opening.Wide;
+            _grid.ShowsTitles = opening.ShowTitles;
+            var first = opening.Query;
             // Opened anew: a search left in this grid is over, so a later one starts from the query shown now (review 2, S1).
             _grid.Browsing = null;
             if (!SameChoices(_grid.Query, first))
@@ -307,22 +287,23 @@ public sealed partial class LibraryPage : Page, IRefreshable
             EmptyText.Visibility = Visibility.Visible;
             return;
         }
-        var title = BrowseText.ViewTitle(view.View, view.Kind);
+        var title = Views.Title(view.View, view.Kind);
         TitleText.Text = title;
         _view = view.View;
-        // A Favourites row's header opens its kind's page with the favourites tick on (owner, 2026-10-27).
-        var first = view.Favourite && view.Kind is { } favouriteKind ? ItemQuery.Favourites(favouriteKind) : ViewArgs.Query(view.View, view.Kind);
-        // Recently added narrows by media type in its Filter menu; a kind's page is one type already.
-        ShowKindItems(view.Kind is null);
-        ShowFilterItems(true);
+        // A Favourites row's header opens its kind's page with the favourites tick on (owner, 2026-10-27); nothing is remembered for
+        // a view (the core's opening).
+        var opening = Views.Opening(view.View, view.Kind, view.Favourite);
+        var first = opening.Query;
+        // Recently added narrows by media type in its Filter menu; a kind's page is one type already (the core's menu).
+        ShowFilterMenu(view.View, view.Kind);
         ShowSearchName(title);
         _grid = server.View(view.View, view.Kind);
         _grid.Bind();
         if (mode is not (NavigationMode.Back or NavigationMode.Forward))
         {
             _grid.FirstVisible = 0;
-            _grid.Wide = false;
-            _grid.ShowsTitles = true;
+            _grid.Wide = opening.Wide;
+            _grid.ShowsTitles = opening.ShowTitles;
             _grid.Browsing = null;
             if (!SameChoices(_grid.Query, first))
             {

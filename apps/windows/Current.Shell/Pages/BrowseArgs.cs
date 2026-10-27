@@ -20,24 +20,11 @@ public sealed record LibraryArgs(Library Library, ItemQuery? Query = null)
 /// Favourites tab, rows of a media kind each (owner, 2026-10-27); and a kind's page, every movie, series or episode, a grid on the
 /// library page that a Favourites row's header opens with the favourites tick on (<c>Favourite</c>). Compares by value.
 /// </summary>
-public sealed record ViewArgs(ServerRef Server, string View, string? Kind = null, bool Favourite = false)
+public sealed record ViewArgs(ServerRef Server, BrowseView View, string? Kind = null, bool Favourite = false)
 {
-    public const string Favourites = "favourites";
-    public const string RecentlyAdded = "recently_added";
-
-    /// <summary>Every item of <c>Kind</c> (ItemQuery.OfKind).</summary>
-    public const string Everything = "everything";
-
-    /// <summary>The view's query from the core, narrowed to one media kind when given.</summary>
-    public static ItemQuery Query(string view, string? kind) => view switch
-    {
-        Favourites => ItemQuery.Favourites(kind),
-        Everything when kind is not null => ItemQuery.OfKind(kind),
-        _ => ItemQuery.RecentlyAddedEverywhere(kind),
-    };
-
-    /// <summary>The page that shows it: the Favourites tab's rows on the search page's layout, any other view a grid.</summary>
-    public Type Page => View == Favourites && Kind is null ? typeof(SearchPage) : typeof(LibraryPage);
+    /// <summary>The page that shows it, by the core's layout: the Favourites tab's rows on the search page's layout, any other view a
+    /// grid.</summary>
+    public Type Page => Views.Layout(View, Kind) == ViewLayout.Rows ? typeof(SearchPage) : typeof(LibraryPage);
 }
 
 /// <summary>An item's detail page.</summary>

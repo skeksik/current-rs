@@ -338,7 +338,7 @@ public sealed partial class DetailsPage : Page, IRefreshable
         }
         if (item.Runtime is { } runtime && runtime > TimeSpan.Zero)
         {
-            facts.Add(BrowseText.Runtime(runtime));
+            facts.Add(BrowseLabels.Runtime(runtime));
         }
         if (details.OfficialRating is { Length: > 0 } rating)
         {

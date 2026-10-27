@@ -272,7 +272,7 @@ public sealed partial class SettingsPage : Page
         PreferredQualityBox.Items.Clear();
         foreach (var option in _preferredOptions)
         {
-            PreferredQualityBox.Items.Add(Player.PlayerText.Quality(option, settings.ShowsQualityResolution));
+            PreferredQualityBox.Items.Add(core.QualityLabel(option, settings.ShowsQualityResolution));
         }
         PreferredQualityBox.SelectedIndex = _preferredOptions
             .Select((option, index) => (option, index))
