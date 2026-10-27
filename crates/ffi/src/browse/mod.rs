@@ -10,6 +10,7 @@
 mod problems;
 mod records;
 mod remember;
+mod search_filter;
 
 use std::sync::Arc;
 
@@ -27,6 +28,10 @@ pub use records::{
     SeriesRun, Slot, SlotDiff, SortChoice, SortOrder, StreamSummary, UserState,
 };
 pub use remember::{LibraryChoices, LibraryMemorySettings, LibraryView};
+pub use search_filter::{
+    SearchChoice, SearchChoices, SearchFilter, SearchSource, SearchSourceChoice, SearchTools,
+    SearchTypeChoice, person_query, search_note,
+};
 
 /// Receives a grid's slots: `[Reset]` first, then batches of diffs, on a core thread. Apply each batch in order. It must only hand
 /// the batch to the UI thread and return, and must never throw.
@@ -440,10 +445,12 @@ impl Browse {
         })
     }
 
-    /// The best matches for `term`, one group per kind. Starts loading at once.
-    pub fn search(&self, term: String) -> Arc<SearchResults> {
+    /// The best matches for `term`, one group per kind, of the types and sources `filter` keeps: every type, 24 of each with people
+    /// last, or the one type chosen, up to 100. The catalog while no Seerr server is set up reads as every source. Starts loading at
+    /// once.
+    pub fn search(&self, term: String, filter: SearchFilter) -> Arc<SearchResults> {
         Arc::new(SearchResults {
-            results: self.browse.search(&term),
+            results: self.browse.search(&term, &(&filter).into()),
             host: self.host.clone(),
         })
     }

@@ -46,6 +46,12 @@ pub use browse::{
     recently_added_everywhere_query, recently_added_query, seen_recently_query, series_run,
     tile_artwork, view_kinds, with_filter_choice, with_filter_toggle,
 };
+pub use browse::{
+    CATALOG_NEEDS_SEERR, CATALOG_NEEDS_SEERR_LABEL, NARROWED_SEARCH_LIMIT, SearchChoice,
+    SearchFilter, SearchSource, SearchSourceChoice, SearchTools, SearchTypeChoice,
+    catalog_available, person_query, search_filter_in_effect, search_note, search_tools,
+    search_type_label, search_types,
+};
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use formats::{
     DecoderProfile, FormatRow, FormatSupport, FormatTab, FormatTabKind, HardwareDecoding,
@@ -54,7 +60,7 @@ pub use formats::{
 pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
 pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState};
 pub use images::{ImageError, ImageLoad, ImageSource, WIDTH_BUCKETS, bucket};
-pub use library_choices::LibraryMemory;
+pub use library_choices::{LibraryMemory, SearchMemory};
 pub use list::{ListSubscription, ObservableList, VectorDiff};
 #[cfg(any(test, feature = "test-engine"))]
 pub use player::test_engine;
@@ -562,6 +568,27 @@ impl App {
         choices: LibraryChoices,
     ) -> Result<(), StoreError> {
         self.libraries.remember(self.settings(), library, &choices)
+    }
+
+    /// The global search page's Filter choices for `filter`, as the capabilities state stands now: the catalog is listed, unavailable
+    /// until a Seerr server is signed in ([`browse::search_tools`]).
+    pub fn search_tools(&self, filter: &SearchFilter) -> SearchTools {
+        browse::search_tools(&self.shared.capabilities.borrow(), filter)
+    }
+
+    /// What the global search page opens with: its last filter and view, each only while its switch ("Remember filter", "Remember
+    /// view") is on.
+    pub fn search_choices(&self) -> SearchMemory {
+        self.libraries.search(self.settings())
+    }
+
+    /// Remembers the search page's choices: each part given whose switch is on; the other stays as it was. Saved at once; nothing is
+    /// written when nothing changed. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// As [`App::remember_library_choices`].
+    pub fn remember_search_choices(&self, choices: SearchMemory) -> Result<(), StoreError> {
+        self.libraries.remember_search(self.settings(), &choices)
     }
 
     /// The platform's report of the network, on start and on every change (ADR 0014). Every server's address provider hears it, and
