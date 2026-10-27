@@ -288,9 +288,10 @@ impl Player {
             .map_err(|error| player_error(&error))
     }
 
-    /// The quality menu for the version playing (`current_playback::quality_options`): "Maximum" (the original) first, then the common
-    /// steps, or every step when `all`, below the original's bitrate, each with the resolution the server would send it at and its
-    /// bitrate. Before a version is planned, every step of the list by its width cap.
+    /// The quality menu for the version playing (`current_app::App::quality_options`): "Maximum" (the original) first, then the
+    /// common steps, or every step when `all`, below the original's bitrate, each with the resolution the server would send this file
+    /// at and its bitrate. The names can change once playback has started, when the server says which video codec it encodes to.
+    /// Before a version is planned, every step of the list by its width cap.
     ///
     /// # Errors
     /// [`CoreError::Player`] with `Closed`.
@@ -304,12 +305,9 @@ impl Player {
                 message: error.to_string(),
             })?
             .map_err(|error| player_error(&error))?;
-        let source = info
-            .details
-            .as_ref()
-            .and_then(|details| details.plan.as_ref())
-            .map(|plan| &plan.source);
-        Ok(current_app::playback::quality_options(source, all)
+        Ok(self
+            .app
+            .quality_options(&info, all)
             .iter()
             .map(Into::into)
             .collect())
