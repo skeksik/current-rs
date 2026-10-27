@@ -40,7 +40,8 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           code=true
-          if [ "$EVENT" = pull_request ] && files=$(git diff --name-only HEAD^1 HEAD) && [ -n "$files" ]; then
+          # --no-renames: with rename detection a file moved into docs/ would list only its new path and hide the old code path.
+          if [ "$EVENT" = pull_request ] && files=$(git diff --name-only --no-renames HEAD^1 HEAD) && [ -n "$files" ]; then
             code=false
             # Docs: docs/**, *.md at the root, .claude/**. Anything else (.github/** included) is code.
             while IFS= read -r f; do
