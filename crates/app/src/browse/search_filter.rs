@@ -205,7 +205,7 @@ pub fn search_note(filter: &SearchFilter, count: u32) -> Option<String> {
 }
 
 /// How a group of `kind` on the search page shows, with `filter` (as it applies) and the page's View (`wide`, `show_titles`).
-/// Proposed, for the owner (2026-10-27): people as cast cards whatever the view, and a search narrowed to one type wrapping into a
+/// The owner's decision (2026-10-27): people as cast cards whatever the view, and a search narrowed to one type wrapping into a
 /// grid. Episodes and videos stay wide, as before; the rest are posters or wide as the View says. A person opens their titles and has
 /// no item menu (nothing to play or mark); anything else opens its details. The group's note shows once it holds as many as it asked
 /// for.
