@@ -33,7 +33,7 @@ internal sealed record SignInRequest(SignInFlow Flow, string ServerName, bool Ht
         catch (Exception error) when (error is UnknownServerException or CoreRuntimeException)
         {
             Trace.TraceError($"Current: sign in again failed: {error.GetType().Name}");
-            App.ShowNotice(InfoBarSeverity.Error, $"Can't sign in to {row.Name}.", ProblemText.Unexpected);
+            App.ShowNotice(InfoBarSeverity.Error, $"Can't sign in to {row.Name}.", ProblemTexts.Unexpected);
             return;
         }
         if (!frame.Navigate(typeof(SignInPage), new SignInRequest(flow, row.Name, false, row.UserName, row.Server)))

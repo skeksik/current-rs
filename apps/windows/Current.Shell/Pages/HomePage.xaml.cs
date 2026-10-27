@@ -226,7 +226,7 @@ public sealed partial class HomePage : Page, IRefreshable
             }
             else if (state.Failed is { } failed)
             {
-                SetInfo(info, InfoBarSeverity.Error, "Some rows couldn't be loaded.", BrowseText.Problem(failed), retry: true);
+                SetInfo(info, InfoBarSeverity.Error, "Some rows couldn't be loaded.", App.Core?.ProblemText(failed) ?? ProblemTexts.Unexpected, retry: true);
             }
             else
             {

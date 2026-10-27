@@ -210,7 +210,7 @@ internal sealed class BrowseHub : IDisposable
             return;
         }
         _lastNotice = failed.Seq;
-        App.ShowNotice(Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning, BrowseText.ActionFailedTitle(failed), BrowseText.Problem(failed.Problem));
+        App.ShowNotice(Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning, BrowseLabels.ActionFailedTitle(failed), _core.ProblemText(failed.Problem));
     }
 
     public void Dispose()

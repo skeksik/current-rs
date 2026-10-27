@@ -106,13 +106,13 @@ public sealed partial class SettingsPage : Page
         catch (CoreStoreException error)
         {
             ShowTheme(core.AppTheme);
-            ShowThemeInfo(ProblemText.Store(error.Problem));
+            ShowThemeInfo(ProblemTexts.Store(error.Problem));
         }
         catch (Exception error)
         {
             Trace.TraceError($"Current: changing the app theme failed: {error.GetType().Name}");
             ShowTheme(core.AppTheme);
-            ShowThemeInfo(ProblemText.Unexpected);
+            ShowThemeInfo(ProblemTexts.Unexpected);
         }
     }
 
@@ -151,13 +151,13 @@ public sealed partial class SettingsPage : Page
         }
         catch (CoreStoreException error)
         {
-            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemTexts.Store(error.Problem)}");
         }
         catch (Exception error)
         {
             Trace.TraceError($"Current: changing auto-skip failed: {error.GetType().Name}");
             ShowAutoSkip(core.PlaybackSettings().SkipsIntrosAndCredits);
-            ShowPlaybackInfo(ProblemText.Unexpected);
+            ShowPlaybackInfo(ProblemTexts.Unexpected);
         }
     }
 
@@ -203,13 +203,13 @@ public sealed partial class SettingsPage : Page
         catch (CoreStoreException error)
         {
             ShowLibraryMemory(core.LibraryMemory);
-            ShowLibrariesInfo(ProblemText.Store(error.Problem));
+            ShowLibrariesInfo(ProblemTexts.Store(error.Problem));
         }
         catch (Exception error)
         {
             Trace.TraceError($"Current: changing a remember switch failed: {error.GetType().Name}");
             ShowLibraryMemory(core.LibraryMemory);
-            ShowLibrariesInfo(ProblemText.Unexpected);
+            ShowLibrariesInfo(ProblemTexts.Unexpected);
         }
     }
 
@@ -245,13 +245,13 @@ public sealed partial class SettingsPage : Page
         }
         catch (CoreStoreException error)
         {
-            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemTexts.Store(error.Problem)}");
         }
         catch (Exception error)
         {
             Trace.TraceError($"Current: changing the quality menu's resolutions failed: {error.GetType().Name}");
             ShowQualityResolution(core.PlaybackSettings().ShowsQualityResolution);
-            ShowPlaybackInfo(ProblemText.Unexpected);
+            ShowPlaybackInfo(ProblemTexts.Unexpected);
         }
         // Its entries follow the switch: which steps it lists, and how they are named.
         ShowPreferredQuality(core);
@@ -295,13 +295,13 @@ public sealed partial class SettingsPage : Page
         }
         catch (CoreStoreException error)
         {
-            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemTexts.Store(error.Problem)}");
         }
         catch (Exception error)
         {
             Trace.TraceError($"Current: changing the preferred quality failed: {error.GetType().Name}");
             ShowPreferredQuality(core);
-            ShowPlaybackInfo(ProblemText.Unexpected);
+            ShowPlaybackInfo(ProblemTexts.Unexpected);
         }
     }
 
@@ -329,13 +329,13 @@ public sealed partial class SettingsPage : Page
         }
         catch (CoreStoreException error)
         {
-            ShowPlaybackInfo($"It applies until Current closes. {ProblemText.Store(error.Problem)}");
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemTexts.Store(error.Problem)}");
         }
         catch (Exception error)
         {
             Trace.TraceError($"Current: changing the quality menu's list failed: {error.GetType().Name}");
             ShowAllQualities(core.PlaybackSettings().ShowsAllQualities);
-            ShowPlaybackInfo(ProblemText.Unexpected);
+            ShowPlaybackInfo(ProblemTexts.Unexpected);
         }
         // Its entries follow the switch: which steps it lists, and how they are named.
         ShowPreferredQuality(core);
@@ -402,7 +402,7 @@ public sealed partial class SettingsPage : Page
         catch (Exception error)
         {
             Trace.TraceError($"Current: signing in to the gateway failed: {error.GetType().Name}");
-            ShowAccountsInfo(InfoBarSeverity.Error, row.Name, ProblemText.Unexpected);
+            ShowAccountsInfo(InfoBarSeverity.Error, row.Name, ProblemTexts.Unexpected);
         }
         finally
         {
@@ -439,7 +439,7 @@ public sealed partial class SettingsPage : Page
         catch (Exception error)
         {
             Trace.TraceError($"Current: signing out failed: {error.GetType().Name}");
-            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't sign out of {row.Name}.", ProblemText.Unexpected);
+            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't sign out of {row.Name}.", ProblemTexts.Unexpected);
         }
         finally
         {
@@ -481,7 +481,7 @@ public sealed partial class SettingsPage : Page
         catch (Exception error)
         {
             Trace.TraceError($"Current: the remove confirmation failed: {error.GetType().Name}");
-            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemText.Unexpected);
+            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemTexts.Unexpected);
             return;
         }
         finally
@@ -510,12 +510,12 @@ public sealed partial class SettingsPage : Page
         }
         catch (CoreStoreException error)
         {
-            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemText.Store(error.Problem));
+            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemTexts.Store(error.Problem));
         }
         catch (Exception error)
         {
             Trace.TraceError($"Current: removing a server failed: {error.GetType().Name}");
-            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemText.Unexpected);
+            ShowAccountsInfo(InfoBarSeverity.Error, $"Couldn't remove {row.Name}.", ProblemTexts.Unexpected);
         }
         finally
         {
@@ -560,7 +560,7 @@ public sealed partial class SettingsPage : Page
             var size = await core.ImageCacheSizeAsync();
             if (_loaded)
             {
-                ImageCacheCard.Description = size == 0 ? "Empty" : $"{Browsing.BrowseText.Bytes(size)} of images";
+                ImageCacheCard.Description = size == 0 ? "Empty" : $"{core.SizeOnDisk(size)} of images";
             }
         }
         catch (Exception error)
@@ -592,7 +592,7 @@ public sealed partial class SettingsPage : Page
             Trace.TraceError($"Current: clearing the image cache failed: {error.GetType().Name}");
             StorageInfo.Severity = InfoBarSeverity.Error;
             StorageInfo.Title = "Couldn't clear the image cache.";
-            StorageInfo.Message = ProblemText.Unexpected;
+            StorageInfo.Message = ProblemTexts.Unexpected;
             StorageInfo.IsOpen = true;
         }
         await ShowCacheSizeAsync(core);

@@ -14,7 +14,9 @@ mod gateway_sign_in;
 mod images;
 mod library_choices;
 mod list;
+mod numbers;
 mod player;
+mod problems;
 mod session;
 mod sign_in;
 
@@ -58,6 +60,11 @@ pub use browse::{
     time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
     view_title,
 };
+pub use browse::{
+    DetailsFacts, FAILED_TILE_NAME, LIBRARY_GONE_MESSAGE, LIBRARY_GONE_TITLE, LOADING_TILE_NAME,
+    action_failed_title, details_facts, facts_line, item_count_label, person_kind_name,
+    search_status, size_on_disk, tile_name, tile_subtitle, tile_title,
+};
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use formats::{
     DecoderProfile, FormatRow, FormatSupport, FormatTab, FormatTabKind, HardwareDecoding,
@@ -68,13 +75,14 @@ pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState}
 pub use images::{ImageError, ImageLoad, ImageSource, WIDTH_BUCKETS, bucket};
 pub use library_choices::{LibraryMemory, SearchMemory};
 pub use list::{ListSubscription, ObservableList, VectorDiff};
+pub use numbers::NumberFormat;
 #[cfg(any(test, feature = "test-engine"))]
 pub use player::test_engine;
 pub use player::{
     CompositionSize, DisplayFacts, EngineOutput, EngineReport, MediaStatus, NowPlaying,
-    NumberFormat, PlaybackInfo, Player, PlayerAction, PlayerEngine, PlayerError, QualityEntry,
-    QualityMenuItem, SwapChain, TIMELINE_INTERVAL, VideoOutput, bitrate_label,
-    fallback_quality_entries, player_engine, quality_label, quality_menu,
+    PlaybackInfo, Player, PlayerAction, PlayerEngine, PlayerError, QualityEntry, QualityMenuItem,
+    SwapChain, TIMELINE_INTERVAL, VideoOutput, bitrate_label, fallback_quality_entries,
+    player_engine, quality_label, quality_menu,
 };
 // The player's words and its problems (ADR 0019), worded once for every UI.
 pub use player::{
@@ -90,6 +98,14 @@ pub mod playback {
         QualityPreference, Track, preferred_quality_options, quality_options, snap_quality,
     };
 }
+pub use problems::{
+    AddressProblem, BrowseProblem, DiscoveryProblem, EMBY_HEADER_IGNORED, GATEWAY_REFUSED,
+    GATEWAY_UNSUPPORTED, GATEWAY_WEB_PAGE, GOOGLE_REFUSES_WEB_VIEWS, GatewayInputProblem,
+    GatewayProblem, GatewaySignInProblem, NetProblem, Platform, ProbeProblem, SignInProblem,
+    StoreProblem, UNEXPECTED, browse_problem_text, discovery_problem_text,
+    gateway_input_problem_text, gateway_problem_text, gateway_sign_in_problem_text,
+    net_problem_text, probe_problem_text, sign_in_problem_text, store_problem_text,
+};
 pub use sign_in::{SignIn, SignInError, SignInState};
 
 use images::ImageCache;
@@ -132,6 +148,8 @@ pub struct App {
     engine_capabilities: Arc<player::KnownCapabilities>,
     /// How the UI's platform writes numbers, for the labels with decimals ([`App::set_decimal_separator`]).
     number_format: Mutex<NumberFormat>,
+    /// The UI's platform, for the texts that name it ([`App::set_platform`]).
+    platform: Mutex<Platform>,
 }
 
 impl std::fmt::Debug for App {
@@ -177,6 +195,7 @@ impl App {
             relay: Arc::default(),
             engine_capabilities: Arc::default(),
             number_format: Mutex::default(),
+            platform: Mutex::default(),
         }
     }
 
@@ -217,6 +236,7 @@ impl App {
             relay: Arc::default(),
             engine_capabilities: Arc::default(),
             number_format: Mutex::default(),
+            platform: Mutex::default(),
         };
         Ok((app, report))
     }
@@ -596,6 +616,28 @@ impl App {
     /// How the labels with decimals write numbers: "." until the UI passes its own ([`App::set_decimal_separator`]).
     pub fn number_format(&self) -> NumberFormat {
         self.lock_number_format().clone()
+    }
+
+    /// The UI's platform, for the few texts that name it ("this PC", "Windows"): a platform fact the UI passes once at start.
+    /// Only Windows's words exist so far, so every platform gets them; macOS's and Linux's come with their apps (M3, Linux).
+    pub fn set_platform(&self, platform: Platform) {
+        *self.platform.lock().unwrap_or_else(PoisonError::into_inner) = platform;
+    }
+
+    /// The platform the texts are worded for: Windows until the UI passes its own ([`App::set_platform`]).
+    pub fn platform(&self) -> Platform {
+        // One assignment at a time: a poisoned lock still holds a whole value.
+        *self.platform.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The UI's digit grouping, for the counts with grouped digits ("12,345 items"): its group separator and its group sizes, as
+    /// [`NumberFormat::group_sizes`] reads them. A platform fact the UI passes once at start. An empty list of sizes keeps groups of 3.
+    pub fn set_digit_grouping(&self, separator: &str, sizes: &[u32]) {
+        let mut format = self.lock_number_format();
+        format.group_separator = separator.to_owned();
+        if !sizes.is_empty() {
+            format.group_sizes = sizes.to_vec();
+        }
     }
 
     fn lock_number_format(&self) -> std::sync::MutexGuard<'_, NumberFormat> {

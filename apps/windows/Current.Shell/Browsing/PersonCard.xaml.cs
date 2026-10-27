@@ -55,7 +55,7 @@ public sealed partial class PersonCard : UserControl
         // The initials until the photo arrives, or for good without one.
         Picture.DisplayName = person.Name;
         NameText.Text = person.Name;
-        RoleText.Text = person.Role is { Length: > 0 } role ? role : BrowseText.PersonKind(person.Kind);
+        RoleText.Text = person.Role is { Length: > 0 } role ? role : BrowseLabels.PersonKind(person.Kind);
         AutomationProperties.SetName(this, RoleText.Text.Length > 0 ? $"{person.Name}, {RoleText.Text}" : person.Name);
         if (person.Image is not { } art)
         {

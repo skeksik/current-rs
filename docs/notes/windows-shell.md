@@ -15,7 +15,6 @@ apps/windows/
     ViewModels/           ServersViewModel and ServerRow (saved servers joined with their status, for Home and Settings)
     DeviceName.cs         the device name Jellyfin shows (GetComputerNameExW, DNS host name)
     NetworkObserver.cs    NetworkFacts from Windows.Networking.Connectivity (ADR 0014)
-    ProblemText.cs        the core's problems in plain words
     DispatcherQueueUi.cs  IUiDispatcher over DispatcherQueue (ADR 0004)
     SmokeRun.cs           Current.exe --smoke
   build.ps1               dotnet publish -c Release -r win-x64 -p:Platform=x64 into apps/windows/out/app, plus licences\ and
@@ -318,7 +317,8 @@ actions; nothing is decided in C#.
   - "Server address" box (`InputScope="Url"`, placeholder `192.168.1.10:8096 or media.example.com`); Enter or "Connect" probes.
     While probing, the box is read-only (it keeps focus), a 20 px `ProgressRing` with "Connecting…" shows (the progress page's own
     keyword for a ring), and "Cancel" or Esc stops it.
-  - Every `ProbeProblem` in plain words (`ProblemText.Probe`), in an error `InfoBar` under the box, on the page and not in a dialog:
+  - Every `ProbeProblem` in plain words (the core's, `CoreHost.ProblemText`), in an error `InfoBar` under the box, on the page and
+    not in a dialog:
     "Don't use dialogs for errors that are contextual to a specific place on the page, such as validation errors … use the app's
     canvas itself to show inline errors" (Dialog controls). `Tls` reads "The secure connection failed. The server's certificate may
     not be trusted by this PC."
@@ -346,7 +346,7 @@ actions; nothing is decided in C#.
     Connect code 1 2 3 4 5 6"), with "Copy" next to it (named "Copy code" for Narrator: it copies the bare code and confirms in an
     `InfoBar`, "Code copied to the clipboard.", as Copy diagnostics does), "Waiting for approval…" and "Cancel" (Esc too).
   - `SigningIn`: a ring with "Signing in…" (the progress page's example of a ring); Cancel or Esc.
-  - Each `SignInProblem` in plain words (`ProblemText.SignIn`) in an error `InfoBar`.
+  - Each `SignInProblem` in plain words (the core's, `CoreHost.ProblemText`) in an error `InfoBar`.
   - `SignedIn`: back to Home and the back and forward history cleared (`MainWindow.ClearHistory`, which also updates the title
     bar's back button), so Back does not return into a finished sign-in (manager, 2026-10-23).
   - The page owns and disposes its flow, so it is never returned to: `MainWindow.OnNavigated` removes sign-in entries from the
@@ -374,7 +374,7 @@ actions; nothing is decided in C#.
     found, 2026-10-23). Only after "Remove" are the row's buttons disabled, until the removal ends. `CredentialsLeft` shows a
     warning: "Removed <name>, but its saved sign-in may still be in Credential Manager. Current no longer uses it. You can
     delete the entries ending in ".Current" under Windows Credentials."
-    A settings error shows `ProblemText.Store`. Home and the list update from the saved-server list; rows are removed by key,
+    A settings error shows the core's `ProblemTexts.Store`. Home and the list update from the saved-server list; rows are removed by key,
     so the other servers' expanders keep their state, and focus moves to "Add another server" (or "Add a server" when none is
     left) once the row is gone. The Remove button carries its row in `Tag` rather than relying on the DataContext the
     expander's items inherit.
@@ -1244,7 +1244,7 @@ The Windows screens for servers behind an authentication gateway; all logic is t
   says: “…”" in the body (cut at 200 characters), never as the title; user name and `PasswordBox`. A refused password shows the
   dialog again with "The user name or password is incorrect." inside it. Over plain public http a warning shows and the button
   reads "Sign in without encryption", which is the user's confirmation (`confirmPlainHttp`).
-- **Web sign-in:** add-server says what the address shows (ProblemText.GatewayWebPage) and offers "Sign in"; after a redirect to
+- **Web sign-in:** add-server says what the address shows (the core's `ProblemTexts.GatewayWebPage`) and offers "Sign in"; after a redirect to
   another host it names the target origin and also offers "Use the address it points to" (`FollowRedirectAsync`). "Sign in" opens
   the sign-in window (`Gateway/SignInWindow`): the system title bar, the window's default size and place, Mica; the title "Sign in
   to <host[:port]>" (ADR 0017's example names the host; the origin bar shows the scheme); an origin bar with Segoe Fluent Icons
@@ -1255,7 +1255,7 @@ The Windows screens for servers behind an authentication gateway; all logic is t
   cancelled with a notice, pop-ups navigated in the same window (`NewWindowRequested`). After each navigation that lands on the
   server's origin, `CookieManager.GetCookiesAsync(<server URL>)` (HttpOnly included) goes to `SubmitCookiesAsync`; the page closes
   the window when the state leaves the web sign-in. The user closing it cancels: the page offers "Sign in" again. A navigation to
-  `accounts.google.com` is cancelled and the window shows ProblemText.GoogleRefusesWebViews with "Back to the sign-in page". The
+  `accounts.google.com` is cancelled and the window shows the core's `ProblemTexts.GoogleRefusesWebViews` with "Back to the sign-in page". The
   main window's closing closes every sign-in window.
 - **Profile:** a new, empty WebView2 user data folder per window under `%LOCALAPPDATA%\Current\SignIn\<guid>`, deleted once the
   window's browser process has exited (and leftovers at the next start or sign-in), not an InPrivate controller. Microsoft documents
@@ -1267,7 +1267,7 @@ The Windows screens for servers behind an authentication gateway; all logic is t
   InPrivate mode." (CoreWebView2ControllerOptions.IsInPrivateModeEnabled, learn.microsoft.com, read 2026-10-24), so what it keeps
   is not documented.
 - **Extra headers** (`Gateway/ExtraHeadersEditor`): rows of a name (`TextBox`) and a value (`PasswordBox`), each named by its row
-  for Narrator, "Add a header", the core's reason when it refuses (`GatewayInputException` → ProblemText.GatewayInput). In
+  for Narrator, "Add a header", the core's reason when it refuses (`GatewayInputException` → the core's `ProblemTexts.GatewayInput`). In
   add-server behind an `Expander` "Advanced: extra headers" in any gateway state that takes them, opened by itself for
   GatewayRefused; in Settings → Accounts → the server's expander, an "Advanced: extra headers" card whose "Edit headers" runs the
   gateway sign-in with the editor in a dialog. The core takes headers only while the gateway asks for something (Password,
@@ -1276,8 +1276,8 @@ The Windows screens for servers behind an authentication gateway; all logic is t
   gateway again") on Home and in Settings, and in Settings an accent "Sign in to the gateway" button runs `SignInToGateway`
   through the same dialog, window or headers (`Gateway/GatewaySignInRunner`). The sign-in page offers the same as its error's
   action when a saved server's gateway answers its sign-in (owner's run, case 1). The Jellyfin session is kept throughout (the core).
-- **Unsupported** and **EmbyHeaderIgnored**: ProblemText.GatewayUnsupported; ProblemText.EmbyHeaderIgnored names both server-side
-  fixes from `docs/notes/gateway-auth.md`.
+- **Unsupported** and **EmbyHeaderIgnored**: the core's `ProblemTexts.GatewayUnsupported`; its text for
+  `SignInProblem.EmbyHeaderIgnored` names both server-side fixes from `docs/notes/gateway-auth.md`.
 - **WebView2 Runtime:** WinUI's `Microsoft.Web.WebView2` 1.0.3719.77 (BSD-3-Clause, its licence and notice already shipped by
   `build.ps1`) is the SDK; no package was added. The runtime is part of Windows 11; on Windows 10 "The vast majority of Windows 10
   devices have the WebView2 Runtime installed already … A small number of Windows 10 devices don't have the WebView2 Runtime

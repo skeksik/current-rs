@@ -7,8 +7,9 @@ use current_model::{Route, StreamProtocol};
 
 use super::PlaybackInfo;
 use super::backend::DisplayFacts;
-use super::labels::{NumberFormat, bitrate_label};
+use super::labels::bitrate_label;
 use super::words::{plan_note_text, reason_text, route_name};
+use crate::numbers::NumberFormat;
 
 /// What the platform measures for the panel's last line: the swap chain panel's size in physical pixels, the view's and the
 /// content's sizes in physical pixels (device-independent size × the window's scale, so fractional), and the window's client size
@@ -73,7 +74,7 @@ pub fn info_panel_lines(
             source.size.map(|bytes| {
                 // Bytes to GB as a double, as the Windows app divided them.
                 let gigabytes = bytes as f64 / 1_000_000_000.0;
-                format!("{} GB", decimals(Digits::double(gigabytes), 1, 1, format))
+                format!("{} GB", format.custom(gigabytes, 15, 1, 1))
             }),
         ]));
         for stream in &source.streams {
@@ -89,7 +90,7 @@ pub fn info_panel_lines(
                 ),
                 video
                     .and_then(|video| video.frame_rate)
-                    .map(|fps| format!("{} fps", decimals(Digits::single(fps), 3, 0, format))),
+                    .map(|fps| format!("{} fps", format.custom(f64::from(fps), 7, 0, 3))),
                 video
                     .and_then(|video| video.bit_depth)
                     .map(|depth| format!("{depth}-bit")),
@@ -133,10 +134,10 @@ pub fn info_panel_lines(
             t.bitrate.map(|bits| bitrate_label(bits, format)),
             size(t.width, t.height),
             t.frame_rate
-                .map(|fps| format!("{} fps", decimals(Digits::single(fps), 3, 0, format))),
+                .map(|fps| format!("{} fps", format.custom(f64::from(fps), 7, 0, 3))),
             t.hardware_acceleration.clone(),
             t.completion
-                .map(|done| format!("{}% done", decimals(Digits::double(done), 0, 0, format))),
+                .map(|done| format!("{}% done", format.custom(done, 15, 0, 0))),
         ]));
         for reason in &t.reasons {
             lines.push(format!("• {}", reason_text(reason.as_str())));
@@ -163,24 +164,20 @@ pub fn info_panel_lines(
             (display.peak_nits > 0.0).then(|| {
                 format!(
                     "peak {} nits",
-                    decimals(Digits::single(display.peak_nits), 0, 0, format)
+                    format.custom(f64::from(display.peak_nits), 7, 0, 0)
                 )
             }),
             (display.sdr_white_nits > 0.0).then(|| {
                 format!(
                     "SDR white {} nits",
-                    decimals(Digits::single(display.sdr_white_nits), 0, 0, format)
+                    format.custom(f64::from(display.sdr_white_nits), 7, 0, 0)
                 )
             }),
-            (display.refresh_hz > 0.0).then(|| {
-                format!(
-                    "{} Hz",
-                    decimals(Digits::double(display.refresh_hz), 3, 0, format)
-                )
-            }),
+            (display.refresh_hz > 0.0)
+                .then(|| format!("{} Hz", format.custom(display.refresh_hz, 15, 0, 3))),
         ]));
     }
-    let two = |value: f64| decimals(Digits::double(value), 2, 0, format);
+    let two = |value: f64| format.custom(value, 15, 0, 2);
     lines.push(join([
         Some("Panel".to_owned()),
         Some(format!(
@@ -217,119 +214,6 @@ fn size(width: Option<u32>, height: Option<u32>) -> Option<String> {
     Some(format!("{}×{}", width?, height?))
 }
 
-/// A number's first significant digits, as .NET takes them before applying a custom numeric format: 15 for a `double` and 7 for a
-/// `float` (dotnet/runtime main, `Double.cs` and `Single.cs` `MaxPrecisionCustomFormat => 15` and `=> 7`, `Number.Formatting.cs`
-/// `FormatFloat`, read 2026-10-27). .NET makes them with Grisu3 or Dragon4, correctly rounded, an exact tie to even
-/// (`Number.Dragon4.cs`, read 2026-10-27); Rust's `{:.Ne}` formatting is correctly rounded too, ties to even (checked on the
-/// workspace's toolchain: 2.5 → "2e0", 3.5 → "4e0").
-#[derive(Debug, PartialEq)]
-struct Digits {
-    negative: bool,
-    /// The digits without trailing zeros; empty for 0.
-    digits: Vec<u8>,
-    /// Where the decimal point is: the number is 0.`digits` × 10^`scale` (.NET's `NumberBuffer.Scale`).
-    scale: i32,
-}
-
-impl Digits {
-    fn double(value: f64) -> Self {
-        Self::parse(&format!("{value:.14e}"))
-    }
-
-    fn single(value: f32) -> Self {
-        Self::parse(&format!("{value:.6e}"))
-    }
-
-    /// From Rust's exponent form, "-1.234560e2".
-    fn parse(text: &str) -> Self {
-        let (negative, text) = match text.strip_prefix('-') {
-            Some(rest) => (true, rest),
-            None => (false, text),
-        };
-        let (mantissa, exponent) = text.split_once('e').unwrap_or((text, "0"));
-        let mut digits: Vec<u8> = mantissa.bytes().filter(u8::is_ascii_digit).collect();
-        while digits.last() == Some(&b'0') {
-            digits.pop();
-        }
-        let scale = if digits.is_empty() {
-            0
-        } else {
-            exponent.parse::<i32>().unwrap_or(0) + 1
-        };
-        Self {
-            negative,
-            digits,
-            scale,
-        }
-    }
-}
-
-/// A custom numeric format of `0` and at most `max` decimals of which `min` are always shown ("0.###" is 3 and 0, "0.0" 1 and 1):
-/// the digits are rounded half up at the last decimal (dotnet/runtime main, `Number.Formatting.Common.cs` `RoundNumber`, read
-/// 2026-10-27), trailing optional zeros dropped, the UI's decimal separator between. A number that is not finite never reaches the
-/// panel (the facts are measured or parsed numbers) and is written as Rust writes it: not verified against .NET.
-fn decimals(number: Digits, max: usize, min: usize, format: &NumberFormat) -> String {
-    let Digits {
-        negative,
-        mut digits,
-        mut scale,
-    } = number;
-    let max_i32 = i32::try_from(max).unwrap_or(i32::MAX);
-    // `pos` is the index of the first digit dropped; .NET rounds only when that digit is in the buffer.
-    let pos = scale.saturating_add(max_i32);
-    if let Ok(pos) = usize::try_from(pos) {
-        if pos < digits.len() {
-            let round_up = digits[pos] >= b'5';
-            digits.truncate(pos);
-            if round_up {
-                let mut i = pos;
-                while i > 0 && digits[i - 1] == b'9' {
-                    i -= 1;
-                }
-                digits.truncate(i);
-                if let Some(last) = digits.last_mut() {
-                    *last += 1;
-                } else {
-                    scale += 1;
-                    digits.push(b'1');
-                }
-            }
-            while digits.last() == Some(&b'0') {
-                digits.pop();
-            }
-        }
-    } else {
-        digits.clear();
-    }
-    if digits.is_empty() {
-        scale = 0;
-    }
-    let digit = |index: i32| -> char {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| digits.get(index))
-            .map_or('0', |digit| char::from(*digit))
-    };
-    let mut text = String::new();
-    if negative && !digits.is_empty() {
-        text.push('-');
-    }
-    if scale <= 0 {
-        text.push('0');
-    } else {
-        text.extend((0..scale).map(digit));
-    }
-    let mut fraction: Vec<char> = (0..max_i32).map(|k| digit(scale + k)).collect();
-    while fraction.len() > min && fraction.last() == Some(&'0') {
-        fraction.pop();
-    }
-    if !fraction.is_empty() {
-        text.push_str(&format.decimal_separator);
-        text.extend(fraction);
-    }
-    text
-}
-
 #[cfg(test)]
 mod tests {
     use current_model::{
@@ -349,15 +233,18 @@ mod tests {
     fn comma() -> NumberFormat {
         NumberFormat {
             decimal_separator: ",".to_owned(),
+            ..NumberFormat::default()
         }
     }
 
+    /// A custom format of `max` decimals, `min` of them always shown, on a double (15 significant digits).
     fn double(value: f64, max: usize, min: usize) -> String {
-        decimals(Digits::double(value), max, min, &dot())
+        dot().custom(value, 15, min, max)
     }
 
+    /// The same on a float (7 significant digits).
     fn single(value: f32, max: usize, min: usize) -> String {
-        decimals(Digits::single(value), max, min, &dot())
+        dot().custom(f64::from(value), 7, min, max)
     }
 
     #[test]
@@ -405,7 +292,7 @@ mod tests {
         assert_eq!(double(60_000.0 / 1_001.0, 3, 0), "59.94");
         assert_eq!(double(143.999, 3, 0), "143.999");
         assert_eq!(double(143.9996, 3, 0), "144");
-        assert_eq!(decimals(Digits::double(1.5), 2, 0, &comma()), "1,5");
+        assert_eq!(comma().custom(1.5, 15, 0, 2), "1,5");
     }
 
     fn info() -> PlaybackInfo {

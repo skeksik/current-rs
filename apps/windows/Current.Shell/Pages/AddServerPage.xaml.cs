@@ -21,6 +21,8 @@ namespace Current.Shell.Pages;
 public sealed partial class AddServerPage : Page
 {
     private readonly ObservableCollection<DiscoveredServer> _found = [];
+    /// <summary>The core the flows came from, for its texts.</summary>
+    private CoreHost? _core;
     private AddServerFlow? _flow;
     private DiscoveryFlow? _discovery;
     private ValueSubscription<AddServerState>? _state;
@@ -49,6 +51,7 @@ public sealed partial class AddServerPage : Page
             return;
         }
         var ui = new DispatcherQueueUi(DispatcherQueue);
+        _core = core;
         _flow = core.AddServer();
         _discovery = core.DiscoverServers();
         _state = _flow.ObserveState(ui);
@@ -85,6 +88,7 @@ public sealed partial class AddServerPage : Page
         _search = null;
         _flow = null;
         _discovery = null;
+        _core = null;
     }
 
     private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
@@ -128,7 +132,7 @@ public sealed partial class AddServerPage : Page
         switch (state)
         {
             case AddServerState.Failed failed:
-                ShowError(ProblemText.Probe(failed.Problem));
+                ShowError(_core?.ProblemText(failed.Problem) ?? ProblemTexts.Unexpected);
                 break;
             case AddServerState.ConfirmPlainHttp confirm:
                 HideError();
@@ -144,7 +148,7 @@ public sealed partial class AddServerPage : Page
                 _ = AskGatewayPasswordAsync(password);
                 break;
             case AddServerState.GatewayUnsupported:
-                ShowError(ProblemText.GatewayUnsupported);
+                ShowError(ProblemTexts.GatewayUnsupported);
                 break;
             default:
                 HideError();
@@ -170,8 +174,8 @@ public sealed partial class AddServerPage : Page
         {
             { Redirected: true } => $"This address sends Current to {web.LocationOrigin ?? "another address"}. It may be your "
                 + "gateway's sign-in, or the server may have moved.",
-            not null => ProblemText.GatewayWebPage,
-            null => refused ? ProblemText.GatewayRefused : "",
+            not null => ProblemTexts.GatewayWebPage,
+            null => refused ? ProblemTexts.GatewayRefused : "",
         };
         GatewaySignInButton.Visibility = web is not null ? Visibility.Visible : Visibility.Collapsed;
         // One accent button for the step at hand (owner's run, 2026-10-24): "Sign in" while it is offered, Connect otherwise.
@@ -218,7 +222,7 @@ public sealed partial class AddServerPage : Page
         {
             DiscoveryState.Searching { Found.Count: 0 } => "Searching…",
             DiscoveryState.Done { Found.Count: 0 } => "No servers found on this network. Enter the address instead.",
-            DiscoveryState.Failed failed => ProblemText.Discovery(failed.Problem),
+            DiscoveryState.Failed failed => _core?.ProblemText(failed.Problem) ?? ProblemTexts.Unexpected,
             _ => "",
         };
         SearchStatus.Text = status;
@@ -291,7 +295,7 @@ public sealed partial class AddServerPage : Page
             Trace.TraceError($"Current: probing failed: {error.GetType().Name}");
             if (!_leaving)
             {
-                ShowError(ProblemText.Unexpected);
+                ShowError(ProblemTexts.Unexpected);
             }
         }
         finally
@@ -434,7 +438,7 @@ public sealed partial class AddServerPage : Page
         catch (Exception error)
         {
             Trace.TraceError($"Current: the gateway password dialog failed: {error.GetType().Name}");
-            ShowError(ProblemText.Unexpected);
+            ShowError(ProblemTexts.Unexpected);
             return;
         }
         finally
@@ -507,7 +511,7 @@ public sealed partial class AddServerPage : Page
         catch (Exception error)
         {
             Trace.TraceError($"Current: opening the sign-in window failed: {error.GetType().Name}");
-            ShowError(ProblemText.Unexpected);
+            ShowError(ProblemTexts.Unexpected);
         }
     }
 
@@ -551,7 +555,7 @@ public sealed partial class AddServerPage : Page
         catch (Exception error)
         {
             Trace.TraceError($"Current: using the extra headers failed: {error.GetType().Name}");
-            ShowError(ProblemText.Unexpected);
+            ShowError(ProblemTexts.Unexpected);
         }
     }
 
@@ -574,7 +578,7 @@ public sealed partial class AddServerPage : Page
         catch (GatewayInputException error)
         {
             // Nothing was sent: the reason goes next to what the user typed.
-            var message = ProblemText.GatewayInput(error.Problem);
+            var message = ProblemTexts.GatewayInput(error.Problem);
             if (AdvancedExpander.Visibility == Visibility.Visible && AdvancedExpander.IsExpanded)
             {
                 HeadersEditor.ShowError(message);
@@ -593,7 +597,7 @@ public sealed partial class AddServerPage : Page
             Trace.TraceError($"Current: a gateway step failed: {error.GetType().Name}");
             if (!_leaving)
             {
-                ShowError(ProblemText.Unexpected);
+                ShowError(ProblemTexts.Unexpected);
             }
         }
         finally
@@ -650,7 +654,7 @@ public sealed partial class AddServerPage : Page
         catch (Exception error)
         {
             Trace.TraceError($"Current: starting the sign-in failed: {error.GetType().Name}");
-            ShowError(ProblemText.Unexpected);
+            ShowError(ProblemTexts.Unexpected);
             return;
         }
         if (!Frame.Navigate(typeof(SignInPage), new SignInRequest(flow, server.Name, server.HttpsFailedTls, null)))

@@ -55,6 +55,10 @@ pub use browse::{
     time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
     view_title,
 };
+pub use browse::{
+    DetailsFacts, action_failed_title, failed_tile_name, library_gone_message, library_gone_title,
+    loading_tile_name, person_kind_name, tile_name, tile_subtitle, tile_title,
+};
 pub use cancel::CancelToken;
 pub use error::CoreError;
 pub use flows::{
@@ -83,7 +87,9 @@ pub use player_records::{
 pub use player_words::PanelSizes;
 pub use problems::{
     AddressProblem, DiscoveryProblem, GatewayInputProblem, GatewayProblem, GatewaySignInProblem,
-    NetProblem, ProbeProblem, SignInProblem, StoreProblem,
+    NetProblem, Platform, ProbeProblem, SignInProblem, StoreProblem, gateway_input_problem_text,
+    gateway_problem_text, gateway_refused_text, gateway_unsupported_text, gateway_web_page_text,
+    google_refuses_web_views_text, store_problem_text, unexpected_problem_text,
 };
 pub use records::{
     AppInfo, AppTheme, CapabilitiesSnapshot, Connectivity, InterfaceKind, LoadReport, NetworkFacts,

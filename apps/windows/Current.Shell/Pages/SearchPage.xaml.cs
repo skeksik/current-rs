@@ -255,20 +255,14 @@ public sealed partial class SearchPage : Page, IRefreshable
         _sections.Clear();
     }
 
-    /// <summary>"Searching…", then nothing once there are results, "No results", or why the search failed.</summary>
+    /// <summary>The core's status line: "Searching…", then nothing once there are results, "No results", or why the search failed.</summary>
     private void ShowStatus()
     {
         var loading = _sections.Any(section => section.State.Loading);
         var found = _sections.Sum(section => section.Rows.Count);
         var failed = _sections.Select(section => section.State.Failed).FirstOrDefault(problem => problem is not null);
         LoadingRing.IsActive = loading && found == 0;
-        var text = _view is not null
-            ? (BrowseLabels.FavouritesStatus(found, loading, failed is not null) is not { } status ? ""
-                : failed is not null ? $"{status} {BrowseText.Problem(failed)}" : status)
-            : found > 0 ? ""
-            : loading ? "Searching…"
-            : failed is not null ? $"Couldn't search. {BrowseText.Problem(failed)}"
-            : "No results";
+        var text = App.Core?.SearchStatus(found, loading, failed, favourites: _view is not null) ?? "";
         if (StatusText.Text != text)
         {
             StatusText.Text = text;

@@ -169,10 +169,102 @@ public static class BrowseLabels
     /// </summary>
     public static string? FavouritesStatus(int rows, bool loading, bool failed) =>
         Ffi.CurrentFfiMethods.FavouritesStatus((uint)Math.Max(rows, 0), loading, failed);
+
+    /// <summary>
+    /// The first line under a tile: an episode's series (with its own name on the second line), else the item's name. On its series'
+    /// own page (<paramref name="withSeries"/> false) an episode shows its own name.
+    /// </summary>
+    public static string TileTitle(ItemSummary item, bool withSeries = true)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return Ffi.CurrentFfiMethods.TileTitle(MapBrowse.ToFfi(item), withSeries);
+    }
+
+    /// <summary>The second line under a tile: an episode's number and name, a series' new episodes ("3 new episodes"), a year, or
+    /// nothing.</summary>
+    public static string TileSubtitle(ItemSummary item, bool withSeries = true)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return Ffi.CurrentFfiMethods.TileSubtitle(MapBrowse.ToFfi(item), withSeries);
+    }
+
+    /// <summary>
+    /// What Narrator reads for a tile: its lines, then its marks ("played", "in progress, 12 min left", "3 unplayed", "favourite"),
+    /// so a list of tiles is told apart and its state heard without opening an item.
+    /// </summary>
+    public static string TileName(ItemSummary item, bool withSeries = true)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return Ffi.CurrentFfiMethods.TileName(MapBrowse.ToFfi(item), withSeries);
+    }
+
+    /// <summary>The name of a tile whose item is still loading.</summary>
+    public static string LoadingTileName => Ffi.CurrentFfiMethods.LoadingTileName();
+
+    /// <summary>The name of a tile whose page failed to load.</summary>
+    public static string FailedTileName => Ffi.CurrentFfiMethods.FailedTileName();
+
+    /// <summary>A person's part when the server gives no role ("Director"); empty for an actor.</summary>
+    public static string PersonKind(string kind)
+    {
+        ArgumentNullException.ThrowIfNull(kind);
+        return Ffi.CurrentFfiMethods.PersonKindName(kind);
+    }
+
+    /// <summary>The title of the notice for a played or favourite mark that failed ("Couldn't mark Name as played.").</summary>
+    public static string ActionFailedTitle(BrowseNotice.ActionFailed failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+        return Ffi.CurrentFfiMethods.ActionFailedTitle(MapBrowse.ToFfi(failed.Action), failed.ItemName);
+    }
+
+    /// <summary>The title of the notice shown when the library on screen left its server's list.</summary>
+    public static string LibraryGoneTitle => Ffi.CurrentFfiMethods.LibraryGoneTitle();
+
+    /// <summary>The message of the notice shown when the library on screen left its server's list.</summary>
+    public static string LibraryGoneMessage => Ffi.CurrentFfiMethods.LibraryGoneMessage();
 }
 
 public sealed partial class CoreHost
 {
+    /// <summary>
+    /// The platform's digit grouping, for the core's counts ("12,345 items"): its group separator and group sizes, as .NET's
+    /// NumberFormatInfo.NumberGroupSeparator and NumberGroupSizes give them. Pass it once at start.
+    /// </summary>
+    public void SetDigitGrouping(string separator, IReadOnlyList<int> sizes)
+    {
+        ArgumentNullException.ThrowIfNull(separator);
+        ArgumentNullException.ThrowIfNull(sizes);
+        _core.SetDigitGrouping(separator, sizes.Select(size => (uint)Math.Max(size, 0)).ToArray());
+    }
+
+    /// <summary>A size on disk in binary units, at most one decimal below 10: "512 bytes", "1.5 KB", "12 MB".</summary>
+    public string SizeOnDisk(long bytes) => _core.SizeOnDisk((ulong)Math.Max(bytes, 0));
+
+    /// <summary>A library grid's count: "1 item", "12,345 items", or empty for none.</summary>
+    public string ItemCount(int total) => _core.ItemCountLabel((ulong)Math.Max(total, 0));
+
+    /// <summary>A detail page's facts line: the year or a series' run, the runtime, the age rating and the community rating.</summary>
+    public string DetailsFacts(ItemDetails details)
+    {
+        ArgumentNullException.ThrowIfNull(details);
+        var item = details.Summary;
+        return _core.DetailsFacts(new Ffi.DetailsFacts(
+            item.Year,
+            details.Run is { } run ? new Ffi.SeriesRun(run.StartYear, run.EndYear, run.Continuing) : null,
+            item.Runtime is { } runtime ? (ulong?)MapViews.Millis(runtime) : null,
+            details.OfficialRating,
+            details.CommunityRating));
+    }
+
+    /// <summary>
+    /// The search page's status line: "Searching…" until the first of <paramref name="found"/> results, empty once there are results,
+    /// "No results", or "Couldn't search." and why it <paramref name="failed"/>. On the Favourites tab (<paramref name="favourites"/>),
+    /// its own lines, with why.
+    /// </summary>
+    public string SearchStatus(int found, bool loading, BrowseProblem? failed, bool favourites) =>
+        _core.SearchStatus((uint)Math.Max(found, 0), loading, failed is { } problem ? MapBrowse.ToFfi(problem) : null, favourites);
+
     /// <summary>
     /// What <paramref name="library"/>'s grid opens with when opened anew: <paramref name="homeQuery"/> as it is when a Home row's
     /// header opened it, posters with titles, nothing remembered; else the library's first query with its remembered sort, filters

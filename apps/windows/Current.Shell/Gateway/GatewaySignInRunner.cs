@@ -39,9 +39,9 @@ internal sealed class GatewaySignInRunner(XamlRoot root, DispatcherQueueUi ui)
                                 InfoBarSeverity.Warning,
                                 "Signed in to the gateway for this session only: Windows Credential Manager isn't available.");
                     case GatewaySignInState.Failed failed:
-                        return new Outcome(InfoBarSeverity.Error, ProblemText.GatewaySignIn(failed.Problem));
+                        return new Outcome(InfoBarSeverity.Error, core.ProblemText(failed.Problem));
                     case GatewaySignInState.Unsupported:
-                        return new Outcome(InfoBarSeverity.Error, ProblemText.GatewayUnsupported);
+                        return new Outcome(InfoBarSeverity.Error, ProblemTexts.GatewayUnsupported);
                     case GatewaySignInState.Password or GatewaySignInState.WebSignIn or GatewaySignInState.Refused
                         when headersFirst || flow.State is GatewaySignInState.Refused:
                         if (!await AskHeadersAsync(flow))
@@ -79,7 +79,7 @@ internal sealed class GatewaySignInRunner(XamlRoot root, DispatcherQueueUi ui)
         {
             Trace.TraceError($"Current: signing in to the gateway failed: {error.GetType().Name}");
             flow.Cancel();
-            return new Outcome(InfoBarSeverity.Error, ProblemText.Unexpected);
+            return new Outcome(InfoBarSeverity.Error, ProblemTexts.Unexpected);
         }
     }
 
@@ -115,7 +115,7 @@ internal sealed class GatewaySignInRunner(XamlRoot root, DispatcherQueueUi ui)
             catch (GatewayInputException error)
             {
                 // Nothing was sent: the dialog stays, with the reason.
-                editor.ShowError(ProblemText.GatewayInput(error.Problem));
+                editor.ShowError(ProblemTexts.GatewayInput(error.Problem));
                 args.Cancel = true;
             }
             catch (FlowNotReadyException)

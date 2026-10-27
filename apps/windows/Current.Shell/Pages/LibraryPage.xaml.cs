@@ -453,14 +453,12 @@ public sealed partial class LibraryPage : Page, IRefreshable
         // A search that fills the server's window says so instead of a count that would only be the window's size (the core decides).
         // Only from the searched query's own state: the previous query's total (a big library's) would flash the note (review 2).
         var note = _stateBeforeSearch ? null : _grid?.Query.SearchNote(state.Total);
-        CountText.Text = note ?? (state.Total > 0
-            ? (state.Total == 1 ? "1 item" : $"{state.Total.ToString("N0", System.Globalization.CultureInfo.CurrentCulture)} items")
-            : "");
+        CountText.Text = note ?? App.Core?.ItemCount(state.Total) ?? "";
         EmptyText.Visibility = !state.Loading && state.Total == 0 && state.Failed is null ? Visibility.Visible : Visibility.Collapsed;
         if (state.Failed is { } failed)
         {
             var title = state.Total == 0 ? "Couldn't load this library." : "Some items couldn't be loaded.";
-            var message = BrowseText.Problem(failed);
+            var message = App.Core?.ProblemText(failed) ?? ProblemTexts.Unexpected;
             // Opened again for a new message, so Narrator reads it: "If you would like to inform users that use screen readers of
             // the InfoBar's updated content we recommend you close and re-open the control" (InfoBar page, learn.microsoft.com,
             // ms.date 2025-02-26, read 2026-10-25).

@@ -135,7 +135,7 @@ public partial class App : Application
             ShowNotice(
                 InfoBarSeverity.Error,
                 "Current couldn't open its settings folder.",
-                $"Sign-ins won't be saved this time. {ProblemText.Store(error.Problem)}");
+                $"Sign-ins won't be saved this time. {ProblemTexts.Store(error.Problem)}");
             core = TryCreateInMemory();
         }
         catch (Exception error)
@@ -165,6 +165,11 @@ public partial class App : Application
         // The region's decimal separator for the core's labels with decimals ("26,1 Mbit/s"), as the app wrote numbers before: in
         // the current culture.
         core?.SetDecimalSeparator(CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator);
+        // Its digit grouping for the counts ("12,345 items"), as "N0" grouped them in the current culture; and the platform, for the
+        // few texts that name it ("this PC").
+        core?.SetDigitGrouping(
+            CultureInfo.CurrentCulture.NumberFormat.NumberGroupSeparator, CultureInfo.CurrentCulture.NumberFormat.NumberGroupSizes);
+        core?.SetPlatform(Platform.Windows);
         Core = core;
         if (core is not null)
         {

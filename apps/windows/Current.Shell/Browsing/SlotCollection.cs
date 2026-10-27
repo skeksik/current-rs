@@ -103,8 +103,8 @@ public sealed class GridSlot(Slot slot) : INotifyPropertyChanged
 
     public override string ToString() => Slot switch
     {
-        Slot.Item item => BrowseText.TileName(item.Summary),
-        Slot.Failed => BrowseText.FailedTileName,
-        _ => BrowseText.LoadingTileName,
+        Slot.Item item => BrowseLabels.TileName(item.Summary),
+        Slot.Failed => BrowseLabels.FailedTileName,
+        _ => BrowseLabels.LoadingTileName,
     };
 }

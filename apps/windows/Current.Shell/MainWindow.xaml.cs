@@ -744,11 +744,11 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>One "no longer available" notice at a time: a newer one replaces one still open, however many libraries went.</summary>
     private void ShowLibraryGoneNotice()
     {
-        foreach (var open in Notices.Children.OfType<InfoBar>().Where(notice => notice.Title == BrowseText.LibraryGoneTitle).ToList())
+        foreach (var open in Notices.Children.OfType<InfoBar>().Where(notice => notice.Title == BrowseLabels.LibraryGoneTitle).ToList())
         {
             Notices.Children.Remove(open);
         }
-        ShowNotice(InfoBarSeverity.Informational, BrowseText.LibraryGoneTitle, BrowseText.LibraryGoneMessage);
+        ShowNotice(InfoBarSeverity.Informational, BrowseLabels.LibraryGoneTitle, BrowseLabels.LibraryGoneMessage);
     }
 
     private void OnSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)

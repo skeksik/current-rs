@@ -54,8 +54,8 @@ pub use backend::{CompositionSize, DisplayFacts, EngineOutput, SwapChain, VideoO
 pub use info_panel::{PanelSizes, info_panel_lines};
 pub use known_caps::EngineReport;
 pub use labels::{
-    NumberFormat, QualityEntry, QualityMenuItem, bitrate_label, fallback_quality_entries,
-    quality_label, quality_menu,
+    QualityEntry, QualityMenuItem, bitrate_label, fallback_quality_entries, quality_label,
+    quality_menu,
 };
 pub use now_playing::{MediaStatus, NowPlaying, TIMELINE_INTERVAL};
 pub use problem::{PlaybackProblem, PlayerProblem};

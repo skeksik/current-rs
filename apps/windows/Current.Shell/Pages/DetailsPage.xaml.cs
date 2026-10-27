@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Globalization;
 using Current.Bindings;
 using Current.Shell.Browsing;
 using Microsoft.UI.Xaml;
@@ -216,7 +215,7 @@ public sealed partial class DetailsPage : Page, IRefreshable
         if (state.Failed is { } failed)
         {
             var title = _details?.Value is null ? "Couldn't load this item." : "Couldn't refresh this item.";
-            var message = BrowseText.Problem(failed);
+            var message = App.Core?.ProblemText(failed) ?? ProblemTexts.Unexpected;
             if (!StateInfo.IsOpen || StateInfo.Title != title || StateInfo.Message != message)
             {
                 StateInfo.IsOpen = false;
@@ -242,7 +241,7 @@ public sealed partial class DetailsPage : Page, IRefreshable
         var item = details.Summary;
         Actions.Visibility = Visibility.Visible;
         TitleText.Text = item.Kind == "episode" ? EpisodeTitle(item) : item.Name;
-        FactsText.Text = Facts(details);
+        FactsText.Text = App.Core?.DetailsFacts(details) ?? "";
         GenresText.Text = string.Join(", ", details.Genres);
         GenresText.Visibility = details.Genres.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         TaglineText.Text = details.Taglines.FirstOrDefault() ?? "";
@@ -283,7 +282,7 @@ public sealed partial class DetailsPage : Page, IRefreshable
         }
         // Another item than the page's (a series' next episode) is named. Decided from the target alone: the details may arrive
         // after it, on their own subscription.
-        var number = target.Item.Item != _item ? BrowseText.EpisodeNumber(target.Item) : "";
+        var number = target.Item.Item != _item ? target.Item.Episode?.Label ?? "" : "";
         var verb = target.Resumes ? "Resume" : "Play";
         var label = number.Length > 0 ? $"{verb} {number}" : verb;
         var main = new Button
@@ -315,40 +314,9 @@ public sealed partial class DetailsPage : Page, IRefreshable
     /// <summary>"Series name: S1:E2 Episode name" on an episode's own page.</summary>
     private static string EpisodeTitle(ItemSummary item)
     {
-        var number = BrowseText.EpisodeNumber(item);
+        var number = item.Episode?.Label ?? "";
         var name = number.Length > 0 ? $"{number} {item.Name}" : item.Name;
         return item.Episode?.SeriesName is { Length: > 0 } series ? $"{series}: {name}" : name;
-    }
-
-    /// <summary>The year (or a series' run), runtime, age rating and community rating, as the server gave them.</summary>
-    private static string Facts(ItemDetails details)
-    {
-        var facts = new List<string>();
-        var item = details.Summary;
-        // A series' run as the core reads it from its dates and status (ItemDetails.Run); only the formatting is here.
-        if (details.Run is { } run)
-        {
-            facts.Add(run.EndYear is { } endYear ? $"{run.StartYear}\u2013{endYear}"
-                : run.Continuing ? $"{run.StartYear}\u2013"
-                : run.StartYear.ToString(CultureInfo.CurrentCulture));
-        }
-        else if (item.Year is { } year)
-        {
-            facts.Add(year.ToString(CultureInfo.CurrentCulture));
-        }
-        if (item.Runtime is { } runtime && runtime > TimeSpan.Zero)
-        {
-            facts.Add(BrowseLabels.Runtime(runtime));
-        }
-        if (details.OfficialRating is { Length: > 0 } rating)
-        {
-            facts.Add(rating);
-        }
-        if (details.CommunityRating is { } community)
-        {
-            facts.Add($"{community.ToString("0.0", CultureInfo.CurrentCulture)}/10");
-        }
-        return string.Join(" · ", facts);
     }
 
     private void ShowPictures(ItemDetails details)

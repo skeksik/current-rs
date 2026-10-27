@@ -209,7 +209,7 @@ public sealed partial class PlayerView : UserControl
         {
             Trace.TraceError($"Current: playing failed: {error.GetType().Name}");
             BusyRing.IsActive = false;
-            ShowProblem(ProblemText.Unexpected);
+            ShowProblem(ProblemTexts.Unexpected);
         }
     }
 

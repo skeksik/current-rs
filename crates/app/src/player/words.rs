@@ -8,8 +8,10 @@
 use current_model::RouteLabel;
 use current_playback::PlanNote;
 
-use super::labels::{NumberFormat, bitrate_label};
+use super::labels::bitrate_label;
 use super::problem::{PlaybackProblem, PlayerProblem};
+use crate::numbers::NumberFormat;
+use crate::problems::UNEXPECTED;
 
 const MS_PER_SECOND: i64 = 1_000;
 const MS_PER_MINUTE: i64 = 60 * MS_PER_SECOND;
@@ -210,11 +212,6 @@ pub const NO_AUDIO_TRACKS: &str = "No audio tracks";
 /// The subtitles menu's first item: no subtitles.
 pub const SUBTITLES_OFF: &str = "Off";
 
-/// The fallback for a problem with no words of its own. A private copy of the Windows app's `ProblemText.Unexpected`, which the
-/// texts-to-core PR A moves into `current-app`'s `problems` module: whichever of the two merges second points this at that constant
-/// and drops the copy (the test pins the string so the merge cannot change it).
-const UNEXPECTED: &str = "Something went wrong in Current. Try again.";
-
 /// Why playback stopped, in plain words (ADR 0019, "Errors").
 pub fn playback_problem_text(problem: &PlaybackProblem) -> String {
     match problem {
@@ -346,6 +343,7 @@ mod tests {
     fn notes_write_bitrates_with_the_platforms_separator() {
         let comma = NumberFormat {
             decimal_separator: ",".to_owned(),
+            ..NumberFormat::default()
         };
         let limit = PlanNote::RemoteBitrateLimit { limit: 1_500_000 };
         assert_eq!(

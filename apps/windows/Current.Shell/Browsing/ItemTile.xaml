@@ -66,7 +66,7 @@
             <!-- An item in progress: a play mark, how far it was watched, and the time left as the core counts it (owner,
                  2026-10-26), on a shade along the picture's bottom (TileScrimBrush, App.xaml). In the dark theme whatever the app's,
                  so the text is light on the shade; high contrast keeps its own colours. Decorative for Narrator: the tile's name says
-                 it (BrowseText.TileName). Glyph: Segoe Fluent Icons E768 "Play" ("Segoe Fluent Icons font", learn.microsoft.com,
+                 it (BrowseLabels.TileName). Glyph: Segoe Fluent Icons E768 "Play" ("Segoe Fluent Icons font", learn.microsoft.com,
                  ms.date 2026-10-13, read 2026-10-26). -->
             <Grid
                 x:Name="ProgressPart"
