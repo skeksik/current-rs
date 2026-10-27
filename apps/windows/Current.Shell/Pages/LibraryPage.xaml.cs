@@ -640,6 +640,16 @@ public sealed partial class LibraryPage : Page, IRefreshable
     /// <summary>The grid's slots now (the smoke run).</summary>
     internal SlotCollection? Slots => _slots;
 
+    /// <summary>Types <paramref name="text"/> into the library's search box and searches at once, as Enter does (the smoke run).</summary>
+    internal void SearchFor(string text)
+    {
+        LibrarySearch.Text = text;
+        Search(text);
+    }
+
+    /// <summary>Whether the Sort and Filter buttons are on now (the smoke run).</summary>
+    internal bool SortAndFilterAvailable => SortButton.IsEnabled && FilterButton.IsEnabled;
+
     /// <summary>Scrolls the grid to a slot, as the scroll bar would (the smoke run).</summary>
     internal void ScrollTo(int index)
     {

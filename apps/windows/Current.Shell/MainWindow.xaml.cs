@@ -161,6 +161,9 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     internal void ShowLibrary(Library library) =>
         Navigate(typeof(LibraryPage), new SuppressNavigationTransitionInfo(), new LibraryArgs(library));
 
+    /// <summary>Opens a view tab, as its item in the pane does (the smoke run).</summary>
+    internal void ShowView(ViewArgs view) => Navigate(view.Page, new SuppressNavigationTransitionInfo(), view);
+
     /// <summary>The page shown now (the smoke run).</summary>
     internal Page? ShownPage => ContentFrame.Content as Page;
 

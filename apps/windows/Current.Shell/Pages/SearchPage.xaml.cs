@@ -14,6 +14,9 @@ namespace Current.Shell.Pages;
 /// </summary>
 public sealed partial class SearchPage : Page, IRefreshable
 {
+    /// <summary>How many rows the page shows now (the smoke run).</summary>
+    internal int RowCount => _sections.Sum(section => section.Rows.Count);
+
     /// <summary>The Favourites tab shown, or null for a search.</summary>
     private ViewArgs? _view;
 

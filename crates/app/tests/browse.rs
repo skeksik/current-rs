@@ -432,6 +432,25 @@ async fn a_list_chosen_by_marks_reads_again_when_a_mark_changes() {
 }
 
 #[tokio::test]
+async fn a_list_not_chosen_by_marks_does_not_read_again_on_a_favourite() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    // Every film by name: a favourite changes how one shows, not which are listed. A Favourites list beside it reads again, so the
+    // reload a second after the mark has happened when the count is checked.
+    let films = browse.open_items(current_app::kind_query(MediaKind::MOVIE));
+    let favourites = browse.open_items(current_app::favourites_query(Some(MediaKind::MOVIE)));
+    eventually(|| films.state().borrow().total > 0 && favourites.state().borrow().total > 0).await;
+    let reads = stand_in.count("/Items");
+    browse.set_favourite(&item(&server, FILM_IDS[1]), true);
+    eventually(|| stand_in.count("/Items") > reads).await;
+    // Past the one-second wait for more marks, and then some: only the Favourites list read again.
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert_eq!(stand_in.count("/Items"), reads + 1);
+}
+
+#[tokio::test]
 async fn the_favourites_tab_is_a_row_per_kind_read_again_when_a_mark_changes() {
     let stand_in = StandIn::start().await.unwrap();
     let app = App::new();
