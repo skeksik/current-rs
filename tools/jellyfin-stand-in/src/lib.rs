@@ -514,9 +514,11 @@ impl Controls {
     }
 
     /// Marks `id` played or not on the server only, as playback or another client would, without any client being told; a series or
-    /// season through its episodes, as the mark request does.
+    /// season through its episodes, as the mark request does, so its episodes' cached instances keep what they held.
     pub fn set_played_on_server(&self, id: &str, played: bool) {
-        lock(&self.state.marks).set_played(id, played);
+        let mut marks = lock(&self.state.marks);
+        marks.set_played(id, played);
+        marks.rehydrate(id);
     }
 
     /// The image requests that passed the gateway so far, oldest first.
