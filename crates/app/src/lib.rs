@@ -60,6 +60,11 @@ pub use browse::{
     time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
     view_title,
 };
+pub use browse::{
+    DetailsFacts, FAILED_TILE_NAME, LIBRARY_GONE_MESSAGE, LIBRARY_GONE_TITLE, LOADING_TILE_NAME,
+    action_failed_title, details_facts, facts_line, item_count_label, person_kind_name,
+    search_status, size_on_disk, tile_name, tile_subtitle, tile_title,
+};
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use formats::{
     DecoderProfile, FormatRow, FormatSupport, FormatTab, FormatTabKind, HardwareDecoding,
@@ -75,9 +80,9 @@ pub use numbers::NumberFormat;
 pub use player::test_engine;
 pub use player::{
     CompositionSize, DisplayFacts, EngineOutput, EngineReport, MediaStatus, NowPlaying,
-    PlaybackInfo, Player, PlayerAction, PlayerEngine, PlayerError, QualityEntry,
-    QualityMenuItem, SwapChain, TIMELINE_INTERVAL, VideoOutput, bitrate_label,
-    fallback_quality_entries, player_engine, quality_label, quality_menu,
+    PlaybackInfo, Player, PlayerAction, PlayerEngine, PlayerError, QualityEntry, QualityMenuItem,
+    SwapChain, TIMELINE_INTERVAL, VideoOutput, bitrate_label, fallback_quality_entries,
+    player_engine, quality_label, quality_menu,
 };
 /// `current-playback`'s values that the player publishes.
 pub mod playback {
@@ -616,6 +621,16 @@ impl App {
     pub fn platform(&self) -> Platform {
         // One assignment at a time: a poisoned lock still holds a whole value.
         *self.platform.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The UI's digit grouping, for the counts with grouped digits ("12,345 items"): its group separator and its group sizes, as
+    /// [`NumberFormat::group_sizes`] reads them. A platform fact the UI passes once at start. An empty list of sizes keeps groups of 3.
+    pub fn set_digit_grouping(&self, separator: &str, sizes: &[u32]) {
+        let mut format = self.lock_number_format();
+        format.group_separator = separator.to_owned();
+        if !sizes.is_empty() {
+            format.group_sizes = sizes.to_vec();
+        }
     }
 
     fn lock_number_format(&self) -> std::sync::MutexGuard<'_, NumberFormat> {

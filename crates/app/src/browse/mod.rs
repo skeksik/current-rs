@@ -19,6 +19,7 @@ mod present;
 mod search;
 mod search_filter;
 mod states;
+mod texts;
 mod views;
 
 use std::collections::{HashMap, HashSet};
@@ -63,6 +64,11 @@ pub use search_filter::{
     search_tools, search_type_label, search_types,
 };
 pub use states::{BrowseNotice, ItemAction, NoticeKind};
+pub use texts::{
+    DetailsFacts, FAILED_TILE_NAME, LIBRARY_GONE_MESSAGE, LIBRARY_GONE_TITLE, LOADING_TILE_NAME,
+    action_failed_title, details_facts, facts_line, item_count_label, person_kind_name,
+    search_status, size_on_disk, tile_name, tile_subtitle, tile_title,
+};
 pub use views::{
     BrowseView, FilterMenu, GridOpening, ItemOpens, RowDisplay, RowLink, RowNote, RowTarget,
     ViewLayout, filter_menu, grid_opening, home_row_display, search_group_display, view_layout,

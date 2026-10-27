@@ -187,15 +187,15 @@ mod tests {
             ..NumberFormat::default()
         };
         assert_eq!(
-            sizes(vec![3, 4, 5]).grouped(55_55555_55555_4444_333),
+            sizes(vec![3, 4, 5]).grouped(5555555555554444333),
             "55,55555,55555,4444,333"
         );
         assert_eq!(
-            sizes(vec![3, 4, 0]).grouped(555555555_4444_333),
+            sizes(vec![3, 4, 0]).grouped(5555555554444333),
             "555555555,4444,333"
         );
         // India's groups: 3, then 2.
-        assert_eq!(sizes(vec![3, 2]).grouped(12_34_56_789), "12,34,56,789");
+        assert_eq!(sizes(vec![3, 2]).grouped(123456789), "12,34,56,789");
         assert_eq!(sizes(vec![0]).grouped(1_234_567), "1234567");
         assert_eq!(sizes(Vec::new()).grouped(1_234_567), "1234567");
     }
