@@ -101,6 +101,8 @@ Report
 ```
 
 ## 5. Answer plans and watch workers
+- Accessibility checks with the owner (Narrator or VoiceOver, high contrast, keyboard only) happen once at the end of each milestone,
+  not per PR (owner, 2026-10-27). Do not ask the owner for them before a merge; PRs list them as "deferred to the milestone pass".
 - Approve a plan that stays in its task and the decision records, adding overlap warnings and tightening. Send to the owner anything
   that adds a dependency, bumps a version, needs or changes a decision record, or departs from native behaviour.
 - While workers are active keep one `send_later` check-in about 45 minutes out (60 when only local cards are pending); stop when nothing
