@@ -12,11 +12,13 @@
 
 mod details;
 mod home;
+mod labels;
 mod libraries;
 mod paged;
 mod present;
 mod search;
 mod states;
+mod views;
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -40,6 +42,10 @@ pub use details::{DetailsView, LoadState, SIMILAR_LIMIT};
 pub use home::{
     HomeFeed, HomeRow, HomeRowKind, HomeState, LATEST_LIMIT, NEXT_UP_LIMIT, RESUME_LIMIT,
 };
+pub use labels::{
+    FAVOURITES_EMPTY, FAVOURITES_FAILED, favourites_status, kind_choice_name, kind_group,
+    library_filter_name, library_sort_name, runtime_label, time_left_label, time_left_short,
+};
 pub use paged::{BACKLOG_PAGES, MAX_PAGE_REQUESTS, PAGE_SIZE, PagedItems, PagedState, Slot};
 pub(crate) use present::ShownAgain;
 pub use present::{
@@ -50,6 +56,11 @@ pub use present::{
 };
 pub use search::{FAVOURITE_ROW_KINDS, FAVOURITE_ROW_LIMIT, SearchResults};
 pub use states::{BrowseNotice, ItemAction, NoticeKind};
+pub use views::{
+    BrowseView, FilterMenu, GridOpening, RowDisplay, RowLink, RowTarget, ViewLayout, filter_menu,
+    grid_opening, home_row_display, search_group_display, view_layout, view_link_tooltip,
+    view_opening, view_query, view_title,
+};
 
 use libraries::Libraries;
 use states::ItemStates;
