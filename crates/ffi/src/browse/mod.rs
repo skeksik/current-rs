@@ -242,14 +242,48 @@ pub fn library_sort_choices() -> Vec<SortChoice> {
         .collect()
 }
 
-/// The filters a library grid offers, in the order to list them: everything first (`None`), then `unplayed`, `played` and
-/// `favourite`. The UI names each.
+/// The filters a library grid offers as one choice, in the order to list them: everything first (`None`), then `unplayed` and
+/// `played`. The UI names each.
 #[uniffi::export]
 pub fn library_filter_choices() -> Vec<Option<String>> {
     current_app::library_filters()
         .into_iter()
         .map(|filter| filter.map(|filter| filter.as_str().to_owned()))
         .collect()
+}
+
+/// The filters a library grid offers as ticks beside that choice, each on or off: `favourite`. The UI names each.
+#[uniffi::export]
+pub fn library_toggle_filter_choices() -> Vec<String> {
+    current_app::library_toggle_filters()
+        .into_iter()
+        .map(|filter| filter.as_str().to_owned())
+        .collect()
+}
+
+/// `query` with `choice` as its filter choice (`None`: everything), its ticks kept.
+#[uniffi::export]
+pub fn library_with_filter_choice(query: ItemQuery, choice: Option<String>) -> ItemQuery {
+    (&current_app::with_filter_choice(&(&query).into(), choice.map(current_model::ItemFilter::new)))
+        .into()
+}
+
+/// `query` with the tick `toggle` on or off, its filter choice kept.
+#[uniffi::export]
+pub fn library_with_filter_toggle(query: ItemQuery, toggle: String, on: bool) -> ItemQuery {
+    (&current_app::with_filter_toggle(
+        &(&query).into(),
+        &current_model::ItemFilter::new(toggle),
+        on,
+    ))
+        .into()
+}
+
+/// Every item of `kind` in every library, by name: the Movies, Series or Episodes page a Favourites row's header opens (with the
+/// favourites tick on: [`favourites_query`] with the kind).
+#[uniffi::export]
+pub fn kind_query(kind: String) -> ItemQuery {
+    (&current_app::kind_query(current_model::MediaKind::new(kind))).into()
 }
 
 /// What `library`'s grid shows before the user sorts or filters it, by name: a film library its films and a TV library its series,

@@ -264,6 +264,13 @@ public static class PlaybackExtensions
             return true;
         });
 
+    /// <summary>
+    /// Settings' "Preferred quality" list (the core decides): Original, then the steps the quality menu lists ("Show all quality
+    /// options" as set), each named by its usual resolution; the preferred quality itself when the list no longer offers it.
+    /// </summary>
+    public static IReadOnlyList<QualityOption> PreferredQualityOptions(this CoreHost core) =>
+        Array.ConvertAll(core.Core.PreferredQualityOptions(), option => PlayerMap.From(option));
+
     /// <summary>The steps of the quality menu after "Maximum", highest first.</summary>
     public static IReadOnlyList<QualityChoice> QualitySteps(this CoreHost core) =>
         Array.ConvertAll(Ffi.CurrentFfiMethods.QualitySteps(), step => PlayerMap.From(step));

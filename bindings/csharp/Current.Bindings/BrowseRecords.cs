@@ -223,8 +223,29 @@ public sealed record ItemQuery
         Ffi.CurrentFfiMethods.LibrarySortChoices(),
         choice => new SortChoice(choice.Key, choice.Order == Ffi.SortOrder.Descending ? SortOrder.Descending : SortOrder.Ascending));
 
-    /// <summary>The filters a library grid offers, in the order to list them: null (everything) first. The UI names each.</summary>
+    /// <summary>The filters a library grid offers as one choice, everything (null) first, then unplayed and played (the core decides).</summary>
     public static IReadOnlyList<string?> FilterChoices { get; } = Ffi.CurrentFfiMethods.LibraryFilterChoices();
+
+    /// <summary>The filters a library grid offers as ticks beside that choice, each on or off: favourite (the core decides).</summary>
+    public static IReadOnlyList<string> ToggleFilterChoices { get; } = Ffi.CurrentFfiMethods.LibraryToggleFilterChoices();
+
+    /// <summary>This query with <paramref name="choice"/> as its filter choice (null: everything), its ticks kept (the core decides).</summary>
+    public ItemQuery WithFilter(string? choice) =>
+        MapBrowse.From(Ffi.CurrentFfiMethods.LibraryWithFilterChoice(MapBrowse.ToFfi(this), choice));
+
+    /// <summary>This query with the tick <paramref name="toggle"/> on or off, its filter choice kept (the core decides).</summary>
+    public ItemQuery WithToggle(string toggle, bool on)
+    {
+        ArgumentNullException.ThrowIfNull(toggle);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.LibraryWithFilterToggle(MapBrowse.ToFfi(this), toggle, on));
+    }
+
+    /// <summary>Every item of <paramref name="kind"/> in every library, by name (the core decides): the page a Favourites row opens.</summary>
+    public static ItemQuery OfKind(string kind)
+    {
+        ArgumentNullException.ThrowIfNull(kind);
+        return MapBrowse.From(Ffi.CurrentFfiMethods.KindQuery(kind));
+    }
 }
 
 /// <summary>

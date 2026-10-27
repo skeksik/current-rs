@@ -45,7 +45,8 @@ pub(crate) use present::ShownAgain;
 pub use present::{
     FILTERS_OFF_WHILE_SEARCHING, GridTools, LIBRARY_SEARCH_WINDOW, REFRESH_WHEN_SHOWN_AFTER,
     SORT_OFF_WHILE_SEARCHING, SeriesRun, SortChoice, TileShape, grid_tools, library_filters,
-    library_search_note, library_sorts, series_run, tile_artwork,
+    library_search_note, library_sorts, library_toggle_filters, series_run, tile_artwork,
+    with_filter_choice, with_filter_toggle,
 };
 pub use search::{FAVOURITE_ROW_KINDS, FAVOURITE_ROW_LIMIT, SearchResults};
 pub use states::{BrowseNotice, ItemAction, NoticeKind};
@@ -582,17 +583,31 @@ fn view_kinds_for(kind: Option<MediaKind>) -> Vec<MediaKind> {
     }
 }
 
-/// The user's favourites in every library, by name (owner, 2026-10-26 and 2026-10-27): with `kind`, that kind only, as a Favourites
-/// row's header opens it (episodes too, [`FAVOURITE_ROW_KINDS`]); without, Home's Favourites row, of the kinds the views across
-/// every library list, with no episode on its own.
-pub fn favourites_query(kind: Option<MediaKind>) -> ItemQuery {
+/// Every item of `kind` in every library, by name (owner, 2026-10-27): the Movies, Series or Episodes page a Favourites row's header
+/// opens, with the favourites tick on ([`favourites_query`]).
+pub fn kind_query(kind: MediaKind) -> ItemQuery {
     ItemQuery {
         recursive: true,
-        kinds: view_kinds_for(kind),
-        filters: vec![ItemFilter::FAVOURITE],
+        kinds: vec![kind],
         sort: vec![SortKey::SORT_NAME],
         ..ItemQuery::default()
     }
+}
+
+/// The user's favourites in every library, by name (owner, 2026-10-26 and 2026-10-27): with `kind`, [`kind_query`] with the
+/// favourites tick on, as a Favourites row's header opens it (episodes too, [`FAVOURITE_ROW_KINDS`]); without, Home's Favourites
+/// row, of the kinds the views across every library list, with no episode on its own.
+pub fn favourites_query(kind: Option<MediaKind>) -> ItemQuery {
+    let query = match kind {
+        Some(kind) => kind_query(kind),
+        None => ItemQuery {
+            recursive: true,
+            kinds: view_kinds_for(None),
+            sort: vec![SortKey::SORT_NAME],
+            ..ItemQuery::default()
+        },
+    };
+    with_filter_toggle(&query, &ItemFilter::FAVOURITE, true)
 }
 
 /// The Recently added tab and Home's Recently added row (owner, 2026-10-26): what was added to every library, the newest first; only

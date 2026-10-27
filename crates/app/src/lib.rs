@@ -41,9 +41,10 @@ pub use browse::{
     HomeState, ItemAction, LATEST_LIMIT, LIBRARY_SEARCH_WINDOW, LoadState, MAX_PAGE_REQUESTS,
     NEXT_UP_LIMIT, NoticeKind, PAGE_SIZE, PagedItems, PagedState, REFRESH_WHEN_SHOWN_AFTER,
     RESUME_LIMIT, SIMILAR_LIMIT, SORT_OFF_WHILE_SEARCHING, SearchResults, SeriesRun, Slot,
-    SortChoice, TileShape, favourites_query, grid_tools, library_filters, library_query,
-    library_search, library_search_note, library_sorts, recently_added_everywhere_query,
-    recently_added_query, seen_recently_query, series_run, tile_artwork, view_kinds,
+    SortChoice, TileShape, favourites_query, grid_tools, kind_query, library_filters,
+    library_query, library_search, library_search_note, library_sorts, library_toggle_filters,
+    recently_added_everywhere_query, recently_added_query, seen_recently_query, series_run,
+    tile_artwork, view_kinds, with_filter_choice, with_filter_toggle,
 };
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use formats::{
@@ -66,7 +67,7 @@ pub use player::{
 pub mod playback {
     pub use current_playback::{
         AutoSkip, NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, QualityOption,
-        QualityPreference, Track, quality_options, snap_quality,
+        QualityPreference, Track, preferred_quality_options, quality_options, snap_quality,
     };
 }
 pub use sign_in::{SignIn, SignInError, SignInState};

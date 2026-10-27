@@ -91,15 +91,51 @@ pub fn library_sorts() -> Vec<SortChoice> {
     .collect()
 }
 
-/// The filters a library grid offers, in the order the UI lists them: everything first (`None`), then unplayed, played and
-/// favourites. Favourites also have their own tab across every library; the filter narrows one library to them (owner, 2026-10-27).
+/// The filters a library grid offers as one choice, in the order the UI lists them: everything first (`None`), then unplayed and
+/// played. Favourites are a tick of their own beside them ([`library_toggle_filters`]).
 pub fn library_filters() -> Vec<Option<ItemFilter>> {
-    vec![
-        None,
-        Some(ItemFilter::UNPLAYED),
-        Some(ItemFilter::PLAYED),
-        Some(ItemFilter::FAVOURITE),
-    ]
+    vec![None, Some(ItemFilter::UNPLAYED), Some(ItemFilter::PLAYED)]
+}
+
+/// The filters a library grid offers as ticks, each on or off whatever [`library_filters`] choice is made: favourites (owner,
+/// 2026-10-27). With a choice and a tick the grid asks for items that match both (whether Jellyfin applies every filter it is
+/// sent, not either, is not verified in its source; checked on the owner's server).
+pub fn library_toggle_filters() -> Vec<ItemFilter> {
+    vec![ItemFilter::FAVOURITE]
+}
+
+/// `query` with `choice` as its [`library_filters`] choice (`None`: everything), its ticks kept.
+pub fn with_filter_choice(query: &ItemQuery, choice: Option<ItemFilter>) -> ItemQuery {
+    let toggles = library_toggle_filters();
+    let mut filters: Vec<ItemFilter> = choice.into_iter().collect();
+    filters.extend(
+        query
+            .filters
+            .iter()
+            .filter(|filter| toggles.contains(filter))
+            .cloned(),
+    );
+    ItemQuery {
+        filters,
+        ..query.clone()
+    }
+}
+
+/// `query` with the tick `toggle` on or off, its [`library_filters`] choice kept.
+pub fn with_filter_toggle(query: &ItemQuery, toggle: &ItemFilter, on: bool) -> ItemQuery {
+    let mut filters: Vec<ItemFilter> = query
+        .filters
+        .iter()
+        .filter(|filter| *filter != toggle)
+        .cloned()
+        .collect();
+    if on {
+        filters.push(toggle.clone());
+    }
+    ItemQuery {
+        filters,
+        ..query.clone()
+    }
 }
 
 /// How many matches a library grid's search can show: Jellyfin's search answers at most three times a request's limit and counts only
@@ -339,8 +375,29 @@ mod tests {
                 .all(|sort| sort.order == SortOrder::Descending)
         );
         assert_eq!(library_filters()[0], None);
-        assert_eq!(library_filters().len(), 4);
-        assert_eq!(library_filters()[3], Some(ItemFilter::FAVOURITE));
+        assert_eq!(library_filters().len(), 3);
+        assert!(!library_filters().contains(&Some(ItemFilter::FAVOURITE)));
+        assert_eq!(library_toggle_filters(), [ItemFilter::FAVOURITE]);
+    }
+
+    #[test]
+    fn the_favourites_tick_combines_with_the_played_choice() {
+        let query = ItemQuery::default();
+        let favourites = with_filter_toggle(&query, &ItemFilter::FAVOURITE, true);
+        assert_eq!(favourites.filters, [ItemFilter::FAVOURITE]);
+        let unplayed = with_filter_choice(&favourites, Some(ItemFilter::UNPLAYED));
+        assert_eq!(
+            unplayed.filters,
+            [ItemFilter::UNPLAYED, ItemFilter::FAVOURITE]
+        );
+        let played = with_filter_choice(&unplayed, Some(ItemFilter::PLAYED));
+        assert_eq!(played.filters, [ItemFilter::PLAYED, ItemFilter::FAVOURITE]);
+        // Ticked twice stays once; off keeps the choice.
+        let again = with_filter_toggle(&played, &ItemFilter::FAVOURITE, true);
+        assert_eq!(again.filters, played.filters);
+        let off = with_filter_toggle(&played, &ItemFilter::FAVOURITE, false);
+        assert_eq!(off.filters, [ItemFilter::PLAYED]);
+        assert!(with_filter_choice(&off, None).filters.is_empty());
     }
 
     #[test]
