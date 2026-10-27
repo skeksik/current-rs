@@ -33,16 +33,16 @@ use tokio::task::JoinHandle;
 
 pub use browse::{
     Artwork, AspectRatio, Browse, BrowseNotice, BrowseNoticeListener, BrowseProblem, CalendarDate,
-    Chapter, DetailsView, EpisodeLinks, HomeFeed, HomeRow, HomeRowDiff, HomeRowKind,
+    Chapter, DetailsView, EpisodeLinks, GridTools, HomeFeed, HomeRow, HomeRowDiff, HomeRowKind,
     HomeRowsListener, HomeState, HomeStateListener, ImageProblem, ImageRef, ImageRequest,
     ImageSource, ItemAction, ItemDetails, ItemDetailsListener, ItemQuery, ItemRef, ItemSummary,
     ItemSummaryDiff, ItemsListener, LibrariesListener, Library, LibraryChoices,
     LibraryMemorySettings, LibraryView, LoadState, LoadStateListener, MediaSummary, NoticeKind,
     PagedItems, PagedState, PagedStateListener, Person, SearchGroup, SearchGroupDiff,
     SearchGroupsListener, SearchResults, SeriesRun, Slot, SlotDiff, SlotsListener, SortChoice,
-    SortOrder, StreamSummary, UserState, favourites_query, library_filter_choices, library_query,
-    library_search, library_sort_choices, recently_added_everywhere_query, recently_added_query,
-    view_kind_choices,
+    SortOrder, StreamSummary, UserState, favourites_query, library_filter_choices,
+    library_grid_tools, library_query, library_search, library_search_note, library_sort_choices,
+    recently_added_everywhere_query, recently_added_query, view_kind_choices,
 };
 pub use cancel::CancelToken;
 pub use error::CoreError;

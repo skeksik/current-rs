@@ -1,12 +1,14 @@
 //! What the browse screens show, decided once for every platform (CLAUDE.md: all logic lives in the core): which picture a tile
-//! takes, a series' run, the sort and filter choices of a library grid, and when a list shown again refreshes. The UIs only name and
+//! takes, a series' run, the sort and filter choices of a library grid and what its search turns off, and when a list shown again
+//! refreshes. The UIs only name and
 //! format what these return.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use current_model::{
-    Artwork, ImageType, ItemDetails, ItemFilter, ItemSummary, MediaKind, SortKey, SortOrder,
+    Artwork, ImageType, ItemDetails, ItemFilter, ItemQuery, ItemSummary, MediaKind, SortKey,
+    SortOrder,
 };
 
 use super::lock;
@@ -98,6 +100,49 @@ pub fn library_filters() -> Vec<Option<ItemFilter>> {
         Some(ItemFilter::PLAYED),
         Some(ItemFilter::FAVOURITE),
     ]
+}
+
+/// How many matches a library grid's search can show: Jellyfin's search answers at most three times a request's limit and counts only
+/// those in its total (`docs/notes/jellyfin-browse.md`, "Search"), and a grid asks for [`super::PAGE_SIZE`] items at a time.
+pub const LIBRARY_SEARCH_WINDOW: usize = 3 * super::PAGE_SIZE;
+
+/// The tooltip of a library grid's Sort button while a search makes it unavailable (owner, 2026-10-27).
+pub const SORT_OFF_WHILE_SEARCHING: &str = "Sorted by relevance while searching";
+/// The tooltip of a library grid's Filter button while a search makes it unavailable.
+pub const FILTERS_OFF_WHILE_SEARCHING: &str = "Filters are off while searching";
+
+/// What a library grid's Sort and Filter buttons offer for the query it shows (owner, 2026-10-27): neither while it searches, as its
+/// results come in the server's relevance order, unfiltered ([`super::library_search`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GridTools {
+    pub sort_available: bool,
+    /// Why Sort is unavailable, for its tooltip; `None` while it is available.
+    pub sort_tooltip: Option<String>,
+    pub filter_available: bool,
+    /// Why Filter is unavailable, for its tooltip; `None` while it is available.
+    pub filter_tooltip: Option<String>,
+}
+
+/// The Sort and Filter buttons of a grid showing `query`.
+pub fn grid_tools(query: &ItemQuery) -> GridTools {
+    let searching = query.search_term.is_some();
+    let off = |text: &str| searching.then(|| text.to_owned());
+    GridTools {
+        sort_available: !searching,
+        sort_tooltip: off(SORT_OFF_WHILE_SEARCHING),
+        filter_available: !searching,
+        filter_tooltip: off(FILTERS_OFF_WHILE_SEARCHING),
+    }
+}
+
+/// The line a grid showing `query` shows above its items once it holds `total` (owner, 2026-10-27): while it searches and its total
+/// reaches [`LIBRARY_SEARCH_WINDOW`], the server left out whatever matched less well, so the user is told to narrow the search.
+/// `None` otherwise.
+pub fn library_search_note(query: &ItemQuery, total: u32) -> Option<String> {
+    let full = usize::try_from(total).is_ok_and(|total| total >= LIBRARY_SEARCH_WINDOW);
+    (query.search_term.is_some() && full).then(|| {
+        format!("Showing the best {LIBRARY_SEARCH_WINDOW} matches. Type more to narrow it.")
+    })
 }
 
 /// "The page is shown again after five minutes" refreshes a list (ADR 0018, section 3).
@@ -296,6 +341,57 @@ mod tests {
         assert_eq!(library_filters()[0], None);
         assert_eq!(library_filters().len(), 4);
         assert_eq!(library_filters()[3], Some(ItemFilter::FAVOURITE));
+    }
+
+    #[test]
+    fn a_searching_grid_offers_no_sort_or_filter_and_says_why() {
+        let browsing = ItemQuery {
+            sort: vec![SortKey::SORT_NAME],
+            ..ItemQuery::default()
+        };
+        assert_eq!(
+            grid_tools(&browsing),
+            GridTools {
+                sort_available: true,
+                sort_tooltip: None,
+                filter_available: true,
+                filter_tooltip: None,
+            }
+        );
+        let searching = ItemQuery {
+            search_term: Some("Example".into()),
+            ..ItemQuery::default()
+        };
+        let tools = grid_tools(&searching);
+        assert!(!tools.sort_available && !tools.filter_available);
+        assert_eq!(
+            tools.sort_tooltip.as_deref(),
+            Some("Sorted by relevance while searching")
+        );
+        assert_eq!(
+            tools.filter_tooltip.as_deref(),
+            Some("Filters are off while searching")
+        );
+    }
+
+    #[test]
+    fn a_search_that_fills_the_server_s_window_asks_for_more_text() {
+        // Three pages of a grid: what one Jellyfin search can answer.
+        assert_eq!(LIBRARY_SEARCH_WINDOW, 300);
+        let window = u32::try_from(LIBRARY_SEARCH_WINDOW).unwrap();
+        let searching = ItemQuery {
+            search_term: Some("Example".into()),
+            ..ItemQuery::default()
+        };
+        assert_eq!(library_search_note(&searching, window - 1), None);
+        assert_eq!(
+            library_search_note(&searching, window).as_deref(),
+            Some("Showing the best 300 matches. Type more to narrow it.")
+        );
+        assert!(library_search_note(&searching, u32::MAX).is_some());
+        // A grid that does not search shows every item: no note, however many.
+        assert_eq!(library_search_note(&ItemQuery::default(), window), None);
+        assert_eq!(library_search_note(&ItemQuery::default(), 0), None);
     }
 
     #[test]

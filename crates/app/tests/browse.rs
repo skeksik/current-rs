@@ -432,6 +432,47 @@ async fn a_list_chosen_by_marks_reads_again_when_a_mark_changes() {
 }
 
 #[tokio::test]
+async fn the_favourites_tab_is_a_row_per_kind_read_again_when_a_mark_changes() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let favourites = browse.favourites();
+    // The stand-in's item list takes no filter: every film, series and episode is in its row here, in the rows' order.
+    eventually(|| favourites.groups().len() == 3 && !favourites.state().borrow().loading).await;
+    assert_eq!(
+        favourites.groups().snapshot(),
+        [MediaKind::MOVIE, MediaKind::SERIES, MediaKind::EPISODE]
+    );
+    assert_eq!(favourites.group(&MediaKind::MOVIE).unwrap().len(), 3);
+    assert_eq!(favourites.group(&MediaKind::SERIES).unwrap().len(), 1);
+    let episodes = favourites.group(&MediaKind::EPISODE).unwrap();
+    assert_eq!(episodes.len(), 2);
+    assert!(favourites.group(&MediaKind::BOX_SET).is_none());
+
+    // A favourite mark, then a played one: each reads the rows again (one request per row), a second later.
+    for played in [false, true] {
+        let reads = stand_in.count("/Items");
+        if played {
+            browse.set_played(&item(&server, EPISODE_IDS[0]), true);
+        } else {
+            browse.set_favourite(&item(&server, FILM_IDS[1]), true);
+        }
+        eventually(|| stand_in.count("/Items") >= reads + 3).await;
+    }
+    // The rows kept their lists: a UI's subscriptions go on.
+    eventually(|| !favourites.state().borrow().loading).await;
+    assert!(Arc::ptr_eq(
+        &episodes,
+        &favourites.group(&MediaKind::EPISODE).unwrap()
+    ));
+    assert_eq!(
+        played(&episodes, &item(&server, EPISODE_IDS[0])),
+        Some(true)
+    );
+}
+
+#[tokio::test]
 async fn play_starts_the_item_or_the_series_next_episode() {
     let stand_in = StandIn::start().await.unwrap();
     let app = App::new();

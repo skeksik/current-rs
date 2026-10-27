@@ -46,7 +46,8 @@ pub struct ItemQuery {
     pub kinds: Vec<MediaKind>,
     /// Whether items inside folders below `parent` are listed too.
     pub recursive: bool,
-    /// Sort keys, most significant first. The service crate adds the name as the last key, so equal keys keep a stable order.
+    /// Sort keys, most significant first. The service crate adds the name as the last key, so equal keys keep a stable order. None
+    /// with a search term: the server's relevance order.
     pub sort: Vec<SortKey>,
     pub order: SortOrder,
     pub filters: Vec<ItemFilter>,
