@@ -227,13 +227,13 @@ Done when: a Jellyfin library is browsable and playable on Windows every day, wi
 The owner's order: implement, fix and polish everything Jellyfin and playback first; Seerr (M4), macOS (M3) and the rest after.
 
 In progress:
-- [ ] Move the Windows app's last texts into the core, so macOS and Linux don't copy them (what the move of 2026-10-27 left; its
-      rules, view and row texts, names, times and quality labels are the core's now). The player's words: route and reason names,
-      plan notes, skip buttons, the next-episode countdown, track names, times and their spoken form, playback problems, and the
-      playback info panel's lines. The browse words still in C#: tile lines and marks ("N new episodes", "in progress", "N
-      unplayed"), person parts, sizes on disk, the action-failed and library-gone notices, browse problems and `ProblemText` (shared
-      by every screen, so it moves as one piece), and the search page's status lines (with the global search filters). Icon glyphs
-      stay with each platform: they are its own icon font.
+- [ ] Move the Windows app's remaining rules and texts into the core, so macOS and Linux don't copy them (manager's
+      review of the Windows UI pass, 2026-10-27). Rules: which quality entry is current and the fallback quality list; dropping
+      remembered filters a menu no longer offers; Favourites offering type filters only; Home-header grids ignoring remembered choices;
+      view ids and the view → query mapping; row kind → tab links and which rows get wide tiles; kbit/s and Mbit/s formatting and the
+      "Original · 4K · 26.1 Mbit/s" composition; time-left rounding and format. Texts: Home row titles ("Recently added in X"), view
+      titles, kind names, link tooltips, the Favourites tab's "No favourites yet" and its failure line. Bindings tests for the quality options, `OpenItems`, the Favourites and Recently added
+      queries, searching, time left and the new Home row kinds
 - [ ] Global search filters (owner, 2026-10-27): Type (All, Movies, Series, Actors), Source (All, Library, Catalog; Catalog comes with
       Seerr, M4) and View
 Fix and polish:
