@@ -10,6 +10,7 @@
 mod problems;
 mod records;
 mod remember;
+mod search_filter;
 mod views;
 
 use std::sync::Arc;
@@ -28,11 +29,16 @@ pub use records::{
     SeriesRun, Slot, SlotDiff, SortChoice, SortOrder, StreamSummary, UserState,
 };
 pub use remember::{LibraryChoices, LibraryMemorySettings, LibraryView};
+pub use search_filter::{
+    SearchChoice, SearchChoices, SearchFilter, SearchSource, SearchSourceChoice, SearchTools,
+    SearchTypeChoice, person_query, search_note, search_result_display,
+};
 pub use views::{
-    BrowseView, FilterMenu, GridOpening, RowDisplay, RowLink, RowTarget, TileShape, ViewLayout,
-    favourites_status, grid_filter_menu, home_row_display, kind_choice_name, kind_group_name,
-    library_filter_name, library_sort_name, runtime_label, search_group_display, time_left_label,
-    time_left_short, view_layout, view_link_tooltip, view_opening, view_query, view_title,
+    BrowseView, FilterMenu, GridOpening, ItemOpens, RowDisplay, RowLink, RowNote, RowTarget,
+    TileShape, ViewLayout, favourites_status, grid_filter_menu, home_row_display, kind_choice_name,
+    kind_group_name, library_filter_name, library_sort_name, runtime_label, search_group_display,
+    time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
+    view_title,
 };
 
 /// Receives a grid's slots: `[Reset]` first, then batches of diffs, on a core thread. Apply each batch in order. It must only hand
@@ -447,10 +453,12 @@ impl Browse {
         })
     }
 
-    /// The best matches for `term`, one group per kind. Starts loading at once.
-    pub fn search(&self, term: String) -> Arc<SearchResults> {
+    /// The best matches for `term`, one group per kind, of the types and sources `filter` keeps: every type, 24 of each with people
+    /// last, or the one type chosen, up to 100. The catalog while no Seerr server is set up reads as every source. Starts loading at
+    /// once.
+    pub fn search(&self, term: String, filter: SearchFilter) -> Arc<SearchResults> {
         Arc::new(SearchResults {
-            results: self.browse.search(&term),
+            results: self.browse.search(&term, &(&filter).into()),
             host: self.host.clone(),
         })
     }

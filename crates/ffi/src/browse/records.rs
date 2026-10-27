@@ -245,6 +245,9 @@ pub struct ItemQuery {
     /// Only items the server finds for this, as its search does.
     #[uniffi(default = None)]
     pub search_term: Option<String>,
+    /// Only items this person is credited on: a person's titles ([`person_query`](crate::browse::person_query)).
+    #[uniffi(default = None)]
+    pub person: Option<ItemRef>,
 }
 
 /// One place in a grid. Never null across the bridge: WinUI 3 does not take null placeholders.
@@ -741,6 +744,7 @@ impl From<&model::ItemQuery> for ItemQuery {
             years: query.years.clone(),
             name_starts_with: query.name_starts_with.clone(),
             search_term: query.search_term.clone(),
+            person: query.person.as_ref().map(Into::into),
         }
     }
 }
@@ -773,6 +777,7 @@ impl From<&ItemQuery> for model::ItemQuery {
             years: query.years.clone(),
             name_starts_with: query.name_starts_with.clone(),
             search_term: query.search_term.clone(),
+            person: query.person.as_ref().map(Into::into),
         }
     }
 }

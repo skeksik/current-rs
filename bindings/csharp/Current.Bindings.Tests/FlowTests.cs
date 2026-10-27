@@ -116,6 +116,26 @@ internal static class FlowTests
         }
     }
 
+    public static async Task SearchChoicesAreRememberedWhileTheirSwitchIsOn()
+    {
+        using var folder = new DataFolder();
+        var chosen = new SearchChoices(new SearchFilter("series", SearchSource.Library), new LibraryView(LibraryView.Wide, ShowTitles: false));
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory))
+        {
+            await core.RememberSearchChoicesAsync(chosen);
+            Check(core.SearchChoices == new SearchChoices(), "nothing remembered while off");
+            await core.SetRememberFilterAsync(true);
+            await core.RememberSearchChoicesAsync(chosen);
+            Check(core.SearchChoices == new SearchChoices(chosen.Filter), "the filter only, while only its switch is on");
+            await core.SetRememberViewAsync(true);
+            await core.RememberSearchChoicesAsync(new SearchChoices(View: chosen.View));
+        }
+        using (var core = await CoreHost.OpenAsync(folder.Path, Path.Combine(folder.Path, "Cache"), "", SecretStore.Memory))
+        {
+            Check(core.SearchChoices == chosen, $"kept for the next open, not {core.SearchChoices}");
+        }
+    }
+
     public static async Task LibraryChoicesAreRememberedWhileTheirSwitchIsOn()
     {
         using var folder = new DataFolder();

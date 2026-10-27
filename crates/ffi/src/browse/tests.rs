@@ -6,7 +6,7 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use jellyfin_stand_in::library::{FILM_IDS, FILMS_LIBRARY_ID, SHOWS_LIBRARY_ID};
+use jellyfin_stand_in::library::{FILM_IDS, FILMS_LIBRARY_ID, PERSON_ID, SHOWS_LIBRARY_ID};
 use jellyfin_stand_in::paging::{BIG_LIBRARY_ID, BIG_LIBRARY_SIZE, big_item_name, page_key};
 use jellyfin_stand_in::{IMAGE, PASSWORD, StandIn, USER_NAME};
 
@@ -42,6 +42,12 @@ impl ItemsListener for Recorder<Vec<ItemSummaryDiff>> {
 
 impl HomeRowsListener for Recorder<Vec<HomeRowDiff>> {
     fn on_diffs(&self, diffs: Vec<HomeRowDiff>) {
+        self.send(diffs);
+    }
+}
+
+impl SearchGroupsListener for Recorder<Vec<SearchGroupDiff>> {
+    fn on_diffs(&self, diffs: Vec<SearchGroupDiff>) {
         self.send(diffs);
     }
 }
@@ -695,7 +701,7 @@ fn listeners_are_released_with_their_handles() {
     let grid = browse.open_library(big_library(&server), ItemQuery::default());
     let home = browse.home();
     let details = browse.details(item(&server, FILM_IDS[0]));
-    let search = browse.search("Example".into());
+    let search = browse.search("Example".into(), SearchFilter::default());
     let handles = [
         grid.subscribe_slots(recorder::<Vec<SlotDiff>>().0),
         grid.subscribe_state(recorder::<PagedState>().0),
@@ -717,5 +723,47 @@ fn listeners_are_released_with_their_handles() {
     search_state.cancel();
     eventually("every listener is dropped", || {
         core.live_listeners() == before
+    });
+}
+
+#[test]
+fn a_search_narrowed_to_people_and_a_persons_titles_cross() {
+    let stand_in = stand_in();
+    let (core, server) = signed_in(&stand_in);
+    let browse = core.browse(server.clone()).unwrap();
+    let search = browse.search(
+        "example".into(),
+        SearchFilter {
+            kind: Some("person".into()),
+            source: SearchSource::Library,
+        },
+    );
+    let (listener, rx) = recorder::<Vec<SearchGroupDiff>>();
+    let _groups = search.subscribe_groups(listener);
+    let mut groups = Mirror::new();
+    while groups.values.is_empty() {
+        let batch = rx
+            .recv_timeout(WAIT)
+            .unwrap_or_else(|_| panic!("timed out waiting for the people"));
+        for diff in batch {
+            apply!(groups, diff, SearchGroupDiff);
+        }
+    }
+    let kinds: Vec<_> = groups.values.iter().map(|g| g.kind.as_str()).collect();
+    assert_eq!(kinds, ["person"]);
+    let (listener, rx) = recorder::<Vec<ItemSummaryDiff>>();
+    let _people = search.subscribe_group("person".into(), listener).unwrap();
+    let mut people = Mirror::new();
+    follow_items(&mut people, &rx, "the people", |people| people.len() == 2);
+    assert_eq!(people.values[0].item, item(&server, PERSON_ID));
+    assert_eq!(people.values[0].kind, "person");
+
+    let titles = browse.open_items(person_query(item(&server, PERSON_ID)));
+    let (listener, rx) = recorder::<Vec<SlotDiff>>();
+    let _slots = titles.subscribe_slots(listener);
+    titles.set_visible_range(0, 10);
+    let mut slots = Mirror::new();
+    follow_slots(&mut slots, &rx, "the person's titles", |slots| {
+        slots.len() == 2 && slots.iter().all(|slot| matches!(slot, Slot::Item { .. }))
     });
 }

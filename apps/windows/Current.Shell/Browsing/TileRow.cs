@@ -11,7 +11,7 @@ namespace Current.Shell.Browsing;
 /// title, its tiles' shape and where its header goes). Its items are the core's list, mirrored on the UI thread. Public, because
 /// x:DataType needs a public type.
 /// </summary>
-public sealed class TileRow(string key, RowDisplay display, ListSubscription<ItemSummary> items) : IDisposable
+public sealed class TileRow(string key, RowDisplay display, ListSubscription<ItemSummary> items) : IDisposable, INotifyPropertyChanged
 {
     public string Key { get; } = key;
 
@@ -41,12 +41,55 @@ public sealed class TileRow(string key, RowDisplay display, ListSubscription<Ite
 
     internal ListSubscription<ItemSummary> Subscription { get; } = items;
 
-    /// <summary>Wide tiles (16:9) or posters, as the core shapes the row.</summary>
-    public DataTemplate ItemTemplate { get; } =
-        (DataTemplate)Application.Current.Resources[display.Wide ? "WideTileTemplate" : "PosterTileTemplate"];
+    /// <summary>Cast cards, wide tiles (16:9) or posters, with or without their titles, as the core shapes the row.</summary>
+    public DataTemplate ItemTemplate { get; } = (DataTemplate)Application.Current.Resources[
+        display.Cards ? "PersonTileTemplate"
+        : display.Wide ? (display.ShowTitles ? "WideTileTemplate" : "WidePictureTemplate")
+        : display.ShowTitles ? "PosterTileTemplate" : "PosterPictureTemplate"];
+
+    /// <summary>Whether the tiles wrap into a grid rather than scroll sideways (the core's: a search narrowed to one type).</summary>
+    public bool Wraps { get; } = display.Wraps;
+
+    /// <summary>What opening an item shows: its details, or a person's titles.</summary>
+    public ItemOpens Opens { get; } = display.Opens;
+
+    /// <summary>Whether its items have the item menu (Play, Mark as played, Favourite); a person has none.</summary>
+    public bool ItemMenu { get; } = display.ItemMenu;
+
+    /// <summary>The line under the header once the row is full (the core's note: only the best matches show); empty until then.</summary>
+    public string Note => _note is { } note && Items.Count >= note.FullAt ? note.Text : "";
+
+    // Kept in a field, not read from the constructor's parameter later: one parameter both initialising members and captured draws
+    // CS9124, an error here.
+    private readonly RowNote? _note = display.Note;
+
+    public Visibility NoteVisibility => Note.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>The note's binding listens here: from then on a row with a note follows its count.</summary>
+    public event PropertyChangedEventHandler? PropertyChanged
+    {
+        add
+        {
+            if (_propertyChanged is null && _note is not null)
+            {
+                Items.CollectionChanged += OnItemsChanged;
+            }
+            _propertyChanged += value;
+        }
+        remove => _propertyChanged -= value;
+    }
+
+    private PropertyChangedEventHandler? _propertyChanged;
+
+    private void OnItemsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        _propertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Note)));
+        _propertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NoteVisibility)));
+    }
 
     public void Dispose()
     {
+        Items.CollectionChanged -= OnItemsChanged;
         Items.Dispose();
         Subscription.Dispose();
     }
@@ -137,12 +180,12 @@ public sealed class HomeSection : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>Gives a row's list the open action and context menu once, when it is first shown.</summary>
-    internal static void AttachOnce(ListViewBase list, Action<ItemSummary> open)
+    internal static void AttachOnce(ListViewBase list, Action<ItemSummary> open, bool itemMenu = true)
     {
         if (list.Tag is not "attached")
         {
             list.Tag = "attached";
-            ItemActions.Attach(list, open);
+            ItemActions.Attach(list, open, itemMenu);
         }
     }
 }

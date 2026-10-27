@@ -29,8 +29,18 @@ pub const EPISODE_IDS: [&str; 2] = [
     "57a2d1e0000000000000000000003201",
     "57a2d1e0000000000000000000003202",
 ];
-/// An actor in the first film.
+/// An actor in the first film and the series.
 pub const PERSON_ID: &str = "57a2d1e0000000000000000000004001";
+/// The director of the third film by name ("Example Film Two"). A search for people finds them too: Jellyfin's `Items` search answers
+/// every person kind (`SqlSearchProvider` filters on `Type` only; jellyfin/jellyfin v12.2, ca0f16eb, read 2026-10-27).
+pub const DIRECTOR_ID: &str = "57a2d1e0000000000000000000004002";
+
+/// Who is credited on what: (person, item). `GET Items?personIds=` lists the items of a person.
+const CREDITS: &[(&str, &str)] = &[
+    (PERSON_ID, FILM_IDS[0]),
+    (PERSON_ID, SERIES_ID),
+    (DIRECTOR_ID, FILM_IDS[2]),
+];
 
 /// One item of the library.
 struct Item {
@@ -92,6 +102,22 @@ const ITEMS: &[Item] = &[
         name: "Example Episode Two",
         parent: SEASON_ID,
         fields: r#""RunTimeTicks":6000000000,"IndexNumber":2,"ParentIndexNumber":1,"IsFolder":false,"SeriesName":"Example Series","SeriesId":"57a2d1e0000000000000000000003001","SeasonId":"57a2d1e0000000000000000000003101","SeasonName":"Season 1","SeriesPrimaryImageTag":"57a2d1e0a0000004","PrimaryImageAspectRatio":0.68,"ImageTags":{},"BackdropImageTags":[]"#,
+    },
+    // People are by-name items: in no library, so only a query that asks for their kind, without a parent, lists them
+    // (`SearchQueryAccessFilter.Build`: "a by-name item belongs to no library ... A search scoped to a parent gets no exemption").
+    Item {
+        id: PERSON_ID,
+        kind: "Person",
+        name: "Example Actor",
+        parent: "",
+        fields: r#""IsFolder":false,"PrimaryImageAspectRatio":0.6666666666666666,"ImageTags":{"Primary":"57a2d1e0a0000006"},"BackdropImageTags":[],"ImageBlurHashes":{"Primary":{"57a2d1e0a0000006":"LEHV6nWB2yk8pyo0adR*.7kCMdnj"}}"#,
+    },
+    Item {
+        id: DIRECTOR_ID,
+        kind: "Person",
+        name: "Example Director",
+        parent: "",
+        fields: r#""IsFolder":false,"ImageTags":{},"BackdropImageTags":[]"#,
     },
 ];
 
@@ -343,20 +369,38 @@ fn item_paths(request: &Browse<'_>, marks: &Marks) -> Option<(u16, String)> {
     Some((200, record(item, marks, &extra)))
 }
 
-/// `GET Items`: parent, kinds, search term, paging and the total, sorted by name.
+/// `GET Items`: parent, kinds, a person's items (`personIds`), search term, paging and the total, sorted by name (Jellyfin orders a
+/// search by its score first: with the stand-in's few names, by name is enough).
 fn items(request: &Browse<'_>, marks: &Marks) -> (u16, String) {
     let parent = request.param("parentId");
     let recursive = request.param("recursive") == Some("true");
     let kinds: Option<Vec<&str>> = request
         .param("includeItemTypes")
         .map(|kinds| kinds.split(',').collect());
+    let people: Option<Vec<&str>> = request
+        .param("personIds")
+        .map(|people| people.split(',').collect());
     let term = request.param("searchTerm").map(str::to_lowercase);
     let mut found: Vec<&Item> = ITEMS
         .iter()
         .filter(|item| match parent {
+            // A person is in no library.
+            _ if item.kind == "Person" => {
+                parent.is_none()
+                    && kinds
+                        .as_ref()
+                        .is_some_and(|kinds| kinds.contains(&"Person"))
+            }
             Some(parent) if recursive => is_below(item, parent),
             Some(parent) => item.parent == parent,
             None => recursive,
+        })
+        .filter(|item| {
+            people.as_ref().is_none_or(|people| {
+                CREDITS
+                    .iter()
+                    .any(|(person, credited)| *credited == item.id && people.contains(person))
+            })
         })
         .filter(|item| {
             kinds

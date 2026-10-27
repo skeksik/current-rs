@@ -27,6 +27,12 @@ public sealed record ViewArgs(ServerRef Server, BrowseView View, string? Kind = 
     public Type Page => Views.Layout(View, Kind) == ViewLayout.Rows ? typeof(SearchPage) : typeof(LibraryPage);
 }
 
+/// <summary>
+/// A person's titles (owner, 2026-10-27): the films and series they are credited on, in every library, the newest first (the core's
+/// ItemQuery.ForPerson), a grid on the library page titled with their name. Opened from a search's People or a details page's cast.
+/// </summary>
+public sealed record PersonArgs(ItemRef Person, string Name);
+
 /// <summary>An item's detail page.</summary>
 public sealed record DetailsArgs(ItemRef Item);
 

@@ -483,4 +483,13 @@ public sealed partial class DetailsPage : Page, IRefreshable
 
     /// <summary>The title bar's Refresh button, as F5.</summary>
     public void Refresh() => _view?.Refresh();
+
+    /// <summary>A cast or crew card: the person's films and series (<see cref="PersonArgs"/>).</summary>
+    private void OnPersonClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is Person person)
+        {
+            Frame.Navigate(typeof(LibraryPage), new PersonArgs(person.Item, person.Name));
+        }
+    }
 }

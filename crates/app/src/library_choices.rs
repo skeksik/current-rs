@@ -1,12 +1,27 @@
 //! Settings' "Remember sort", "Remember filter" and "Remember view" (all off by default), and the choices remembered per library: a
 //! library opens with the last sort, filter and view chosen there for each part whose switch is on. A part whose switch is off is
 //! neither saved nor given back, and turning a switch off forgets that part for every library, so turning it on again starts afresh.
+//! The global search page has choices of its own under the same switches: its filter and its view ([`SearchMemory`]).
 //! Saved in `settings.json` (`current-store`'s `browse`, open values) when the app has a data folder, else kept for the run only.
 
 use std::sync::{Mutex, PoisonError};
 
 use current_model::{ItemRef, ServerRef};
-use current_store::{BrowseSettings, LibraryChoices, SettingsStore, StoreError};
+use current_store::{
+    BrowseSettings, LibraryChoices, RememberedSearchFilter, RememberedView, SettingsStore,
+    StoreError,
+};
+
+use crate::browse::{SearchFilter, SearchSource};
+
+/// The global search page's remembered choices, each `None` when nothing is (or its switch is off): the page then opens with every
+/// type and source, and its first view.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SearchMemory {
+    /// A remembered source this version does not know reads as every source.
+    pub filter: Option<SearchFilter>,
+    pub view: Option<RememberedView>,
+}
 
 /// The three switches.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -160,6 +175,58 @@ impl LibraryPrefs {
         })
     }
 
+    /// What the search page opens with: the remembered parts whose switch is on.
+    pub(crate) fn search(&self, store: Option<&SettingsStore>) -> SearchMemory {
+        let browse = self.read(store);
+        SearchMemory {
+            filter: browse
+                .search
+                .filter
+                .filter(|_| browse.remember_filter)
+                .map(|filter| SearchFilter {
+                    kind: filter.kind,
+                    source: SearchSource::from_name(&filter.source).unwrap_or_default(),
+                }),
+            view: browse.search.view.filter(|_| browse.remember_view),
+        }
+    }
+
+    /// Remembers the search page's choices as [`LibraryPrefs::remember`] does a library's.
+    pub(crate) fn remember_search(
+        &self,
+        store: Option<&SettingsStore>,
+        choices: &SearchMemory,
+    ) -> Result<(), StoreError> {
+        let apply = |browse: &mut BrowseSettings| {
+            let current = browse.search.clone();
+            let mut next = current.clone();
+            if browse.remember_filter
+                && let Some(filter) = &choices.filter
+            {
+                // Everything is the default: left out of the file, as ADR 0013 leaves defaults out.
+                next.filter =
+                    (*filter != SearchFilter::default()).then(|| RememberedSearchFilter {
+                        kind: filter.kind.clone(),
+                        source: filter.source.as_str().to_owned(),
+                    });
+            }
+            if browse.remember_view && choices.view.is_some() {
+                next.view.clone_from(&choices.view);
+            }
+            if next == current {
+                return false;
+            }
+            browse.search = next;
+            true
+        };
+        if !apply(&mut self.read(store)) {
+            return Ok(());
+        }
+        self.change(store, |browse| {
+            apply(browse);
+        })
+    }
+
     /// The server was removed: its libraries go. A settings store forgets them in the removal's own save (`Shared::remove_server`);
     /// this is for an app that stores nothing.
     pub(crate) fn server_removed(&self, store: Option<&SettingsStore>, server: &ServerRef) {
@@ -209,6 +276,80 @@ mod tests {
 
     fn file(dir: &std::path::Path) -> serde_json::Value {
         serde_json::from_slice(&std::fs::read(dir.join(SETTINGS_FILE)).unwrap()).unwrap()
+    }
+
+    fn search_memory() -> SearchMemory {
+        SearchMemory {
+            filter: Some(SearchFilter {
+                kind: Some(current_model::MediaKind::PERSON),
+                source: SearchSource::Library,
+            }),
+            view: Some(RememberedView {
+                tile: "wide".into(),
+                titles: true,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_search_page_remembers_its_filter_and_view_under_their_switches() {
+        let temp = tempfile::tempdir().unwrap();
+        let app = open(temp.path());
+        app.remember_search_choices(search_memory()).unwrap();
+        assert_eq!(app.search_choices(), SearchMemory::default());
+        assert!(file(temp.path()).get("browse").is_none());
+
+        app.set_remember_filter(true).unwrap();
+        app.remember_search_choices(search_memory()).unwrap();
+        assert_eq!(
+            app.search_choices(),
+            SearchMemory {
+                view: None,
+                ..search_memory()
+            }
+        );
+        assert_eq!(
+            file(temp.path())["browse"]["search"],
+            serde_json::json!({"filter": {"type": "person", "source": "library"}})
+        );
+        app.set_remember_view(true).unwrap();
+        app.remember_search_choices(search_memory()).unwrap();
+        assert_eq!(app.search_choices(), search_memory());
+        // Read again from the file.
+        drop(app);
+        let app = open(temp.path());
+        assert_eq!(app.search_choices(), search_memory());
+        // Everything is the default: nothing is written for it.
+        app.remember_search_choices(SearchMemory {
+            filter: Some(SearchFilter::default()),
+            view: None,
+        })
+        .unwrap();
+        assert_eq!(app.search_choices().filter, None);
+        assert!(
+            file(temp.path())["browse"]["search"]
+                .get("filter")
+                .is_none()
+        );
+        // Off forgets it.
+        app.set_remember_filter(false).unwrap();
+        app.set_remember_view(false).unwrap();
+        assert_eq!(app.search_choices(), SearchMemory::default());
+        assert!(file(temp.path())["browse"].get("search").is_none());
+    }
+
+    #[test]
+    fn a_remembered_source_this_version_does_not_know_reads_as_every_source() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join(SETTINGS_FILE),
+            r#"{"version": 1, "browse": {"remember_filter": true, "search": {"filter": {"type": "series", "source": "a_newer_source"}}}}"#,
+        )
+        .unwrap();
+        let app = open(temp.path());
+        let filter = app.search_choices().filter.unwrap();
+        assert_eq!(filter.kind, Some(current_model::MediaKind::SERIES));
+        assert_eq!(filter.source, SearchSource::All);
     }
 
     #[test]

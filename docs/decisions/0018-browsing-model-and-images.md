@@ -4,7 +4,8 @@ Status: proposed (2026-10-25), from the browse spike; accepted when its PR merge
 (see "Decided by the owner"). Amended 2026-10-25 (fix/library-changes): the navigation's libraries follow the server, below under
 "Libraries that follow the server". Amended 2026-10-27 (owner, fix/windows-ui-polish): library search (sections 2 and 3), the
 filters (section 3), lists chosen by marks (section 5), Home's rows (section 6), the Favourites and Recently added views and
-remembered choices (section 7).
+remembered choices (section 7). Amended 2026-10-27 (owner, feat/global-search-filters): global search filters, people and a person's
+titles ("Global search filters").
 Research, quotes and sources: `docs/notes/jellyfin-browse.md`. Playback, media sources and streams are ADR 0019's (spike/playback-design);
 section 6 of the notes lists what is left to it.
 
@@ -85,7 +86,8 @@ Wire types stay private; each method returns model types. Every list query sends
 | `seasons(series)` | `GET Shows/{id}/Seasons` | |
 | `episodes(series, season)` | `GET Shows/{id}/Episodes` | `seasonId` |
 | `similar(item, limit)` | `GET Items/{id}/Similar` | `fields` as summary |
-| `search(term, kinds, limit)` | `GET Items?searchTerm=` | one request per result group (movies, series, episodes, ...), `recursive=true`, one page of up to 24 each; not paged (see Context) |
+| `search(term, kinds, limit)` | `GET Items?searchTerm=` | one request per result group (movies, series, episodes, ..., people last; amended 2026-10-27), `recursive=true`, one page of up to 24 each, or 100 of the one type a filter keeps; not paged (see Context) |
+| `items(query)` with `person` (amended 2026-10-27) | `GET Items?personIds=` | a person's titles: the items "containing the specified person id" (`ItemsController.GetItems`) |
 | `items(query)` with `search_term` (amended 2026-10-27) | `GET Items?searchTerm=` | a library grid's search: the grid's `parentId` and kinds, `searchTerm`, **no `sortBy`, `sortOrder` or `filters`**, so the server's relevance order comes back; paged as any grid, within the `3 × limit` window (section 3) |
 | `details(item)` | `GET Items/{id}` | |
 | `set_played(item, bool)` | `POST`/`DELETE UserPlayedItems/{id}` | answers the item's user data |
@@ -244,6 +246,53 @@ failed load keeps the list. A library grid whose library left the list says `Not
 The UI updates its navigation in place and decides what to show when the library on screen leaves the list; whether a library is gone
 comes from the core's list.
 
+### Global search filters (amended 2026-10-27, owner)
+The title bar's search gets a Filter and a View on its results page (owner, 2026-10-26 and 2026-10-27). The core holds the model
+(`search_filter.rs`): the choices, which is in effect, which are unavailable and why, the queries, and the line under a full group;
+the UIs list what it gives.
+- **Type: All, Movies, Series, People.** All shows every group the search finds, as before, with people as the last group; Movies,
+  Series and People narrow it to that one group, up to 100 (`NARROWED_SEARCH_LIMIT`; the server then weighs 300 candidates). The
+  kinds are the open-value media kinds (`movie`, `series`, `person`); a remembered kind the search does not offer reads as All.
+- **People** (owner, 2026-10-27, from the owner's "Actors"): people are searched as items, `GET Items?searchTerm=&
+  includeItemTypes=Person&recursive=true` with no `parentId`, so they come in the server's relevance order (exact, prefix, word prefix,
+  then contains, on the clean name, original title and sort name: `SqlSearchProvider.SearchAsync`) within the same `3 × limit` window
+  as every group, and map to ordinary summaries with their picture as the primary image (by-name items are let through the library
+  access filter when no parent is given: `SearchQueryAccessFilter.Build`; ids from the providers skip the libraries' `TopParentIds`:
+  `LibraryManager.AddUserToQuery`). That search returns every person kind, directors and writers with the actors, as Jellyfin's
+  `Items` cannot narrow people by their part (its `personTypes` narrows the items a person is credited on), so the choice and the
+  group are called **People**, not Actors. `GET Persons?searchTerm=&personTypes=Actor` gives actors only, but by a plain name match
+  in name order (`PeopleRepository.GetPeople`: `OrderBy(e => e.Name.ToLower())`), not by relevance; `GET Search/Hints` needs a
+  second answer shape and has no user data. (jellyfin/jellyfin v12.2, ca0f16eb, read 2026-10-27.) A user with content
+  restrictions sees only people credited on an item they can reach: under `UserHasContentRestrictions`,
+  `ApplyItemByNameAccessFiltering` keeps a Person "only when at least one item behind its name is reachable for the user"
+  (`Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs`), and a user has content restrictions when not every
+  folder is enabled, or with blocked folders, a parental rating limit, blocked or allowed tags, or blocked unrated items
+  (`User.HasContentRestrictions`, `Jellyfin.Data/UserEntityExtensions.cs`; same tag, read 2026-10-27).
+- **Opening a person** (owner, 2026-10-27) shows the films and series they are credited on, in every library, the newest first
+  (`person_query(person)`: `ItemQuery.person`, `personIds`), as a grid titled with their name, with nothing remembered. A details
+  page's cast and crew cards open the same. A person page of its own is later.
+- **Source: All, Library, Catalog.** Catalog is what can be requested, with Seerr (M4); it is available while a Seerr server is
+  signed in (`catalog_available`: the capabilities state's `is_available(SEERR)`), so today never, and M4 only has to provide one.
+  Until then **the Source filter is shown, with Catalog unavailable**: disabled, its name saying why ("Catalog (needs Seerr)") and
+  the tooltip "Needs a Seerr server". A disabled control "can't receive keyboard focus" and "can't handle any input events on itself"
+  (Control.IsEnabled, learn.microsoft.com, updated 2026-07-28, read 2026-10-27); that its tooltip then does not show, and how
+  Narrator reads it, are not verified, so the reason is in its name. **This departs from "hide what
+  is unavailable" (CLAUDE.md), by the owner's decision: the app is also used without Seerr, and the option should be visible.** A
+  Catalog choice that cannot apply reads as All. Without Seerr, All and Library find the same.
+- **View**: posters or wide, with or without titles, as a library grid's (section 7's remembered view). Episodes and videos stay wide.
+  The owner's decision (2026-10-27): people show as round cast cards whatever the view, and a search narrowed to one type wraps its
+  tiles into a grid. The core shapes each group (`search_result_display(kind, filter, wide, show_titles) ->
+  RowDisplay`: its tiles, whether they are cast cards, show titles and wrap, what opening an item does (a person opens their titles),
+  whether it has the item menu (a person has none), and its note), from the filter as it applies.
+- **No sort**: results stay in the server's relevance order (Context; section 3). A group that returns as many as it asked for (24,
+  or 100 narrowed) shows "Showing the best N matches. Type more to narrow it." (`search_note(filter, count)`).
+- **Remembered** under the existing switches (section 7): the search page's filter while "Remember filter" is on and its view while
+  "Remember view" is, one entry for the page (`browse.search` in `settings.json`, ADR 0013's open-value rules: `{"filter": {"type":
+  "movie" | "all", "source": "library"}, "view": {...}}`), forgotten when its switch goes off; every type and every source, the
+  default, is left out.
+- Across the bridge: `Browse::search(term, filter)`; `Core::search_tools(filter) -> SearchTools`, `search_choices()`,
+  `remember_search_choices(choices)`; `search_note(filter, count)`, `person_query(person)`; `ItemQuery` gains `person`.
+
 ### 7. Across the bridge
 Records mirror the model types (`ItemSummary`, `ItemDetails`, `Library`, `ImageRef`, `Artwork`, `UserState`, `Slot`, `PagedState`, ...);
 item ids and image tags cross, addresses and paths never do.
@@ -345,5 +394,6 @@ The implementation tasks write these into the ADRs they amend (task 1: ADR 0005;
 - Grids of any size open at the speed of one page and keep their place through refreshes.
 - Images follow the server's address and gateway like every other request, and a cache of one server never outlives it.
 - The core grows an image cache and a BlurHash decoder, and holds image bytes in memory; the UIs only decode and draw.
-- Search shows the best matches per group, not an endless list; that is what the server offers.
+- Search shows the best matches per group, not an endless list; that is what the server offers. Narrowed to one type, it shows more
+  of that type, still the best matches only.
 - ADR 0019 and this ADR share `MediaSummary`; whichever merges second adapts to the other.

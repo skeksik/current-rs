@@ -9,14 +9,14 @@ use std::time::Duration;
 
 use current_app::{
     AddServerState, App, HomeRowKind, ItemAction, ListSubscription, NoticeKind, ObservableList,
-    PagedItems, SignInState, Slot, VectorDiff,
+    PagedItems, SearchFilter, SearchSource, SignInState, Slot, VectorDiff,
 };
 use current_jellyfin::AuthError;
 use current_model::{
     CollectionKind, ItemId, ItemQuery, ItemRef, ItemSummary, Library, MediaKind, ServerRef,
 };
 use jellyfin_stand_in::library::{
-    EPISODE_IDS, FILM_IDS, FILMS_LIBRARY_ID, SERIES_ID, SHOWS_LIBRARY_ID,
+    DIRECTOR_ID, EPISODE_IDS, FILM_IDS, FILMS_LIBRARY_ID, PERSON_ID, SERIES_ID, SHOWS_LIBRARY_ID,
 };
 use jellyfin_stand_in::paging::{BIG_LIBRARY_ID, BIG_LIBRARY_SIZE, big_item_name, page_key};
 use jellyfin_stand_in::{PASSWORD, StandIn, USER_NAME};
@@ -332,7 +332,7 @@ async fn an_optimistic_change_shows_in_every_live_list_and_rolls_back_on_failure
     let grid = browse.open_library(films, ItemQuery::default());
     let home = browse.home();
     let details = browse.details(&film);
-    let search = browse.search("Example Film");
+    let search = browse.search("Example Film", &SearchFilter::default());
     let latest = format!("latest:{FILMS_LIBRARY_ID}");
     eventually(|| slot_of(&grid, &film).is_some()).await;
     eventually(|| {
@@ -448,6 +448,59 @@ async fn a_list_not_chosen_by_marks_does_not_read_again_on_a_favourite() {
     // Past the one-second wait for more marks, and then some: only the Favourites list read again.
     tokio::time::sleep(Duration::from_millis(2_500)).await;
     assert_eq!(stand_in.count("/Items"), reads + 1);
+}
+
+#[tokio::test]
+async fn a_search_narrowed_to_a_type_finds_that_type_and_a_person_opens_their_titles() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+
+    // Every type: people come last, after the films and series.
+    let every = browse.search("example", &SearchFilter::default());
+    eventually(|| !every.state().borrow().loading && every.groups().len() >= 3).await;
+    let groups = every.groups().snapshot();
+    assert_eq!(groups.first(), Some(&MediaKind::MOVIE));
+    assert_eq!(groups.last(), Some(&MediaKind::PERSON));
+
+    let people = SearchFilter {
+        kind: Some(MediaKind::PERSON),
+        source: SearchSource::Library,
+    };
+    let found = browse.search("example", &people);
+    eventually(|| found.groups().len() == 1).await;
+    assert_eq!(found.groups().snapshot(), [MediaKind::PERSON]);
+    let named: Vec<_> = found
+        .group(&MediaKind::PERSON)
+        .unwrap()
+        .snapshot()
+        .into_iter()
+        .map(|person| person.item)
+        .collect();
+    assert_eq!(
+        named,
+        [item(&server, PERSON_ID), item(&server, DIRECTOR_ID)]
+    );
+
+    // The catalog without a Seerr server reads as every source: the library's films are found.
+    let catalog = SearchFilter {
+        kind: Some(MediaKind::MOVIE),
+        source: SearchSource::Catalog,
+    };
+    let films = browse.search("example film", &catalog);
+    eventually(|| films.groups().len() == 1).await;
+    assert_eq!(films.group(&MediaKind::MOVIE).unwrap().len(), 3);
+
+    let titles = browse.open_items(current_app::person_query(&item(&server, PERSON_ID)));
+    titles.set_visible_range(0, 10);
+    eventually(|| titles.state().borrow().total == 2).await;
+    eventually(|| is_item(titles.slots().get(1))).await;
+    let shown: Vec<_> = (0..2)
+        .filter_map(|at| name(titles.slots().get(at)))
+        .collect();
+    assert_eq!(shown.len(), 2);
+    assert!(shown.contains(&"Example Series".to_owned()), "{shown:?}");
 }
 
 #[tokio::test]

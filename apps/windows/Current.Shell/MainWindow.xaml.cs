@@ -164,6 +164,9 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>Opens a view tab, as its item in the pane does (the smoke run).</summary>
     internal void ShowView(ViewArgs view) => Navigate(view.Page, new SuppressNavigationTransitionInfo(), view);
 
+    /// <summary>Searches every signed-in server, as the title bar's box does (the smoke run).</summary>
+    internal void ShowSearch(string term) => Navigate(typeof(SearchPage), new SuppressNavigationTransitionInfo(), new SearchArgs(term));
+
     /// <summary>The page shown now (the smoke run).</summary>
     internal Page? ShownPage => ContentFrame.Content as Page;
 
@@ -661,6 +664,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         LibraryArgs library => library.Library.Item.Server,
         ViewArgs view => view.Server,
         DetailsArgs details => details.Item.Server,
+        PersonArgs person => person.Person.Server,
         _ => null,
     };
 

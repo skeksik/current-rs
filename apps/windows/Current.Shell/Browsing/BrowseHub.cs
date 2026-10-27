@@ -129,24 +129,54 @@ internal sealed class BrowseHub : IDisposable
     /// <summary>
     /// The search for a history entry (<paramref name="args"/>, the page's navigation parameter), with one section per signed-in
     /// server, kept from now on: Back to a search page shows the results it had, without searching again and without its rows
-    /// arriving one by one (the owner's run, 2026-10-25). New for an entry not seen, or one let go of as one of the older ones.
+    /// arriving one by one (the owner's run, 2026-10-25). New for an entry not seen, or one let go of as one of the older ones. The
+    /// entry keeps its filters and view: <paramref name="filter"/> is used only for a new search; <see cref="Refilter"/> changes them.
     /// </summary>
-    public IReadOnlyList<SearchSection> Search(object args, string term)
+    public KeptSearch Search(object args, string term, SearchFilter filter, bool wide, bool titles)
     {
         if (!_searches.TryGetValue(args, out var kept))
         {
-            var servers = Servers;
-            var sections = servers
-                .Select(server => new SearchSection(servers.Count > 1 ? ServerName(server.Server) : "", server.Session.Search(term), _ui))
-                .ToList();
-            kept = new KeptSearch(sections);
+            kept = new KeptSearch(Sections(term, filter, wide, titles), filter, wide, titles);
             _searches[args] = kept;
         }
         kept.LastUsed = ++_searchUses;
         var older = _searches.OrderByDescending(entry => entry.Value.LastUsed).Skip(KeptSearches).Select(entry => entry.Key).ToHashSet(
             ReferenceEqualityComparer.Instance);
         ForgetSearches(older.Contains);
-        return kept.Sections;
+        return kept;
+    }
+
+    /// <summary>The entry's search again with <paramref name="filter"/>: new sections replace the ones it had, which are let go of.</summary>
+    public KeptSearch Refilter(object args, string term, SearchFilter filter)
+    {
+        if (!_searches.TryGetValue(args, out var kept))
+        {
+            return Search(args, term, filter, wide: false, titles: true);
+        }
+        var replaced = new KeptSearch(Sections(term, filter, kept.Wide, kept.Titles), filter, kept.Wide, kept.Titles)
+        {
+            LastUsed = kept.LastUsed,
+        };
+        foreach (var section in kept.Sections)
+        {
+            section.Dispose();
+        }
+        _searches[args] = replaced;
+        return replaced;
+    }
+
+    private List<SearchSection> Sections(string term, SearchFilter filter, bool wide, bool titles)
+    {
+        var servers = Servers;
+        var sections = servers
+            .Select(server => new SearchSection(
+                servers.Count > 1 ? ServerName(server.Server) : "", server.Session.Search(term, filter), _ui, filter: filter))
+            .ToList();
+        foreach (var section in sections)
+        {
+            section.SetView(wide, titles);
+        }
+        return sections;
     }
 
     /// <summary>Drops the searches of entries no longer in the history (<paramref name="live"/>: the parameters still in it).</summary>
@@ -306,6 +336,33 @@ internal sealed class ServerBrowse : IDisposable
 
     private readonly Dictionary<string, LibraryGrid> _views = [];
 
+    /// <summary>
+    /// The grid of <paramref name="person"/>'s titles (<see cref="Pages.PersonArgs"/>), opened on first use and kept for the
+    /// <see cref="KeptPeople"/> people shown last (review of PR 87, S4): a person's page shown again among them returns to where it
+    /// was left; an older one is retired (freed once no page binds it) and opens again from the top.
+    /// </summary>
+    public LibraryGrid Person(ItemRef person)
+    {
+        if (!_people.TryGetValue(person, out var kept))
+        {
+            var query = ItemQuery.ForPerson(person);
+            kept = (new LibraryGrid(Session.OpenItems(query), query), 0);
+        }
+        _people[person] = (kept.Grid, ++_peopleUses);
+        foreach (var older in _people.OrderByDescending(entry => entry.Value.LastUsed).Skip(KeptPeople).Select(entry => entry.Key).ToList())
+        {
+            _people[older].Grid.Retire();
+            _people.Remove(older);
+        }
+        return kept.Grid;
+    }
+
+    /// <summary>How many people's grids stay live, as many as the searches kept (<see cref="BrowseHub"/>'s KeptSearches).</summary>
+    internal const int KeptPeople = 5;
+
+    private readonly Dictionary<ItemRef, (LibraryGrid Grid, ulong LastUsed)> _people = [];
+    private ulong _peopleUses;
+
     /// <summary>The Favourites tab's rows, a row per media kind (the core's), opened on first use and kept, as Home is.</summary>
     public SearchSection Favourites => _favourites ??= new SearchSection("", Session.Favourites(), _ui, BrowseView.Everything);
 
@@ -385,12 +442,13 @@ internal sealed class ServerBrowse : IDisposable
         _home = null;
         _favourites?.Dispose();
         _favourites = null;
-        foreach (var grid in _grids.Values.Concat(_views.Values))
+        foreach (var grid in _grids.Values.Concat(_views.Values).Concat(_people.Values.Select(person => person.Grid)))
         {
             grid.Retire();
         }
         _grids.Clear();
         _views.Clear();
+        _people.Clear();
         Session.Dispose();
     }
 }
@@ -471,10 +529,26 @@ internal sealed class KeptDetails
     public double SimilarOffset { get; set; }
 }
 
-/// <summary>A history entry's search: its sections, one per server, and when it was last shown.</summary>
-internal sealed class KeptSearch(IReadOnlyList<SearchSection> sections)
+/// <summary>A history entry's search: its sections, the filters they were searched with, and the View they show.</summary>
+internal sealed class KeptSearch(IReadOnlyList<SearchSection> sections, SearchFilter filter, bool wide, bool titles)
 {
     public IReadOnlyList<SearchSection> Sections { get; } = sections;
+
+    public SearchFilter Filter { get; } = filter;
+
+    public bool Wide { get; private set; } = wide;
+
+    public bool Titles { get; private set; } = titles;
+
+    /// <summary>Every section with the View's tiles.</summary>
+    public void SetView(bool wide, bool titles)
+    {
+        (Wide, Titles) = (wide, titles);
+        foreach (var section in Sections)
+        {
+            section.SetView(wide, titles);
+        }
+    }
 
     public ulong LastUsed { get; set; }
 }

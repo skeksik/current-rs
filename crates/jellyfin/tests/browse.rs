@@ -19,6 +19,7 @@ use tokio::net::TcpListener;
 
 const TOKEN: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
 const MOVIE: &str = "f11m0000000000000000000000000001";
+const PERSON: &str = "9e750000000000000000000000000001";
 const SERIES: &str = "5e710000000000000000000000000001";
 const SEASON: &str = "5ea50000000000000000000000000001";
 const EPISODE: &str = "e9150000000000000000000000000001";
@@ -172,6 +173,7 @@ async fn items_send_the_query_and_page() {
         years: vec![2009, 2010],
         name_starts_with: Some("E".into()),
         search_term: Some("Example".into()),
+        person: Some(item(PERSON)),
     };
     let page = client.items(&query, 100, 100, true).await.unwrap();
 
@@ -190,6 +192,7 @@ async fn items_send_the_query_and_page() {
     assert_eq!(q["years"], "2009,2010");
     assert_eq!(q["nameStartsWith"], "E");
     assert_eq!(q["searchTerm"], "Example");
+    assert_eq!(q["personIds"], PERSON);
     assert_eq!(q["startIndex"], "100");
     assert_eq!(q["limit"], "100");
     assert_eq!(q["enableTotalRecordCount"], "true");
@@ -548,6 +551,7 @@ async fn search_sends_one_request_per_group_and_drops_empty_ones() {
         "MusicAlbum",
         "MusicArtist",
         "MusicVideo",
+        "Person",
         "Series",
         "Video",
     ];
@@ -565,6 +569,40 @@ async fn search_sends_one_request_per_group_and_drops_empty_ones() {
     let kinds: Vec<_> = groups.iter().map(|g| g.kind.clone()).collect();
     assert_eq!(kinds, [MediaKind::MOVIE, MediaKind::EPISODE]);
     assert_eq!(groups[0].items[0].name, "Example Film");
+}
+
+/// A person as `Items?includeItemTypes=Person` answers one: a by-name item's `BaseItemDto` (`DtoService.GetBaseItemDtos`; jellyfin/jellyfin
+/// v12.2, ca0f16eb, read 2026-10-27), with its picture as the primary image. Hand-written: the fields are those the code reads.
+const PEOPLE: &str = r#"{"Items":[
+  {"Name":"Example Actor","ServerId":"5e70000000000000000000000000001","Id":"9e750000000000000000000000000001","Type":"Person",
+   "IsFolder":false,"PrimaryImageAspectRatio":0.6666666666666666,"ImageTags":{"Primary":"pp1"},"BackdropImageTags":[],
+   "ImageBlurHashes":{"Primary":{"pp1":"LHB:Q@t7_4WB~qt7%Mt7-;t7Rjj["}},
+   "UserData":{"PlaybackPositionTicks":0,"PlayCount":0,"IsFavorite":false,"Played":false,"Key":"Person-Example Actor"}},
+  {"Name":"Example Director","Id":"9e750000000000000000000000000002","Type":"Person","ImageTags":{},"BackdropImageTags":[]}
+],"TotalRecordCount":0,"StartIndex":0}"#;
+
+#[tokio::test]
+async fn people_are_searched_as_items_and_map_to_summaries() {
+    let stand_in = StandIn::answering(PEOPLE).await;
+    let groups = client(&stand_in)
+        .search("example", &[MediaKind::PERSON], 100)
+        .await
+        .unwrap();
+    let request = stand_in.only();
+    assert_eq!(request.path, "/Items");
+    assert_eq!(request.query["includeItemTypes"], "Person");
+    assert_eq!(request.query["limit"], "100");
+    assert!(!request.query.contains_key("parentId"));
+    assert_eq!(groups.len(), 1);
+    let people = &groups[0].items;
+    assert_eq!(people.len(), 2);
+    assert_eq!(people[0].kind, MediaKind::PERSON);
+    assert_eq!(people[0].name, "Example Actor");
+    let picture = &people[0].artwork[0];
+    assert_eq!(picture.kind, ImageType::PRIMARY);
+    assert_eq!(picture.image.item, item(PERSON));
+    assert!(picture.blurhash.is_some());
+    assert!(people[1].artwork.is_empty());
 }
 
 #[tokio::test]

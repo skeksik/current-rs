@@ -13,7 +13,10 @@ mod playback;
 mod secrets;
 mod settings;
 
-pub use browse::{BrowseSettings, LibraryChoices, RememberedSort, RememberedView};
+pub use browse::{
+    BrowseSettings, LibraryChoices, RememberedSearchFilter, RememberedSort, RememberedView,
+    SearchChoices,
+};
 pub use device::DeviceId;
 pub use error::StoreError;
 pub use gateway::{

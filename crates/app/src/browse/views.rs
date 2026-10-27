@@ -179,12 +179,56 @@ pub struct RowLink {
     pub tooltip: String,
 }
 
-/// How a row of tiles shows: its title, its tiles' shape, and its header's link (`None`: plain text).
+/// What opening an item of a row shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ItemOpens {
+    /// Its detail page.
+    #[default]
+    Details,
+    /// A person's titles: the grid of [`super::person_query`] (owner, 2026-10-27).
+    PersonTitles,
+}
+
+/// The line under a row once it holds `full_at` items or more: the search asked for no more, so only the best matches show.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowNote {
+    pub full_at: u32,
+    pub text: String,
+}
+
+/// How a row of tiles shows: its title, its tiles' shape, and its header's link (`None`: plain text); and, on the search page
+/// (amended 2026-10-27, global search filters), whether its tiles are cast cards, show their titles, wrap into a grid, what opening one
+/// does, whether it has the item menu (Play, Mark as played, Favourite), and the line once it is full.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RowDisplay {
     pub title: String,
     pub shape: TileShape,
     pub link: Option<RowLink>,
+    /// The tiles are cast cards, a round picture and the name, as a details page's cast: people, whatever the view.
+    pub cards: bool,
+    pub show_titles: bool,
+    /// The tiles wrap into a grid rather than scroll sideways.
+    pub wraps: bool,
+    pub opens: ItemOpens,
+    pub item_menu: bool,
+    pub note: Option<RowNote>,
+}
+
+impl RowDisplay {
+    /// A row that scrolls sideways, of tiles with their titles that open their detail pages and have the item menu.
+    pub(crate) fn plain(title: String, shape: TileShape, link: Option<RowLink>) -> Self {
+        Self {
+            title,
+            shape,
+            link,
+            cards: false,
+            show_titles: true,
+            wraps: false,
+            opens: ItemOpens::Details,
+            item_menu: true,
+            note: None,
+        }
+    }
 }
 
 /// How a Home row shows. Its title: "Continue watching", "Next up", "Recently added", "Favourites", "Seen recently", and a library's
@@ -228,21 +272,21 @@ pub fn home_row_display(row: &HomeRow) -> RowDisplay {
         HomeRowKind::Favourites => view(BrowseView::Favourites),
         _ => None,
     };
-    RowDisplay { title, shape, link }
+    RowDisplay::plain(title, shape, link)
 }
 
 /// How a row of `kind` on the search page shows, a search group or a Favourites tab's row: its kind's name ([`kind_group`]), wide
 /// tiles for episodes and videos, posters for the rest. With `link` (the Favourites tab's rows: [`BrowseView::Everything`]), its
 /// header opens that view of its kind with the favourites tick on.
 pub fn search_group_display(kind: &MediaKind, link: Option<BrowseView>) -> RowDisplay {
-    RowDisplay {
-        title: kind_group(kind),
-        shape: if *kind == MediaKind::EPISODE || *kind == MediaKind::VIDEO {
+    RowDisplay::plain(
+        kind_group(kind),
+        if *kind == MediaKind::EPISODE || *kind == MediaKind::VIDEO {
             TileShape::Wide
         } else {
             TileShape::Poster
         },
-        link: link.map(|view| RowLink {
+        link.map(|view| RowLink {
             target: RowTarget::View {
                 view,
                 kind: Some(kind.clone()),
@@ -250,7 +294,7 @@ pub fn search_group_display(kind: &MediaKind, link: Option<BrowseView>) -> RowDi
             },
             tooltip: view_link_tooltip(view, Some(kind)),
         }),
-    }
+    )
 }
 
 #[cfg(test)]

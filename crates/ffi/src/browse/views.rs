@@ -107,12 +107,36 @@ pub struct RowLink {
     pub tooltip: String,
 }
 
-/// How a row of tiles shows: its title, its tiles' shape, and its header's link (`None`: plain text).
+/// What opening an item of a row shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum ItemOpens {
+    /// Its detail page.
+    Details,
+    /// A person's titles: [`person_query`](super::person_query) in a grid titled with their name.
+    PersonTitles,
+}
+
+/// The line under a row once it holds `full_at` items or more.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct RowNote {
+    pub full_at: u32,
+    pub text: String,
+}
+
+/// How a row of tiles shows: its title, its tiles' shape, and its header's link (`None`: plain text); whether its tiles are cast
+/// cards (people), show their titles and wrap into a grid; what opening one does; whether it has the item menu; and the line once
+/// it is full.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct RowDisplay {
     pub title: String,
     pub shape: TileShape,
     pub link: Option<RowLink>,
+    pub cards: bool,
+    pub show_titles: bool,
+    pub wraps: bool,
+    pub opens: ItemOpens,
+    pub item_menu: bool,
+    pub note: Option<RowNote>,
 }
 
 impl From<current_app::RowDisplay> for RowDisplay {
@@ -139,6 +163,18 @@ impl From<current_app::RowDisplay> for RowDisplay {
                     },
                 },
                 tooltip: link.tooltip,
+            }),
+            cards: display.cards,
+            show_titles: display.show_titles,
+            wraps: display.wraps,
+            opens: match display.opens {
+                current_app::ItemOpens::Details => ItemOpens::Details,
+                current_app::ItemOpens::PersonTitles => ItemOpens::PersonTitles,
+            },
+            item_menu: display.item_menu,
+            note: display.note.map(|note| RowNote {
+                full_at: note.full_at,
+                text: note.text,
             }),
         }
     }

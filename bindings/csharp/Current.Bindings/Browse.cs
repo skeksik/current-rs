@@ -123,8 +123,12 @@ public sealed class Browse : IDisposable
     /// <summary><paramref name="item"/>'s detail page. Starts loading at once.</summary>
     public DetailsView Details(ItemRef item) => new(_browse.Details(MapBrowse.ToFfi(item)));
 
-    /// <summary>The best matches for <paramref name="term"/>, one group per kind. Starts loading at once.</summary>
-    public SearchResults Search(string term) => new(_browse.Search(term));
+    /// <summary>
+    /// The best matches for <paramref name="term"/>, one group per kind, of the types and sources <paramref name="filter"/> keeps
+    /// (everything without one): every type, people last, or the one type chosen (the core decides). Starts loading at once.
+    /// </summary>
+    public SearchResults Search(string term, SearchFilter? filter = null) =>
+        new(_browse.Search(term, SearchMap.ToFfi(filter ?? new SearchFilter())));
 
     /// <summary>
     /// The Favourites tab: the user's favourite films, series and episodes, a group each, in that order, each only while it has items.

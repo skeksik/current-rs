@@ -216,6 +216,11 @@ public sealed partial class LibraryPage : Page, IRefreshable
             ShowView(view, e.NavigationMode);
             return;
         }
+        if (e.Parameter is PersonArgs person)
+        {
+            ShowPerson(person, e.NavigationMode);
+            return;
+        }
         if (e.Parameter is not LibraryArgs args || App.Browsing?.Find(args.Library.Item.Server) is not { } server)
         {
             // The server was signed out of while this page was in the history.
@@ -304,6 +309,40 @@ public sealed partial class LibraryPage : Page, IRefreshable
             _grid.FirstVisible = 0;
             _grid.Wide = opening.Wide;
             _grid.ShowsTitles = opening.ShowTitles;
+            _grid.Browsing = null;
+            if (!SameChoices(_grid.Query, first))
+            {
+                _grid.Query = first;
+                _grid.Items.SetQuery(first);
+            }
+        }
+        Attach();
+    }
+
+    /// <summary>
+    /// A person's titles (owner, 2026-10-27) in the same grid: their films and series, the newest first (the core's query), titled with
+    /// their name, nothing remembered, and Back and Forward returning to where it was left, as a view's.
+    /// </summary>
+    private void ShowPerson(PersonArgs person, NavigationMode mode)
+    {
+        if (App.Browsing?.Find(person.Person.Server) is not { } server)
+        {
+            EmptyText.Visibility = Visibility.Visible;
+            return;
+        }
+        TitleText.Text = person.Name;
+        _view = null;
+        // One person's titles: the Filter menu a library has (the core's menu).
+        ShowFilterMenu(null, null);
+        ShowSearchName(person.Name);
+        _grid = server.Person(person.Person);
+        _grid.Bind();
+        if (mode is not (NavigationMode.Back or NavigationMode.Forward))
+        {
+            var first = ItemQuery.ForPerson(person.Person);
+            _grid.FirstVisible = 0;
+            _grid.Wide = false;
+            _grid.ShowsTitles = true;
             _grid.Browsing = null;
             if (!SameChoices(_grid.Query, first))
             {
@@ -484,7 +523,8 @@ public sealed partial class LibraryPage : Page, IRefreshable
 
     /// <summary>
     /// A command button on or off, its tooltip on the area around it: a disabled control gets no pointer input, so its own tooltip would
-    /// not show (not verified in the docs; seen in the app, 2026-10-27). Narrator reads the reason as the button's help text.
+    /// not show ("It can't handle any input events on itself", Control.IsEnabled, learn.microsoft.com, updated 2026-07-28, read
+    /// 2026-10-27; seen in the app, 2026-10-27). Narrator reads the reason as the button's help text.
     /// </summary>
     private static void ShowTool(Control button, FrameworkElement area, bool available, string tip)
     {

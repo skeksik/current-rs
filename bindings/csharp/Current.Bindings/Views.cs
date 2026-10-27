@@ -45,9 +45,33 @@ public abstract record RowTarget
 /// <summary>A row header that is a link: where it goes and its tooltip.</summary>
 public sealed record RowLink(RowTarget Target, string Tooltip);
 
-/// <summary>How a row of tiles shows: its title, whether its tiles are wide (16:9) rather than posters (2:3), and its header's link
-/// (null: plain text).</summary>
-public sealed record RowDisplay(string Title, bool Wide, RowLink? Link);
+/// <summary>What opening an item of a row shows.</summary>
+public enum ItemOpens
+{
+    /// <summary>Its detail page.</summary>
+    Details,
+    /// <summary>A person's titles: <see cref="ItemQuery.ForPerson"/> in a grid titled with their name.</summary>
+    PersonTitles,
+}
+
+/// <summary>The line under a row once it holds <c>FullAt</c> items or more.</summary>
+public sealed record RowNote(int FullAt, string Text);
+
+/// <summary>
+/// How a row of tiles shows: its title, whether its tiles are wide (16:9) rather than posters (2:3), and its header's link (null:
+/// plain text); whether its tiles are cast cards (people), show their titles and wrap into a grid; what opening one does; whether it
+/// has the item menu; and the line once it is full (the core decides).
+/// </summary>
+public sealed record RowDisplay(
+    string Title,
+    bool Wide,
+    RowLink? Link,
+    bool Cards = false,
+    bool ShowTitles = true,
+    bool Wraps = false,
+    ItemOpens Opens = ItemOpens.Details,
+    bool ItemMenu = true,
+    RowNote? Note = null);
 
 /// <summary>The views across every library and how rows show (the core decides).</summary>
 public static class Views
@@ -92,6 +116,18 @@ public static class Views
     {
         ArgumentNullException.ThrowIfNull(kind);
         return MapViews.From(Ffi.CurrentFfiMethods.SearchGroupDisplay(kind, link is { } view ? (Ffi.BrowseView?)MapViews.ToFfi(view) : null));
+    }
+
+    /// <summary>
+    /// How a group of <paramref name="kind"/> on the search page shows with <paramref name="filter"/> and the page's View
+    /// (<paramref name="wide"/>, <paramref name="showTitles"/>): its title and tiles, whether it wraps, what opening an item does,
+    /// whether it has the item menu, and its note once full (the core decides).
+    /// </summary>
+    public static RowDisplay ForSearchResult(string kind, SearchFilter filter, bool wide, bool showTitles)
+    {
+        ArgumentNullException.ThrowIfNull(kind);
+        ArgumentNullException.ThrowIfNull(filter);
+        return MapViews.From(Ffi.CurrentFfiMethods.SearchResultDisplay(kind, SearchMap.ToFfi(filter), wide, showTitles));
     }
 }
 
@@ -180,7 +216,13 @@ internal static class MapViews
                     _ => throw new ArgumentException($"unknown row target {link.Target.GetType().Name}", nameof(display)),
                 },
                 link.Tooltip)
-            : null);
+            : null,
+        display.Cards,
+        display.ShowTitles,
+        display.Wraps,
+        display.Opens == Ffi.ItemOpens.PersonTitles ? ItemOpens.PersonTitles : ItemOpens.Details,
+        display.ItemMenu,
+        display.Note is { } note ? new RowNote((int)Math.Min(note.FullAt, int.MaxValue), note.Text) : null);
 
     public static Ffi.HomeRow ToFfi(HomeRow row) => new(
         row.Key,

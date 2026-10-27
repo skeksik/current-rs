@@ -21,11 +21,21 @@
 //! A library's key is its item reference as `service/server key/item id`: the server part is how [`ServerRef`] displays, which holds
 //! no address, and neither the service nor Current's server keys contain `/`. An empty `filter` list is a choice ("All"); a missing
 //! one is none remembered.
+//!
+//! The global search page has one entry of its own (owner, 2026-10-27), not per server, under the same switches: its filter while
+//! "Remember filter" is on and its view while "Remember view" is. Its type is `all` or a media kind's name, its source `all`, `library`,
+//! `catalog` or one a later version names: open values.
+//!
+//! ```json
+//! "browse": {
+//!   "search": {"filter": {"type": "movie", "source": "library"}, "view": {"tile": "wide", "titles": true}}
+//! }
+//! ```
 
 use std::collections::BTreeMap;
 
 use current_model::{
-    ItemFilter, ItemId, ItemRef, ServerKey, ServerRef, ServiceType, SortKey, SortOrder,
+    ItemFilter, ItemId, ItemRef, MediaKind, ServerKey, ServerRef, ServiceType, SortKey, SortOrder,
 };
 use serde_json::{Map, Value};
 
@@ -33,6 +43,7 @@ const REMEMBER_SORT: &str = "remember_sort";
 const REMEMBER_FILTER: &str = "remember_filter";
 const REMEMBER_VIEW: &str = "remember_view";
 const LIBRARIES: &str = "libraries";
+const SEARCH: &str = "search";
 
 const SORT: &str = "sort";
 const FILTER: &str = "filter";
@@ -44,6 +55,10 @@ const ASCENDING: &str = "ascending";
 const DESCENDING: &str = "descending";
 const VIEW_TILE: &str = "tile";
 const VIEW_TITLES: &str = "titles";
+const SEARCH_TYPE: &str = "type";
+const SEARCH_SOURCE: &str = "source";
+/// The search type that is every type.
+const ALL: &str = "all";
 
 /// A library grid's sort: its key and the order it goes in.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,6 +116,67 @@ impl LibraryChoices {
         );
         set(entry, VIEW, read_view, self.view.as_ref().map(write_view));
     }
+}
+
+/// The global search page's filter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RememberedSearchFilter {
+    /// One type only, or `None` for every type.
+    pub kind: Option<MediaKind>,
+    /// `all`, `library` or `catalog`, or a source a later version names: an open value.
+    pub source: String,
+}
+
+/// What is remembered for the global search page, each part `None` when nothing is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SearchChoices {
+    pub filter: Option<RememberedSearchFilter>,
+    pub view: Option<RememberedView>,
+}
+
+impl SearchChoices {
+    /// Whether nothing is remembered.
+    pub fn is_empty(&self) -> bool {
+        self.filter.is_none() && self.view.is_none()
+    }
+
+    fn read(entry: &Map<String, Value>) -> Self {
+        Self {
+            filter: entry.get(FILTER).and_then(read_search_filter),
+            view: entry.get(VIEW).and_then(read_view),
+        }
+    }
+
+    /// Writes each part into the stored `entry`, as [`LibraryChoices`] does.
+    fn write_into(&self, entry: &mut Map<String, Value>) {
+        set(
+            entry,
+            FILTER,
+            read_search_filter,
+            self.filter.as_ref().map(write_search_filter),
+        );
+        set(entry, VIEW, read_view, self.view.as_ref().map(write_view));
+    }
+}
+
+fn read_search_filter(value: &Value) -> Option<RememberedSearchFilter> {
+    let kind = value
+        .get(SEARCH_TYPE)?
+        .as_str()
+        .filter(|kind| !kind.is_empty())?;
+    let source = value
+        .get(SEARCH_SOURCE)?
+        .as_str()
+        .filter(|source| !source.is_empty())?;
+    Some(RememberedSearchFilter {
+        kind: (kind != ALL).then(|| MediaKind::new(kind)),
+        source: source.to_owned(),
+    })
+}
+
+fn write_search_filter(filter: &RememberedSearchFilter) -> Value {
+    let kind = filter.kind.as_ref().map_or(ALL, MediaKind::as_str);
+    serde_json::json!({ SEARCH_TYPE: kind, SEARCH_SOURCE: filter.source })
 }
 
 /// Sets `key` in `object` to `value` (removes it for `None`), unless what is stored there cannot be read by `read`: then it stays.
@@ -193,6 +269,8 @@ pub struct BrowseSettings {
     pub remember_view: bool,
     /// What is remembered per library. A library whose entry this version cannot read is not listed here and is kept in the file.
     pub libraries: BTreeMap<ItemRef, LibraryChoices>,
+    /// What is remembered for the global search page. An entry this version cannot read reads as nothing and is kept in the file.
+    pub search: SearchChoices,
     /// The stored object as read: fields this version does not know, known fields whose value it could not read, and the libraries'
     /// entries as stored.
     stored: Map<String, Value>,
@@ -221,12 +299,17 @@ impl BrowseSettings {
                 .collect(),
             _ => BTreeMap::new(),
         };
+        let search = match stored.get(SEARCH) {
+            Some(Value::Object(entry)) => SearchChoices::read(entry),
+            _ => SearchChoices::default(),
+        };
         (
             Self {
                 remember_sort: switch(REMEMBER_SORT),
                 remember_filter: switch(REMEMBER_FILTER),
                 remember_view: switch(REMEMBER_VIEW),
                 libraries,
+                search,
                 stored,
             },
             None,
@@ -238,14 +321,24 @@ impl BrowseSettings {
         self.forget_part(SORT, |choices| choices.sort = None);
     }
 
-    /// Forgets the filters of every library, also ones this version could not read.
+    /// Forgets the filters of every library and of the search page, also ones this version could not read.
     pub fn forget_filters(&mut self) {
         self.forget_part(FILTER, |choices| choices.filters = None);
+        self.search.filter = None;
+        self.forget_search_part(FILTER);
     }
 
-    /// Forgets the view of every library, also one this version could not read.
+    /// Forgets the view of every library and of the search page, also one this version could not read.
     pub fn forget_views(&mut self) {
         self.forget_part(VIEW, |choices| choices.view = None);
+        self.search.view = None;
+        self.forget_search_part(VIEW);
+    }
+
+    fn forget_search_part(&mut self, part: &str) {
+        if let Some(Value::Object(entry)) = self.stored.get_mut(SEARCH) {
+            entry.remove(part);
+        }
     }
 
     /// Forgets every library of `server`, also entries this version could not read: the server was removed.
@@ -283,6 +376,23 @@ impl BrowseSettings {
         ] {
             if now != then {
                 self.stored.remove(key);
+            }
+        }
+        if self.search != before.search {
+            match self.stored.get_mut(SEARCH) {
+                Some(Value::Object(entry)) => {
+                    if self.search.filter != before.search.filter {
+                        entry.remove(FILTER);
+                    }
+                    if self.search.view != before.search.view {
+                        entry.remove(VIEW);
+                    }
+                }
+                // A `search` this version could not read gives way to what is remembered here.
+                Some(_) => {
+                    self.stored.remove(SEARCH);
+                }
+                None => {}
             }
         }
         if self.libraries == before.libraries {
@@ -354,6 +464,22 @@ impl BrowseSettings {
                 }
                 if !entries.is_empty() {
                     object.insert(LIBRARIES.to_owned(), Value::Object(entries));
+                }
+            }
+        }
+        match object.remove(SEARCH) {
+            // A `search` this version could not read, and nothing remembered here since: kept as it was.
+            Some(unreadable) if !unreadable.is_object() => {
+                object.insert(SEARCH.to_owned(), unreadable);
+            }
+            stored => {
+                let mut entry = match stored {
+                    Some(Value::Object(entry)) => entry,
+                    _ => Map::new(),
+                };
+                self.search.write_into(&mut entry);
+                if !entry.is_empty() {
+                    object.insert(SEARCH.to_owned(), Value::Object(entry));
                 }
             }
         }
@@ -570,6 +696,109 @@ mod tests {
         assert_eq!(keys.len(), 2, "{keys:?}");
         assert!(written["libraries"].get("jellyfin/12/abc").is_some());
         assert!(written["libraries"].get("stash/1/abc").is_some());
+    }
+
+    fn search_choices() -> SearchChoices {
+        SearchChoices {
+            filter: Some(RememberedSearchFilter {
+                kind: Some(MediaKind::PERSON),
+                source: "library".into(),
+            }),
+            view: Some(RememberedView {
+                tile: "wide".into(),
+                titles: true,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_search_pages_choices_round_trip_and_an_older_file_has_none() {
+        // A file from before the search page remembered anything.
+        let older = read(
+            r#"{"remember_filter": true, "remember_view": true, "libraries": {"jellyfin/1/abc": {"filter": []}}}"#,
+        );
+        assert!(older.search.is_empty());
+        let mut settings = older.clone();
+        settings.search = search_choices();
+        settings.changed_from(&older);
+        let written = settings.write().unwrap();
+        assert_eq!(
+            written["search"],
+            serde_json::json!({
+                "filter": {"type": "person", "source": "library"},
+                "view": {"tile": "wide", "titles": true}
+            })
+        );
+        assert_eq!(
+            written["libraries"]["jellyfin/1/abc"]["filter"],
+            serde_json::json!([])
+        );
+        let (reread, _) = BrowseSettings::read(Some(written));
+        assert_eq!(reread.search, search_choices());
+
+        // Every type is `all`.
+        let mut every = reread.clone();
+        every.search.filter = Some(RememberedSearchFilter {
+            kind: None,
+            source: "all".into(),
+        });
+        every.changed_from(&reread);
+        assert_eq!(
+            every.write().unwrap()["search"]["filter"],
+            serde_json::json!({"type": "all", "source": "all"})
+        );
+        let (again, _) = BrowseSettings::read(every.write());
+        assert_eq!(again.search.filter.unwrap().kind, None);
+
+        // Forgetting filters and views forgets the search page's too.
+        let mut forgotten = reread.clone();
+        forgotten.forget_filters();
+        forgotten.changed_from(&reread);
+        assert_eq!(forgotten.search.filter, None);
+        assert_eq!(
+            forgotten.write().unwrap()["search"],
+            serde_json::json!({"view": {"tile": "wide", "titles": true}})
+        );
+        let mut nothing = forgotten.clone();
+        nothing.forget_views();
+        nothing.changed_from(&forgotten);
+        assert!(nothing.write().unwrap().get("search").is_none());
+    }
+
+    #[test]
+    fn the_search_pages_open_and_unreadable_values_are_kept() {
+        let settings = read(
+            r#"{"search": {"filter": {"type": "a_newer_kind", "source": "a_newer_source"}, "view": {"tile": "wide"}, "zoom": 2}}"#,
+        );
+        let filter = settings.search.filter.as_ref().unwrap();
+        assert_eq!(filter.kind, Some(MediaKind::new("a_newer_kind")));
+        assert_eq!(filter.source, "a_newer_source");
+        // The view has no `titles`: unreadable, kept until changed here.
+        assert_eq!(settings.search.view, None);
+        let written = settings.write().unwrap();
+        assert_eq!(
+            written["search"]["view"],
+            serde_json::json!({"tile": "wide"})
+        );
+        assert_eq!(written["search"]["zoom"], 2);
+        let mut changed = settings.clone();
+        changed.search = search_choices();
+        changed.changed_from(&settings);
+        let written = changed.write().unwrap();
+        assert_eq!(written["search"]["view"]["titles"], true);
+        assert_eq!(written["search"]["zoom"], 2);
+
+        // A `search` that is not an object is kept until something is remembered here.
+        let odd = read(r#"{"search": [1]}"#);
+        assert!(odd.search.is_empty());
+        assert_eq!(odd.write().unwrap()["search"], serde_json::json!([1]));
+        let mut replaced = odd.clone();
+        replaced.search = search_choices();
+        replaced.changed_from(&odd);
+        assert_eq!(
+            replaced.write().unwrap()["search"]["filter"]["type"],
+            "person"
+        );
     }
 
     #[test]

@@ -57,6 +57,8 @@ pub struct ItemQuery {
     pub name_starts_with: Option<String>,
     /// Only items the server finds for this, as its search does (a library's own search box).
     pub search_term: Option<String>,
+    /// Only items this person is credited on (a person's titles, opened from search or a cast list).
+    pub person: Option<ItemRef>,
 }
 
 impl ItemQuery {

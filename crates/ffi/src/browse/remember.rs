@@ -85,7 +85,7 @@ impl From<LibraryChoices> for store::LibraryChoices {
 
 impl Core {
     /// Runs a settings change on the core's blocking pool.
-    async fn save_settings(
+    pub(super) async fn save_settings(
         &self,
         change: impl FnOnce(&current_app::App) -> Result<(), store::StoreError> + Send + 'static,
     ) -> Result<(), CoreError> {

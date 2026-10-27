@@ -48,11 +48,15 @@ pub use browse::{
     tile_artwork, view_kinds, with_filter_choice, with_filter_toggle,
 };
 pub use browse::{
-    BrowseView, FAVOURITES_EMPTY, FAVOURITES_FAILED, FilterMenu, GridOpening, RowDisplay, RowLink,
-    RowTarget, ViewLayout, favourites_status, filter_menu, grid_opening, home_row_display,
-    kind_choice_name, kind_group, library_filter_name, library_sort_name, runtime_label,
-    search_group_display, time_left_label, time_left_short, view_layout, view_link_tooltip,
-    view_opening, view_query, view_title,
+    BrowseView, CATALOG_NEEDS_SEERR, CATALOG_NEEDS_SEERR_LABEL, FAVOURITES_EMPTY,
+    FAVOURITES_FAILED, FilterMenu, GridOpening, ItemOpens, NARROWED_SEARCH_LIMIT, RowDisplay,
+    RowLink, RowNote, RowTarget, SearchChoice, SearchFilter, SearchSource, SearchSourceChoice,
+    SearchTools, SearchTypeChoice, ViewLayout, catalog_available, favourites_status, filter_menu,
+    grid_opening, home_row_display, kind_choice_name, kind_group, library_filter_name,
+    library_sort_name, person_query, runtime_label, search_filter_in_effect, search_group_display,
+    search_note, search_result_display, search_tools, search_type_label, search_types,
+    time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
+    view_title,
 };
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use formats::{
@@ -62,7 +66,7 @@ pub use formats::{
 pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
 pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState};
 pub use images::{ImageError, ImageLoad, ImageSource, WIDTH_BUCKETS, bucket};
-pub use library_choices::LibraryMemory;
+pub use library_choices::{LibraryMemory, SearchMemory};
 pub use list::{ListSubscription, ObservableList, VectorDiff};
 #[cfg(any(test, feature = "test-engine"))]
 pub use player::test_engine;
@@ -605,6 +609,27 @@ impl App {
         choices: LibraryChoices,
     ) -> Result<(), StoreError> {
         self.libraries.remember(self.settings(), library, &choices)
+    }
+
+    /// The global search page's Filter choices for `filter`, as the capabilities state stands now: the catalog is listed, unavailable
+    /// until a Seerr server is signed in ([`browse::search_tools`]).
+    pub fn search_tools(&self, filter: &SearchFilter) -> SearchTools {
+        browse::search_tools(&self.shared.capabilities.borrow(), filter)
+    }
+
+    /// What the global search page opens with: its last filter and view, each only while its switch ("Remember filter", "Remember
+    /// view") is on.
+    pub fn search_choices(&self) -> SearchMemory {
+        self.libraries.search(self.settings())
+    }
+
+    /// Remembers the search page's choices: each part given whose switch is on; the other stays as it was. Saved at once; nothing is
+    /// written when nothing changed. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// As [`App::remember_library_choices`].
+    pub fn remember_search_choices(&self, choices: SearchMemory) -> Result<(), StoreError> {
+        self.libraries.remember_search(self.settings(), &choices)
     }
 
     /// The platform's report of the network, on start and on every change (ADR 0014). Every server's address provider hears it, and

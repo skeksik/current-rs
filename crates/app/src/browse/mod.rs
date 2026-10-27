@@ -17,6 +17,7 @@ mod libraries;
 mod paged;
 mod present;
 mod search;
+mod search_filter;
 mod states;
 mod views;
 
@@ -55,11 +56,17 @@ pub use present::{
     with_filter_choice, with_filter_toggle,
 };
 pub use search::{FAVOURITE_ROW_KINDS, FAVOURITE_ROW_LIMIT, SearchResults};
+pub use search_filter::{
+    CATALOG_NEEDS_SEERR, CATALOG_NEEDS_SEERR_LABEL, NARROWED_SEARCH_LIMIT, SearchChoice,
+    SearchFilter, SearchSource, SearchSourceChoice, SearchTools, SearchTypeChoice,
+    catalog_available, person_query, search_filter_in_effect, search_note, search_result_display,
+    search_tools, search_type_label, search_types,
+};
 pub use states::{BrowseNotice, ItemAction, NoticeKind};
 pub use views::{
-    BrowseView, FilterMenu, GridOpening, RowDisplay, RowLink, RowTarget, ViewLayout, filter_menu,
-    grid_opening, home_row_display, search_group_display, view_layout, view_link_tooltip,
-    view_opening, view_query, view_title,
+    BrowseView, FilterMenu, GridOpening, ItemOpens, RowDisplay, RowLink, RowNote, RowTarget,
+    ViewLayout, filter_menu, grid_opening, home_row_display, search_group_display, view_layout,
+    view_link_tooltip, view_opening, view_query, view_title,
 };
 
 use libraries::Libraries;
@@ -577,9 +584,16 @@ impl Browse {
         DetailsView::open(self.ctx.clone(), item.clone())
     }
 
-    /// The best matches for `term`, one group per kind. Starts loading at once.
-    pub fn search(&self, term: &str) -> SearchResults {
-        SearchResults::open(self.ctx.clone(), term.to_owned())
+    /// The best matches for `term`, one group per kind, of the types and sources `filter` keeps as it can apply now
+    /// ([`search_filter_in_effect`]): every kind, [`current_jellyfin::SEARCH_LIMIT`] of each, or one kind,
+    /// [`NARROWED_SEARCH_LIMIT`] of it. Starts loading at once.
+    pub fn search(&self, term: &str, filter: &SearchFilter) -> SearchResults {
+        let filter = match self.ctx.shared.upgrade() {
+            Some(shared) => search_filter_in_effect(&shared.capabilities.borrow(), filter),
+            // The app is gone: the search fails as signed out, whatever it asks for.
+            None => filter.clone(),
+        };
+        SearchResults::open(self.ctx.clone(), term.to_owned(), filter)
     }
 
     /// The Favourites tab (owner, 2026-10-27): the user's favourite films, series and episodes, a row each ([`FAVOURITE_ROW_KINDS`]),
@@ -831,6 +845,7 @@ pub fn library_search(base: &ItemQuery, term: &str) -> ItemQuery {
         parent: base.parent.clone(),
         kinds: base.kinds.clone(),
         recursive: base.recursive,
+        person: base.person.clone(),
         search_term: Some(term.to_owned()),
         ..ItemQuery::default()
     }
@@ -902,6 +917,7 @@ mod tests {
             years: vec![2010],
             name_starts_with: Some("E".into()),
             search_term: None,
+            person: None,
         };
         let searching = library_search(&base, "  Example  ");
         assert_eq!(searching.search_term.as_deref(), Some("Example"));

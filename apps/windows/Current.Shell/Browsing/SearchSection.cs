@@ -17,10 +17,12 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
     private readonly ValueSubscription<LoadState> _state;
 
     /// <param name="link">The view a row's header opens with the row's kind (the Favourites tab's rows); null for a search.</param>
-    internal SearchSection(string header, SearchResults results, IUiDispatcher ui, BrowseView? link = null)
+    /// <param name="filter">A search's filters, from which the core shapes its rows; null for the Favourites tab.</param>
+    internal SearchSection(string header, SearchResults results, IUiDispatcher ui, BrowseView? link = null, SearchFilter? filter = null)
     {
         Header = header;
         _link = link;
+        _filter = filter;
         _results = results;
         _ui = ui;
         _groups = results.ObserveGroups(ui);
@@ -35,6 +37,30 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
     public string Header { get; }
 
     private readonly BrowseView? _link;
+    private readonly SearchFilter? _filter;
+
+    /// <summary>The search page's View (owner, 2026-10-27, as a library grid's): wide pictures, and whether tiles show their titles.</summary>
+    private bool _wide;
+    private bool _titles = true;
+
+    /// <summary>
+    /// Shows every row with the View's tiles. A row keeps its list but not its cards, so its template changes: the rows are made again
+    /// from the core's groups, without searching again.
+    /// </summary>
+    internal void SetView(bool wide, bool titles)
+    {
+        if (wide == _wide && titles == _titles)
+        {
+            return;
+        }
+        (_wide, _titles) = (wide, titles);
+        foreach (var row in Rows)
+        {
+            row.Dispose();
+        }
+        Rows.Clear();
+        SyncGroups();
+    }
 
     public Visibility HeaderVisibility => Header.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
@@ -63,7 +89,11 @@ public sealed class SearchSection : INotifyPropertyChanged, IDisposable
                 {
                     continue;
                 }
-                existing = new TileRow(kind, Views.ForSearchGroup(kind, _link), items);
+                // A search's rows as the core shapes them for its filter and View; the Favourites tab's as its own.
+                var display = _filter is { } filter
+                    ? Views.ForSearchResult(kind, filter, _wide, _titles)
+                    : Views.ForSearchGroup(kind, _link);
+                existing = new TileRow(kind, display, items);
                 Rows.Insert(position, existing);
             }
             else if (Rows.IndexOf(existing) != position)

@@ -13,7 +13,8 @@ use current_model::{
 };
 use current_net::{FixedAddress, RequestLog, Url};
 use jellyfin_stand_in::library::{
-    EPISODE_IDS, FILM_IDS, FILMS_LIBRARY_ID, SEASON_ID, SERIES_ID, SHOWS_LIBRARY_ID,
+    DIRECTOR_ID, EPISODE_IDS, FILM_IDS, FILMS_LIBRARY_ID, PERSON_ID, SEASON_ID, SERIES_ID,
+    SHOWS_LIBRARY_ID,
 };
 use jellyfin_stand_in::{PASSWORD, StandIn, USER_NAME};
 
@@ -120,6 +121,53 @@ async fn the_stand_ins_library_is_browsable() {
     let media = details.media.unwrap();
     assert_eq!(media.audio.len(), 1);
     assert!(media.video.is_some());
+}
+
+#[tokio::test]
+async fn people_are_found_and_list_their_titles() {
+    let stand_in = StandIn::start().await.unwrap();
+    let client = signed_in(&stand_in).await;
+
+    // Every person kind is a person: the director is found as the actor is.
+    let groups = client
+        .search("example", &[MediaKind::PERSON], 100)
+        .await
+        .unwrap();
+    let people: Vec<_> = groups[0].items.iter().map(|p| p.item.clone()).collect();
+    assert_eq!(people, [item(PERSON_ID), item(DIRECTOR_ID)]);
+    assert_eq!(groups[0].items[0].kind, MediaKind::PERSON);
+    assert_eq!(groups[0].items[0].artwork[0].kind, ImageType::PRIMARY);
+    // A search for films finds no people, and no query below a library lists them.
+    let films = client
+        .search("example", &[MediaKind::MOVIE], 100)
+        .await
+        .unwrap();
+    assert!(films[0].items.iter().all(|f| f.kind == MediaKind::MOVIE));
+    let in_library = ItemQuery {
+        parent: Some(item(FILMS_LIBRARY_ID)),
+        kinds: vec![MediaKind::PERSON],
+        recursive: true,
+        ..ItemQuery::default()
+    };
+    assert!(
+        client
+            .items(&in_library, 0, 10, false)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+
+    let titles = ItemQuery {
+        kinds: vec![MediaKind::MOVIE, MediaKind::SERIES],
+        recursive: true,
+        person: Some(item(PERSON_ID)),
+        ..ItemQuery::default()
+    };
+    let page = client.items(&titles, 0, 100, true).await.unwrap();
+    let found: Vec<_> = page.items.iter().map(|t| t.item.clone()).collect();
+    assert_eq!(found, [item(FILM_IDS[0]), item(SERIES_ID)]);
+    assert_eq!(page.total, Some(2));
 }
 
 #[tokio::test]

@@ -5,11 +5,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, Weak};
 
-use current_jellyfin::{AuthError, JellyfinClient, SEARCH_GROUPS, SEARCH_LIMIT, SearchGroup};
+use current_jellyfin::{AuthError, JellyfinClient, SearchGroup};
 use current_model::{ItemRef, ItemSummary, MediaKind, UserState};
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinSet};
 
+use super::search_filter::{SearchFilter, library_groups};
 use super::{Context, Live, LoadState, below_in, find_in, lock, patch_list, sync_list};
 use crate::list::ObservableList;
 
@@ -20,12 +21,12 @@ pub const FAVOURITE_ROW_KINDS: [MediaKind; 3] =
 
 /// How many items each Favourites row shows: as many as a search group ([`SEARCH_LIMIT`]), as the tab lays its rows out as the
 /// search page does.
-pub const FAVOURITE_ROW_LIMIT: u32 = SEARCH_LIMIT;
+pub const FAVOURITE_ROW_LIMIT: u32 = current_jellyfin::SEARCH_LIMIT;
 
 /// What the groups are.
 enum Source {
-    /// The best matches for a term.
-    Term(String),
+    /// The best matches for a term, of the types and sources a filter in effect keeps ([`super::search_filter`]).
+    Term(String, SearchFilter),
     /// The user's favourites, a row per kind of [`FAVOURITE_ROW_KINDS`].
     Favourites,
 }
@@ -33,7 +34,11 @@ enum Source {
 impl Source {
     async fn load(&self, client: Arc<JellyfinClient>) -> Result<Vec<SearchGroup>, AuthError> {
         match self {
-            Self::Term(term) => client.search(term, SEARCH_GROUPS, SEARCH_LIMIT).await,
+            Self::Term(term, filter) => match library_groups(filter) {
+                Some((kinds, limit)) => client.search(term, &kinds, limit).await,
+                // The catalog only: nothing from the library (the catalog's own results come with Seerr, M4).
+                None => Ok(Vec::new()),
+            },
             Self::Favourites => favourite_rows(client).await,
         }
     }
@@ -105,8 +110,8 @@ impl std::fmt::Debug for SearchResults {
 }
 
 impl SearchResults {
-    pub(super) fn open(ctx: Arc<Context>, term: String) -> Self {
-        Self::start(ctx, Source::Term(term))
+    pub(super) fn open(ctx: Arc<Context>, term: String, filter: SearchFilter) -> Self {
+        Self::start(ctx, Source::Term(term, filter))
     }
 
     /// The Favourites tab's rows: they read again when a played or favourite mark changes, as an item can join or leave them.
