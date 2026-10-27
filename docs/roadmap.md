@@ -294,7 +294,7 @@ Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 whe
       remembered filters a menu no longer offers; Favourites offering type filters only; Home-header grids ignoring remembered choices;
       view ids and the view → query mapping; row kind → tab links and which rows get wide tiles; kbit/s and Mbit/s formatting and the
       "Original · 4K · 26.1 Mbit/s" composition; time-left rounding and format. Texts: Home row titles ("Recently added in X"), view
-      titles, kind names, link tooltips. Bindings tests for the quality options, `OpenItems`, the Favourites and Recently added
+      titles, kind names, link tooltips, the Favourites tab's "No favourites yet" and its failure line. Bindings tests for the quality options, `OpenItems`, the Favourites and Recently added
       queries, searching, time left and the new Home row kinds
 - [ ] Global search filters (owner, 2026-10-27): Type (All, Movies, Series, Actors), Source (All, Library, Catalog; Catalog comes with
       Seerr, M4) and View

@@ -291,9 +291,11 @@ address without a gateway, which has none to pass.
       highest entry of its own menu not above the preferred one (Original counts at its bitrate: preferred 20 Mbit/s on a 5.6 Mbit/s
       source plays Original); preferred Original always plays Original, whatever its bitrate. When every entry is above the preferred
       one, or the source's bitrate is unknown, the preferred bitrate is the limit as it is, so an item never plays above it
-      (`snap_quality`). The preferred quality is always an entry of Settings' list: switching "Show all quality options" off with a
-      step only it lists as the preferred one moves the setting to the nearest listed step not above it (the lowest when none is),
-      and a value the list lacks reads that way at start (`listed_quality`). A pick in the player's menu applies to that playback
+      (`snap_quality`). The preferred quality is always an entry of Settings' list. The owner's rule: "if show all quality turned off
+      when one of the addition qualities is chosen, it should switch to nearest available", and the preferred quality "should never
+      go above chosen" (owner, 2026-10-27); so the nearest listed step not above it, the lowest when none is (preferred 15 Mbit/s
+      with the short list becomes 4 Mbit/s, not 20; confirmed by the owner, 2026-10-27). A value the list lacks, set or read at
+      start, is stored that way too (`listed_quality`). A pick in the player's menu applies to that playback
       only and is not saved. The old `quality_local` and `quality_internet` are read and written back unchanged for
       older versions, and used for nothing.
 11. Refresh-rate switching: **A**, not in M2; `display-fps-override` and the `display-resample` check on the device.

@@ -65,6 +65,8 @@ impl PlaybackPrefs {
         preferred: Quality,
     ) -> Result<(), StoreError> {
         let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        // Always an entry of Settings' list, as the list promises: a step it does not offer becomes the nearest it does (review 2).
+        let preferred = listed_quality(preferred, self.quality_all());
         self.preferred_quality.send_replace(preferred);
         match &shared.storage {
             Some(storage) => storage

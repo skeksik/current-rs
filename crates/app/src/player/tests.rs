@@ -436,15 +436,17 @@ async fn items_play_at_the_preferred_quality_and_a_picked_one_is_not_saved() {
     let temp = tempfile::tempdir().unwrap();
     let app = open_stored(temp.path());
     let server = signed_in(&stand_in, &app).await;
-    // Between two entries of the stand-in's menu (its source is 1.4 Mbit/s: the original, then 480p at 1 Mbit/s).
+    // 1.2 Mbit/s is no step Settings lists: it is stored as the nearest listed one not above it, 1 Mbit/s, which the stand-in's menu
+    // has below its 1.4 Mbit/s original (480p).
     app.set_preferred_quality(Quality::Bitrate(1_200_000))
         .unwrap();
+    assert_eq!(app.preferred_quality(), Quality::Bitrate(1_000_000));
     let (player, _) = open(&app).await;
     player
         .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
         .await
         .unwrap();
-    // The entry below it, which the menu ticks.
+    // That entry, which the menu ticks.
     let status = until(&player.state(), playing).await;
     assert_eq!(status.quality, Quality::Bitrate(1_000_000));
     // A pick re-plans at the position and changes only the item playing.
@@ -456,7 +458,7 @@ async fn items_play_at_the_preferred_quality_and_a_picked_one_is_not_saved() {
     let settings = || app.settings().unwrap().get().playback;
     assert_eq!(
         settings().quality_preferred,
-        StreamQuality::Bitrate(1_200_000)
+        StreamQuality::Bitrate(1_000_000)
     );
     assert_eq!(settings().quality_local, StreamQuality::Maximum);
     assert_eq!(settings().quality_internet, StreamQuality::Maximum);
@@ -471,7 +473,7 @@ async fn items_play_at_the_preferred_quality_and_a_picked_one_is_not_saved() {
     .await;
     player.close().await;
     drop(app);
-    // Read again at the next start: 1.2 Mbit/s is no step Settings lists, so it reads as the nearest listed one not above it.
+    // Read again at the next start.
     let app = open_stored(temp.path());
     assert_eq!(app.preferred_quality(), Quality::Bitrate(1_000_000));
 }

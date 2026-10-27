@@ -322,10 +322,21 @@ fn the_playback_settings_switch_skipping() {
         }
     );
     let preferred = QualityChoice::Bitrate {
-        bits_per_second: 10_000_000,
+        bits_per_second: 20_000_000,
     };
     block_on(core.set_preferred_quality(preferred)).unwrap();
     assert_eq!(core.playback_settings().preferred_quality, preferred);
+    // A step the short list does not offer is stored as the nearest it does, so Settings always has one selected.
+    block_on(core.set_preferred_quality(QualityChoice::Bitrate {
+        bits_per_second: 10_000_000,
+    }))
+    .unwrap();
+    assert_eq!(
+        core.playback_settings().preferred_quality,
+        QualityChoice::Bitrate {
+            bits_per_second: 4_000_000
+        }
+    );
     // No bitrate is no limit: "Maximum", as the settings file reads it.
     block_on(core.set_preferred_quality(QualityChoice::Bitrate { bits_per_second: 0 })).unwrap();
     assert_eq!(

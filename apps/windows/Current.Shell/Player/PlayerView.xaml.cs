@@ -935,7 +935,10 @@ public sealed partial class PlayerView : UserControl
         var current = State.Quality;
         if (current is QualityChoice.Bitrate limit && !options.Any(option => option.Quality == current))
         {
-            options = [.. options, new QualityOption(current, null, limit.BitsPerSecond)];
+            // In bitrate order among the steps (Original stays first): a 10 Mbit/s limit sits between 20 and 4 (review 2).
+            var at = options.Select((option, index) => (option, index))
+                .FirstOrDefault(entry => entry.index > 0 && entry.option.Bitrate < limit.BitsPerSecond, (null!, options.Count)).index;
+            options = [.. options.Take(at), new QualityOption(current, null, limit.BitsPerSecond), .. options.Skip(at)];
         }
         foreach (var option in options)
         {
