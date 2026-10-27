@@ -98,8 +98,10 @@ pub fn library_filters() -> Vec<Option<ItemFilter>> {
 }
 
 /// The filters a library grid offers as ticks, each on or off whatever [`library_filters`] choice is made: favourites (owner,
-/// 2026-10-27). With a choice and a tick the grid asks for items that match both (whether Jellyfin applies every filter it is
-/// sent, not either, is not verified).
+/// 2026-10-27). With a choice and a tick the grid gets the items that match both: Jellyfin's `ApplyFilters` sets `IsPlayed` for
+/// played or unplayed and `IsFavorite` for favourites on one query, each applied as its own condition (`ItemsController.cs`,
+/// `InternalItemsQuery.cs`, `BaseItemRepository.TranslateQuery.cs`, jellyfin/jellyfin master, read 2026-10-27); played and unplayed
+/// together throw "Conflicting filters", which the single choice avoids.
 pub fn library_toggle_filters() -> Vec<ItemFilter> {
     vec![ItemFilter::FAVOURITE]
 }

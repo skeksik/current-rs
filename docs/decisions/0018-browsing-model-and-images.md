@@ -127,8 +127,12 @@ records anyway, so a tile template always has a slot to bind to.)
   gives the line "Showing the best 300 matches. Type more to narrow it." A search is a new query, so it starts at the top.
 - **Filters (amended 2026-10-27, owner).** A grid offers one choice of everything, unplayed or played (`library_filters`), and
   favourites as a tick beside it, on or off whatever the choice (`library_toggle_filters`); `with_filter_choice` and
-  `with_filter_toggle` change one and keep the other, and a grid with both asks for items that match both. That Jellyfin applies
-  every `filters` value it is sent, not either, is not verified.
+  `with_filter_toggle` change one and keep the other, and a grid with both gets the items that match both: `ItemsController` calls
+  `query.ApplyFilters(filters)`, which sets `IsPlayed` (true for played, false for unplayed) and `IsFavorite = true` on one query,
+  and the repository applies each as its own `Where` (`Jellyfin.Api/Controllers/ItemsController.cs`,
+  `MediaBrowser.Controller/Entities/InternalItemsQuery.cs`, `Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs`;
+  jellyfin/jellyfin master, read 2026-10-27). Played and unplayed together throw "Conflicting filters"; the single choice never
+  sends both.
 
 ### 4. Images
 **The core fetches every image** through the server's `RoamingAddresses`, so the current address and its gateway credentials apply
