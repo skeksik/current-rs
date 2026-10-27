@@ -172,6 +172,14 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
 1. `set_played(item, true)` (or favourite) records the new `UserState` as pending and broadcasts `(ItemRef, UserState)` inside the core.
 2. **Every live list subscribes to the store** and patches its slots for that `ItemRef` with `Set` (each list keeps an
    `ItemRef → indices` map): grids, home rows, details, search. Items loaded while a change is pending take the pending state.
+   (**Amended 2026-10-27 (owner)**, fix/item-state-single-source: **one source of truth for each item's user state on every page.**
+   Besides the pending changes, the session keeps an `ItemStore`: each item a live list holds, with its state as the server gave it
+   last, on the session's clock (a list's read takes the clock when its request goes out, a server's answer to a mark, a read-back
+   or a stop when it arrives). Every list's read goes through it: a read newer than the store's copy replaces it and every live list
+   shows it; an older one (a slow answer that left the server before a later change) shows the store's. The pending changes and
+   estimates show on top. An item's state for the UI's actions (`Browse::user_state`) is the store's with them. Entries no live list
+   holds are dropped after each read. Before, each list kept its own copy and only patches were shared, so a page read later, or a
+   slow answer, left the pages disagreeing.)
 3. The request goes out; requests for one item are sent one at a time, and only the last wanted state is sent after one in flight.
 4. Success: the server's answer becomes the item's state. Then the lists whose content depends on it reload in the background, a
    second after the last change: "continue watching", "next up", and the parent series and season (their unplayed count).
@@ -213,10 +221,28 @@ One **`ItemStates`** store in `current-app`, per session, keyed by `ItemRef`:
    item))`"), whose user data only a mark on the item's own id saves (`SaveUserData`: "`// rehydrate the cached userdata`"), while
    `Folder.MarkUnplayed` saves the instances `GetItemList` loads. So a detail page takes the item's marks from a list read of it
    (`GET Items?ids={id}`, whose user data `GetUserDataBatch` reads fresh), sent with the item's own read; and where two live lists'
-   copies of an item differ, the one read or patched last is the item's state for the UI's actions (`Browse::user_state`). The
+   copies of an item differ, the one read or patched last is the item's state for the UI's actions (`Browse::user_state`; **amended
+   2026-10-27 (owner)**: replaced by the store of point 2, which every page shows, not only the UI's actions). The
    series' and season's own read-backs (`GET UserItems/{id}/UserData`) stay: their played state, unplayed count and percentage are
    derived from their episodes by count queries (`Folder.FillUserDataDtoValues`), not from the cached instance. The workaround goes
    once a single-item read serves fresh user data after a folder's sweep: re-check on each new server baseline.
+7. (**Amended 2026-10-27 (owner)**, fix/item-state-single-source.) **Collections, folders, focus, and a write-back.**
+   - A played change on a collection or another folder whose items the core cannot name (Jellyfin marks a collection's films,
+     `BoxSet.MarkPlayed`, and a folder's items, `Folder.MarkPlayed`; v12.3, 06de749): after the server's answer, the marks of every
+     item the store holds are read again (`GET Items?ids=`, a few dozen a request), and the lists of what is below it (a grid whose
+     parent it is) reload with the dependents.
+   - A season keeps its series from the page that listed it, so a series' change reaches it in every list.
+   - A change for an item no live list holds is sent whatever it asks for: what the server holds is not known.
+   - **Resync on focus**: Home or a grid shown again within `REFRESH_WHEN_SHOWN_AFTER` reads the marks of every item the store
+     holds again, so a change made on another device shows; after that time they refresh, and the foreground refresh reads every
+     list again, as before. Jellyfin's WebSocket `UserDataChanged` would push such changes; it needs a dependency the owner has not
+     approved, so it is not used.
+   - An estimate made before a confirmed played change, of the item or of what is below it, is dropped when the server answers.
+   - *Workaround for an upstream Jellyfin bug* (`docs/notes/jellyfin-browse.md`, "Upstream bugs and our workarounds"): Jellyfin saves
+     a favourite or a playback report on an episode with the user data its cached instance holds, which a series' sweep leaves
+     behind, so the write puts the old played mark back in the database. Before a favourite or a playback start on an episode whose
+     series or season this session marked since, its played mark as a list reads it is sent on its own id, which puts the instance
+     right. It goes once a write reads its user data fresh.
 
 ### 6. Home
 Home's layout is **provisional**: the owner accepted it for now and will have it redesigned later (2026-10-25). The `HomeFeed`
