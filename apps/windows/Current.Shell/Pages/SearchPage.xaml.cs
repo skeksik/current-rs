@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Current.Bindings;
 using Current.Shell.Browsing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
