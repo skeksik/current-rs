@@ -1,6 +1,6 @@
 //! Browsing a signed-in Jellyfin server (ADR 0018, sections 3, 5 and 6): library grids as paged lists ([`PagedItems`]), Home
-//! ([`HomeFeed`]), detail pages ([`DetailsView`]), search ([`SearchResults`]), and played and favourite marks shown at once in
-//! every live list and sent to the server one at a time per item.
+//! ([`HomeFeed`]), detail pages ([`DetailsView`]), search and the Favourites tab's rows ([`SearchResults`]), and played and
+//! favourite marks shown at once in every live list and sent to the server one at a time per item.
 //!
 //! A [`Browse`] belongs to one session of one server: once that session ends (sign-out, removal, a new sign-in), its lists stop
 //! loading and its requests fail with [`AuthError::NotSignedIn`] without reaching the network. A new session needs a new
@@ -47,7 +47,7 @@ pub use present::{
     SORT_OFF_WHILE_SEARCHING, SeriesRun, SortChoice, TileShape, grid_tools, library_filters,
     library_search_note, library_sorts, series_run, tile_artwork,
 };
-pub use search::SearchResults;
+pub use search::{FAVOURITE_ROW_KINDS, FAVOURITE_ROW_LIMIT, SearchResults};
 pub use states::{BrowseNotice, ItemAction, NoticeKind};
 
 use libraries::Libraries;
@@ -392,8 +392,8 @@ impl Browse {
         PagedItems::open(self.ctx.clone(), query, Some(library.item.clone()))
     }
 
-    /// A grid of items from every library: `query` with no parent (the Favorites and Recently added tabs, [`favourites_query`] and
-    /// [`recently_added_everywhere_query`]). Starts loading at once.
+    /// A grid of items from every library: `query` with no parent (a Favourites row's whole list and the Recently added tab,
+    /// [`favourites_query`] and [`recently_added_everywhere_query`]). Starts loading at once.
     pub fn open_items(&self, query: ItemQuery) -> PagedItems {
         PagedItems::open(
             self.ctx.clone(),
@@ -418,6 +418,14 @@ impl Browse {
     /// The best matches for `term`, one group per kind. Starts loading at once.
     pub fn search(&self, term: &str) -> SearchResults {
         SearchResults::open(self.ctx.clone(), term.to_owned())
+    }
+
+    /// The Favourites tab (owner, 2026-10-27): the user's favourite films, series and episodes, a row each ([`FAVOURITE_ROW_KINDS`]),
+    /// as many as [`FAVOURITE_ROW_LIMIT`] in each, by name; a row only while it has items. They read again a moment after a played or
+    /// favourite mark changes. A row's header opens the whole list: [`Browse::open_items`] with [`favourites_query`] for its kind.
+    /// Starts loading at once.
+    pub fn favourites(&self) -> SearchResults {
+        SearchResults::favourites(self.ctx.clone())
     }
 
     /// Marks `item` played or unplayed: every live list shows it at once, the server is told, and on failure the change rolls
@@ -574,8 +582,9 @@ fn view_kinds_for(kind: Option<MediaKind>) -> Vec<MediaKind> {
     }
 }
 
-/// The Favorites tab and Home's Favourites row (owner, 2026-10-26): the user's favourites in every library, by name; only `kind` when
-/// given.
+/// The user's favourites in every library, by name (owner, 2026-10-26 and 2026-10-27): with `kind`, that kind only, as a Favourites
+/// row's header opens it (episodes too, [`FAVOURITE_ROW_KINDS`]); without, Home's Favourites row, of the kinds the views across
+/// every library list, with no episode on its own.
 pub fn favourites_query(kind: Option<MediaKind>) -> ItemQuery {
     ItemQuery {
         recursive: true,
@@ -657,6 +666,17 @@ mod tests {
         assert_eq!(
             favourites_query(Some(MediaKind::MOVIE)).kinds,
             [MediaKind::MOVIE]
+        );
+        // Each Favourites row's header opens its kind, episodes included.
+        for kind in FAVOURITE_ROW_KINDS {
+            let row = favourites_query(Some(kind.clone()));
+            assert_eq!(row.kinds, [kind]);
+            assert_eq!(row.filters, [ItemFilter::FAVOURITE]);
+            assert!(row.recursive && row.depends_on_marks());
+        }
+        assert_eq!(
+            FAVOURITE_ROW_KINDS,
+            [MediaKind::MOVIE, MediaKind::SERIES, MediaKind::EPISODE]
         );
 
         let recent = recently_added_everywhere_query(None);
