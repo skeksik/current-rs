@@ -170,3 +170,40 @@ fn the_reference_frame_rate_is_the_average_unless_it_reads_1000_or_more() {
     );
     assert_eq!(video(None, None).video.unwrap().reference_frame_rate, None);
 }
+
+#[test]
+fn the_play_method_is_direct_play_on_every_local_route_and_transcode_on_a_server_stream() {
+    let report = |route| ProgressReport {
+        item: ItemId::new("e1"),
+        media_source: "s1".into(),
+        play_session_id: "ps".into(),
+        position: Duration::ZERO,
+        audio: None,
+        subtitle: None,
+        paused: false,
+        muted: false,
+        volume: None,
+        can_seek: true,
+        route,
+    };
+    for route in [Route::Native, Route::DeviceRemux, Route::AppEngine] {
+        assert_eq!(
+            progress_body(&report(route.clone())).play_method,
+            "DirectPlay",
+            "{route:?}"
+        );
+    }
+    for engine in [
+        current_model::EngineRole::Native,
+        current_model::EngineRole::App,
+    ] {
+        let route = Route::ServerStream {
+            engine,
+            protocol: StreamProtocol::Hls,
+            container: Some("mp4".into()),
+            video: StreamAction::Copy,
+            audio: StreamAction::Copy,
+        };
+        assert_eq!(progress_body(&report(route)).play_method, "Transcode");
+    }
+}

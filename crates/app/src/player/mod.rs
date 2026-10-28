@@ -39,6 +39,8 @@ mod server;
 #[cfg(any(test, feature = "test-engine"))]
 pub mod test_engine;
 // With libmpv built in, players use it: these tests need the test engine.
+#[cfg(test)]
+mod one_engine_tests;
 #[cfg(all(test, not(feature = "libmpv")))]
 mod tests;
 mod words;

@@ -135,6 +135,16 @@ fn transcoding_profiles(capabilities: &EngineCapabilities) -> Vec<TranscodingPro
     .collect()
 }
 
+/// The device profile for `capabilities` as PlaybackInfo's body carries it (`DeviceProfile`), with `max_streaming_bitrate` in bits
+/// per second: for checks that a change to how the capabilities are made leaves the profile the server gets unchanged (ADR 0025).
+pub fn device_profile_json(
+    capabilities: &EngineCapabilities,
+    max_streaming_bitrate: i32,
+) -> String {
+    // The profile is plain data with string keys, so serializing it cannot fail; an empty string would fail any comparison.
+    serde_json::to_string(&device_profile(capabilities, max_streaming_bitrate)).unwrap_or_default()
+}
+
 /// What the server converts a stream to when this device cannot play it as it is (ADR 0021, the "Supported formats" page): the codecs
 /// of the transcoding profiles [`device_profile`] sends for `capabilities`, fMP4 first, each once. Empty when no transcoding profile
 /// is sent (the engine decodes none of the targets).

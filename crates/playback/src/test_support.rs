@@ -153,6 +153,8 @@ pub struct ServerState {
     /// Answers for the next PlaybackInfo calls, in order; when empty, a direct play answer.
     pub answers: VecDeque<Result<ServerAnswer, PlaybackProblem>>,
     pub requests: Vec<(ItemRef, PlanRequest)>,
+    /// The capabilities each request's device profile was made from.
+    pub profiles: Vec<EngineCapabilities>,
     /// Each report with the clock's time.
     pub reports: Vec<(Duration, Report)>,
     pub segments: Vec<Segment>,
@@ -194,6 +196,7 @@ impl FakeServer {
             state: Arc::new(Mutex::new(ServerState {
                 answers: VecDeque::new(),
                 requests: Vec::new(),
+                profiles: Vec::new(),
                 reports: Vec::new(),
                 segments: Vec::new(),
                 segment_calls: 0,
@@ -248,10 +251,11 @@ impl MediaServer for FakeServer {
         &self,
         item: &ItemRef,
         request: &PlanRequest,
-        _capabilities: &EngineCapabilities,
+        capabilities: &EngineCapabilities,
     ) -> Result<ServerAnswer, PlaybackProblem> {
         let mut state = self.state();
         state.requests.push((item.clone(), request.clone()));
+        state.profiles.push(capabilities.clone());
         let count = state.requests.len();
         let mut answer = state
             .answers

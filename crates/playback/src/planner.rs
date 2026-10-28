@@ -416,4 +416,132 @@ mod tests {
         .expect("a route");
         assert_eq!(lower.notes, vec![PlanNote::RemoteSourceTranscodingForced]);
     }
+
+    #[test]
+    fn with_a_native_engine_the_check_picks_the_route_and_says_why() {
+        use crate::engines::{EngineProfile, PlatformRules};
+        use current_model::{
+            Codec, CodecSupport, Container, EngineCapabilities, GapKind, TrackGap,
+        };
+
+        let caps = |audio: &[Codec]| EngineCapabilities {
+            containers: vec![Container::MKV, Container::MP4],
+            video: vec![CodecSupport::any(Codec::H264)],
+            audio: audio.iter().cloned().map(CodecSupport::any).collect(),
+            subtitles: vec![],
+            external_subtitles: true,
+        };
+        let engines = Engines {
+            native: Some(EngineProfile::new(caps(&[Codec::AAC]), true)),
+            app: EngineProfile::new(caps(&[Codec::AAC, Codec::TRUEHD]), true),
+            remux: None,
+            rules: PlatformRules::WINDOWS,
+        };
+        let inputs = |tried| RouteInputs {
+            engines: &engines,
+            context: RouteContext::default(),
+            tried,
+        };
+        let mut direct = answer(ServerOffer::DirectPlay, vec![]);
+        direct.source.streams[0].codec = Some(Codec::H264);
+        direct.source.streams[1].codec = Some(Codec::AAC);
+        direct.source.streams[2].codec = Some(Codec::TRUEHD);
+        let permissions = TranscodePermissions::default();
+        let request = ask(Quality::Maximum);
+        let planned = plan(
+            &item("e1"),
+            &request,
+            direct.clone(),
+            &[],
+            &permissions,
+            true,
+            inputs(&[]),
+        )
+        .expect("a route");
+        assert_eq!(planned.plan.route, Route::Native);
+        assert_eq!(
+            planned.plan.reasons,
+            vec![RouteReason::NATIVE_FULLY_COMPATIBLE]
+        );
+        // The native route failed: the app engine, which lists it as failed.
+        let planned = plan(
+            &item("e1"),
+            &request,
+            direct.clone(),
+            &[],
+            &permissions,
+            true,
+            inputs(&[Route::Native]),
+        )
+        .expect("a route");
+        assert_eq!(planned.plan.route, Route::AppEngine);
+        assert_eq!(planned.plan.failed_routes, vec![Route::Native]);
+        // TrueHD selected: the app engine, with what the native one lacks.
+        let truehd = PlanRequest {
+            tracks: TrackChoice {
+                audio: Some(2),
+                subtitle: SubtitleChoice::Off,
+            },
+            ..request.clone()
+        };
+        let planned = plan(
+            &item("e1"),
+            &truehd,
+            direct.clone(),
+            &[],
+            &permissions,
+            true,
+            inputs(&[]),
+        )
+        .expect("a route");
+        assert_eq!(planned.plan.route, Route::AppEngine);
+        assert_eq!(planned.plan.reasons, vec![RouteReason::NATIVE_LACKS]);
+        assert_eq!(
+            planned.plan.native_lacks,
+            vec![TrackGap {
+                kind: GapKind::Audio,
+                name: Some("truehd".into())
+            }]
+        );
+        // Both tried: no local route, so the caller asks for the server's stream.
+        assert!(
+            plan(
+                &item("e1"),
+                &request,
+                direct,
+                &[],
+                &permissions,
+                true,
+                inputs(&[Route::Native, Route::AppEngine]),
+            )
+            .is_none()
+        );
+        // A server stream goes to the native engine first, with the server's reasons.
+        let mut stream = answer(
+            hls(StreamAction::Copy, StreamAction::Transcode),
+            vec![RouteReason::AUDIO_CODEC_NOT_SUPPORTED],
+        );
+        stream.source = planned_source();
+        let planned = plan(
+            &item("e1"),
+            &truehd,
+            stream,
+            &[],
+            &permissions,
+            true,
+            inputs(&[]),
+        )
+        .expect("a route");
+        assert_eq!(planned.plan.route.engine(), EngineRole::Native);
+        assert_eq!(
+            planned.plan.reasons,
+            vec![RouteReason::AUDIO_CODEC_NOT_SUPPORTED]
+        );
+    }
+
+    fn planned_source() -> MediaSource {
+        let mut source = source();
+        source.streams[0].codec = Some(current_model::Codec::H264);
+        source
+    }
 }
