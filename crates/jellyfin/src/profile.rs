@@ -203,6 +203,17 @@ fn codec_profile(support: &CodecSupport, kind: Kind) -> Option<CodecProfile> {
     if let Some(profiles) = &support.profiles {
         conditions.push(condition("EqualsAny", profile, profiles.join("|")));
     }
+    if let Kind::Audio = kind
+        && let Some(channels) = support.max_channels
+    {
+        // `ProfileConditionValue.AudioChannels` (Jellyfin v12.2, commit ca0f16eb, `MediaBrowser.Model/Dlna/ProfileConditionValue.cs`,
+        // read 2026-10-28).
+        conditions.push(condition(
+            "LessThanEqual",
+            "AudioChannels",
+            channels.to_string(),
+        ));
+    }
     if let Kind::Video = kind {
         if let Some(level) = support.level {
             conditions.push(condition("LessThanEqual", "VideoLevel", level.to_string()));
@@ -454,6 +465,8 @@ mod tests {
             profiles: Some(vec!["main".into(), "main 10".into()]),
             level: Some(153),
             ranges: Some(vec![VideoRangeType::SDR, VideoRangeType::HDR10]),
+            // Channels mean nothing for video and are left out.
+            max_channels: Some(2),
         }];
         capabilities.audio = vec![
             CodecSupport {
@@ -465,6 +478,10 @@ mod tests {
             CodecSupport {
                 level: Some(1),
                 ..CodecSupport::any(Codec::AAC)
+            },
+            CodecSupport {
+                max_channels: Some(2),
+                ..CodecSupport::any(Codec::OPUS)
             },
         ];
         let json = serde_json::to_value(device_profile(&capabilities, i32::MAX)).unwrap();
@@ -486,6 +503,13 @@ mod tests {
                     "Codec": "flac",
                     "Conditions": [
                         {"Condition": "LessThanEqual", "Property": "AudioBitDepth", "Value": "24", "IsRequired": false}
+                    ]
+                },
+                {
+                    "Type": "VideoAudio",
+                    "Codec": "opus",
+                    "Conditions": [
+                        {"Condition": "LessThanEqual", "Property": "AudioChannels", "Value": "2", "IsRequired": false}
                     ]
                 }
             ])

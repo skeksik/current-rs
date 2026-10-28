@@ -169,13 +169,20 @@ Added 2026-10-28 by task W2 (feat/routes-and-engines), from ADR 0025 "How the co
   `setting_always_app_engine`, `dolby_vision_on_app_engine`, `hdr_on_sdr_display`, `speed_not_supported`. The plan also lists the
   routes that failed before it (`failed_routes`). A local route on a player with the app engine only has no reasons, as before.
 - **The per-file check** (`current_playback::route`), after a direct-play answer: native, then the remux, then the app engine, as
-  ADR 0025 orders them; a route already failed in this play is left out. With the app engine only, the server's answer stands (it
-  was made from exactly that engine's capabilities). A server stream goes to the first engine, native first, that takes its protocol
+  ADR 0025 orders them; a route already failed in this play is left out, and the route after it carries `previous_route_failed`.
+  With the app engine only, the server's answer stands (it was made from exactly that engine's capabilities). A subtitle that needs
+  rendering (picture formats, ASS/SSA) is decided from its format: never through the remux, and on the native route only where the
+  platform's rules keep it (`PlatformRules::native_rendered_subtitles`; Windows: PGS, ADR 0025 departure 3), whatever the native
+  engine lists. A codec or container the server does not name is not native, but the app engine plays it (the server offered
+  direct play). `CodecSupport` gains `max_channels` (audio; Windows' player takes Opus in stereo only, W1), sent to the server as an
+  `AudioChannels` condition; libmpv has none, so its profile is unchanged. A server stream goes to the first engine, native first, that takes its protocol
   and container, decodes what it copies, and decodes every codec of the transcoding profiles the device profile has (the server
-  picks among them); the app engine takes every stream, as before.
-- **Fallback** (choice 9, widened): a failure moves to the next untried route of the same order, each at most once per play, ending
-  with the server stream; position and tracks are kept. With the app engine only this is choice 9 as written. The two-engine chain,
-  track, speed and display re-plans across engines and the "Player" setting's effect are a second W2 change.
+  picks among them); the app engine takes every stream, as before. A server stream goes to the app engine first when the selected
+  subtitle is sent beside the picture and the native route does not show it, and on an SDR display for a PQ source whether copied
+  or transcoded (the server may keep HDR in an HEVC transcode; not verified).
+- **Fallback** (choice 9, widened): today choice 9 holds as written; the chain arrives with W2's second change: a failure moves to the
+  next untried route of the same order, each at most once per play, ending with the server stream, position and tracks kept. The
+  same change brings the track, speed and display re-plans across engines and the "Player" setting's effect.
 
 ### Gateways, tokens and the player
 **Amended 2026-10-26 (ADR 0020):** streams on an address with gateway credentials go through the loopback relay (ADR 0020): the

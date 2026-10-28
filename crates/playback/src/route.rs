@@ -6,8 +6,8 @@
 
 use current_model::{
     Codec, CodecSupport, EngineCapabilities, GapKind, MediaSource, MediaStream, Route, RouteReason,
-    ServerOffer, StreamAction, StreamKind, StreamProtocol, SubtitleChoice, TrackChoice, TrackGap,
-    VideoRangeType,
+    ServerOffer, StreamAction, StreamKind, StreamProtocol, SubtitleChoice, SubtitleDelivery,
+    TrackChoice, TrackGap, VideoRangeType,
 };
 
 use crate::engines::{DisplayKind, EnginePreference, EngineProfile, Engines};
@@ -26,9 +26,9 @@ const TRANSCODE_AUDIO: &[Codec] = &[
     Codec::MP3,
 ];
 
-/// Subtitle formats that need rendering (ADR 0025, choice 1): picture formats, and ASS/SSA whose styling must be kept. On the native
-/// route only where its engine lists them (PGS on Windows, departure 3); otherwise the file goes to the app engine. By the server's
-/// names, compared without case.
+/// Subtitle formats that need rendering (ADR 0025, choice 1): picture formats, and ASS/SSA whose styling must be kept. They go to the
+/// app engine, except those the platform's rules keep native (PGS on Windows, departure 3), and never through the remux. By the
+/// server's names, compared without case.
 const RENDERED_SUBTITLES: &[&str] = &[
     "ass", "ssa", "pgssub", "pgs", "dvdsub", "dvbsub", "xsub", "vobsub",
 ];
@@ -62,13 +62,15 @@ impl RouteChoice {
     }
 }
 
-/// The local routes that play `source` with `tracks` (the user's choice with the server's defaults filled in), in the order to try
-/// them, leaving out `tried` (except with the app engine only, below). Empty when none does: the plan is then asked again without direct play (ADR 0025, step 4).
+/// The local routes that play `source` with `tracks`, in the order to try them, leaving out `tried` (except with the app engine only,
+/// below). The caller resolves [`SubtitleChoice::Default`] to the server's pick first (`planner::resolve_tracks`); here it counts as
+/// no subtitle. Empty when no route plays the file: the plan is then asked again without direct play (ADR 0025, step 4).
 ///
-/// With a native engine: native when it plays the container and every selected track (and the platform's display rules allow it);
-/// else the remux, when only the container is missing and the remux reads it; else the app engine. A display rule (departures 2 and
-/// 8) puts the app engine before the native route instead of removing it. With "Always app engine" or "Play with app engine", the
-/// app engine only.
+/// With a native engine: native when it plays the container and every selected track, and the subtitle rule and the platform's
+/// display rules allow it; else the remux, when only the container is missing, the remux reads it, and neither Dolby Vision profile 7
+/// nor a subtitle that needs rendering is in the way; else the app engine. A display rule (departures 2 and 8) puts the app engine
+/// before the native route instead of removing it. With "Always app engine" or "Play with app engine", the app engine only. A route
+/// chosen because one before it failed says so ([`RouteReason::PREVIOUS_ROUTE_FAILED`]).
 pub fn local_routes(
     source: &MediaSource,
     tracks: TrackChoice,
@@ -81,7 +83,9 @@ pub fn local_routes(
         // that offers direct play again when asked not to gets direct play again, as before ADR 0025).
         return vec![RouteChoice::new(Route::AppEngine, Vec::new(), Vec::new())];
     };
-    let app_plays = gaps(&engines.app.capabilities, source, tracks).is_empty();
+    // The server offered direct play from a profile the app engine is part of: a codec or container it does not name, the app
+    // engine plays as before ADR 0025, the native engine is not trusted with.
+    let app_plays = gaps(&engines.app.capabilities, source, tracks, Unnamed::Plays).is_empty();
     let chosen = if context.app_engine_chosen {
         Some(RouteReason::USER_CHOSE_APP_ENGINE)
     } else if context.preference == EnginePreference::AlwaysAppEngine {
@@ -98,11 +102,15 @@ pub fn local_routes(
         return untried(routes, tried);
     }
 
-    let native_gaps = gaps(&native.capabilities, source, tracks);
+    let mut native_gaps = gaps(&native.capabilities, source, tracks, Unnamed::Lacks);
     let display_reasons = display_reasons(source, engines, context.display);
-    let subtitle_rendered = selected_subtitle(source, tracks)
-        .filter(|_| native_gaps.iter().any(|gap| gap.kind == GapKind::Subtitle))
-        .is_some_and(needs_rendering);
+    // Choice 1, from the format itself: a subtitle that needs rendering keeps the file off the remux, and off the native route
+    // unless the platform's rules keep that format native.
+    let rendered = selected_subtitle(source, tracks).filter(|stream| needs_rendering(stream));
+    let rendered_off_native = rendered.is_some_and(|stream| !kept_native(stream, engines));
+    if rendered_off_native {
+        native_gaps.retain(|gap| gap.kind != GapKind::Subtitle);
+    }
     let only_container =
         !native_gaps.is_empty() && native_gaps.iter().all(|gap| gap.kind == GapKind::Container);
     let dolby_vision_7 = source
@@ -118,36 +126,22 @@ pub fn local_routes(
         })
     });
 
-    let mut routes = Vec::new();
-    let mut app_reasons = Vec::new();
-    let mut lacks = Vec::new();
-    let mut native_route = None;
-    if native_gaps.is_empty() {
-        native_route = Some(RouteChoice::new(
+    let native_route = if native_gaps.is_empty() && !rendered_off_native {
+        Some(RouteChoice::new(
             Route::Native,
             vec![RouteReason::NATIVE_FULLY_COMPATIBLE],
             Vec::new(),
-        ));
-    } else if only_container && remux_reads && dolby_vision_7 {
-        app_reasons.push(RouteReason::DOLBY_VISION_PROFILE_7);
-    } else if only_container && remux_reads {
-        native_route = Some(RouteChoice::new(
+        ))
+    } else if only_container && remux_reads && !dolby_vision_7 && rendered.is_none() {
+        Some(RouteChoice::new(
             Route::DeviceRemux,
             vec![RouteReason::KEEPS_ORIGINAL_STREAMS],
             Vec::new(),
-        ));
+        ))
     } else {
-        if subtitle_rendered {
-            app_reasons.push(RouteReason::SUBTITLE_NEEDS_RENDERING);
-        }
-        lacks = native_gaps
-            .into_iter()
-            .filter(|gap| !(subtitle_rendered && gap.kind == GapKind::Subtitle))
-            .collect();
-        if !lacks.is_empty() {
-            app_reasons.insert(0, RouteReason::NATIVE_LACKS);
-        }
-    }
+        None
+    };
+    let mut routes = Vec::new();
     match native_route {
         Some(native_route) if display_reasons.is_empty() => {
             routes.push(native_route);
@@ -166,11 +160,21 @@ pub fn local_routes(
             }
             routes.push(native_route);
         }
-        None => {
-            if app_plays {
-                routes.push(RouteChoice::new(Route::AppEngine, app_reasons, lacks));
+        None if app_plays => {
+            let mut reasons = Vec::new();
+            if !native_gaps.is_empty() {
+                reasons.push(RouteReason::NATIVE_LACKS);
             }
+            let remux_was_the_way = only_container && remux_reads;
+            if rendered_off_native || (remux_was_the_way && rendered.is_some()) {
+                reasons.push(RouteReason::SUBTITLE_NEEDS_RENDERING);
+            }
+            if remux_was_the_way && dolby_vision_7 {
+                reasons.push(RouteReason::DOLBY_VISION_PROFILE_7);
+            }
+            routes.push(RouteChoice::new(Route::AppEngine, reasons, native_gaps));
         }
+        None => {}
     }
     untried(routes, tried)
 }
@@ -197,10 +201,23 @@ pub fn server_routes(
                 ..
             }
         );
-        let display_rule =
-            copies_video && !display_reasons(source, engines, context.display).is_empty();
+        // Departure 2 on a copied picture only (a transcode is the server's picture, not the source's Dolby Vision). Departure 8 on
+        // any stream from a PQ source: the server may keep HDR in an HEVC transcode (not verified), and the app engine plays every
+        // stream.
+        let dolby_vision = copies_video
+            && display_reasons(source, engines, context.display)
+                .contains(&RouteReason::DOLBY_VISION_ON_APP_ENGINE);
+        let pq_on_sdr = display_reasons(source, engines, context.display)
+            .contains(&RouteReason::HDR_ON_SDR_DISPLAY);
+        // The subtitle rule: one the server sends beside the picture (not burned in) that the native route does not show leaves the
+        // stream to the app engine.
+        let subtitle_off_native = selected_subtitle(source, tracks)
+            .filter(|stream| stream.subtitle_delivery.as_ref() != Some(&SubtitleDelivery::ENCODE))
+            .is_some_and(|stream| !shows_natively(stream, native, engines));
         if !app_first
-            && !display_rule
+            && !dolby_vision
+            && !pq_on_sdr
+            && !subtitle_off_native
             && takes_stream(native, &engines.device_profile(), offer, source, tracks)
         {
             routes.extend(Route::server_stream(
@@ -214,8 +231,21 @@ pub fn server_routes(
     routes
 }
 
-fn untried(mut routes: Vec<RouteChoice>, tried: &[Route]) -> Vec<RouteChoice> {
-    routes.retain(|choice| !tried.contains(&choice.route));
+/// `routes` without those in `tried`; the first one left says why, when a route before it failed.
+fn untried(routes: Vec<RouteChoice>, tried: &[Route]) -> Vec<RouteChoice> {
+    let skipped = routes
+        .iter()
+        .take_while(|choice| tried.contains(&choice.route))
+        .count();
+    let mut routes: Vec<RouteChoice> = routes
+        .into_iter()
+        .filter(|choice| !tried.contains(&choice.route))
+        .collect();
+    if skipped > 0
+        && let Some(first) = routes.first_mut()
+    {
+        first.reasons.insert(0, RouteReason::PREVIOUS_ROUTE_FAILED);
+    }
     routes
 }
 
@@ -278,6 +308,8 @@ fn display_reasons(
         return Vec::new();
     };
     let range = video.range_type.as_ref();
+    // Every `DOVI*` range type counts, `DOVIInvalid` (the server could not read the Dolby Vision metadata) included, on purpose: the
+    // app engine shows the base layer as well as the native one does.
     let dolby_vision = video.dv_profile.is_some()
         || range.is_some_and(|range| range.as_str().to_ascii_uppercase().starts_with("DOVI"));
     let mut reasons = Vec::new();
@@ -310,7 +342,8 @@ fn is_pq(range: Option<&VideoRangeType>, dolby_vision: bool) -> bool {
     ];
     pq.iter()
         .any(|known| known.as_str().eq_ignore_ascii_case(range.as_str()))
-        // Dolby Vision on an HLG or SDR base layer is not PQ; an unknown Dolby Vision kind is taken as PQ.
+        // Dolby Vision on an HLG or SDR base layer is not PQ; an unknown Dolby Vision kind, `DOVIInvalid` included, is taken as PQ on
+        // purpose: the app engine plays it either way, the native one might clip it.
         || (dolby_vision
             && ![
                 VideoRangeType::DOVI_WITH_HLG,
@@ -322,43 +355,63 @@ fn is_pq(range: Option<&VideoRangeType>, dolby_vision: bool) -> bool {
             .any(|known| known.as_str().eq_ignore_ascii_case(range.as_str())))
 }
 
+/// What a container, codec or format the server does not name means for an engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unnamed {
+    /// It lacks it (the native engine: nothing says it plays it).
+    Lacks,
+    /// It plays it (the app engine, when the server offered direct play from a profile it is part of).
+    Plays,
+}
+
 /// What an engine with `capabilities` lacks to play `source` with `tracks`: the container, the video, the selected audio, the
-/// selected subtitle. A stream whose codec the server does not name counts as lacking.
+/// selected subtitle.
 pub fn gaps(
     capabilities: &EngineCapabilities,
     source: &MediaSource,
     tracks: TrackChoice,
+    unnamed: Unnamed,
 ) -> Vec<TrackGap> {
     let mut gaps = Vec::new();
-    let container_ok = container_names(source).any(|name| {
-        capabilities
-            .containers
-            .iter()
-            .any(|known| known.as_str().eq_ignore_ascii_case(name))
-    });
+    let mut names = container_names(source).peekable();
+    let container_ok = if names.peek().is_none() {
+        unnamed == Unnamed::Plays
+    } else {
+        names.any(|name| {
+            capabilities
+                .containers
+                .iter()
+                .any(|known| known.as_str().eq_ignore_ascii_case(name))
+        })
+    };
     if !container_ok {
+        // The file's container as the user knows it: the server's first name for it (`mov,mp4,m4a,...` is an MP4 file to them).
         gaps.push(TrackGap {
             kind: GapKind::Container,
-            name: source.container.clone(),
+            name: container_names(source).next().map(container_shown),
         });
     }
+    let trusted = |stream: &MediaStream| stream.codec.is_none() && unnamed == Unnamed::Plays;
     if let Some(video) = source.video()
+        && !trusted(video)
         && !plays(&capabilities.video, video)
     {
         gaps.push(gap(GapKind::Video, video));
     }
     if let Some(audio) = selected_audio(source, tracks)
+        && !trusted(audio)
         && !plays(&capabilities.audio, audio)
     {
         gaps.push(gap(GapKind::Audio, audio));
     }
     if let Some(subtitle) = selected_subtitle(source, tracks) {
-        let named = subtitle.codec.as_ref().is_some_and(|codec| {
-            capabilities
-                .subtitles
-                .iter()
-                .any(|format| format.as_str().eq_ignore_ascii_case(codec.as_str()))
-        });
+        let named = trusted(subtitle)
+            || subtitle.codec.as_ref().is_some_and(|codec| {
+                capabilities
+                    .subtitles
+                    .iter()
+                    .any(|format| format.as_str().eq_ignore_ascii_case(codec.as_str()))
+            });
         if !named || (subtitle.is_external && !capabilities.external_subtitles) {
             gaps.push(gap(GapKind::Subtitle, subtitle));
         }
@@ -370,6 +423,16 @@ fn gap(kind: GapKind, stream: &MediaStream) -> TrackGap {
     TrackGap {
         kind,
         name: stream.codec.as_ref().map(|codec| codec.as_str().to_owned()),
+    }
+}
+
+/// The name a user knows a container by, from one of the server's names: FFmpeg's `mov` demuxer reads MP4 files too, and the server
+/// names them `mov,mp4,m4a,3gp,3g2,mj2`; `matroska` is MKV.
+fn container_shown(name: &str) -> String {
+    match name.to_ascii_lowercase().as_str() {
+        "mov" => "mp4".to_owned(),
+        "matroska" => "mkv".to_owned(),
+        other => other.to_owned(),
     }
 }
 
@@ -398,6 +461,30 @@ fn selected_subtitle(source: &MediaSource, tracks: TrackChoice) -> Option<&Media
     }
 }
 
+/// Whether the platform's rules keep this subtitle that needs rendering on the native route (departure 3).
+fn kept_native(stream: &MediaStream, engines: &Engines) -> bool {
+    stream.codec.as_ref().is_some_and(|codec| {
+        engines
+            .rules
+            .native_rendered_subtitles
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(codec.as_str()))
+    })
+}
+
+/// Whether the native route shows this subtitle: a format its engine lists, and, for one that needs rendering, one the platform's
+/// rules keep native.
+fn shows_natively(stream: &MediaStream, native: &EngineProfile, engines: &Engines) -> bool {
+    let listed = stream.codec.as_ref().is_some_and(|codec| {
+        native
+            .capabilities
+            .subtitles
+            .iter()
+            .any(|format| format.as_str().eq_ignore_ascii_case(codec.as_str()))
+    });
+    listed && (!needs_rendering(stream) || kept_native(stream, engines))
+}
+
 fn needs_rendering(stream: &MediaStream) -> bool {
     stream.codec.as_ref().is_some_and(|codec| {
         RENDERED_SUBTITLES
@@ -406,7 +493,7 @@ fn needs_rendering(stream: &MediaStream) -> bool {
     })
 }
 
-/// Whether `supports` decodes `stream` within its limits (bit depth, profile, level and range, where it has them).
+/// Whether `supports` decodes `stream` within its limits (bit depth, profile, level, range and channels, where it has them).
 fn plays(supports: &[CodecSupport], stream: &MediaStream) -> bool {
     let Some(codec) = &stream.codec else {
         return false;
@@ -444,7 +531,14 @@ fn plays(supports: &[CodecSupport], stream: &MediaStream) -> bool {
             .any(|known| known.as_str().eq_ignore_ascii_case(range.as_str())),
         _ => true,
     };
-    bit_depth_ok && profile_ok && level_ok && range_ok
+    let channels_ok = match (
+        support.max_channels,
+        stream.audio.as_ref().and_then(|audio| audio.channels),
+    ) {
+        (Some(max), Some(channels)) => channels <= max,
+        _ => true,
+    };
+    bit_depth_ok && profile_ok && level_ok && range_ok && channels_ok
 }
 
 #[cfg(test)]

@@ -55,6 +55,8 @@ pub struct CodecSupport {
     /// The dynamic range types it shows. Video only. `None` for all: an engine that cannot show a range tone-maps it (ADR 0019,
     /// choice 1).
     pub ranges: Option<Vec<VideoRangeType>>,
+    /// The most channels it plays. Audio only (W1: Windows' player takes Opus in stereo, not 5.1).
+    pub max_channels: Option<u32>,
 }
 
 impl CodecSupport {
@@ -66,6 +68,7 @@ impl CodecSupport {
             profiles: None,
             level: None,
             ranges: None,
+            max_channels: None,
         }
     }
 
@@ -74,6 +77,7 @@ impl CodecSupport {
             || self.profiles.is_some()
             || self.level.is_some()
             || self.ranges.is_some()
+            || self.max_channels.is_some()
     }
 }
 
@@ -124,5 +128,10 @@ mod tests {
             ..CodecSupport::any(Codec::HEVC)
         };
         assert!(limited.has_limits());
+        let channels = CodecSupport {
+            max_channels: Some(2),
+            ..CodecSupport::any(Codec::OPUS)
+        };
+        assert!(channels.has_limits());
     }
 }

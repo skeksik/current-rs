@@ -6,8 +6,8 @@ use std::time::Duration;
 use current_model::{
     AudioFacts, Codec, CodecSupport, Container, EngineCapabilities, EngineRole, GapKind,
     MediaSource, MediaStream, Route, RouteReason, ServerOffer, StreamAction, StreamKind,
-    StreamProtocol, SubtitleChoice, SubtitleFormat, TrackChoice, TrackGap, VideoFacts,
-    VideoRangeType,
+    StreamProtocol, SubtitleChoice, SubtitleDelivery, SubtitleFormat, TrackChoice, TrackGap,
+    VideoFacts, VideoRangeType,
 };
 
 use super::*;
@@ -26,15 +26,17 @@ fn native_caps() -> EngineCapabilities {
             CodecSupport::any(Codec::HEVC),
             CodecSupport::any(Codec::AV1),
         ],
-        audio: [
-            Codec::AAC,
-            Codec::AC3,
-            Codec::EAC3,
-            Codec::FLAC,
-            Codec::OPUS,
-        ]
-        .map(CodecSupport::any)
-        .to_vec(),
+        audio: vec![
+            CodecSupport::any(Codec::AAC),
+            CodecSupport::any(Codec::AC3),
+            CodecSupport::any(Codec::EAC3),
+            CodecSupport::any(Codec::FLAC),
+            // W1: multichannel Opus failed natively.
+            CodecSupport {
+                max_channels: Some(2),
+                ..CodecSupport::any(Codec::OPUS)
+            },
+        ],
         subtitles: vec![
             SubtitleFormat::SUBRIP,
             SubtitleFormat::SRT,
@@ -374,8 +376,14 @@ fn no_remux_with_a_subtitle_that_needs_rendering_or_dolby_vision_7() {
         automatic(DisplayKind::Hdr),
     );
     assert_eq!(order, vec![Route::AppEngine]);
-    assert_eq!(reasons, vec![RouteReason::DOLBY_VISION_PROFILE_7]);
-    assert!(lacks.is_empty());
+    assert_eq!(
+        reasons,
+        vec![
+            RouteReason::NATIVE_LACKS,
+            RouteReason::DOLBY_VISION_PROFILE_7
+        ]
+    );
+    assert_eq!(lacks, vec![gap(GapKind::Container, "mkv")]);
 }
 
 #[test]
@@ -690,7 +698,7 @@ fn a_server_stream_follows_the_display_rules_and_the_users_choice() {
         &[],
     );
     assert_eq!(engines_of(&routes), vec![EngineRole::App]);
-    // A transcode is the server's picture, not the source's: the rule does not apply.
+    // A transcode of a PQ source may keep HDR (not verified): departure 8 holds for it too.
     let transcode = hls_offer(StreamAction::Transcode, StreamAction::Transcode);
     let routes = server_routes(
         &transcode,
@@ -698,6 +706,30 @@ fn a_server_stream_follows_the_display_rules_and_the_users_choice() {
         tracks(1, None),
         &engines,
         automatic(DisplayKind::Sdr),
+        &[],
+    );
+    assert_eq!(engines_of(&routes), vec![EngineRole::App]);
+    // On an HDR display, native first.
+    let routes = server_routes(
+        &transcode,
+        &hdr10,
+        tracks(1, None),
+        &engines,
+        automatic(DisplayKind::Hdr),
+        &[],
+    );
+    assert_eq!(
+        engines_of(&routes),
+        vec![EngineRole::Native, EngineRole::App]
+    );
+    // Dolby Vision transcoded: the server's picture, not the source's Dolby Vision; departure 2 does not apply.
+    let dv = with_video(video("hevc", 10, VideoRangeType::DOVI_WITH_HDR10, Some(8)));
+    let routes = server_routes(
+        &transcode,
+        &dv,
+        tracks(1, None),
+        &engines,
+        automatic(DisplayKind::Hdr),
         &[],
     );
     assert_eq!(
@@ -717,7 +749,7 @@ fn gaps_name_what_is_missing() {
     let mut source = movie();
     source.container = None;
     source.streams[1].codec = None;
-    let lacks = gaps(&native_caps(), &source, tracks(1, Some(7)));
+    let lacks = gaps(&native_caps(), &source, tracks(1, Some(7)), Unnamed::Lacks);
     assert_eq!(
         lacks,
         vec![
@@ -734,7 +766,7 @@ fn gaps_name_what_is_missing() {
     let mut no_external = native_caps();
     no_external.external_subtitles = false;
     assert_eq!(
-        gaps(&no_external, &movie(), tracks(1, Some(7))),
+        gaps(&no_external, &movie(), tracks(1, Some(7)), Unnamed::Lacks),
         vec![gap(GapKind::Subtitle, "srt")]
     );
     // Profile, level and range limits.
@@ -748,7 +780,7 @@ fn gaps_name_what_is_missing() {
     let mut main = movie();
     main.streams[0].profile = Some("Main".into());
     main.streams[0].level = Some(150.0);
-    assert!(gaps(&limited, &main, tracks(1, None)).is_empty());
+    assert!(gaps(&limited, &main, tracks(1, None), Unnamed::Lacks).is_empty());
     for change in 0..3 {
         let mut other = main.clone();
         match change {
@@ -763,9 +795,235 @@ fn gaps_name_what_is_missing() {
             }
         }
         assert_eq!(
-            gaps(&limited, &other, tracks(1, None)),
+            gaps(&limited, &other, tracks(1, None), Unnamed::Lacks),
             vec![gap(GapKind::Video, "hevc")],
             "change {change}"
         );
     }
+}
+
+#[test]
+fn a_rendered_subtitle_never_goes_through_the_remux_even_one_the_native_engine_lists() {
+    // An Apple-shaped native engine that lists PGS, with a remux for MKV: PGS needs rendering, so no remux (choice 1).
+    let mut engines = with_remux();
+    let native = engines.native.as_mut().expect("native");
+    native.capabilities.subtitles.push(SubtitleFormat::PGSSUB);
+    let (order, reasons, lacks) = check(
+        &movie(),
+        tracks(1, Some(4)),
+        &engines,
+        automatic(DisplayKind::Hdr),
+    );
+    assert_eq!(order, vec![Route::AppEngine]);
+    assert_eq!(
+        reasons,
+        vec![
+            RouteReason::NATIVE_LACKS,
+            RouteReason::SUBTITLE_NEEDS_RENDERING
+        ]
+    );
+    assert_eq!(lacks, vec![gap(GapKind::Container, "mkv")]);
+    // A text subtitle: the remux.
+    let (order, ..) = check(
+        &movie(),
+        tracks(1, Some(3)),
+        &engines,
+        automatic(DisplayKind::Hdr),
+    );
+    assert_eq!(order[0], Route::DeviceRemux);
+}
+
+#[test]
+fn only_the_platforms_rules_keep_a_rendered_subtitle_native() {
+    // A native engine that lists ASS and DVD subtitles too: they still go to the app engine (choice 1); only PGS stays (departure 3).
+    let mut engines = windows();
+    let native = engines.native.as_mut().expect("native");
+    native
+        .capabilities
+        .subtitles
+        .extend([SubtitleFormat::ASS, SubtitleFormat::DVDSUB]);
+    for subtitle in [5, 6] {
+        let (order, reasons, lacks) = check(
+            &movie(),
+            tracks(1, Some(subtitle)),
+            &engines,
+            automatic(DisplayKind::Hdr),
+        );
+        assert_eq!(order, vec![Route::AppEngine], "subtitle {subtitle}");
+        assert_eq!(reasons, vec![RouteReason::SUBTITLE_NEEDS_RENDERING]);
+        assert!(lacks.is_empty());
+    }
+    let (order, ..) = check(
+        &movie(),
+        tracks(1, Some(4)),
+        &engines,
+        automatic(DisplayKind::Hdr),
+    );
+    assert_eq!(order[0], Route::Native);
+    // Elsewhere no rendered format is kept native, PGS included.
+    let mut elsewhere = engines.clone();
+    elsewhere.rules = PlatformRules::default();
+    let (order, reasons, _) = check(
+        &movie(),
+        tracks(1, Some(4)),
+        &elsewhere,
+        automatic(DisplayKind::Hdr),
+    );
+    assert_eq!(order, vec![Route::AppEngine]);
+    assert_eq!(reasons, vec![RouteReason::SUBTITLE_NEEDS_RENDERING]);
+}
+
+#[test]
+fn a_server_stream_with_a_subtitle_the_native_route_does_not_show_goes_to_the_app_engine() {
+    let engines = windows();
+    let context = automatic(DisplayKind::Hdr);
+    let offer = hls_offer(StreamAction::Copy, StreamAction::Transcode);
+    // Styled ASS sent beside the picture.
+    let routes = server_routes(&offer, &movie(), tracks(1, Some(5)), &engines, context, &[]);
+    assert_eq!(engines_of(&routes), vec![EngineRole::App]);
+    // PGS on Windows, and a text subtitle: native first.
+    for subtitle in [3, 4] {
+        let routes = server_routes(
+            &offer,
+            &movie(),
+            tracks(1, Some(subtitle)),
+            &engines,
+            context,
+            &[],
+        );
+        assert_eq!(
+            engines_of(&routes),
+            vec![EngineRole::Native, EngineRole::App],
+            "subtitle {subtitle}"
+        );
+    }
+    // Burned into the picture by the server: no subtitle to show, native first.
+    let mut burned = movie();
+    burned.streams[5].subtitle_delivery = Some(SubtitleDelivery::ENCODE);
+    let transcode = hls_offer(StreamAction::Transcode, StreamAction::Transcode);
+    let routes = server_routes(
+        &transcode,
+        &burned,
+        tracks(1, Some(5)),
+        &engines,
+        context,
+        &[],
+    );
+    assert_eq!(
+        engines_of(&routes),
+        vec![EngineRole::Native, EngineRole::App]
+    );
+}
+
+#[test]
+fn multichannel_opus_goes_to_the_app_engine() {
+    let mut source = movie();
+    let mut opus = audio(8, "opus");
+    opus.audio.as_mut().expect("audio facts").channels = Some(8);
+    source.streams.push(opus);
+    let (order, reasons, lacks) = check(
+        &source,
+        tracks(8, None),
+        &windows(),
+        automatic(DisplayKind::Hdr),
+    );
+    assert_eq!(order, vec![Route::AppEngine]);
+    assert_eq!(reasons, vec![RouteReason::NATIVE_LACKS]);
+    assert_eq!(lacks, vec![gap(GapKind::Audio, "opus")]);
+    // Stereo Opus plays natively.
+    source.streams[8]
+        .audio
+        .as_mut()
+        .expect("audio facts")
+        .channels = Some(2);
+    let (order, ..) = check(
+        &source,
+        tracks(8, None),
+        &windows(),
+        automatic(DisplayKind::Hdr),
+    );
+    assert_eq!(order[0], Route::Native);
+}
+
+#[test]
+fn a_route_after_a_failed_one_says_so() {
+    let engines = windows();
+    let context = automatic(DisplayKind::Hdr);
+    let after_native = local_routes(
+        &movie(),
+        tracks(1, None),
+        &engines,
+        context,
+        &[Route::Native],
+    );
+    assert_eq!(after_native[0].route, Route::AppEngine);
+    assert_eq!(
+        after_native[0].reasons,
+        vec![RouteReason::PREVIOUS_ROUTE_FAILED]
+    );
+    // After the app engine failed under a display rule: native, saying so, with its own reason.
+    let hdr10 = with_video(video("hevc", 10, VideoRangeType::HDR10, None));
+    let after_app = local_routes(
+        &hdr10,
+        tracks(1, None),
+        &engines,
+        automatic(DisplayKind::Sdr),
+        &[Route::AppEngine],
+    );
+    assert_eq!(after_app[0].route, Route::Native);
+    assert_eq!(
+        after_app[0].reasons,
+        vec![
+            RouteReason::PREVIOUS_ROUTE_FAILED,
+            RouteReason::NATIVE_FULLY_COMPATIBLE
+        ]
+    );
+    // Nothing failed: no such reason.
+    let first = local_routes(&movie(), tracks(1, None), &engines, context, &[]);
+    assert_eq!(first[0].reasons, vec![RouteReason::NATIVE_FULLY_COMPATIBLE]);
+}
+
+#[test]
+fn an_unnamed_codec_is_not_native_but_the_app_engine_plays_it() {
+    // The server offered direct play: as before ADR 0025, the app engine plays what the server does not name.
+    let mut source = movie();
+    source.streams[0].codec = None;
+    let (order, reasons, lacks) = check(
+        &source,
+        tracks(1, None),
+        &windows(),
+        automatic(DisplayKind::Hdr),
+    );
+    assert_eq!(order, vec![Route::AppEngine]);
+    assert_eq!(reasons, vec![RouteReason::NATIVE_LACKS]);
+    assert_eq!(
+        lacks,
+        vec![TrackGap {
+            kind: GapKind::Video,
+            name: None
+        }]
+    );
+    let mut no_container = movie();
+    no_container.container = None;
+    let (order, ..) = check(
+        &no_container,
+        tracks(1, None),
+        &windows(),
+        automatic(DisplayKind::Hdr),
+    );
+    assert_eq!(order, vec![Route::AppEngine]);
+    assert!(gaps(&app_caps(), &source, tracks(1, None), Unnamed::Plays).is_empty());
+    assert!(gaps(&app_caps(), &no_container, tracks(1, None), Unnamed::Plays).is_empty());
+}
+
+#[test]
+fn a_container_gap_names_the_container_as_the_user_knows_it() {
+    let mut native = native_caps();
+    native.containers = vec![Container::MKV];
+    let mut mp4 = movie();
+    mp4.container = Some("mov,mp4,m4a,3gp,3g2,mj2".into());
+    assert_eq!(
+        gaps(&native, &mp4, tracks(1, None), Unnamed::Lacks),
+        vec![gap(GapKind::Container, "mp4")]
+    );
 }

@@ -495,6 +495,10 @@ mod tests {
                 "The native player can't read AVI files.",
             ),
             (
+                gap(GapKind::Container, Some("mp4")),
+                "The native player can't read MP4 files.",
+            ),
+            (
                 gap(GapKind::Container, None),
                 "The native player can't read this file's container.",
             ),

@@ -22,7 +22,8 @@ impl EngineProfile {
 }
 
 /// The remux on the device (ADR 0025, route 2): what it reads, for the native engine, which then takes the streams it copies. None on
-/// Windows (departure 1); Apple's (MKV to fMP4 HLS) comes with M3.
+/// Windows (departure 1); Apple's (MKV to fMP4 HLS) comes with M3. Only its containers are checked: which streams it may copy (ADR
+/// 0025, "Engines": "containers it demuxes, streams it may copy") is left to the Apple remux spike (M3-2) and its ADR.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DeviceRemux {
     /// Containers it reads.
@@ -38,13 +39,18 @@ pub struct PlatformRules {
     pub dolby_vision_on_app_engine: bool,
     /// Departure 8 (Windows): a PQ source (HDR10, HDR10+, Dolby Vision; not HLG) on an SDR display plays on the app engine first.
     pub pq_on_sdr_on_app_engine: bool,
+    /// The subtitle formats that need rendering (picture formats, styled ASS) which the native route still shows, by the server's
+    /// names: an exception to choice 1, which sends them to the app engine, made per platform by a departure (Windows: PGS,
+    /// departure 3). Empty elsewhere. The native engine must also list the format in its capabilities.
+    pub native_rendered_subtitles: &'static [&'static str],
 }
 
 impl PlatformRules {
-    /// Windows' rules (ADR 0025, departures 2 and 8).
+    /// Windows' rules (ADR 0025, departures 2, 3 and 8).
     pub const WINDOWS: Self = Self {
         dolby_vision_on_app_engine: true,
         pq_on_sdr_on_app_engine: true,
+        native_rendered_subtitles: &["pgssub"],
     };
 }
 
@@ -138,6 +144,7 @@ fn looser(a: &CodecSupport, b: &CodecSupport) -> CodecSupport {
         ranges: both(&a.ranges, &b.ranges, |a: &Vec<VideoRangeType>, b| {
             joined(a, b)
         }),
+        max_channels: both(&a.max_channels, &b.max_channels, |a, b| *a.max(b)),
     }
 }
 
@@ -218,16 +225,21 @@ mod tests {
             ranges: None,
             ..CodecSupport::any(Codec::H264)
         };
-        let native = caps(
+        let mut native = caps(
             &[Container::MP4, Container::TS],
             vec![native_h264, CodecSupport::any(Codec::AV1)],
             &[Codec::AAC, Codec::EAC3],
             &[SubtitleFormat::SUBRIP, SubtitleFormat::PGSSUB],
         );
+        // Opus in stereo only natively; any channels on the app engine.
+        native.audio.push(CodecSupport {
+            max_channels: Some(2),
+            ..CodecSupport::any(Codec::OPUS)
+        });
         let app = caps(
             &[Container::MKV, Container::MP4],
             vec![app_h264],
-            &[Codec::AAC, Codec::TRUEHD],
+            &[Codec::AAC, Codec::TRUEHD, Codec::OPUS],
             &[SubtitleFormat::ASS, SubtitleFormat::PGSSUB],
         );
         let engines = Engines {
@@ -257,13 +269,14 @@ mod tests {
                     profiles: Some(vec!["high 10".into(), "high".into()]),
                     level: Some(52),
                     ranges: None,
+                    max_channels: None,
                 },
                 CodecSupport::any(Codec::AV1),
             ]
         );
         assert_eq!(
             union.audio,
-            [Codec::AAC, Codec::TRUEHD, Codec::EAC3].map(CodecSupport::any)
+            [Codec::AAC, Codec::TRUEHD, Codec::OPUS, Codec::EAC3].map(CodecSupport::any)
         );
         assert_eq!(
             union.subtitles,
