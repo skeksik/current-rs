@@ -14,6 +14,7 @@ mod gateway_sign_in;
 mod images;
 mod library_choices;
 mod list;
+pub mod navigation;
 mod numbers;
 mod player;
 mod problems;
