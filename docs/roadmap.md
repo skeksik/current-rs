@@ -277,7 +277,7 @@ Fix and polish:
 - [ ] View settings per Home row: dropped for now (owner, 2026-10-28)
 - [ ] Browse by genre: a Genres tab and a Genres row on Home; Studios and Networks rows on Home (owner, 2026-10-26, from the Windows UI
       pass; moved here from M4, 2026-10-27)
-Native player first (owner, 2026-10-28; ADR 0025, proposed): Windows' own player (Media Foundation in `MediaPlayerElement`) first,
+Native player first (owner, 2026-10-28; ADR 0025): Windows' own player (Media Foundation in `MediaPlayerElement`) first,
 then libmpv, then the server; no device remux on Windows (MF reads MKV; departure 1). In this order, one PR each:
 - [ ] W1 spike (spike/windows-native-player): a prototype on the owner's PC, as D2 was: `MediaPlayerElement` under our XAML controls;
       HDR10, HLG, HDR10+, Dolby Vision (with and without the Dolby Vision Extensions); MKV with H.264, HEVC (with and without the HEVC
@@ -334,7 +334,7 @@ Done when: a title can be found, requested and followed to "available", then pla
 - [ ] The M1, M2 and M4 screens in SwiftUI on the shared core; AVPlayer with our own subtitle layer (ADR 0010: libass, PGS/VobSub decoder in
       the core, External delivery from Jellyfin); Keychain; Now Playing, PiP, AirPlay
 - [ ] Local discovery from each up interface: list the IPv4 interfaces with `getifaddrs` and pass them to each search (ADR 0016)
-- [ ] Native player first on the Mac (owner, 2026-10-28; ADR 0025, proposed): AVPlayer, then a remux on the Mac when AVPlayer takes
+- [ ] Native player first on the Mac (owner, 2026-10-28; ADR 0025): AVPlayer, then a remux on the Mac when AVPlayer takes
       the codecs but not the container (MKV to fMP4 HLS through the loopback relay; not with Dolby Vision profile 7 or a subtitle that
       needs rendering), then libmpv as the app engine (no longer deferred), then the server's remux or transcode. Needs FFmpeg's
       libavformat and libmpv on macOS (new dependencies, the owner's approval) and amends ADR 0008 and ADR 0010
@@ -350,7 +350,7 @@ Done when: everything from M1, M2 and M4 works on a Mac.
 ## M5: Linux
 - [ ] The M1-M4 screens in GTK4 + libadwaita; the libmpv engine from M2 through the OpenGL render API (SDR); Secret Service; MPRIS
       media controls (ADR 0011)
-- [ ] Native player first on Linux (owner, 2026-10-28; ADR 0025, proposed): GStreamer first (no device remux: `matroskademux` reads
+- [ ] Native player first on Linux (owner, 2026-10-28; ADR 0025): GStreamer first (no device remux: `matroskademux` reads
       MKV), libmpv as the app engine, then the server. GStreamer, gstreamer-rs and `gtk4paintablesink` (MPL-2.0) need the owner's
       approval
   - [ ] L1 spike (spike/linux-gstreamer): `playbin3` into `gtk4paintablesink` under our GTK controls: VA-API, HDR through GDK colour

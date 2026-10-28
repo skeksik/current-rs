@@ -1,6 +1,6 @@
 # Native player first: research notes (2026-10-28)
 
-Decision: `docs/decisions/0025-native-player-first.md` (proposed). No code was written and no device was used: every fact below is
+Decision: `docs/decisions/0025-native-player-first.md` (accepted 2026-10-28, owner). No code was written and no device was used: every fact below is
 from a document, with its address, the page's own date where it shows one, and the date read (2026-10-28 for everything here unless
 said otherwise). "Not verified" means no primary source was found; the Windows prototype (ADR 0025, task W1) checks those on the
 owner's PC.
@@ -245,7 +245,7 @@ Store product pages, https://apps.microsoft.com/detail/<id> (read 2026-10-28; pr
   through Vulkan on MoltenVK; not verified): a spike of its own (task M3-3).
 - **ADR 0010's subtitle layer:** under the owner's rule picture subtitles and styled ASS go to libmpv, which renders them itself, so the
   libass/PGS layer over AVPlayer is no longer needed for them. Keeping it would keep HDR and Dolby Vision with a PGS track on the native
-  route: a departure for the owner (ADR 0025, departure 5).
+  route: ADR 0025, departure 5 (approved: the rule first, the layer later).
 
 ## Other platforms (brief, for the ADR)
 

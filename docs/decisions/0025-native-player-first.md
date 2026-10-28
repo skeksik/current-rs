@@ -1,7 +1,7 @@
 # 0025: Native player first, then a remux on the device, then the app engine, then the server
 
-Status: proposed (2026-10-28), from the native-player-first spike. The route order and choices 1 to 3 are the owner's (2026-10-28);
-the departures are proposals, each for the owner's approval. Research, quotes and sources: `docs/notes/native-player-first.md`. No code
+Status: accepted (2026-10-28, owner), from the native-player-first spike. The route order, choices 1 to 3 and departures 1 to 7
+are the owner's (2026-10-28); departures 1 to 4 are provisional until task W1 checks them on the owner's PC. Research, quotes and sources: `docs/notes/native-player-first.md`. No code
 was written.
 
 ## Context
@@ -123,11 +123,11 @@ The existing client's behaviour is the default on every platform; where ours dif
    in `settings.json` as an open value (ADR 0013); and "Play with app engine" in the player's menu for this playback only (re-plans at
    the position). With either, the order is app engine, then the server; the reason says why.
 
-### Departures, each for the owner's approval
+### Departures (approved by the owner, 2026-10-28)
 1. **Windows has no device remux.** What differs: the existing client remuxes MKV for its native player; Media Foundation reads MKV
    itself (H.264, HEVC, VP9, AV1 and others in MKV, "Supported codecs", ms.date 2026-05-12), so step 2 is empty on Windows and no
    libavformat muxer is enabled. Why: nothing to remux into. Source: notes, "Formats Media Foundation plays". Checked on the device in
-   task W1. Needs the owner's approval.
+   task W1. Approved by the owner (2026-10-28), provisional until task W1 checks it on the owner's PC.
 2. **Windows: Dolby Vision prefers libmpv.** What differs: the existing client shows true Dolby Vision on its native player or its
    remux and sends a profile without a compatible base layer (profile 5) to the server. On Windows, Media Foundation shows Dolby Vision
    only with the Dolby Vision Extensions on "a Dolby Vision licensed device" (Store page), Microsoft's requirement for external HDR
@@ -139,25 +139,27 @@ The existing client's behaviour is the default on every platform; where ours dif
    works. Why: a better picture than the base layer on the HDR10 monitors most users have, and no server transcode that drops HDR.
    The owner's PC (an HDR10-only DisplayHDR 400 monitor and an SDR one) can compare libmpv's conversion with Media Foundation's base
    layer by eye, HDR10+ likewise; a Dolby Vision certified built-in laptop screen is not testable by the owner. Sources: notes,
-   "HDR". Needs the owner's approval.
+   "HDR". Approved by the owner (2026-10-28), provisional until task W1 checks it on the owner's PC.
 3. **Windows: picture subtitles native, if task W1 shows them.** What differs: Windows lists VobSub and PGS among its timed text
    formats and exposes `ImageSubtitle` tracks with `ImageCue` bitmaps, which our view could draw (`ApplicationPresented`). If in-band
    PGS from MKV arrives that way, PGS stays on the native route instead of moving the file to libmpv. Why: no engine switch on a track
-   change, Dolby Vision kept with the extension. Not verified; until W1 shows it, the owner's rule applies. Needs the owner's approval.
+   change, Dolby Vision kept with the extension. Not verified; until W1 shows it, the owner's rule applies.
+   Approved by the owner (2026-10-28), provisional until task W1 checks it on the owner's PC.
 4. **Windows: server streams on libmpv until fMP4 HLS is checked.** What differs: the existing client plays the server's HLS on its
    native player. Microsoft's HLS tag table marks `EXT-X-MAP` (fMP4's init segment) "Not Supported", up to Windows 10 1607 (ms.date
    2026-02-24, possibly stale), and our transcodes are HLS with fMP4 segments (ADR 0019 choice 2). Proposed: server streams play on
    libmpv on Windows (today's working route) unless task W1 shows `AdaptiveMediaSource` playing Jellyfin's fMP4 HLS through the relay;
-   then native first, as the rule says. Needs the owner's approval.
+   then native first, as the rule says. Approved by the owner (2026-10-28), provisional until task W1 checks it on the
+   owner's PC.
 5. **Apple: keep ADR 0010's subtitle layer over AVPlayer for PGS, VobSub and ASS.** What differs: the owner's rule moves those to
    libmpv. ADR 0010 already designed our own layer (libass, the core's PGS decoder) over AVPlayer, which keeps HDR and Dolby Vision and
    PiP for the video. Proposed: M3 follows the rule first (libmpv), and the layer is a later improvement once libmpv works on the Mac.
-   Needs the owner's approval for either order.
+   Approved by the owner (2026-10-28): the rule first, the layer later.
 6. **Linux: ASS and PGS stay on GStreamer.** What differs: GStreamer renders ASS through libass (`assrender`) and PGS (`dvdspu`), so
-   the native route keeps them, with no engine switch. Source: GStreamer's plugin documentation (notes, "Linux"). Needs the owner's
-   approval (and a check in task L1 that styling and placement over our controls work).
+   the native route keeps them, with no engine switch. Source: GStreamer's plugin documentation (notes, "Linux"). Approved by the
+   owner (2026-10-28), with a check in task L1 that styling and placement over our controls work.
 7. **Web: no app engine.** What differs: a browser cannot load libmpv, so its order is native, remux, server. A platform that cannot,
-   not a choice; recorded for the owner.
+   not a choice. Approved by the owner (2026-10-28).
 
 ### What each platform gains and loses against today
 - **Windows.**
@@ -178,14 +180,14 @@ The existing client's behaviour is the default on every platform; where ours dif
   availability that differs per distribution (not verified), a second engine.
 - **Android, iOS, tvOS, web:** follow from the start, so nothing is lost against today.
 
-### What it amends (written when the owner approves this record)
+### What it amends (written by the task that implements each part)
 - **ADR 0001:** wording only: "The player is our own on every platform" gains "over the platform's native decoder and renderer where
   it plays the file, and over our app engine otherwise". No change of meaning.
 - **ADR 0007:** libmpv becomes the Windows app engine; the native engine is Media Foundation in `MediaPlayerElement`, with our XAML
   controls over it; the display-fact mapping stays for libmpv only.
 - **ADR 0008:** route 2 (server remux for MKV) becomes the device remux; libmpv is the fallback engine, no longer deferred; the
   capability check feeds the fallback chain.
-- **ADR 0010:** picture subtitles and styled ASS go to libmpv under the owner's rule; the layer stays proposed as departure 5.
+- **ADR 0010:** picture subtitles and styled ASS go to libmpv under the owner's rule; the layer comes later (departure 5).
 - **ADR 0011:** GStreamer becomes the Linux native engine; libmpv the app engine; its HDR section points at GStreamer's colour states.
 - **ADR 0019:** `Route`, `RouteLabel` and `RouteReason` as above; two engines per player; the device profile is the union; choice 9's
   single re-plan becomes the fallback chain; the "URL crosses no bridge" rule gains the relay-only exception for platform engines.
