@@ -292,14 +292,19 @@
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>
-            <!-- Left with Done, Escape, by choosing Settings or another page, or by closing the pane. Each change is saved as it is
-                 made, so there is no Cancel; Reset is in Settings. -->
+            <!-- Left with Done, Escape, by choosing a page, or by closing the pane. Each change is saved as it is made, so there is
+                 no Cancel; Reset is in Settings. The pane's custom content sits above its menu items, in an Auto row
+                 ("PaneCustomContentBorder", Grid.Row 4, above "ItemsContainerGrid", NavigationView.xaml, microsoft-ui-xaml main at
+                 b9fa30e, read 2026-10-28), so Home cannot show above the lists as itself: edit mode shows it there dimmed and fixed,
+                 as the design's mock has it, and the real item is collapsed meanwhile; Settings is disabled, which dims it, and stays
+                 where it is. -->
             <NavigationView.PaneCustomContent>
                 <Grid x:Name="EditPane" Visibility="Collapsed" Padding="16,0,8,8" RowSpacing="8">
                     <Grid.KeyboardAccelerators>
                         <KeyboardAccelerator Key="Escape" Invoked="OnEditEscape" />
                     </Grid.KeyboardAccelerators>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
@@ -326,8 +331,19 @@
                         Style="{StaticResource CaptionTextBlockStyle}"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                         TextWrapping="Wrap"
-                        Text="Home and Settings always show. Drag an item, or use its arrows, to move it within its group." />
-                    <ScrollViewer x:Name="EditScroll" Grid.Row="2">
+                        Text="Drag an item, or use its arrows, to move it within its group." />
+                    <!-- Home, fixed: dimmed as a disabled item is (TextFillColorDisabledBrush), not a control. Glyph: Segoe Fluent
+                         Icons E80F "Home" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-28). -->
+                    <StackPanel
+                        Grid.Row="2"
+                        Margin="4,4,0,0"
+                        Orientation="Horizontal"
+                        Spacing="12"
+                        AutomationProperties.Name="Home, always shows first">
+                        <FontIcon FontSize="16" Glyph="&#xE80F;" Foreground="{ThemeResource TextFillColorDisabledBrush}" />
+                        <TextBlock Text="Home" Foreground="{ThemeResource TextFillColorDisabledBrush}" />
+                    </StackPanel>
+                    <ScrollViewer x:Name="EditScroll" Grid.Row="3">
                         <StackPanel x:Name="EditGroups" Spacing="4" />
                     </ScrollViewer>
                 </Grid>

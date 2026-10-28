@@ -33,12 +33,14 @@ AllowDrop and CanReorderItems properties" ("Drag and drop", learn.microsoft.com,
    the user's `MyMediaExcludes` start hidden, and the editor says "Hidden on the server". The tabs, the views and Home's rows start in
    the app's order: Movies, Series; Favourites, Recently added; Continue watching, Next up, Favourites, Recently added, the Latest
    rows in the pane's library order, Seen recently. A Latest row exists only for a library not in `LatestItemsExcludes` nor in
-   `MyMediaExcludes` and of a kind with a "latest" (rows the server leaves out stay out).
+   `MyMediaExcludes` and of a kind with a "latest" (rows the server leaves out stay out): a library hidden on the server gets no
+   Latest row even when the user shows it in the pane, as before this record (owner, 2026-10-28).
 3. **The merge rule** (owner, 2026-10-28; `current-app`, `navigation`):
    - An item the user never moved keeps its place in the default order relative to the other unmoved items, so it follows a change
      in Jellyfin's order.
-   - Moving an item stores the item just above it at the drop (or "first") and makes it the group's latest move; items placed right
-     after it are moved onto the item that was above it, so they stay where they were.
+   - Moving an item stores the item just above it at the drop (or "first") and makes it the group's latest move.
+   - Items that were placed right after the moved item are re-anchored onto the item that was above it, so they stay where they
+     showed (owner, 2026-10-28: without it they followed the moved item, which a test of random moves found).
    - Resolving takes the unmoved items in the default order, then puts each moved item, oldest move first, right after its anchor;
      an anchor not in the list now is followed along its own anchor, and when nothing on that chain is, the item goes first.
    - The user's hide or show wins over the default; choosing what the default says forgets the choice. A new item shows in its
@@ -51,7 +53,9 @@ AllowDrop and CanReorderItems properties" ("Drag and drop", learn.microsoft.com,
      ToggleSwitch per item, and a Reset button per group.
    - The pane's edit mode, entered only from an "Edit navigation" item with a pencil in the pane's footer, shown while the pane is
      open; left with Done, Escape, choosing a page, or closing the pane. The same lists, an eye toggle button instead of the switch
-     (the 300 px pane has no room for one).
+     (the 300 px pane has no room for one). Home shows above the lists and Settings in the footer, both dimmed and fixed (the
+     design's mock): the pane's custom content sits above the menu items (NavigationView.xaml, microsoft-ui-xaml main at b9fa30e,
+     read 2026-10-28), so Home there is a dimmed label and the real item is collapsed meanwhile; Settings is disabled.
    - An "Edit Home" button in Home's title row opens the Home list in a ContentDialog, with Done.
    - Every change is saved at once; the pane and Home follow.
 

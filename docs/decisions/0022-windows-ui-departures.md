@@ -56,7 +56,7 @@ Each choice below stays until the owner changes it.
    menu", support.microsoft.com, read 2026-10-28), which Current has as well, under Personalization. Reason: the owner chose this
    design, to arrange the pane where it is. In edit mode the pane's items give way to one reorderable ListView per group (Movies and
    Series, Favourites and Recently added, the libraries), each item with a drag handle, Move up and Move down, and an eye to show or
-   hide it; Home and Settings stay fixed. Done, Escape, choosing a page or closing the pane leaves it. The nearest Windows precedent,
+   hide it; Home and Settings show dimmed and fixed. Done, Escape, choosing a page or closing the pane leaves it. The nearest Windows precedent,
    Quick settings' edit mode (pencil, unpin, drag, Done), is described only by third-party sources (not verified with Microsoft).
 9. **An "Edit navigation" item in the pane's footer**, with a pencil, above Settings, shown only while the pane is open (owner,
    2026-10-28; ADR 0024). The NavigationView guide's footer holds Settings and items like it; an edit command there is the owner's

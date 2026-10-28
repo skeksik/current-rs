@@ -9,9 +9,9 @@ namespace Current.Shell;
 /// <summary>
 /// The pane's edit mode (ADR 0024; ADR 0022, departures 8 and 9, owner, 2026-10-28): the pencil above Settings swaps the pane's items
 /// for one reorderable list per group of each signed-in server (Movies and Series, Favourites and Recently added, the libraries),
-/// each item moved by dragging or its arrows and shown or hidden by its eye. Home and Settings stay where they are. Every change is
-/// saved at once by the core, which publishes the arrangement again; the lists follow it. Done, Escape, choosing Settings or another
-/// page, or closing the pane leaves it.
+/// each item moved by dragging or its arrows and shown or hidden by its eye. Home shows above the lists and Settings in the footer,
+/// both dimmed and fixed. Every change is saved at once by the core, which publishes the arrangement again; the lists follow it.
+/// Done, Escape, choosing a page (Back, a link), or closing the pane leaves it.
 /// </summary>
 public sealed partial class MainWindow
 {
@@ -33,6 +33,7 @@ public sealed partial class MainWindow
             _editLists.Clear();
             EditGroups.Children.Clear();
             EditPane.Visibility = Visibility.Collapsed;
+            SetSettingsItemEnabled(true);
             if (hub is not null)
             {
                 // The pane's items as they were.
@@ -63,6 +64,8 @@ public sealed partial class MainWindow
         }
         _editing = true;
         EditPane.Visibility = Visibility.Visible;
+        // Fixed and dimmed while the lists show (the mock); Done, Escape or closing the pane leaves.
+        SetSettingsItemEnabled(false);
         ShowEditNavigation();
         EditDoneButton.Focus(FocusState.Programmatic);
     }
@@ -77,6 +80,7 @@ public sealed partial class MainWindow
         _editLists.Clear();
         EditGroups.Children.Clear();
         EditPane.Visibility = Visibility.Collapsed;
+        SetSettingsItemEnabled(true);
         if (App.Browsing is { } hub)
         {
             ShowLibraries(hub);
@@ -84,6 +88,15 @@ public sealed partial class MainWindow
         else
         {
             ShowEditNavigation();
+        }
+    }
+
+    /// <summary>The navigation view's Settings item, disabled (so dimmed) in edit mode. Null before its template is applied.</summary>
+    private void SetSettingsItemEnabled(bool enabled)
+    {
+        if (NavView.SettingsItem is Control settings)
+        {
+            settings.IsEnabled = enabled;
         }
     }
 
@@ -101,9 +114,9 @@ public sealed partial class MainWindow
 
     /// <summary>
     /// The lists' height: the pane's custom content takes the height it asks for, so the lists scroll within what is left above the
-    /// footer (the title bar's 48, the heading and the note, Settings' item); not verified on the owner's PC.
+    /// footer (the title bar's 48, the heading, the note and Home, Settings' item); not verified on the owner's PC.
     /// </summary>
-    private double EditListsHeight() => Math.Max(160, NavView.ActualHeight - 48 - 96 - 48 - 16);
+    private double EditListsHeight() => Math.Max(160, NavView.ActualHeight - 48 - 128 - 48 - 16);
 
     /// <summary>The lists in the order the pane shows its groups, a heading per server when more than one is signed in.</summary>
     private void ShowEditLists(BrowseHub hub)
