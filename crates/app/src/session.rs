@@ -1047,6 +1047,8 @@ impl Shared {
                 )
             })
             .await??;
+            // Without a settings file, the arrangements kept for the run go too.
+            self.navigation.forget_server(&server);
             let session = lock(&self.sessions).remove(&server);
             self.forget_gateways(&server);
             // Dropping the link stops its follow task; the provider itself lives on for the logouts below.

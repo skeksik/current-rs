@@ -113,6 +113,17 @@ impl Placement {
     }
 }
 
+/// A group's entries as stored, each key once: a file edited by hand may name one twice, and the first entry wins.
+fn read_group(entries: &[Value]) -> Vec<Placement> {
+    let mut read: Vec<Placement> = Vec::new();
+    for entry in entries.iter().filter_map(Placement::read) {
+        if read.iter().all(|known| known.key != entry.key) {
+            read.push(entry);
+        }
+    }
+    read
+}
+
 /// Whose arrangement: a user on a server.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NavigationScope {
@@ -169,10 +180,7 @@ impl NavigationSettings {
                     let Value::Array(entries) = entries else {
                         return None;
                     };
-                    Some((
-                        name.clone(),
-                        entries.iter().filter_map(Placement::read).collect(),
-                    ))
+                    Some((name.clone(), read_group(entries)))
                 })
                 .collect();
             scopes.insert(scope, groups);
@@ -191,12 +199,10 @@ impl NavigationSettings {
             };
             for (name, entries) in groups {
                 // A group as stored that reads as what is held here is kept as it is, entries this version cannot read included.
-                if let Some(Value::Array(as_stored)) = stored.get(name) {
-                    let read: Vec<Placement> =
-                        as_stored.iter().filter_map(Placement::read).collect();
-                    if &read == entries {
-                        continue;
-                    }
+                if let Some(Value::Array(as_stored)) = stored.get(name)
+                    && &read_group(as_stored) == entries
+                {
+                    continue;
                 }
                 let entries: Vec<Value> = entries
                     .iter()
@@ -331,6 +337,22 @@ mod tests {
         let (mut settings, _) = NavigationSettings::read(Some(written));
         settings.set_group(&scope("1"), "home_rows", Vec::new());
         assert_eq!(settings.write(), None);
+    }
+
+    #[test]
+    fn a_key_named_twice_reads_once_the_first_entry_winning() {
+        let (settings, _) = NavigationSettings::read(Some(json!({
+            "jellyfin/1/u1": {"libraries": [
+                {"key": "a", "after": ""},
+                {"key": "b"},
+                {"key": "a", "hidden": true}
+            ]}
+        })));
+        let libraries = settings.group(&scope("1"), "libraries");
+        assert_eq!(libraries.len(), 2);
+        assert_eq!(libraries[0].key, "a");
+        assert_eq!(libraries[0].after, Some(Anchor::First));
+        assert_eq!(libraries[0].hidden, None);
     }
 
     #[test]

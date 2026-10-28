@@ -148,14 +148,20 @@ impl Browse {
             .collect()
     }
 
-    /// Moves `key` to `to` in `group` (an index in the group as arranged, hidden items included) and saves it at once on the
-    /// core's blocking pool. The pane's subscription and Home follow. Not cancellable: it is one small write.
+    /// Moves `key` in `group` right after `after`, the item shown above it where the user dropped it (`None`: first in its group),
+    /// and saves it at once on the core's blocking pool. By key, not index, so a group that changed meanwhile still puts it where
+    /// the user saw it; an `after` no longer in the group changes nothing. The pane's subscription and Home follow, also after a
+    /// failed save, so a list that showed the drop shows the saved arrangement again. Not cancellable: it is one small write.
     ///
     /// # Errors
     /// [`CoreError::Store`] if the settings could not be saved (a newer version's file, a failed write): nothing changed.
-    pub async fn move_item(&self, group: NavGroup, key: String, to: u32) -> Result<(), CoreError> {
-        let to = usize::try_from(to).unwrap_or(usize::MAX);
-        self.arrange(move |browse| browse.move_item(group.into(), &key, to))
+    pub async fn move_item(
+        &self,
+        group: NavGroup,
+        key: String,
+        after: Option<String>,
+    ) -> Result<(), CoreError> {
+        self.arrange(move |browse| browse.move_item(group.into(), &key, after.as_deref()))
             .await
     }
 

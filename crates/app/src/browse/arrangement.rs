@@ -104,11 +104,18 @@ impl Context {
     fn base(&self, group: NavGroup, libraries: &[Library]) -> Vec<BaseItem> {
         match group {
             NavGroup::Tabs => {
-                let hidden = self.hidden_on_server();
-                let shown: Vec<Library> = libraries
-                    .iter()
-                    .filter(|library| !hidden.contains(&library.item))
-                    .cloned()
+                // A tab while a library of its type shows in the pane: hidden on the server but shown by the user counts, hidden by
+                // the user does not.
+                let shown: Vec<Library> = self
+                    .arrange(NavGroup::Libraries, libraries)
+                    .into_iter()
+                    .filter(|item| !item.hidden)
+                    .filter_map(|item| {
+                        libraries
+                            .iter()
+                            .find(|library| library.item.id.as_str() == item.key)
+                            .cloned()
+                    })
                     .collect();
                 kind_tabs(&shown)
                     .iter()
@@ -234,11 +241,11 @@ impl Context {
             return Ok(());
         };
         let base = self.base(group, &self.known_libraries());
-        let saved = self.placements(group);
-        let entries = change(&base, &saved);
         shared
             .navigation
-            .set_group(shared.settings(), &scope, group.name(), entries)
+            .update(shared.settings(), &scope, group.name(), |saved| {
+                change(&base, saved)
+            })
     }
 }
 
@@ -251,6 +258,9 @@ async fn follow_pane(
     mut revision: watch::Receiver<u64>,
     mut capabilities: watch::Receiver<Capabilities>,
 ) {
+    // An arrangement saved or refused is published even when the layout is the same: a list that showed a drop ahead of a save
+    // that failed shows the saved arrangement again.
+    let mut arranged = false;
     loop {
         let Some(context) = context.upgrade() else {
             return;
@@ -262,16 +272,16 @@ async fn follow_pane(
         revision.borrow_and_update();
         capabilities.borrow_and_update();
         context.pane.send_if_modified(|shown| {
-            let changed = *shown != layout;
+            let changed = arranged || *shown != layout;
             *shown = layout;
             changed
         });
         drop(context);
-        tokio::select! {
-            changed = libraries.changed() => if changed.is_err() { return },
-            changed = revision.changed() => if changed.is_err() { return },
-            changed = capabilities.changed() => if changed.is_err() { return },
-        }
+        arranged = tokio::select! {
+            changed = libraries.changed() => if changed.is_err() { return } else { false },
+            changed = revision.changed() => if changed.is_err() { return } else { true },
+            changed = capabilities.changed() => if changed.is_err() { return } else { false },
+        };
     }
 }
 
@@ -300,14 +310,21 @@ impl super::Browse {
             .collect()
     }
 
-    /// Moves `key` to `to` in `group` (an index in the group as arranged, hidden items included) and saves it. Blocking file I/O:
-    /// call it off the async runtime.
+    /// Moves `key` in `group` right after `after`, the item shown above it where the user dropped it (`None`: first), and saves
+    /// it. By key, not index, so a group that changed meanwhile still puts it where the user saw it; an `after` no longer in the
+    /// group changes nothing. Blocking file I/O: call it off the async runtime.
     ///
     /// # Errors
     /// The settings could not be saved (a newer version's file, a failed write): nothing changed.
-    pub fn move_item(&self, group: NavGroup, key: &str, to: usize) -> Result<(), StoreError> {
-        self.ctx
-            .change_group(group, |base, saved| navigation::moved(base, saved, key, to))
+    pub fn move_item(
+        &self,
+        group: NavGroup,
+        key: &str,
+        after: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.ctx.change_group(group, |base, saved| {
+            navigation::moved_after(base, saved, key, after)
+        })
     }
 
     /// Hides or shows `key` in `group` and saves it, as [`super::Browse::move_item`].

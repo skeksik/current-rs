@@ -380,8 +380,9 @@ impl Home {
                                     }
                                 }
                                 let keys = shown_keys(&arranged);
+                                // Rows that answered before, by a load that read the order without the libraries, move into it.
                                 if let Some(home) = me.upgrade() {
-                                    lock(&home.lists).order = keys.clone();
+                                    home.take_order(keys.clone());
                                 }
                                 order = Some(keys);
                             }
@@ -404,8 +405,10 @@ impl Home {
                 Err(error) => failures.push(error),
             }
             if let Some(home) = me.upgrade() {
-                if let Some(order) = order {
-                    home.keep_only(&order);
+                // The order as it is now: the user may have hidden a row while this load ran.
+                if order.is_some() {
+                    let now = lock(&home.lists).order.clone();
+                    home.keep_only(&now);
                 }
                 home.finished(full, generation, failures.into_iter().next());
             }
@@ -455,6 +458,11 @@ impl Home {
     fn apply(&self, spec: &Spec, mut items: Vec<ItemSummary>, read: u64) {
         let key = spec.key();
         let mut rows = lock(&self.lists);
+        // Asked for before the user hid it, or its library left: not shown.
+        if !rows.order.contains(&key) {
+            rows.lists.remove(&key);
+            return;
+        }
         let at = self.rows.snapshot().iter().position(|row| row.key == key);
         if items.is_empty() {
             rows.lists.remove(&key);
@@ -502,6 +510,14 @@ impl Home {
     /// The user's arrangement changed: the rows take its order, hidden rows go, and a row shown again loads.
     fn rearrange(&self) {
         let order = shown_keys(&self.ctx.arranged_home(&self.ctx.known_libraries()));
+        // A row shown again: read every row, keeping what they show.
+        if self.take_order(order) {
+            self.load(true);
+        }
+    }
+
+    /// Takes `order` as Home's: the rows not in it go, the rest move into it. Returns whether it shows a row the last order did not.
+    fn take_order(&self, order: Vec<String>) -> bool {
         let shown_again = {
             let mut rows = lock(&self.lists);
             let again = order.iter().any(|key| !rows.order.contains(key));
@@ -526,10 +542,7 @@ impl Home {
                 }
             }
         }
-        // A row shown again: read every row, keeping what they show.
-        if shown_again {
-            self.load(true);
-        }
+        shown_again
     }
 
     /// Removes the rows of libraries that are gone or now excluded, and the rows the user hid.

@@ -6,8 +6,8 @@
 use std::time::Duration;
 
 use current_app::{AddServerState, App, Browse, HomeFeed, NavGroup, PaneLayout, SignInState};
-use current_model::ServerRef;
-use jellyfin_stand_in::library::{FILMS_LIBRARY_ID, SHOWS_LIBRARY_ID};
+use current_model::{ItemId, ItemRef, ServerRef};
+use jellyfin_stand_in::library::{FILM_IDS, FILMS_LIBRARY_ID, SHOWS_LIBRARY_ID};
 use jellyfin_stand_in::{PASSWORD, StandIn, USER_NAME};
 
 /// A library the tests add, kept out of "My media".
@@ -103,12 +103,12 @@ async fn the_pane_follows_the_users_arrangement() {
 
     // Moved and hidden.
     browse
-        .move_item(NavGroup::Libraries, SHOWS_LIBRARY_ID, 0)
+        .move_item(NavGroup::Libraries, SHOWS_LIBRARY_ID, None)
         .unwrap();
     eventually(|| libraries(&browse) == [SHOWS_LIBRARY_ID, FILMS_LIBRARY_ID]).await;
     browse.set_hidden(NavGroup::Tabs, "series", true).unwrap();
     browse
-        .move_item(NavGroup::Views, "recently_added", 0)
+        .move_item(NavGroup::Views, "recently_added", None)
         .unwrap();
     eventually(|| {
         layout(&browse).is_some_and(|pane| {
@@ -117,6 +117,17 @@ async fn the_pane_follows_the_users_arrangement() {
         })
     })
     .await;
+
+    // A tab follows the libraries the pane shows: the films library hidden here takes Movies with it, and shown again brings it back.
+    browse
+        .set_hidden(NavGroup::Libraries, FILMS_LIBRARY_ID, true)
+        .unwrap();
+    eventually(|| layout(&browse).is_some_and(|pane| keys(&pane.tabs) == ["!series"])).await;
+    browse
+        .set_hidden(NavGroup::Libraries, FILMS_LIBRARY_ID, false)
+        .unwrap();
+    eventually(|| layout(&browse).is_some_and(|pane| keys(&pane.tabs) == ["movie", "!series"]))
+        .await;
 
     // A library kept out of "My media" comes hidden, last (the server lists it after those in its order), until shown here.
     stand_in.add_library(HIDDEN_LIBRARY_ID, "homevideos", "Example Hidden");
@@ -188,7 +199,7 @@ async fn homes_rows_follow_the_users_arrangement() {
     );
 
     // Each Latest row moves on its own: Latest in Shows first.
-    browse.move_item(NavGroup::HomeRows, &shows, 0).unwrap();
+    browse.move_item(NavGroup::HomeRows, &shows, None).unwrap();
     eventually(|| rows(&home).first() == Some(&shows)).await;
     assert!(at(&rows(&home), &films) > 0);
 
@@ -217,4 +228,77 @@ async fn homes_rows_follow_the_users_arrangement() {
         .unwrap();
     eventually(|| rows(&home).contains(&films)).await;
     assert_eq!(rows(&home).first(), Some(&shows));
+}
+
+#[tokio::test]
+async fn a_row_hidden_while_its_answer_is_on_the_way_stays_hidden() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let browse = app.browse(&server).unwrap();
+    let home = browse.home();
+    eventually(|| rows(&home).contains(&"resume".to_owned()) && !home.state().borrow().loading)
+        .await;
+
+    // A reload asks for Continue watching; the answer is held while the user hides the row.
+    let asked = stand_in.count("/UserItems/Resume");
+    stand_in.hold("/UserItems/Resume");
+    home.refresh();
+    eventually(|| stand_in.count("/UserItems/Resume") > asked).await;
+    browse
+        .set_hidden(NavGroup::HomeRows, "resume", true)
+        .unwrap();
+    eventually(|| !rows(&home).contains(&"resume".to_owned())).await;
+    stand_in.release("/UserItems/Resume");
+    eventually(|| !home.state().borrow().loading).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !rows(&home).contains(&"resume".to_owned()),
+        "{:?}",
+        rows(&home)
+    );
+}
+
+#[tokio::test]
+async fn homes_first_load_takes_the_arranged_order() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let films = format!("latest:{FILMS_LIBRARY_ID}");
+    {
+        // Continue watching after Latest in Films: an anchor the session knows only once the libraries are loaded.
+        let browse = app.browse(&server).unwrap();
+        eventually(|| libraries(&browse).len() == 2).await;
+        browse
+            .move_item(NavGroup::HomeRows, "resume", Some(&films))
+            .unwrap();
+    }
+    // A new session's Home opens before its libraries load: the rows that answer first still end in the arranged order.
+    // A mark changed meanwhile: the rows that depend on marks load again at once, before the libraries do.
+    stand_in.hold("/UserViews");
+    let browse = app.browse(&server).unwrap();
+    let home = browse.home();
+    browse.set_played(
+        &ItemRef::new(server.clone(), ItemId::new(FILM_IDS[0])),
+        true,
+    );
+    eventually(|| rows(&home).contains(&"resume".to_owned())).await;
+    stand_in.release("/UserViews");
+    eventually(|| {
+        let rows = rows(&home);
+        rows.contains(&films)
+            && rows.contains(&"resume".to_owned())
+            && !home.state().borrow().loading
+    })
+    .await;
+    let shown = rows(&home);
+    let want: Vec<String> = browse
+        .home_layout()
+        .into_iter()
+        .filter(|row| !row.hidden && shown.contains(&row.key))
+        .map(|row| row.key)
+        .collect();
+    assert_eq!(shown, want);
+    let at = |key: &str| shown.iter().position(|row| row == key).unwrap();
+    assert!(at("resume") > at(&films), "{shown:?}");
 }

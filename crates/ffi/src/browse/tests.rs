@@ -821,7 +821,7 @@ fn the_arrangement_crosses_the_bridge_and_is_saved() {
             .all(|entry| !entry.hidden && !entry.hidden_on_server)
     );
 
-    block_on(browse.move_item(NavGroup::Libraries, SHOWS_LIBRARY_ID.into(), 0)).unwrap();
+    block_on(browse.move_item(NavGroup::Libraries, SHOWS_LIBRARY_ID.into(), None)).unwrap();
     pane_becomes(&rx, |layout| {
         library_ids(layout) == [SHOWS_LIBRARY_ID, FILMS_LIBRARY_ID]
     });

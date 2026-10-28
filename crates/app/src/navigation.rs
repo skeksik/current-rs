@@ -130,6 +130,10 @@ pub fn moved(base: &[BaseItem], saved: &[Placement], key: &str, to: usize) -> Ve
     let mut order: Vec<&str> = arranged.iter().map(|item| item.key.as_str()).collect();
     order.remove(from);
     let to = to.min(order.len());
+    // Dropped back where it was: nothing moved, and nothing is pinned.
+    if to == from {
+        return saved.to_vec();
+    }
     let anchor = to
         .checked_sub(1)
         .map_or(Anchor::First, |at| Anchor::After(order[at].to_owned()));
@@ -147,6 +151,30 @@ pub fn moved(base: &[BaseItem], saved: &[Placement], key: &str, to: usize) -> Ve
     mine.after = Some(anchor);
     entries.push(mine);
     entries
+}
+
+/// The group's entries once the user moved `key` right after `after` (`None`: first in its group), the item the UI shows above
+/// it at the drop. Named by key rather than by index, so a list that changed meanwhile (the libraries loaded again) still puts it
+/// where the user saw it. An `after` no longer in the group changes nothing.
+pub fn moved_after(
+    base: &[BaseItem],
+    saved: &[Placement],
+    key: &str,
+    after: Option<&str>,
+) -> Vec<Placement> {
+    let order: Vec<String> = arrange(base, saved)
+        .into_iter()
+        .map(|item| item.key)
+        .filter(|known| known != key)
+        .collect();
+    let to = match after {
+        None => 0,
+        Some(after) => match order.iter().position(|known| known == after) {
+            Some(at) => at + 1,
+            None => return saved.to_vec(),
+        },
+    };
+    moved(base, saved, key, to)
 }
 
 /// The group's entries once the user hid or showed `key`. A choice that matches the base forgets the user's, so the item follows
@@ -181,8 +209,10 @@ pub fn with_hidden(
 pub(crate) struct Arrangements {
     /// The arrangements of an app that stores nothing; unused when there is a settings store, which is then the only copy.
     memory: Mutex<NavigationSettings>,
-    /// Counts the changes saved.
+    /// Counts the changes saved, and the failed saves, after which what shows is published again.
     revision: watch::Sender<u64>,
+    /// Serializes [`Arrangements::update`]: a change reads, computes and writes under it, so two quick changes both count.
+    writing: Mutex<()>,
 }
 
 impl Arrangements {
@@ -190,6 +220,7 @@ impl Arrangements {
         Self {
             memory: Mutex::new(NavigationSettings::default()),
             revision: watch::Sender::new(0),
+            writing: Mutex::new(()),
         }
     }
 
@@ -211,8 +242,35 @@ impl Arrangements {
         }
     }
 
+    /// Changes `scope`'s entries in `group` to what `change` makes of them and saves them, one change at a time: blocking file I/O.
+    /// An unchanged group writes nothing. A failed save is published too, so a list that showed the change ahead of the core (a
+    /// drop) shows the saved arrangement again.
+    pub(crate) fn update(
+        &self,
+        store: Option<&SettingsStore>,
+        scope: &NavigationScope,
+        group: &str,
+        change: impl FnOnce(&[Placement]) -> Vec<Placement>,
+    ) -> Result<(), StoreError> {
+        // A panic while holding it leaves nothing half done: the settings are replaced whole.
+        let _writing = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let entries = change(&self.group(store, scope, group));
+        let result = self.set_group(store, scope, group, entries);
+        if result.is_err() {
+            self.revision.send_modify(|revision| *revision += 1);
+        }
+        result
+    }
+
+    /// Forgets the arrangements of `server`'s users kept in memory (an app that stores nothing); the settings file's go with the
+    /// server's removal ([`crate::session`]).
+    pub(crate) fn forget_server(&self, server: &current_model::ServerRef) {
+        self.lock().forget_server(server);
+        self.revision.send_modify(|revision| *revision += 1);
+    }
+
     /// Replaces `scope`'s entries in `group` and saves them: blocking file I/O. An unchanged group writes nothing.
-    pub(crate) fn set_group(
+    fn set_group(
         &self,
         store: Option<&SettingsStore>,
         scope: &NavigationScope,
@@ -395,5 +453,100 @@ mod tests {
         assert!(arranged[0].hidden);
         let saved = with_hidden(&base, &saved, "c", false);
         assert_eq!(order(&base, &saved), "c a b");
+    }
+
+    #[test]
+    fn dropping_an_item_back_where_it_was_pins_nothing() {
+        let base = base("a b c");
+        assert!(moved(&base, &[], "b", 1).is_empty());
+        assert!(moved_after(&base, &[], "b", Some("a")).is_empty());
+        assert!(moved_after(&base, &[], "a", None).is_empty());
+    }
+
+    #[test]
+    fn a_move_names_the_item_above_it() {
+        let base = base("a b c d");
+        let saved = moved_after(&base, &[], "d", Some("a"));
+        assert_eq!(order(&base, &saved), "a d b c");
+        let saved = moved_after(&base, &saved, "c", None);
+        assert_eq!(order(&base, &saved), "c a d b");
+        // The item above is gone meanwhile (the libraries loaded again): nothing moves.
+        assert_eq!(moved_after(&base, &saved, "b", Some("gone")), saved);
+    }
+
+    fn scope() -> NavigationScope {
+        NavigationScope::new(
+            current_model::ServerRef::new(
+                current_model::ServiceType::JELLYFIN,
+                current_model::ServerKey::new("1"),
+            ),
+            current_model::UserId::new("u1"),
+        )
+    }
+
+    /// Two changes at once, from two threads as the bridge runs them: each reads what the other wrote, so neither is lost.
+    #[test]
+    fn concurrent_changes_both_count() {
+        let arrangements = std::sync::Arc::new(Arrangements::new());
+        let base = base("a b");
+        let threads: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|key| {
+                let arrangements = arrangements.clone();
+                let base = base.clone();
+                std::thread::spawn(move || {
+                    for round in 0..200 {
+                        arrangements
+                            .update(None, &scope(), HOME_ROWS, |saved| {
+                                // Slow enough between read and write for the other thread to come in, without the lock.
+                                std::thread::yield_now();
+                                with_hidden(&base, saved, key, round % 2 == 0)
+                            })
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        // Each thread's last change hid nothing (round 199 is odd): then hide both, one after the other on two threads.
+        let threads: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|key| {
+                let arrangements = arrangements.clone();
+                let base = base.clone();
+                std::thread::spawn(move || {
+                    arrangements
+                        .update(None, &scope(), HOME_ROWS, |saved| {
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                            with_hidden(&base, saved, key, true)
+                        })
+                        .unwrap();
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let saved = arrangements.group(None, &scope(), HOME_ROWS);
+        assert!(
+            arrange(&base, &saved).iter().all(|item| item.hidden),
+            "{saved:?}"
+        );
+    }
+
+    #[test]
+    fn a_removed_server_takes_its_arrangements_from_memory() {
+        let arrangements = Arrangements::new();
+        let base = base("a");
+        arrangements
+            .update(None, &scope(), TABS, |saved| {
+                with_hidden(&base, saved, "a", true)
+            })
+            .unwrap();
+        assert_eq!(arrangements.group(None, &scope(), TABS).len(), 1);
+        arrangements.forget_server(&scope().server);
+        assert!(arrangements.group(None, &scope(), TABS).is_empty());
     }
 }

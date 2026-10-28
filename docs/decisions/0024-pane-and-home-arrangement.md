@@ -34,11 +34,14 @@ AllowDrop and CanReorderItems properties" ("Drag and drop", learn.microsoft.com,
    the app's order: Movies, Series; Favourites, Recently added; Continue watching, Next up, Favourites, Recently added, the Latest
    rows in the pane's library order, Seen recently. A Latest row exists only for a library not in `LatestItemsExcludes` nor in
    `MyMediaExcludes` and of a kind with a "latest" (rows the server leaves out stay out): a library hidden on the server gets no
-   Latest row even when the user shows it in the pane, as before this record (owner, 2026-10-28).
+   Latest row even when the user shows it in the pane, as before this record (owner, 2026-10-28). A tab shows while a library of
+   its type shows in the pane: one hidden on the server but shown by the user counts, one the user hid does not.
 3. **The merge rule** (owner, 2026-10-28; `current-app`, `navigation`):
    - An item the user never moved keeps its place in the default order relative to the other unmoved items, so it follows a change
      in Jellyfin's order.
-   - Moving an item stores the item just above it at the drop (or "first") and makes it the group's latest move.
+   - Moving an item stores the item just above it at the drop (or "first") and makes it the group's latest move. The UI names that
+     item by its key, not an index, so a group that changed meanwhile (the libraries loaded again) still puts it where the user saw
+     it; a key no longer in the group changes nothing. Dropping an item back where it was stores nothing.
    - Items that were placed right after the moved item are re-anchored onto the item that was above it, so they stay where they
      showed (owner, 2026-10-28: without it they followed the moved item, which a test of random moves found).
    - Resolving takes the unmoved items in the default order, then puts each moved item, oldest move first, right after its anchor;
@@ -46,8 +49,11 @@ AllowDrop and CanReorderItems properties" ("Drag and drop", learn.microsoft.com,
    - The user's hide or show wins over the default; choosing what the default says forgets the choice. A new item shows in its
      default place (a new Jellyfin library last, as `/UserViews` lists it). A removed item's entry is kept: it still anchors others,
      and the item returns to its place if its id comes back. Reset forgets the group. Removing a server forgets its users' entries.
-4. **Home asks only for the rows that show**, in the user's order; a row shown again loads.
-5. **Windows** (ADR 0022, departures 8 and 9):
+4. **Home asks only for the rows that show**, in the user's order; a row shown again loads. An answer for a row hidden meanwhile
+   is dropped, and the rows move into the order each time it changes (a load that read it before the libraries).
+5. **Changes are saved one at a time**: each reads, computes and writes under one lock, so two quick changes both count. A failed
+   save publishes the arrangement again, so a list that showed a drop ahead of it goes back.
+6. **Windows** (ADR 0022, departures 8 and 9):
    - Settings → Personalization: two expanders, "Navigation pane" (a list per group, per server) and "Home" (its rows), each a
      ListView reordered by dragging (CanReorderItems, AllowDrop, CanDragItems), with Move up and Move down, Alt+Up and Alt+Down, a
      ToggleSwitch per item, and a Reset button per group.
