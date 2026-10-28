@@ -1,8 +1,9 @@
-//! The views across every library (the Favourites and Recently added tabs, and a kind's page), what a grid opens with, its Filter
-//! menu's entries, and how Home's rows and the Favourites tab's rows show and link (owner, 2026-10-26 and 2026-10-27; ADR 0018), decided
-//! once for every platform (CLAUDE.md: all logic lives in the core). The UIs lay these out, with their own icons.
+//! The views across every library (the Favourites and Recently added tabs, and a kind's page: the Movies and Series tabs), which kind
+//! tabs show, what a grid opens with, its Filter menu's entries, and how Home's rows and the Favourites tab's rows show and link (owner,
+//! 2026-10-26, 2026-10-27 and 2026-10-28; ADR 0018), decided once for every platform (CLAUDE.md: all logic lives in the core). The UIs
+//! lay these out, with their own icons.
 
-use current_model::{ItemFilter, ItemQuery, ItemRef, Library, MediaKind};
+use current_model::{CollectionKind, ItemFilter, ItemQuery, ItemRef, Library, MediaKind};
 use current_store::LibraryChoices;
 
 use super::home::{HomeRow, HomeRowKind};
@@ -19,8 +20,44 @@ pub enum BrowseView {
     Favourites,
     /// The Recently added tab: a grid, the newest first.
     RecentlyAdded,
-    /// Every item of a kind, by name: the page a Favourites row's header opens.
+    /// Every item of a kind, by name: the Movies and Series tabs ([`KIND_TABS`]), and the page a Favourites row's header opens.
     Everything,
+}
+
+/// The kinds with a tab of their own in the navigation, in its order (owner, 2026-10-28): every film and every series of a server,
+/// [`BrowseView::Everything`] of that kind. Episodes and collections have none.
+pub const KIND_TABS: [MediaKind; 2] = [MediaKind::MOVIE, MediaKind::SERIES];
+
+/// The collection type of a library that holds `kind`'s items, for [`kind_tabs`]: Jellyfin's `movies` and `tvshows`.
+fn tab_collection(kind: &MediaKind) -> Option<CollectionKind> {
+    if *kind == MediaKind::MOVIE {
+        Some(CollectionKind::MOVIES)
+    } else if *kind == MediaKind::SERIES {
+        Some(CollectionKind::TV_SHOWS)
+    } else {
+        None
+    }
+}
+
+/// The kind tabs a server with `libraries` (the user's, [`super::Browse::library_list`]) shows, in [`KIND_TABS`]' order: Movies
+/// while a film library is listed, Series while a TV library is (owner, 2026-10-28). Read from the list the core already keeps, so a
+/// tab comes and goes with its libraries and costs no request; a library without a collection type (mixed content) shows no tab.
+pub fn kind_tabs(libraries: &[Library]) -> Vec<MediaKind> {
+    KIND_TABS
+        .into_iter()
+        .filter(|kind| {
+            let collection = tab_collection(kind);
+            libraries
+                .iter()
+                .any(|library| library.collection.is_some() && library.collection == collection)
+        })
+        .collect()
+}
+
+/// Whether a view's grid remembers its choices, as a library's does: a kind tab's page ([`KIND_TABS`]), also when a Favourites row's
+/// header opened it. The other views remember nothing.
+pub fn view_remembers(view: BrowseView, kind: Option<&MediaKind>) -> bool {
+    view == BrowseView::Everything && kind.is_some_and(|kind| KIND_TABS.contains(kind))
 }
 
 /// How a view is laid out.
@@ -80,7 +117,11 @@ pub fn grid_opening(
             show_titles: true,
         };
     }
-    let mut query = library_query(library);
+    with_remembered(library_query(library), remembered)
+}
+
+/// `query` with what `remembered` holds: its sort, its filters if the Filter menu still offers every one of them, and its view.
+fn with_remembered(mut query: ItemQuery, remembered: &LibraryChoices) -> GridOpening {
     if let Some(sort) = &remembered.sort {
         query.sort = vec![sort.key.clone()];
         query.order = sort.order;
@@ -105,13 +146,25 @@ fn offered(filter: &ItemFilter) -> bool {
     library_filters().contains(&Some(filter.clone())) || library_toggle_filters().contains(filter)
 }
 
-/// What a view's grid opens with: its query ([`view_query`]), posters with titles; nothing is remembered for a view.
-pub fn view_opening(view: BrowseView, kind: Option<&MediaKind>, favourite: bool) -> GridOpening {
-    GridOpening {
-        query: view_query(view, kind, favourite),
-        wide: false,
-        show_titles: true,
+/// What a view's grid opens with: its query ([`view_query`]), posters with titles; with `remembered` ([`crate::App::view_opening`]),
+/// for a view that remembers ([`view_remembers`]) opened from its tab, not from a Favourites row's header, that query with what
+/// `remembered` holds, as a library's ([`grid_opening`]). A Favourites row's header opens its query as it is, as a Home row's header
+/// opens a library.
+pub fn view_opening(
+    view: BrowseView,
+    kind: Option<&MediaKind>,
+    favourite: bool,
+    remembered: &LibraryChoices,
+) -> GridOpening {
+    let query = view_query(view, kind, favourite);
+    if favourite || !view_remembers(view, kind) {
+        return GridOpening {
+            query,
+            wide: false,
+            show_titles: true,
+        };
     }
+    with_remembered(query, remembered)
 }
 
 /// What a grid's Filter menu lists besides its filters.
@@ -456,12 +509,140 @@ mod tests {
     #[test]
     fn a_view_opens_with_posters_and_titles() {
         assert_eq!(
-            view_opening(BrowseView::Everything, Some(&MediaKind::MOVIE), true),
+            view_opening(
+                BrowseView::Everything,
+                Some(&MediaKind::MOVIE),
+                true,
+                &LibraryChoices::default()
+            ),
             GridOpening {
                 query: favourites_query(Some(MediaKind::MOVIE)),
                 wide: false,
                 show_titles: true
             }
+        );
+    }
+
+    #[test]
+    fn a_kind_tab_opens_with_what_is_remembered_unless_a_favourites_header_opened_it() {
+        let opening = view_opening(
+            BrowseView::Everything,
+            Some(&MediaKind::SERIES),
+            false,
+            &remembered(),
+        );
+        let mut expected = kind_query(MediaKind::SERIES);
+        expected.sort = vec![SortKey::DATE_CREATED];
+        expected.order = SortOrder::Descending;
+        expected.filters = vec![ItemFilter::UNPLAYED, ItemFilter::FAVOURITE];
+        assert_eq!(
+            opening,
+            GridOpening {
+                query: expected,
+                wide: true,
+                show_titles: false
+            }
+        );
+        // Nothing remembered: every series by name, posters with titles.
+        assert_eq!(
+            view_opening(
+                BrowseView::Everything,
+                Some(&MediaKind::MOVIE),
+                false,
+                &LibraryChoices::default()
+            ),
+            GridOpening {
+                query: kind_query(MediaKind::MOVIE),
+                wide: false,
+                show_titles: true
+            }
+        );
+        // A Favourites row's header: the favourites ticked, nothing remembered.
+        assert_eq!(
+            view_opening(
+                BrowseView::Everything,
+                Some(&MediaKind::MOVIE),
+                true,
+                &remembered()
+            ),
+            GridOpening {
+                query: favourites_query(Some(MediaKind::MOVIE)),
+                wide: false,
+                show_titles: true
+            }
+        );
+        // Episodes have no tab: their page remembers nothing, nor do the other views.
+        for (view, kind) in [
+            (BrowseView::Everything, Some(&MediaKind::EPISODE)),
+            (BrowseView::RecentlyAdded, None),
+            (BrowseView::RecentlyAdded, Some(&MediaKind::MOVIE)),
+            (BrowseView::Favourites, Some(&MediaKind::MOVIE)),
+        ] {
+            assert!(!view_remembers(view, kind));
+            assert_eq!(
+                view_opening(view, kind, false, &remembered()),
+                view_opening(view, kind, false, &LibraryChoices::default())
+            );
+        }
+        assert!(view_remembers(
+            BrowseView::Everything,
+            Some(&MediaKind::MOVIE)
+        ));
+        assert!(view_remembers(
+            BrowseView::Everything,
+            Some(&MediaKind::SERIES)
+        ));
+    }
+
+    fn library_of(id: &str, collection: Option<CollectionKind>) -> Library {
+        Library {
+            item: item(id),
+            name: id.into(),
+            collection,
+            artwork: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_kind_tab_shows_while_a_library_of_its_type_is_listed() {
+        assert!(kind_tabs(&[]).is_empty());
+        assert_eq!(kind_tabs(&[films()]), [MediaKind::MOVIE]);
+        // In the tabs' order, whatever the libraries' order; one tab for two libraries of a type.
+        assert_eq!(
+            kind_tabs(&[
+                library_of("b", Some(CollectionKind::TV_SHOWS)),
+                films(),
+                library_of("c", Some(CollectionKind::MOVIES)),
+            ]),
+            [MediaKind::MOVIE, MediaKind::SERIES]
+        );
+        // Music, an unknown type, or none (mixed content): no tab.
+        assert!(
+            kind_tabs(&[
+                library_of("d", Some(CollectionKind::MUSIC)),
+                library_of("e", Some(CollectionKind::new("a_newer_type"))),
+                library_of("f", None),
+            ])
+            .is_empty()
+        );
+        for kind in kind_tabs(&[films(), library_of("b", Some(CollectionKind::TV_SHOWS))]) {
+            assert_eq!(
+                view_layout(BrowseView::Everything, Some(&kind)),
+                ViewLayout::Grid
+            );
+            assert!(
+                filter_menu(Some(BrowseView::Everything), Some(&kind))
+                    .kinds
+                    .is_empty()
+            );
+        }
+        assert_eq!(
+            view_title(BrowseView::Everything, Some(&MediaKind::MOVIE)),
+            "Movies"
+        );
+        assert_eq!(
+            view_title(BrowseView::Everything, Some(&MediaKind::SERIES)),
+            "Series"
         );
     }
 

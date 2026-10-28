@@ -1,6 +1,7 @@
 //! Settings' "Remember sort", "Remember filter" and "Remember view" (all off by default), and the choices remembered per library: a
 //! library opens with the last sort, filter and view chosen there for each part whose switch is on. A part whose switch is off is
 //! neither saved nor given back, and turning a switch off forgets that part for every library, so turning it on again starts afresh.
+//! A kind's page across a server's libraries (the Movies and Series tabs, owner, 2026-10-28) remembers its own, as a library does.
 //! The global search page has choices of its own under the same switches: its filter and its view ([`SearchMemory`]).
 //! Saved in `settings.json` (`current-store`'s `browse`, open values) when the app has a data folder, else kept for the run only.
 
@@ -8,8 +9,8 @@ use std::sync::{Mutex, PoisonError};
 
 use current_model::{ItemRef, ServerRef};
 use current_store::{
-    BrowseSettings, LibraryChoices, RememberedSearchFilter, RememberedView, SettingsStore,
-    StoreError,
+    BrowseSettings, KindPage, LibraryChoices, RememberedSearchFilter, RememberedView,
+    SettingsStore, StoreError,
 };
 
 use crate::browse::{SearchFilter, SearchSource};
@@ -46,6 +47,28 @@ impl Part {
             Self::Filter => &mut browse.remember_filter,
             Self::View => &mut browse.remember_view,
         }
+    }
+}
+
+/// A grid whose choices are remembered: a library's, or a kind's page across a server's libraries.
+enum Page<'a> {
+    Library(&'a ItemRef),
+    Kind(&'a KindPage),
+}
+
+impl Page<'_> {
+    fn get<'b>(&self, browse: &'b BrowseSettings) -> Option<&'b LibraryChoices> {
+        match self {
+            Self::Library(library) => browse.libraries.get(*library),
+            Self::Kind(page) => browse.kinds.get(*page),
+        }
+    }
+
+    fn insert(&self, browse: &mut BrowseSettings, choices: LibraryChoices) {
+        match self {
+            Self::Library(library) => browse.libraries.insert((*library).clone(), choices),
+            Self::Kind(page) => browse.kinds.insert((*page).clone(), choices),
+        };
     }
 }
 
@@ -126,8 +149,31 @@ impl LibraryPrefs {
         store: Option<&SettingsStore>,
         library: &ItemRef,
     ) -> LibraryChoices {
+        self.page_choices(store, &Page::Library(library))
+    }
+
+    /// What a kind's page opens with, as a library's ([`LibraryPrefs::choices`]).
+    pub(crate) fn kind_choices(
+        &self,
+        store: Option<&SettingsStore>,
+        page: &KindPage,
+    ) -> LibraryChoices {
+        self.page_choices(store, &Page::Kind(page))
+    }
+
+    /// Remembers the choices on a kind's page, as a library's ([`LibraryPrefs::remember`]).
+    pub(crate) fn remember_kind(
+        &self,
+        store: Option<&SettingsStore>,
+        page: &KindPage,
+        choices: &LibraryChoices,
+    ) -> Result<(), StoreError> {
+        self.remember_page(store, &Page::Kind(page), choices)
+    }
+
+    fn page_choices(&self, store: Option<&SettingsStore>, page: &Page<'_>) -> LibraryChoices {
         let browse = self.read(store);
-        let Some(remembered) = browse.libraries.get(library) else {
+        let Some(remembered) = page.get(&browse) else {
             return LibraryChoices::default();
         };
         LibraryChoices {
@@ -148,8 +194,17 @@ impl LibraryPrefs {
         library: &ItemRef,
         choices: &LibraryChoices,
     ) -> Result<(), StoreError> {
+        self.remember_page(store, &Page::Library(library), choices)
+    }
+
+    fn remember_page(
+        &self,
+        store: Option<&SettingsStore>,
+        page: &Page<'_>,
+        choices: &LibraryChoices,
+    ) -> Result<(), StoreError> {
         let apply = |browse: &mut BrowseSettings| {
-            let current = browse.libraries.get(library).cloned().unwrap_or_default();
+            let current = page.get(browse).cloned().unwrap_or_default();
             let mut next = current.clone();
             if browse.remember_sort && choices.sort.is_some() {
                 next.sort.clone_from(&choices.sort);
@@ -163,7 +218,7 @@ impl LibraryPrefs {
             if next == current {
                 return false;
             }
-            browse.libraries.insert(library.clone(), next);
+            page.insert(browse, next);
             true
         };
         // Checked on a copy first, so that nothing to save never writes, nor fails on a file this version must not write.
@@ -227,7 +282,7 @@ impl LibraryPrefs {
         })
     }
 
-    /// The server was removed: its libraries go. A settings store forgets them in the removal's own save (`Shared::remove_server`);
+    /// The server was removed: its libraries and kind's pages go. A settings store forgets them in the removal's own save (`Shared::remove_server`);
     /// this is for an app that stores nothing.
     pub(crate) fn server_removed(&self, store: Option<&SettingsStore>, server: &ServerRef) {
         if store.is_none() {
@@ -538,6 +593,76 @@ mod tests {
     }
 
     #[test]
+    fn a_kind_tab_remembers_its_own_choices_under_the_switches() {
+        use crate::BrowseView;
+        use current_model::MediaKind;
+        let temp = tempfile::tempdir().unwrap();
+        let app = open(temp.path());
+        let server = library("a").server;
+        let movies = Some(&MediaKind::MOVIE);
+        // Switches off: nothing is saved.
+        app.remember_view_choices(&server, BrowseView::Everything, movies, everything())
+            .unwrap();
+        assert_eq!(
+            app.view_choices(&server, BrowseView::Everything, movies),
+            LibraryChoices::default()
+        );
+        app.set_remember_sort(true).unwrap();
+        app.set_remember_view(true).unwrap();
+        app.remember_view_choices(&server, BrowseView::Everything, movies, everything())
+            .unwrap();
+        let remembered = app.view_choices(&server, BrowseView::Everything, movies);
+        assert_eq!(remembered.sort, everything().sort);
+        assert_eq!(remembered.filters, None);
+        assert_eq!(remembered.view, everything().view);
+        assert_eq!(
+            file(temp.path())["browse"]["kinds"]["jellyfin/1/movie"]["sort"]["key"],
+            "date_created"
+        );
+        // Its own: not the Series tab's, nor a library's.
+        assert_eq!(
+            app.view_choices(&server, BrowseView::Everything, Some(&MediaKind::SERIES)),
+            LibraryChoices::default()
+        );
+        assert_eq!(
+            app.library_choices(&library("a")),
+            LibraryChoices::default()
+        );
+        // Opened from its tab with them; from a Favourites row's header without.
+        let opening = app.view_opening(&server, BrowseView::Everything, movies, false);
+        assert_eq!(opening.query.sort, vec![SortKey::DATE_CREATED]);
+        assert!(opening.wide);
+        let opening = app.view_opening(&server, BrowseView::Everything, movies, true);
+        assert_eq!(
+            opening.query,
+            crate::favourites_query(Some(MediaKind::MOVIE))
+        );
+        assert!(!opening.wide);
+        // Views without a tab remember nothing, and saving their choices writes nothing.
+        let before = file(temp.path());
+        for (view, kind) in [
+            (BrowseView::Everything, Some(&MediaKind::EPISODE)),
+            (BrowseView::RecentlyAdded, None),
+        ] {
+            app.remember_view_choices(&server, view, kind, everything())
+                .unwrap();
+            assert_eq!(
+                app.view_choices(&server, view, kind),
+                LibraryChoices::default()
+            );
+        }
+        assert_eq!(file(temp.path()), before);
+        // A switch turned off forgets that part on the tab too.
+        app.set_remember_sort(false).unwrap();
+        app.set_remember_sort(true).unwrap();
+        assert_eq!(
+            app.view_choices(&server, BrowseView::Everything, movies)
+                .sort,
+            None
+        );
+    }
+
+    #[test]
     fn numbers_use_the_decimal_separator_the_ui_passed() {
         let app = App::new();
         assert_eq!(app.number_format().decimal_separator, ".");
@@ -551,12 +676,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn removing_a_server_forgets_its_libraries() {
+    async fn removing_a_server_forgets_its_libraries_and_kind_pages() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join(SETTINGS_FILE),
             r#"{"version": 1, "device_id": "abc", "servers": [{"service": "jellyfin", "key": "1"}, {"service": "jellyfin", "key": "2"}],
-                "browse": {"remember_filter": true, "libraries": {"jellyfin/1/a": {"filter": []}, "jellyfin/2/a": {"filter": []}}}}"#,
+                "browse": {"remember_filter": true, "libraries": {"jellyfin/1/a": {"filter": []}, "jellyfin/2/a": {"filter": []}},
+                "kinds": {"jellyfin/1/movie": {"filter": []}, "jellyfin/2/movie": {"filter": []}}}}"#,
         )
         .unwrap();
         let app = open(temp.path());
@@ -573,6 +699,8 @@ mod tests {
         );
         assert_eq!(app.library_choices(&other).filters, Some(Vec::new()));
         let json = file(temp.path());
+        assert!(json["browse"]["kinds"].get("jellyfin/1/movie").is_none());
+        assert!(json["browse"]["kinds"].get("jellyfin/2/movie").is_some());
         assert!(json["browse"]["libraries"].get("jellyfin/1/a").is_none());
         assert!(json["browse"]["libraries"].get("jellyfin/2/a").is_some());
     }

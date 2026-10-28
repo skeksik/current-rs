@@ -589,6 +589,15 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         var all = new List<object>();
         // The views across every library: above Libraries with one server, first inside each server's item with more.
         var single = servers.Count == 1 ? servers[0].Server : null;
+        // Movies and Series under Home with one server, each while the core lists it (a library of its type is listed).
+        IReadOnlyList<string> singleTabs = single is null ? [] : Views.KindTabs(servers[0].Libraries);
+        foreach (var (item, kind) in KindTabItems)
+        {
+            var shown = singleTabs.Contains(kind);
+            item.Tag = shown ? new ViewArgs(single!, BrowseView.Everything, kind) : null;
+            item.Content = Views.Title(BrowseView.Everything, kind);
+            item.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+        }
         FavouritesItem.Tag = single is null ? null : new ViewArgs(single, BrowseView.Favourites);
         RecentItem.Tag = single is null ? null : new ViewArgs(single, BrowseView.RecentlyAdded);
         FavouritesItem.Visibility = RecentItem.Visibility = single is null ? Visibility.Collapsed : Visibility.Visible;
@@ -608,11 +617,15 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
                 all.Add(group);
                 into = [];
                 wanted.Add((group.MenuItems, into));
-                foreach (var (view, glyph) in new[] { (BrowseView.Favourites, "\uEB51"), (BrowseView.RecentlyAdded, "\uE823") })
+                // The server's Movies and Series first, as under Home with one server, then its Favourites and Recently added.
+                var views = Views.KindTabs(server.Libraries)
+                    .Select(kind => (Tag: new ViewArgs(server.Server, BrowseView.Everything, kind), Glyph: KindTabGlyph(kind)))
+                    .Concat(new[] { (BrowseView.Favourites, "\uEB51"), (BrowseView.RecentlyAdded, "\uE823") }
+                        .Select(view => (Tag: new ViewArgs(server.Server, view.Item1), Glyph: view.Item2)));
+                foreach (var (tag, glyph) in views)
                 {
-                    var tag = new ViewArgs(server.Server, view);
                     var item = _libraryItems.OfType<NavigationViewItem>().FirstOrDefault(known => Equals(known.Tag, tag))
-                        ?? new NavigationViewItem { Tag = tag, Content = Views.Title(view), Icon = new FontIcon { Glyph = glyph } };
+                        ?? new NavigationViewItem { Tag = tag, Content = Views.Title(tag.View, tag.Kind), Icon = new FontIcon { Glyph = glyph } };
                     into.Add(item);
                     all.Add(item);
                 }
@@ -677,6 +690,17 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         LibrariesSeparator.Visibility = any;
         LibrariesItem.Visibility = any;
     }
+
+    /// <summary>The Movies and Series items under Home, by the kind each shows (Views.KindTabs' kinds).</summary>
+    private (NavigationViewItem Item, string Kind)[] KindTabItems => [(MoviesItem, "movie"), (SeriesItem, "series")];
+
+    /// <summary>A kind tab's icon, as the library of its type's (LibraryGlyph): E8B2 Movies, E7F4 TVMonitor.</summary>
+    private static string KindTabGlyph(string kind) => kind switch
+    {
+        "movie" => "\uE8B2",
+        "series" => "\uE7F4",
+        _ => "\uE8B7",
+    };
 
     /// <summary>
     /// A library's icon by what it holds, from Segoe Fluent Icons ("Segoe Fluent Icons font", learn.microsoft.com, ms.date
@@ -1093,14 +1117,17 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         {
             return;
         }
-        // A view's page selects its tab: the Favourites tab's rows (on the search page), and a kind's page that a Favourites row's
-        // header opened, under Favourites (review 2, S2).
+        // A view's page selects its tab: the Favourites tab's rows (on the search page), a kind's page that a Favourites row's
+        // header opened under Favourites (review 2, S2), and a kind's page opened from its tab (Movies, Series) that tab.
         if (_shownParameter is ViewArgs shownView)
         {
-            var tab = shownView is { View: BrowseView.Everything, Favourite: true }
-                ? new ViewArgs(shownView.Server, BrowseView.Favourites)
-                : shownView with { Kind = null };
-            NavView.SelectedItem = new[] { FavouritesItem, RecentItem }.Concat(_libraryItems.OfType<NavigationViewItem>())
+            var tab = shownView switch
+            {
+                { View: BrowseView.Everything, Favourite: true } => new ViewArgs(shownView.Server, BrowseView.Favourites),
+                { View: BrowseView.Everything } => shownView,
+                _ => shownView with { Kind = null },
+            };
+            NavView.SelectedItem = new[] { MoviesItem, SeriesItem, FavouritesItem, RecentItem }.Concat(_libraryItems.OfType<NavigationViewItem>())
                 .FirstOrDefault(item => item.Visibility == Visibility.Visible && Equals(item.Tag, tab));
             return;
         }

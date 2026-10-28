@@ -14,8 +14,8 @@ mod secrets;
 mod settings;
 
 pub use browse::{
-    BrowseSettings, LibraryChoices, RememberedSearchFilter, RememberedSort, RememberedView,
-    SearchChoices,
+    BrowseSettings, KindPage, LibraryChoices, RememberedSearchFilter, RememberedSort,
+    RememberedView, SearchChoices,
 };
 pub use device::DeviceId;
 pub use error::StoreError;

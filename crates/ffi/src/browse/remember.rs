@@ -256,6 +256,55 @@ mod tests {
     }
 
     #[test]
+    fn a_kind_tab_remembers_its_choices_across_the_bridge() {
+        use crate::{BrowseView, kind_tabs, view_remembers};
+        let temp = tempfile::tempdir().unwrap();
+        let core = open(&temp);
+        let server = library("a").server;
+        let movies = || Some("movie".to_owned());
+        block_on(core.set_remember_sort(true)).unwrap();
+        block_on(core.set_remember_filter(true)).unwrap();
+        block_on(core.set_remember_view(true)).unwrap();
+        block_on(core.remember_view_choices(
+            server.clone(),
+            BrowseView::Everything,
+            movies(),
+            everything(),
+        ))
+        .unwrap();
+        assert_eq!(
+            core.view_choices(server.clone(), BrowseView::Everything, movies()),
+            everything()
+        );
+        let opening = core.view_opening(server.clone(), BrowseView::Everything, movies(), false);
+        assert_eq!(opening.query.sort, ["date_created"]);
+        assert_eq!(opening.query.filters, ["unplayed"]);
+        assert!(opening.wide);
+        // A Favourites row's header: favourites ticked, nothing remembered.
+        let opening = core.view_opening(server.clone(), BrowseView::Everything, movies(), true);
+        assert_eq!(opening.query.filters, ["favourite"]);
+        assert!(!opening.wide);
+        // Episodes have no tab and remember nothing.
+        assert!(view_remembers(BrowseView::Everything, movies()));
+        assert!(!view_remembers(
+            BrowseView::Everything,
+            Some("episode".into())
+        ));
+        block_on(core.remember_view_choices(
+            server.clone(),
+            BrowseView::Everything,
+            Some("episode".into()),
+            everything(),
+        ))
+        .unwrap();
+        assert_eq!(
+            core.view_choices(server, BrowseView::Everything, Some("episode".into())),
+            LibraryChoices::default()
+        );
+        assert!(kind_tabs(Vec::new()).is_empty());
+    }
+
+    #[test]
     fn a_choice_that_cannot_be_saved_is_refused() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
