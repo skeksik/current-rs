@@ -22,6 +22,15 @@
 //! no address, and neither the service nor Current's server keys contain `/`. An empty `filter` list is a choice ("All"); a missing
 //! one is none remembered.
 //!
+//! A kind's page across every library of a server (the Movies and Series tabs, owner, 2026-10-28) has an entry of its own under
+//! `kinds`, of the same shape, keyed `service/server key/kind` with the kind's open name (Jellyfin's kinds hold no `/`):
+//!
+//! ```json
+//! "browse": {
+//!   "kinds": {"jellyfin/1/movie": {"sort": {"key": "date_created", "order": "descending"}}}
+//! }
+//! ```
+//!
 //! The global search page has one entry of its own (owner, 2026-10-27), not per server, under the same switches: its filter while
 //! "Remember filter" is on and its view while "Remember view" is. Its type is `all` or a media kind's name, its source `all`, `library`,
 //! `catalog` or one a later version names: open values.
@@ -43,6 +52,7 @@ const REMEMBER_SORT: &str = "remember_sort";
 const REMEMBER_FILTER: &str = "remember_filter";
 const REMEMBER_VIEW: &str = "remember_view";
 const LIBRARIES: &str = "libraries";
+const KINDS: &str = "kinds";
 const SEARCH: &str = "search";
 
 const SORT: &str = "sort";
@@ -243,22 +253,191 @@ fn write_view(view: &RememberedView) -> Value {
     serde_json::json!({ VIEW_TILE: view.tile, VIEW_TITLES: view.titles })
 }
 
-/// The key of `library` under `libraries`.
-fn library_key(library: &ItemRef) -> String {
-    format!("{}/{}", library.server, library.id)
+/// A page of every item of one kind across a server's libraries (the Movies and Series tabs, owner, 2026-10-28): what its choices are
+/// remembered under.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KindPage {
+    pub server: ServerRef,
+    pub kind: MediaKind,
 }
 
-/// The library a key names; `None` for a key this version cannot read.
-fn parse_library_key(key: &str) -> Option<ItemRef> {
+impl KindPage {
+    pub fn new(server: ServerRef, kind: MediaKind) -> Self {
+        Self { server, kind }
+    }
+}
+
+/// What an entry under `libraries` or `kinds` is keyed by: written as `service/server key/rest`, read back the same way.
+trait EntryKey: Ord + Clone {
+    fn key(&self) -> String;
+    /// The key's value; `None` for a key this version cannot read.
+    fn parse(key: &str) -> Option<Self>;
+    fn server(&self) -> &ServerRef;
+}
+
+impl EntryKey for ItemRef {
+    fn key(&self) -> String {
+        format!("{}/{}", self.server, self.id)
+    }
+
+    fn parse(key: &str) -> Option<Self> {
+        let (server, id) = parse_key(key)?;
+        Some(ItemRef::new(server, ItemId::new(id)))
+    }
+
+    fn server(&self) -> &ServerRef {
+        &self.server
+    }
+}
+
+impl EntryKey for KindPage {
+    fn key(&self) -> String {
+        format!("{}/{}", self.server, self.kind.as_str())
+    }
+
+    fn parse(key: &str) -> Option<Self> {
+        let (server, kind) = parse_key(key)?;
+        Some(KindPage::new(server, MediaKind::new(kind)))
+    }
+
+    fn server(&self) -> &ServerRef {
+        &self.server
+    }
+}
+
+/// The server and the rest of a key, `service/server key/rest`; `None` for a key this version cannot read.
+fn parse_key(key: &str) -> Option<(ServerRef, &str)> {
     let mut parts = key.splitn(3, '/');
-    let (service, server, id) = (parts.next()?, parts.next()?, parts.next()?);
-    if service.is_empty() || server.is_empty() || id.is_empty() {
+    let (service, server, rest) = (parts.next()?, parts.next()?, parts.next()?);
+    if service.is_empty() || server.is_empty() || rest.is_empty() {
         return None;
     }
-    Some(ItemRef::new(
+    Some((
         ServerRef::new(ServiceType::new(service), ServerKey::new(server)),
-        ItemId::new(id),
+        rest,
     ))
+}
+
+/// The entries stored under `section`, keyed by what their keys name; an entry this version cannot read is left out.
+fn read_entries<K: EntryKey>(
+    stored: &Map<String, Value>,
+    section: &str,
+) -> BTreeMap<K, LibraryChoices> {
+    match stored.get(section) {
+        Some(Value::Object(entries)) => entries
+            .iter()
+            .filter_map(|(key, entry)| {
+                let key = K::parse(key)?;
+                let Value::Object(entry) = entry else {
+                    return None;
+                };
+                Some((key, LibraryChoices::read(entry)))
+            })
+            .collect(),
+        _ => BTreeMap::new(),
+    }
+}
+
+/// Forgets `part` of every entry under `section`, also one this version could not read.
+fn forget_part_in<K>(
+    entries: &mut BTreeMap<K, LibraryChoices>,
+    stored: &mut Map<String, Value>,
+    section: &str,
+    part: &str,
+    forget: impl Fn(&mut LibraryChoices),
+) {
+    entries.values_mut().for_each(forget);
+    if let Some(Value::Object(stored)) = stored.get_mut(section) {
+        for entry in stored.values_mut() {
+            if let Value::Object(entry) = entry {
+                entry.remove(part);
+            }
+        }
+    }
+}
+
+/// Forgets every entry of `server` under `section`, also entries this version could not read.
+fn forget_server_in<K: EntryKey>(
+    entries: &mut BTreeMap<K, LibraryChoices>,
+    stored: &mut Map<String, Value>,
+    section: &str,
+    server: &ServerRef,
+) {
+    entries.retain(|key, _| key.server() != server);
+    if let Some(Value::Object(stored)) = stored.get_mut(section) {
+        stored.retain(|key, _| K::parse(key).is_none_or(|key| key.server() != server));
+    }
+}
+
+/// Forgets the stored value of each entry part under `section` that differs between `now` and `before`.
+fn changed_in<K: EntryKey>(
+    stored: &mut Map<String, Value>,
+    section: &str,
+    now: &BTreeMap<K, LibraryChoices>,
+    before: &BTreeMap<K, LibraryChoices>,
+) {
+    if now == before {
+        return;
+    }
+    let entries = match stored.get_mut(section) {
+        Some(Value::Object(entries)) => entries,
+        Some(_) => {
+            // A section this version could not read gives way to the entries remembered here.
+            stored.remove(section);
+            return;
+        }
+        None => return,
+    };
+    for (key, then) in before {
+        let text = key.key();
+        let Some(now) = now.get(key) else {
+            entries.remove(&text);
+            continue;
+        };
+        if let Some(Value::Object(entry)) = entries.get_mut(&text) {
+            forget_changed(entry, now, then);
+        }
+    }
+    for key in now.keys() {
+        if !before.contains_key(key) {
+            // New here: anything stored under its key could not be read, and gives way.
+            entries.remove(&key.key());
+        }
+    }
+}
+
+/// Writes `entries` under `section` into `object`, over what was stored there.
+fn write_entries<K: EntryKey>(
+    object: &mut Map<String, Value>,
+    section: &str,
+    entries: &BTreeMap<K, LibraryChoices>,
+) {
+    match object.remove(section) {
+        // A section this version could not read, and none remembered here since: kept as it was.
+        Some(unreadable) if !unreadable.is_object() => {
+            object.insert(section.to_owned(), unreadable);
+        }
+        stored => {
+            let mut stored = match stored {
+                Some(Value::Object(stored)) => stored,
+                _ => Map::new(),
+            };
+            for (key, choices) in entries {
+                let key = key.key();
+                let mut entry = match stored.remove(&key) {
+                    Some(Value::Object(entry)) => entry,
+                    _ => Map::new(),
+                };
+                choices.write_into(&mut entry);
+                if !entry.is_empty() {
+                    stored.insert(key, Value::Object(entry));
+                }
+            }
+            if !stored.is_empty() {
+                object.insert(section.to_owned(), Value::Object(stored));
+            }
+        }
+    }
 }
 
 /// The browse settings. All off, nothing remembered by default.
@@ -269,6 +448,8 @@ pub struct BrowseSettings {
     pub remember_view: bool,
     /// What is remembered per library. A library whose entry this version cannot read is not listed here and is kept in the file.
     pub libraries: BTreeMap<ItemRef, LibraryChoices>,
+    /// What is remembered per kind's page of a server (the Movies and Series tabs, owner, 2026-10-28), as per library.
+    pub kinds: BTreeMap<KindPage, LibraryChoices>,
     /// What is remembered for the global search page. An entry this version cannot read reads as nothing and is kept in the file.
     pub search: SearchChoices,
     /// The stored object as read: fields this version does not know, known fields whose value it could not read, and the libraries'
@@ -286,19 +467,8 @@ impl BrowseSettings {
             return (Self::default(), Some(value));
         };
         let switch = |key: &str| stored.get(key).and_then(Value::as_bool).unwrap_or(false);
-        let libraries = match stored.get(LIBRARIES) {
-            Some(Value::Object(entries)) => entries
-                .iter()
-                .filter_map(|(key, entry)| {
-                    let library = parse_library_key(key)?;
-                    let Value::Object(entry) = entry else {
-                        return None;
-                    };
-                    Some((library, LibraryChoices::read(entry)))
-                })
-                .collect(),
-            _ => BTreeMap::new(),
-        };
+        let libraries = read_entries(&stored, LIBRARIES);
+        let kinds = read_entries(&stored, KINDS);
         let search = match stored.get(SEARCH) {
             Some(Value::Object(entry)) => SearchChoices::read(entry),
             _ => SearchChoices::default(),
@@ -309,6 +479,7 @@ impl BrowseSettings {
                 remember_filter: switch(REMEMBER_FILTER),
                 remember_view: switch(REMEMBER_VIEW),
                 libraries,
+                kinds,
                 search,
                 stored,
             },
@@ -316,19 +487,19 @@ impl BrowseSettings {
         )
     }
 
-    /// Forgets the sort of every library, also one this version could not read.
+    /// Forgets the sort of every library and kind's page, also one this version could not read.
     pub fn forget_sorts(&mut self) {
         self.forget_part(SORT, |choices| choices.sort = None);
     }
 
-    /// Forgets the filters of every library and of the search page, also ones this version could not read.
+    /// Forgets the filters of every library, every kind's page and the search page, also ones this version could not read.
     pub fn forget_filters(&mut self) {
         self.forget_part(FILTER, |choices| choices.filters = None);
         self.search.filter = None;
         self.forget_search_part(FILTER);
     }
 
-    /// Forgets the view of every library and of the search page, also one this version could not read.
+    /// Forgets the view of every library, every kind's page and the search page, also one this version could not read.
     pub fn forget_views(&mut self) {
         self.forget_part(VIEW, |choices| choices.view = None);
         self.search.view = None;
@@ -341,26 +512,21 @@ impl BrowseSettings {
         }
     }
 
-    /// Forgets every library of `server`, also entries this version could not read: the server was removed.
+    /// Forgets every library and kind's page of `server`, also entries this version could not read: the server was removed.
     pub fn forget_server(&mut self, server: &ServerRef) {
-        self.libraries
-            .retain(|library, _| library.server != *server);
-        if let Some(Value::Object(entries)) = self.stored.get_mut(LIBRARIES) {
-            entries.retain(|key, _| {
-                parse_library_key(key).is_none_or(|library| library.server != *server)
-            });
-        }
+        forget_server_in(&mut self.libraries, &mut self.stored, LIBRARIES, server);
+        forget_server_in(&mut self.kinds, &mut self.stored, KINDS, server);
     }
 
     fn forget_part(&mut self, part: &str, forget: impl Fn(&mut LibraryChoices)) {
-        self.libraries.values_mut().for_each(forget);
-        if let Some(Value::Object(entries)) = self.stored.get_mut(LIBRARIES) {
-            for entry in entries.values_mut() {
-                if let Value::Object(entry) = entry {
-                    entry.remove(part);
-                }
-            }
-        }
+        forget_part_in(
+            &mut self.libraries,
+            &mut self.stored,
+            LIBRARIES,
+            part,
+            &forget,
+        );
+        forget_part_in(&mut self.kinds, &mut self.stored, KINDS, part, &forget);
     }
 
     /// Forgets the stored value of each setting that differs from `before`: it was changed here, so what was read no longer stands.
@@ -395,34 +561,13 @@ impl BrowseSettings {
                 None => {}
             }
         }
-        if self.libraries == before.libraries {
-            return;
-        }
-        let entries = match self.stored.get_mut(LIBRARIES) {
-            Some(Value::Object(entries)) => entries,
-            Some(_) => {
-                // A `libraries` this version could not read gives way to the libraries remembered here.
-                self.stored.remove(LIBRARIES);
-                return;
-            }
-            None => return,
-        };
-        for (library, then) in &before.libraries {
-            let key = library_key(library);
-            let Some(now) = self.libraries.get(library) else {
-                entries.remove(&key);
-                continue;
-            };
-            if let Some(Value::Object(entry)) = entries.get_mut(&key) {
-                forget_changed(entry, now, then);
-            }
-        }
-        for library in self.libraries.keys() {
-            if !before.libraries.contains_key(library) {
-                // New here: anything stored under its key could not be read, and gives way.
-                entries.remove(&library_key(library));
-            }
-        }
+        changed_in(
+            &mut self.stored,
+            LIBRARIES,
+            &self.libraries,
+            &before.libraries,
+        );
+        changed_in(&mut self.stored, KINDS, &self.kinds, &before.kinds);
     }
 
     /// The value to store: what was read, with each known setting written where it reads as something here or was changed here.
@@ -441,32 +586,8 @@ impl BrowseSettings {
                 on.then(|| Value::from(true)),
             );
         }
-        match object.remove(LIBRARIES) {
-            // A `libraries` this version could not read, and none remembered here since: kept as it was.
-            Some(unreadable) if !unreadable.is_object() => {
-                object.insert(LIBRARIES.to_owned(), unreadable);
-            }
-            stored => {
-                let mut entries = match stored {
-                    Some(Value::Object(entries)) => entries,
-                    _ => Map::new(),
-                };
-                for (library, choices) in &self.libraries {
-                    let key = library_key(library);
-                    let mut entry = match entries.remove(&key) {
-                        Some(Value::Object(entry)) => entry,
-                        _ => Map::new(),
-                    };
-                    choices.write_into(&mut entry);
-                    if !entry.is_empty() {
-                        entries.insert(key, Value::Object(entry));
-                    }
-                }
-                if !entries.is_empty() {
-                    object.insert(LIBRARIES.to_owned(), Value::Object(entries));
-                }
-            }
-        }
+        write_entries(&mut object, LIBRARIES, &self.libraries);
+        write_entries(&mut object, KINDS, &self.kinds);
         match object.remove(SEARCH) {
             // A `search` this version could not read, and nothing remembered here since: kept as it was.
             Some(unreadable) if !unreadable.is_object() => {
@@ -825,6 +946,98 @@ mod tests {
         assert_eq!(
             changed.write().unwrap(),
             serde_json::json!({"libraries": {"jellyfin/1/abc": {"filter": []}}})
+        );
+    }
+
+    fn kind(server: &str, kind: MediaKind) -> KindPage {
+        KindPage::new(
+            ServerRef::new(ServiceType::JELLYFIN, ServerKey::new(server)),
+            kind,
+        )
+    }
+
+    #[test]
+    fn kind_pages_round_trip_beside_libraries_and_are_forgotten_with_them() {
+        // An older file has no `kinds`: nothing remembered, nothing written.
+        let older =
+            read(r#"{"remember_sort": true, "libraries": {"jellyfin/1/abc": {"filter": []}}}"#);
+        assert!(older.kinds.is_empty());
+        assert!(older.write().unwrap().get("kinds").is_none());
+
+        let mut settings = older.clone();
+        settings
+            .kinds
+            .insert(kind("1", MediaKind::MOVIE), all_choices());
+        settings.kinds.insert(
+            kind("2", MediaKind::new("a_newer_kind")),
+            LibraryChoices {
+                filters: Some(Vec::new()),
+                ..LibraryChoices::default()
+            },
+        );
+        settings.changed_from(&older);
+        let written = settings.write().unwrap();
+        assert_eq!(
+            written["kinds"],
+            serde_json::json!({
+                "jellyfin/1/movie": {
+                    "sort": {"key": "date_created", "order": "descending"},
+                    "filter": ["unplayed"],
+                    "view": {"tile": "wide", "titles": false}
+                },
+                "jellyfin/2/a_newer_kind": {"filter": []}
+            })
+        );
+        assert_eq!(
+            written["libraries"]["jellyfin/1/abc"]["filter"],
+            serde_json::json!([])
+        );
+        let (reread, _) = BrowseSettings::read(Some(written));
+        assert_eq!(reread.kinds, settings.kinds);
+
+        // Unknown fields in an entry and unreadable keys stay.
+        let mut kept = read(
+            r#"{"kinds": {"jellyfin/1/series": {"filter": ["played"], "later": 1}, "nonsense": {"filter": []}}}"#,
+        );
+        assert_eq!(
+            kept.kinds[&kind("1", MediaKind::SERIES)].filters,
+            Some(vec![ItemFilter::new("played")])
+        );
+        let before = kept.clone();
+        kept.kinds
+            .get_mut(&kind("1", MediaKind::SERIES))
+            .unwrap()
+            .view = all_choices().view;
+        kept.changed_from(&before);
+        let written = kept.write().unwrap();
+        assert_eq!(written["kinds"]["jellyfin/1/series"]["later"], 1);
+        assert_eq!(
+            written["kinds"]["jellyfin/1/series"]["view"]["tile"],
+            "wide"
+        );
+        assert_eq!(
+            written["kinds"]["nonsense"],
+            serde_json::json!({"filter": []})
+        );
+
+        // Forgetting a part forgets it on kind pages too; forgetting a server drops its kind pages.
+        let mut forgot = reread.clone();
+        forgot.forget_sorts();
+        assert!(forgot.kinds.values().all(|choices| choices.sort.is_none()));
+        assert!(
+            forgot.write().unwrap()["kinds"]["jellyfin/1/movie"]
+                .get("sort")
+                .is_none()
+        );
+        forgot.forget_server(&ServerRef::new(ServiceType::JELLYFIN, ServerKey::new("1")));
+        assert_eq!(
+            forgot.kinds.keys().cloned().collect::<Vec<_>>(),
+            [kind("2", MediaKind::new("a_newer_kind"))]
+        );
+        assert!(
+            forgot.write().unwrap()["kinds"]
+                .get("jellyfin/1/movie")
+                .is_none()
         );
     }
 }
