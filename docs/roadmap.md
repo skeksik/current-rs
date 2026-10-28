@@ -277,6 +277,22 @@ Fix and polish:
 - [ ] View settings per Home row: dropped for now (owner, 2026-10-28)
 - [ ] Browse by genre: a Genres tab and a Genres row on Home; Studios and Networks rows on Home (owner, 2026-10-26, from the Windows UI
       pass; moved here from M4, 2026-10-27)
+Native player first (owner, 2026-10-28; ADR 0025, proposed): Windows' own player (Media Foundation in `MediaPlayerElement`) first,
+then libmpv, then the server; no device remux on Windows (MF reads MKV; departure 1). In this order, one PR each:
+- [ ] W1 spike (spike/windows-native-player): a prototype on the owner's PC, as D2 was: `MediaPlayerElement` under our XAML controls;
+      HDR10, HLG, HDR10+, Dolby Vision (with and without the Dolby Vision Extensions); MKV with H.264, HEVC (with and without the HEVC
+      extension), VP9, AV1; AC-3, E-AC-3 and Atmos on 24H2, spatial sound; in-band SRT, ASS and PGS; the decoder status of an
+      unsupported track; `CodecQuery` and the Store codecs from an unpackaged app, and the Store link for a missing one; progressive and
+      fMP4 HLS through the relay; SMTC, CompactOverlay, tracks, speed. Ends in notes and ADR 0025's departures 1 to 4 answered
+- [ ] W2 (feat/routes-and-engines): the core's routes and reasons, two engines per player, the per-file route check, the device
+      profile as the union of both engines, the fallback chain, track changes across engines, Settings → Playback → "Player"
+      (Automatic, Always app engine) and "Play with app engine" (owner, 2026-10-28); fake engines in tests
+- [ ] W3 (feat/platform-engine-bridge): the platform engine as a UniFFI foreign trait with its events, capability facts from the UI,
+      every platform-engine stream through the relay; C# adapters and bindings tests against the stand-in
+- [ ] W4 (feat/windows-native-engine): the C# Media Foundation engine, the player page with both surfaces, the decodability check
+- [ ] W5 (feat/windows-native-subtitles): our own subtitle view for the native route, above the control bar
+- [ ] W6 (feat/formats-per-route): the supported formats page per route, with missing Store extensions and their link (ADR 0021)
+- [ ] W7: device check on the owner's PC: real files on each route, the route and its reasons in the info panel, the fallback chain
 New features (each starts with a spike and an ADR with the owner's choices):
 - [ ] Generated subtitles for videos without any (owner, 2026-10-25): speech to text on the device, with translation into English
       (for example Japanese audio to English subtitles). The first candidate is Whisper through whisper.cpp: MIT code and weights;
@@ -318,17 +334,28 @@ Done when: a title can be found, requested and followed to "available", then pla
 - [ ] The M1, M2 and M4 screens in SwiftUI on the shared core; AVPlayer with our own subtitle layer (ADR 0010: libass, PGS/VobSub decoder in
       the core, External delivery from Jellyfin); Keychain; Now Playing, PiP, AirPlay
 - [ ] Local discovery from each up interface: list the IPv4 interfaces with `getifaddrs` and pass them to each search (ADR 0016)
-- [ ] Decide at M3 (owner, 2026-10-28): remux on the Mac instead of on the server. ADR 0008's route 2 sends MKV with H.264 or HEVC to
-      the server for an HLS remux; repackaging it on the device for AVPlayer (video and audio copied) would start and seek without a
-      server job, cover local MKV files (ADR 0008 gap 4) and keep Dolby Vision where AVPlayer takes the base layer (not profile 7). The
-      loopback relay (ADR 0020) could serve the result on 127.0.0.1. Needs FFmpeg's libavformat on macOS (a new dependency) and an
-      ADR 0008 amendment
-
+- [ ] Native player first on the Mac (owner, 2026-10-28; ADR 0025, proposed): AVPlayer, then a remux on the Mac when AVPlayer takes
+      the codecs but not the container (MKV to fMP4 HLS through the loopback relay; not with Dolby Vision profile 7 or a subtitle that
+      needs rendering), then libmpv as the app engine (no longer deferred), then the server's remux or transcode. Needs FFmpeg's
+      libavformat and libmpv on macOS (new dependencies, the owner's approval) and amends ADR 0008 and ADR 0010
+  - [ ] M3-1: AVPlayer as a platform engine (ADR 0025's foreign trait) in Swift
+  - [ ] M3-2 spike (spike/macos-device-remux): libavformat MKV to fMP4 HLS served by the relay: segments on keyframes, seeking,
+        `hvc1`, Dolby Vision boxes, audio AVPlayer lacks, our LGPL build on macOS; an ADR
+  - [ ] M3-3 spike (spike/macos-libmpv): libmpv under our SwiftUI controls (render API or `gpu-next`), HDR/EDR, our LGPL build; an ADR
+  - [ ] M3-4: the device remux, from M3-2's ADR
+  - [ ] M3-5: the libmpv engine on macOS, from M3-3's ADR; ADR 0010's layer over AVPlayer only if the owner approves ADR 0025's
+        departure 5
 Done when: everything from M1, M2 and M4 works on a Mac.
 
 ## M5: Linux
 - [ ] The M1-M4 screens in GTK4 + libadwaita; the libmpv engine from M2 through the OpenGL render API (SDR); Secret Service; MPRIS
       media controls (ADR 0011)
+- [ ] Native player first on Linux (owner, 2026-10-28; ADR 0025, proposed): GStreamer first (no device remux: `matroskademux` reads
+      MKV), libmpv as the app engine, then the server. GStreamer, gstreamer-rs and `gtk4paintablesink` (MPL-2.0) need the owner's
+      approval
+  - [ ] L1 spike (spike/linux-gstreamer): `playbin3` into `gtk4paintablesink` under our GTK controls: VA-API, HDR through GDK colour
+        states, ASS and PGS on GStreamer (ADR 0025 departure 6), MPRIS; an ADR amending ADR 0011
+  - [ ] L2: the GStreamer engine in Rust, implementing `Engine`; libmpv stays the app engine
 - [ ] Our LGPL-2.1 libmpv and FFmpeg for Linux (the distributions' builds are GPL; ADR 0003, ADR 0011), and the Linux CI job
 - [ ] Several player windows at once: libmpv engines share FFmpeg's log through the first mpv instance only (ADR 0019, 2026-10-25), so
       `current-mpv` runs one engine per process. For several players: one redactor for every engine's secrets, and a closed engine
@@ -353,6 +380,9 @@ Nothing leaves the owner's machines until these are done (ADR 0003, ADR 0009 whe
 
 ## Later
 - [ ] Android (Compose, Media3 plus a fallback engine), iOS and iPadOS (SwiftUI from macOS), tvOS, the web (the core on WebAssembly)
+  - Native player first there too (ADR 0025): Android Media3, then libmpv for Android (a spike first); iOS, iPadOS and tvOS with
+    macOS's AVPlayer, remux and libmpv (ADR 0010's LGPL framework question); the web with MSE, the remux in WebAssembly or on the
+    server, and no app engine (departure 7)
 - [ ] Several servers at once and user switching
 - [ ] Jellyfin's other library types: music with its own player, live TV and DVR, books, photos (owner, 2026-10-27: later)
 - Not planned yet (ask to add): other media servers.
