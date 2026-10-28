@@ -279,19 +279,22 @@ Fix and polish:
       pass; moved here from M4, 2026-10-27)
 Native player first (owner, 2026-10-28; ADR 0025): Windows' own player (Media Foundation in `MediaPlayerElement`) first,
 then libmpv, then the server; no device remux on Windows (MF reads MKV; departure 1). In this order, one PR each:
-- [ ] W1 spike (spike/windows-native-player): a prototype on the owner's PC, as D2 was: `MediaPlayerElement` under our XAML controls;
-      HDR10, HLG, HDR10+, Dolby Vision (with and without the Dolby Vision Extensions); MKV with H.264, HEVC (with and without the HEVC
-      extension), VP9, AV1; AC-3, E-AC-3 and Atmos on 24H2, spatial sound; in-band SRT, ASS and PGS; the decoder status of an
-      unsupported track; `CodecQuery` and the Store codecs from an unpackaged app, and the Store link for a missing one; progressive and
-      fMP4 HLS through the relay; SMTC, CompactOverlay, tracks, speed. Ends in notes and ADR 0025's departures 1 to 4 answered
-- [ ] W2 (feat/routes-and-engines): the core's routes and reasons, two engines per player, the per-file route check, the device
-      profile as the union of both engines, the fallback chain, track changes across engines, Settings → Playback → "Player"
-      (Automatic, Always app engine) and "Play with app engine" (owner, 2026-10-28); fake engines in tests
+- [x] W1 spike (spike/windows-native-player, #105): a prototype on the owner's PC, as D2 was (`docs/notes/windows-native-player.md`).
+      Departures 1 to 3 kept, departure 4 dropped (fMP4 HLS plays natively), departure 8 added (PQ video on an SDR display on
+      libmpv) and a speed the native player ignores re-plans to libmpv (owner, 2026-10-28)
+- [ ] W2 (feat/routes-and-engines): the core's routes and reasons, two engines per player, the per-file route check with the display
+      rule (departures 2 and 8), the device profile as the union of both engines, the fallback chain, track, speed and display changes
+      across engines, Settings → Playback → "Player" (Automatic, Always app engine) and "Play with app engine" (owner, 2026-10-28); fake
+      engines in tests
 - [ ] W3 (feat/platform-engine-bridge): the platform engine as a UniFFI foreign trait with its events, capability facts from the UI,
       every platform-engine stream through the relay; C# adapters and bindings tests against the stand-in
 - [ ] W4 (feat/windows-native-engine): the C# Media Foundation engine, the player page with both surfaces, the decodability check
-- [ ] W5 (feat/windows-native-subtitles): our own subtitle view for the native route, above the control bar
-- [ ] W6 (feat/formats-per-route): the supported formats page per route, with missing Store extensions and their link (ADR 0021)
+      (`DecoderStatus`, a track's `OpenFailed`, `MediaFailed` after opening), tracks by `Id`, HLS through `AdaptiveMediaSource` with its
+      own deadline for a slow first segment (W1)
+- [ ] W5 (feat/windows-native-subtitles): our own subtitle view for the native route (text cues and PGS image cues), above the control
+      bar
+- [ ] W6 (feat/formats-per-route): the supported formats page per route, with missing Store extensions (found through `CodecQuery`)
+      and their link (ADR 0021)
 - [ ] W7: device check on the owner's PC: real files on each route, the route and its reasons in the info panel, the fallback chain
 New features (each starts with a spike and an ADR with the owner's choices):
 - [ ] Generated subtitles for videos without any (owner, 2026-10-25): speech to text on the device, with translation into English
