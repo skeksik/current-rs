@@ -91,7 +91,7 @@ internal static class PlayerTests
         var hour = TimeSpan.FromHours(1) + TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(3);
         Check(core.TimeLabel(hour) == "1:02:03" && core.TimeLabel(TimeSpan.FromSeconds(123)) == "2:03", "the shown times");
         Check(core.TimeLabel(TimeSpan.FromSeconds(-5)) == "0:00", "below zero is 0:00");
-        Check(core.TimeLabel(TimeSpan.FromHours(25)) == "1:00:00", "24 hours or more wrap, as before");
+        Check(core.TimeLabel(TimeSpan.FromHours(25) + TimeSpan.FromSeconds(30)) == "25:00:30", "24 hours or more count whole hours");
         Check(core.SpokenTime(hour) == "1 hour 2 minutes 3 seconds" && core.SpokenTime(TimeSpan.Zero) == "0 seconds", "the spoken time");
         Check(core.ElapsedLabel(TimeSpan.FromSeconds(1)) == "Time elapsed 1 second", "the elapsed time's name");
         Check(core.RemainingLabel(TimeSpan.FromMinutes(12)) == "Time remaining 12 minutes", "the remaining time's name");
