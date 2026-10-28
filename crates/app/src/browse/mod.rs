@@ -10,6 +10,7 @@
 //! lists depend on, and a refresh reach every list that is still alive. Lists are held weakly: dropping a list (every clone of its
 //! handle) stops its requests.
 
+mod arrangement;
 mod details;
 mod home;
 mod labels;
@@ -42,6 +43,7 @@ use tokio::task::AbortHandle;
 use crate::list::{ObservableList, VectorDiff};
 use crate::session::Shared;
 
+pub use arrangement::{HomeRowSetting, NavGroup, PaneEntry, PaneLayout, PaneLibrary};
 pub use details::{DetailsView, LoadState, SIMILAR_LIMIT};
 pub use home::{
     HomeFeed, HomeRow, HomeRowKind, HomeState, LATEST_LIMIT, NEXT_UP_LIMIT, RESUME_LIMIT,
@@ -195,6 +197,7 @@ impl Hub {
         ));
         contexts.insert(server.clone(), Arc::downgrade(&context));
         context.start_libraries(shared.capabilities.subscribe());
+        context.start_pane();
         context.start_live();
         Some(Browse { ctx: context })
     }
@@ -318,6 +321,10 @@ pub(crate) struct Context {
     /// Since when the app's window is minimized ([`Hub::window_minimized`]): the socket closes after a while ([`live`]).
     minimized: watch::Receiver<Option<tokio::time::Instant>>,
     libraries: Libraries,
+    /// The pane's groups as the user arranged them ([`Browse::pane`]); `None` until the libraries first loaded.
+    pane: watch::Sender<Option<PaneLayout>>,
+    /// The task that keeps `pane` following the libraries and the arrangement.
+    pane_follower: Mutex<Option<AbortHandle>>,
     /// Orders the lists' reads and the server's answers ([`store::ItemStore`]).
     clock: AtomicU64,
 }
@@ -330,6 +337,9 @@ impl Drop for Context {
         // Closes the socket at once, not at its next message.
         if let Some(live) = lock(&self.live).take() {
             live.abort();
+        }
+        if let Some(follower) = lock(&self.pane_follower).take() {
+            follower.abort();
         }
     }
 }
@@ -361,6 +371,8 @@ impl Context {
             live: Mutex::new(None),
             minimized,
             libraries: Libraries::default(),
+            pane: watch::Sender::new(None),
+            pane_follower: Mutex::new(None),
             clock: AtomicU64::new(0),
         }
     }

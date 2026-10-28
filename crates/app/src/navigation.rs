@@ -16,8 +16,12 @@
 //!    others, and the item comes back to its place if its id returns. Reset forgets the group.
 
 use std::collections::HashSet;
+use std::sync::{Mutex, PoisonError};
 
-use current_store::{Anchor, Placement};
+use current_store::{
+    Anchor, NavigationScope, NavigationSettings, Placement, SettingsStore, StoreError,
+};
+use tokio::sync::watch;
 
 /// The pane's Movies and Series tabs, keyed by the kind each shows (`movie`, `series`).
 pub const TABS: &str = "tabs";
@@ -170,6 +174,69 @@ pub fn with_hidden(
     }
     entries.retain(|entry| !entry.is_empty());
     entries
+}
+
+/// Where the arrangements are kept: the settings file, or for an app that stores nothing, memory for the run. Every change is
+/// published, so the pane and Home follow it.
+pub(crate) struct Arrangements {
+    /// The arrangements of an app that stores nothing; unused when there is a settings store, which is then the only copy.
+    memory: Mutex<NavigationSettings>,
+    /// Counts the changes saved.
+    revision: watch::Sender<u64>,
+}
+
+impl Arrangements {
+    pub(crate) fn new() -> Self {
+        Self {
+            memory: Mutex::new(NavigationSettings::default()),
+            revision: watch::Sender::new(0),
+        }
+    }
+
+    /// Told after each saved change.
+    pub(crate) fn subscribe(&self) -> watch::Receiver<u64> {
+        self.revision.subscribe()
+    }
+
+    /// `scope`'s entries in `group`, oldest move first.
+    pub(crate) fn group(
+        &self,
+        store: Option<&SettingsStore>,
+        scope: &NavigationScope,
+        group: &str,
+    ) -> Vec<Placement> {
+        match store {
+            Some(store) => store.get().navigation.group(scope, group).to_vec(),
+            None => self.lock().group(scope, group).to_vec(),
+        }
+    }
+
+    /// Replaces `scope`'s entries in `group` and saves them: blocking file I/O. An unchanged group writes nothing.
+    pub(crate) fn set_group(
+        &self,
+        store: Option<&SettingsStore>,
+        scope: &NavigationScope,
+        group: &str,
+        entries: Vec<Placement>,
+    ) -> Result<(), StoreError> {
+        if self.group(store, scope, group) == entries {
+            return Ok(());
+        }
+        match store {
+            Some(store) => {
+                store.update(|settings| settings.navigation.set_group(scope, group, entries))?;
+            }
+            None => self.lock().set_group(scope, group, entries),
+        }
+        self.revision.send_modify(|revision| *revision += 1);
+        Ok(())
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, NavigationSettings> {
+        // A panic while holding the lock leaves usable settings behind (each change is one assignment), so poisoning is safe to
+        // ignore.
+        self.memory.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 #[cfg(test)]

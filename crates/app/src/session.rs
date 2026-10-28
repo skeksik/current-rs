@@ -185,6 +185,8 @@ pub(crate) struct Shared {
     next_session: AtomicU64,
     /// Orders session changes (see the module documentation).
     changes: tokio::sync::Mutex<()>,
+    /// How the user arranged the pane and Home, per server and user (ADR 0024).
+    pub(crate) navigation: crate::navigation::Arrangements,
 }
 
 /// Where a sign-in goes: a server just found by setup, or one already saved.
@@ -234,7 +236,13 @@ impl Shared {
             roaming: Mutex::new(Roaming::default()),
             next_session: AtomicU64::new(1),
             changes: tokio::sync::Mutex::new(()),
+            navigation: crate::navigation::Arrangements::new(),
         }
+    }
+
+    /// The settings file, when the app stores anything.
+    pub(crate) fn settings(&self) -> Option<&SettingsStore> {
+        self.storage.as_ref().map(|storage| &storage.settings)
     }
 
     pub(crate) fn servers(&self) -> Vec<SavedServer> {

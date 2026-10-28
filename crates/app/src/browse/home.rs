@@ -76,7 +76,7 @@ pub struct HomeState {
 }
 
 #[derive(Clone)]
-enum Spec {
+pub(super) enum Spec {
     Resume,
     NextUp,
     RecentlyAdded,
@@ -86,7 +86,7 @@ enum Spec {
 }
 
 impl Spec {
-    fn key(&self) -> String {
+    pub(super) fn key(&self) -> String {
         match self {
             Self::Resume => "resume".to_owned(),
             Self::NextUp => "next_up".to_owned(),
@@ -97,7 +97,7 @@ impl Spec {
         }
     }
 
-    fn row(&self) -> HomeRow {
+    pub(super) fn row(&self) -> HomeRow {
         let (kind, title, library) = match self {
             Self::Resume => (HomeRowKind::ContinueWatching, String::new(), None),
             Self::NextUp => (HomeRowKind::NextUp, String::new(), None),
@@ -149,6 +149,26 @@ const DEPENDENT: [Spec; 4] = [
     Spec::Favourites,
     Spec::SeenRecently,
 ];
+
+/// Home's rows in their default order (owner, 2026-10-26): Continue watching, Next up, Favourites, Recently added, a Latest row for
+/// each of `libraries` (in that order) that has one, Seen recently.
+pub(super) fn specs(libraries: &[Library], excludes: &[ItemRef]) -> Vec<Spec> {
+    let mut specs = vec![
+        Spec::Resume,
+        Spec::NextUp,
+        Spec::Favourites,
+        Spec::RecentlyAdded,
+    ];
+    specs.extend(
+        libraries
+            .iter()
+            .filter(|library| has_latest(library, excludes))
+            .cloned()
+            .map(Spec::Latest),
+    );
+    specs.push(Spec::SeenRecently);
+    specs
+}
 
 /// Whether `library` gets a Latest row.
 fn has_latest(library: &Library, excludes: &[ItemRef]) -> bool {
@@ -203,11 +223,16 @@ struct Home {
     lists: Mutex<Rows>,
     state: watch::Sender<HomeState>,
     loads: Mutex<Loads>,
+    /// The task that follows the user's arrangement of the rows.
+    follower: Mutex<Option<AbortHandle>>,
     me: Weak<Home>,
 }
 
 impl Drop for Home {
     fn drop(&mut self) {
+        if let Some(follower) = lock(&self.follower).take() {
+            follower.abort();
+        }
         let loads = lock(&self.loads);
         for task in loads.full.task.iter().chain(&loads.dependent.task) {
             task.abort();
@@ -230,26 +255,32 @@ impl std::fmt::Debug for HomeFeed {
 
 impl HomeFeed {
     pub(super) fn open(ctx: Arc<Context>) -> Self {
+        let order = shown_keys(&ctx.arranged_home(&ctx.known_libraries()));
+        let arrangement = ctx
+            .shared
+            .upgrade()
+            .map(|shared| shared.navigation.subscribe());
         let inner = Arc::new_cyclic(|me| Home {
             ctx,
             rows: ObservableList::new(),
             lists: Mutex::new(Rows {
-                order: vec![
-                    Spec::Resume.key(),
-                    Spec::NextUp.key(),
-                    Spec::Favourites.key(),
-                    Spec::RecentlyAdded.key(),
-                    Spec::SeenRecently.key(),
-                ],
+                order,
                 lists: HashMap::new(),
             }),
             state: watch::Sender::new(HomeState::default()),
             loads: Mutex::new(Loads::default()),
+            follower: Mutex::new(None),
             me: me.clone(),
         });
         let live: Weak<dyn Live> = Arc::downgrade(&inner) as Weak<Home>;
         inner.ctx.register(live);
         inner.load(true);
+        if let Some(arrangement) = arrangement {
+            let follower = inner
+                .ctx
+                .spawn(follow_arrangement(Arc::downgrade(&inner), arrangement));
+            *lock(&inner.follower) = Some(follower);
+        }
         Self {
             inner,
             shown: Arc::default(),
@@ -326,32 +357,28 @@ impl Home {
             match ctx.client() {
                 Ok(client) => {
                     let mut rows = JoinSet::new();
+                    // The rows the user hid are not asked for (ADR 0024).
+                    let shown_now: Vec<String> =
+                        shown_keys(&ctx.arranged_home(&ctx.known_libraries()));
                     for spec in DEPENDENT {
-                        spawn_row(&mut rows, &ctx, &client, spec);
+                        if shown_now.contains(&spec.key()) {
+                            spawn_row(&mut rows, &ctx, &client, spec);
+                        }
                     }
                     if full {
-                        spawn_row(&mut rows, &ctx, &client, Spec::RecentlyAdded);
+                        if shown_now.contains(&Spec::RecentlyAdded.key()) {
+                            spawn_row(&mut rows, &ctx, &client, Spec::RecentlyAdded);
+                        }
                         // The navigation's list takes them too, so the navigation follows what Home shows.
                         match ctx.libraries_joined().await {
                             Ok(libraries) => {
-                                // Libraries kept out of "My media" have no Latest row, as before `GET UserViews` listed them.
-                                let mut excludes = client.latest_excludes();
-                                excludes.extend(client.hidden_libraries());
-                                let mut keys = vec![
-                                    Spec::Resume.key(),
-                                    Spec::NextUp.key(),
-                                    Spec::Favourites.key(),
-                                    Spec::RecentlyAdded.key(),
-                                ];
-                                for library in libraries
-                                    .into_iter()
-                                    .filter(|library| has_latest(library, &excludes))
-                                {
-                                    let spec = Spec::Latest(library);
-                                    keys.push(spec.key());
-                                    spawn_row(&mut rows, &ctx, &client, spec);
+                                let arranged = ctx.arranged_home(&libraries);
+                                for (spec, hidden) in &arranged {
+                                    if !hidden && matches!(spec, Spec::Latest(_)) {
+                                        spawn_row(&mut rows, &ctx, &client, spec.clone());
+                                    }
                                 }
-                                keys.push(Spec::SeenRecently.key());
+                                let keys = shown_keys(&arranged);
                                 if let Some(home) = me.upgrade() {
                                     lock(&home.lists).order = keys.clone();
                                 }
@@ -471,7 +498,40 @@ impl Home {
         self.ctx.spread(changed);
     }
 
-    /// Removes the rows of libraries that are gone or now excluded.
+    /// The user's arrangement changed: the rows take its order, hidden rows go, and a row shown again loads.
+    fn rearrange(&self) {
+        let order = shown_keys(&self.ctx.arranged_home(&self.ctx.known_libraries()));
+        let shown_again = {
+            let mut rows = lock(&self.lists);
+            let again = order.iter().any(|key| !rows.order.contains(key));
+            rows.order.clone_from(&order);
+            again
+        };
+        self.keep_only(&order);
+        {
+            let _rows = lock(&self.lists);
+            let mut shown = self.rows.snapshot();
+            let mut want = shown.clone();
+            want.sort_by_key(|row| order.iter().position(|key| *key == row.key));
+            for (at, row) in want.into_iter().enumerate() {
+                if shown[at].key == row.key {
+                    continue;
+                }
+                if let Some(from) = shown.iter().position(|known| known.key == row.key) {
+                    let _ = self.rows.remove(from);
+                    shown.remove(from);
+                    let _ = self.rows.insert(at, row.clone());
+                    shown.insert(at, row);
+                }
+            }
+        }
+        // A row shown again: read every row, keeping what they show.
+        if shown_again {
+            self.load(true);
+        }
+    }
+
+    /// Removes the rows of libraries that are gone or now excluded, and the rows the user hid.
     fn keep_only(&self, order: &[String]) {
         let mut rows = lock(&self.lists);
         let snapshot = self.rows.snapshot();
@@ -481,6 +541,26 @@ impl Home {
                 let _ = self.rows.remove(at);
             }
         }
+    }
+}
+
+/// The keys of the rows that show, in order.
+fn shown_keys(arranged: &[(Spec, bool)]) -> Vec<String> {
+    arranged
+        .iter()
+        .filter(|(_, hidden)| !hidden)
+        .map(|(spec, _)| spec.key())
+        .collect()
+}
+
+/// Rearranges Home each time the user saves an arrangement, until Home is gone.
+async fn follow_arrangement(home: Weak<Home>, mut arrangement: watch::Receiver<u64>) {
+    arrangement.borrow_and_update();
+    while arrangement.changed().await.is_ok() {
+        let Some(home) = home.upgrade() else {
+            return;
+        };
+        home.rearrange();
     }
 }
 
