@@ -419,7 +419,10 @@ pub(crate) fn answer(
     let marks = &*marks;
     let answer = match path {
         "/UserViews" => {
-            let views = views(listed);
+            let with_hidden = request
+                .param("includeHidden")
+                .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+            let views = views(listed, with_hidden);
             let total = views.len();
             (200, result(&views, 0, Some(total)))
         }
@@ -632,6 +635,9 @@ pub(crate) struct Views {
     /// Removed and forgotten: `GET Items` under one answers 400, as Jellyfin 12.2 does for a parent id it does not know
     /// (`LibraryManager.GetParentItem`).
     pub forgotten: HashSet<String>,
+    /// Kept out of "My media" (`MyMediaExcludes`): listed only with `includeHidden=true`, as Jellyfin 12.3's
+    /// `UserViewManager.GetUserViews` does.
+    pub excluded: HashSet<String>,
 }
 
 impl Default for Views {
@@ -648,6 +654,7 @@ impl Default for Views {
             ],
             hidden: HashSet::new(),
             forgotten: HashSet::new(),
+            excluded: HashSet::new(),
         }
     }
 }
@@ -667,10 +674,11 @@ impl Views {
     }
 }
 
-fn views(views: &Views) -> Vec<String> {
+fn views(views: &Views, with_hidden: bool) -> Vec<String> {
     views
         .listed
         .iter()
+        .filter(|view| with_hidden || !views.excluded.contains(&view.id))
         .map(|view| {
             format!(
                 r#"{{"Name":"{}","ServerId":"{}","Id":"{}","IsFolder":true,"Type":"CollectionFolder","CollectionType":"{}","ImageTags":{{}},"BackdropImageTags":[]}}"#,

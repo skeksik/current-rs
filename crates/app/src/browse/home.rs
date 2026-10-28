@@ -334,7 +334,9 @@ impl Home {
                         // The navigation's list takes them too, so the navigation follows what Home shows.
                         match ctx.libraries_joined().await {
                             Ok(libraries) => {
-                                let excludes = client.latest_excludes();
+                                // Libraries kept out of "My media" have no Latest row, as before `GET UserViews` listed them.
+                                let mut excludes = client.latest_excludes();
+                                excludes.extend(client.hidden_libraries());
                                 let mut keys = vec![
                                     Spec::Resume.key(),
                                     Spec::NextUp.key(),

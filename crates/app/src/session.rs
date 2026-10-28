@@ -793,6 +793,13 @@ impl Shared {
                 .map(|library| ItemRef::new(server.clone(), library.id))
                 .collect();
             client.set_latest_excludes(excludes);
+            client.set_hidden_libraries(
+                signed_in
+                    .hidden_libraries
+                    .into_iter()
+                    .map(|library| ItemRef::new(server.clone(), library.id))
+                    .collect(),
+            );
             self.install(Arc::new(client), user.id.clone(), CHECKED);
             // Race now, so that the status soon shows the address in use.
             provider.retry_now();

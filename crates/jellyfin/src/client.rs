@@ -139,6 +139,8 @@ pub struct SignedIn {
     /// The libraries the user keeps out of "latest" ([`JellyfinClient::latest_excludes`]), for the client that carries the session
     /// when it is not the one that signed in.
     pub latest_excludes: Vec<ItemRef>,
+    /// The libraries the user keeps out of "My media" ([`JellyfinClient::hidden_libraries`]), as `latest_excludes`.
+    pub hidden_libraries: Vec<ItemRef>,
 }
 
 /// A Quick Connect request waiting for approval: the user enters `code` in another signed-in client.
@@ -224,6 +226,8 @@ pub struct JellyfinClient {
     /// The libraries the signed-in user keeps out of "latest" (`Configuration.LatestItemsExcludes`), as the last sign-in or
     /// [`JellyfinClient::current_user`] read them.
     latest_excludes: Mutex<Vec<ItemRef>>,
+    /// The libraries the signed-in user keeps out of "My media" (`Configuration.MyMediaExcludes`), as `latest_excludes`.
+    hidden_libraries: Mutex<Vec<ItemRef>>,
 }
 
 impl std::fmt::Debug for JellyfinClient {
@@ -273,6 +277,7 @@ impl JellyfinClient {
                 outcome: Outcome::Resumed,
             }),
             latest_excludes: Mutex::new(Vec::new()),
+            hidden_libraries: Mutex::new(Vec::new()),
         })
     }
 
@@ -290,6 +295,7 @@ impl JellyfinClient {
     pub fn clear_token(&self) {
         auth::write(&self.token, None);
         self.set_latest_excludes(Vec::new());
+        self.set_hidden_libraries(Vec::new());
         self.resume();
     }
 
@@ -311,18 +317,40 @@ impl JellyfinClient {
             .unwrap_or_else(PoisonError::into_inner) = libraries;
     }
 
-    /// Keeps `user`'s "exclude from latest" libraries.
-    fn keep_latest_excludes(&self, user: &wire::UserDto) {
-        let libraries = user
-            .configuration
-            .as_ref()
-            .and_then(|configuration| configuration.latest_items_excludes.as_ref())
-            .into_iter()
-            .flatten()
-            .filter(|id| !id.is_empty())
-            .map(|id| ItemRef::new(self.server().clone(), ItemId::new(id.as_str())))
-            .collect();
-        self.set_latest_excludes(libraries);
+    /// The libraries the signed-in user keeps out of "My media", so the navigation hides them until the user shows them in Current
+    /// (ADR 0024). Read as [`JellyfinClient::latest_excludes`] is.
+    pub fn hidden_libraries(&self) -> Vec<ItemRef> {
+        self.hidden_libraries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Sets the libraries the user keeps out of "My media": a sign-in's [`SignedIn::hidden_libraries`], when another client made it.
+    pub fn set_hidden_libraries(&self, libraries: Vec<ItemRef>) {
+        // A single assignment under the lock: a poisoned one still holds a usable value.
+        *self
+            .hidden_libraries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = libraries;
+    }
+
+    /// Keeps `user`'s "exclude from latest" and "My media" exclusions.
+    fn keep_excludes(&self, user: &wire::UserDto) {
+        let configuration = user.configuration.as_ref();
+        let libraries = |ids: Option<&Vec<String>>| {
+            ids.into_iter()
+                .flatten()
+                .filter(|id| !id.is_empty())
+                .map(|id| ItemRef::new(self.server().clone(), ItemId::new(id.as_str())))
+                .collect()
+        };
+        self.set_latest_excludes(libraries(
+            configuration.and_then(|configuration| configuration.latest_items_excludes.as_ref()),
+        ));
+        self.set_hidden_libraries(libraries(
+            configuration.and_then(|configuration| configuration.my_media_excludes.as_ref()),
+        ));
     }
 
     pub fn has_token(&self) -> bool {
@@ -546,7 +574,7 @@ impl JellyfinClient {
     pub async fn current_user(&self) -> Result<User, AuthError> {
         let response = self.send_authenticated(Request::get("/Users/Me")).await?;
         let user: wire::UserDto = response.json()?;
-        self.keep_latest_excludes(&user);
+        self.keep_excludes(&user);
         Ok(map_user(user, self.server()))
     }
 
@@ -796,6 +824,7 @@ impl JellyfinClient {
             *slot = None;
             drop(slot);
             self.set_latest_excludes(Vec::new());
+            self.set_hidden_libraries(Vec::new());
             true
         } else {
             false
@@ -804,9 +833,10 @@ impl JellyfinClient {
 
     fn signed_in(&self, response: &Response) -> Result<SignedIn, AuthError> {
         let result: wire::AuthenticationResult = response.json()?;
-        self.keep_latest_excludes(&result.user);
+        self.keep_excludes(&result.user);
         Ok(SignedIn {
             latest_excludes: self.latest_excludes(),
+            hidden_libraries: self.hidden_libraries(),
             user: map_user(result.user, self.server()),
             token: AccessToken::new(result.access_token),
             server_id: result
