@@ -468,6 +468,42 @@ mod tests {
     }
 
     #[test]
+    fn a_local_route_names_what_the_native_player_lacks_and_keeps_todays_route_name() {
+        let mut info = info();
+        if let Some(plan) = info
+            .details
+            .as_mut()
+            .and_then(|details| details.plan.as_mut())
+        {
+            plan.route = Route::AppEngine;
+            plan.reasons = vec![
+                RouteReason::NATIVE_LACKS,
+                RouteReason::SUBTITLE_NEEDS_RENDERING,
+            ];
+            plan.native_lacks = vec![
+                current_model::TrackGap {
+                    kind: current_model::GapKind::Audio,
+                    name: Some("truehd".into()),
+                },
+                current_model::TrackGap {
+                    kind: current_model::GapKind::Video,
+                    name: Some("h264".into()),
+                },
+            ];
+        }
+        let lines = info_panel_lines(&info, None, &panel(), &dot());
+        assert_eq!(
+            lines[..4],
+            [
+                "Direct play",
+                "• The native player can't decode Dolby TrueHD audio.",
+                "• The native player can't decode this H.264 (AVC) video.",
+                "• The subtitles need rendering the native player can't do.",
+            ]
+        );
+    }
+
+    #[test]
     fn the_panel_uses_the_platforms_separator_and_leaves_out_what_is_unknown() {
         let display = DisplayFacts {
             hdr: false,

@@ -356,8 +356,10 @@ mod tests {
         automatic.changed_from(&always);
         // Automatic is the default, left out of the file.
         assert_eq!(automatic.write(), None);
-        let mut set = PlaybackSettings::default();
-        set.player = PlayerChoice::AlwaysAppEngine;
+        let mut set = PlaybackSettings {
+            player: PlayerChoice::AlwaysAppEngine,
+            ..PlaybackSettings::default()
+        };
         set.changed_from(&PlaybackSettings::default());
         assert_eq!(set.write().unwrap()["player"], "always_app_engine");
         // A value this version cannot read reads as "Automatic" and is kept until changed here.

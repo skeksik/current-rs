@@ -16,7 +16,7 @@ libadwaita in Rust on Linux; Android, iOS, tvOS and the web later. **Desktop fir
 ## Layout
 ```
 crates/model        current-model: domain types (pure, no I/O)
-crates/playback     current-playback: playback logic (ADR 0019): Engine and MediaServer traits, route planner, playback controller; no service, no HTTP, no libmpv
+crates/playback     current-playback: playback logic (ADR 0019): Engine and MediaServer traits, route planner, playback controller, the engines and per-file route check (ADR 0025); no service, no HTTP, no libmpv
 crates/net          current-net: HTTP client per server, typed errors, redacted request log, plain-HTTP rule, gateway credentials (ADR 0017), streaming send for the loopback relay (ADR 0020), the WebSocket (ADR 0023)
 crates/store        current-store: settings file, secrets in the OS keyring, device id (ADR 0013), the pane's and Home's arrangement (ADR 0024)
 crates/jellyfin     current-jellyfin: Jellyfin client; so far server setup (ADR 0012), discovery (ADR 0016), sign-in (ADR 0015), gateway answers and header placement (ADR 0017), browse queries and images (ADR 0018), playback calls and the device profile (ADR 0019), a stream's path and streaming send for the loopback relay (ADR 0020), live messages on the WebSocket (ADR 0023)
