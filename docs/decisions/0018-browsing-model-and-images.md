@@ -274,6 +274,26 @@ Home is a **`HomeFeed`**: a list of rows, each with its own item list.
   favourites tick on (`favourites_query(Some(kind))`). A series stands for its episodes in the rows chosen across
   libraries (Favourites, Recently added); Seen recently shows films, episodes and other videos. `HomeRowKind` gains `Favourites`,
   `RecentlyAdded` and `SeenRecently`; `Latest` keeps its name on the bridge.
+- **Amended 2026-10-28 (owner): Movies and Series tabs.** Two kind pages get a tab of their own in the navigation: **Movies** and
+  **Series**, every film or series of the server across its libraries (`BrowseView::Everything` of that kind, `kind_query`; no second
+  page type). Episodes and Collections get none: their Favourites rows' headers keep opening today's page.
+  - **Place:** right under Home, above the separator before Favourites, Recently added and Libraries: Home · Movies · Series · ── ·
+    Favourites · Recently added · Libraries. With more than one signed-in server, first inside each server's item, before its
+    Favourites and Recently added, as those two sit there.
+  - **When a tab shows** (`kind_tabs`): while the server lists a library of its collection type, `movies` for Movies and `tvshows`
+    for Series (Jellyfin's `CollectionType`, `Jellyfin.Data/Enums/CollectionType.cs`, jellyfin/jellyfin master, read 2026-10-28).
+    It is read from the library list the core already keeps (`Browse::library_list`), so a tab comes and goes with its libraries and
+    costs no request. A library without a collection type (mixed content; the enum has no value for it) shows no tab (not verified
+    on a server). A count query (`GET /Items` with `Limit=0` and the total) would catch those, at the cost of a request per type and
+    server, its reloads and its failures; not chosen.
+  - **What it shows:** a library's grid. All items of the kind by name, the same Sort, Filter (Played/Unplayed, Favourites) and
+    View, and **its own remembered choices** under the same three Settings switches (`view_remembers`, `App::view_opening`,
+    `App::remember_view_choices`). They are kept per server and kind in `current-store` under `browse.kinds`
+    (`"jellyfin/1/movie": {sort, filter, view}`), additive: an older file has none and loads as before. A Favourites row's header
+    for Movies or Series opens the same page with the favourites tick on and nothing remembered, as a Home row's header opens a
+    library; choices made there are remembered for the tab, as they are for a library opened from Home. That page keeps the
+    Favourites tab selected; opened from its own tab, the page selects that tab.
+  - **View settings per Home row:** dropped for now (owner, 2026-10-28).
 
 ### Libraries that follow the server (amended 2026-10-25)
 On the owner's server, a library added while the app ran showed on Home but not in the navigation until a restart, and a removed one

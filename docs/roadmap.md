@@ -268,8 +268,11 @@ Fix and polish:
       the supported formats page shows "Server converts" today, ADR 0021)
 - [ ] Reorder or hide the pane's items within their groups (Favourites, Recently added; the libraries), Home and Settings fixed, and
       reorder Home's rows (owner, 2026-10-26); where the order is kept (locally or the user's Jellyfin library order) to be researched
-- [ ] Per-type pages (Movies, Series, Episodes, opened from the Favourites rows' headers) as pane tabs, and view settings per Home
-      row: to be discussed with the owner (2026-10-27)
+- [x] Per-type pages as pane tabs: Movies and Series, every library's, with a library's Sort, Filter, View and remembered choices,
+      under Home (owner, 2026-10-28; ADR 0018 §6, amended; PR #PR)
+- [ ] Per-type pages for Episodes and Collections (their Favourites rows' headers open today's page; not wanted for now, owner,
+      2026-10-28)
+- [ ] View settings per Home row: dropped for now (owner, 2026-10-28)
 - [ ] Browse by genre: a Genres tab and a Genres row on Home; Studios and Networks rows on Home (owner, 2026-10-26, from the Windows UI
       pass; moved here from M4, 2026-10-27)
 New features (each starts with a spike and an ADR with the owner's choices):
