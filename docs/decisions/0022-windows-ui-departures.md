@@ -30,6 +30,8 @@ Each choice below stays until the owner changes it.
 4. **A Refresh button in the title bar**, beside Back, on pages that can refresh (Home, a library, a details page); F5 and Ctrl+R stay.
    The title bar page above lists a back button, icon, title, search, a person picture and tabs, not other commands. Reason: one place
    for Refresh on every page, instead of a button on each page (owner, 2026-10-26).
+   Search and Refresh belong to the pages: both are hidden while the player is open, and come back with the page (owner,
+   2026-10-28).
 5. **The tile shade.** An in-progress tile shows its play mark, bar and time left in the dark theme whatever the app's theme, on a
    shade from clear to 80 % black over the poster's bottom (App.xaml, `TileScrimBrush`). The rest of the app follows the Windows light
    or dark setting. Reason: white text on a darkened picture reads on any poster; the shade is measured against the 4.5:1 text

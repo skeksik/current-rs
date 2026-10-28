@@ -336,8 +336,25 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         }
         NavView.Visibility = Visibility.Collapsed;
         AppTitleBar.IsPaneToggleButtonVisible = false;
+        ShowPageCommands(false);
         _ = Player.PlayAsync(core, target.Item.Item, fromStart ? TimeSpan.Zero : target.Start);
         UpdateBackButton();
+    }
+
+    /// <summary>
+    /// The title bar's search and Refresh belong to the pages, so they go while the player is open and come back with the page
+    /// (owner, 2026-10-28; ADR 0022 items 3 and 4). Hidden, not removed: the search keeps its text and Refresh its state.
+    /// </summary>
+    private void ShowPageCommands(bool show)
+    {
+        var visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        RefreshButton.Visibility = visibility;
+        SearchHost.Visibility = visibility;
+        if (!show)
+        {
+            CloseNarrowSearch();
+        }
+        QueueTitleBarRegions();
     }
 
     public bool IsFullScreen => AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen;
@@ -375,6 +392,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     {
         NavView.Visibility = Visibility.Visible;
         AppTitleBar.IsPaneToggleButtonVisible = true;
+        ShowPageCommands(true);
         UpdateBackButton();
         DispatcherQueue.TryEnqueue(() => ContentFrame.Focus(FocusState.Programmatic));
     }
@@ -841,6 +859,11 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     private void OnSearchAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
+        // No search over the player: its box is hidden while it plays (ShowPageCommands).
+        if (Player.IsOpen)
+        {
+            return;
+        }
         if (SearchBox.Visibility == Visibility.Visible)
         {
             args.Handled = SearchBox.Focus(FocusState.Keyboard);

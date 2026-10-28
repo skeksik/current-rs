@@ -275,6 +275,7 @@ Fix and polish:
 - [ ] Per-type pages for Episodes and Collections (their Favourites rows' headers open today's page; not wanted for now, owner,
       2026-10-28)
 - [ ] View settings per Home row: dropped for now (owner, 2026-10-28)
+- [x] No search or Refresh in the title bar while the player is open (owner, 2026-10-28; PR 105)
 - [ ] Browse by genre: a Genres tab and a Genres row on Home; Studios and Networks rows on Home (owner, 2026-10-26, from the Windows UI
       pass; moved here from M4, 2026-10-27)
 Native player first (owner, 2026-10-28; ADR 0025): Windows' own player (Media Foundation in `MediaPlayerElement`) first,
