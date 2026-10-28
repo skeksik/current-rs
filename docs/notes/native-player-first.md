@@ -98,6 +98,29 @@ Store product pages, https://apps.microsoft.com/detail/<id> (read 2026-10-28; pr
   "MediaPlayerElement does not support DolbyVision" (microsoft/microsoft-ui-xaml #9238, filed by a user, no Microsoft answer seen).
   On an ordinary PC and display, then, Windows has **no true Dolby Vision route** for us; libmpv applies the Dolby Vision metadata
   itself and outputs HDR10 or SDR (ADR 0007, ADR 0019).
+- **Dolby Vision, checked against leads from the owner (2026-10-28; the leads were a secondary summary, so only primary sources are
+  quoted here):**
+  1. *Dolby Vision only on certified displays, with Microsoft's or Dolby's extension.* Partly supported: the extension "requires a
+     Dolby Vision licensed device" (Store page) and Windows picks Dolby Vision "For Dolby Vision certified monitors" ("HDR settings in
+     Windows"). Microsoft lists "Dolby Vision" among the certifications to look for in a display or PC ("Display requirements for HDR
+     video in Windows", https://support.microsoft.com/help/4040547, no page date). That only certain apps (Films & TV, Media Player)
+     show it: not verified. Dell's article "may not see Dolby Vision option when the ACM is turned on" (Dell KB 000222733, last
+     modified 2026-05-20) shows the mode exists on some vendors' laptops.
+  2. *External monitors and TVs over HDMI usually get HDR10.* Microsoft's requirement for an external display is HDR10 ("The HDR
+     display or TV must support HDR10, DisplayPort 1.4, HDMI 2.0 or higher, USB-C, or Thunderbolt", same page); nothing found says
+     Windows sends Dolby Vision to an external display. Not verified either way.
+  3. *Profile 7 falls back to HDR10 in Windows' players.* Not verified.
+  4. *Only dedicated, licensed tools decode it fully.* Not verified.
+  - **The owner's PC:** an HDR10-only DisplayHDR 400 monitor (no Dolby Vision, no HDR10+, per its maker's datasheet, read by the
+    manager 2026-10-28) and an SDR monitor. True Dolby Vision cannot be tested there; a Dolby Vision certified built-in laptop screen
+    is not testable by the owner.
+  - **Which route looks better on an HDR10 monitor that is not Dolby Vision:** libplacebo (libmpv's renderer, `vo=gpu-next`) has
+    "Native support for Dolby Vision HDR, including Profile 5 conversion to HDR/PQ or SDR, reading DV side data, and reshaping"
+    (libplacebo `README.md`, master, read 2026-10-28), and mpv keeps the metadata by default (`format` filter: `dolbyvision` "Whether or
+    not to include Dolby Vision metadata (default: yes)", mpv v0.41.0 `DOCS/man/vf.rst`). So libmpv applies each frame's reshaping and
+    outputs PQ. Media Foundation without a Dolby Vision display would show the base layer: HDR10 with static metadata for profile 8.1,
+    and for profile 5, which has no HDR10-compatible base layer, wrong colours or nothing (inferred, not verified). Task W1 compares
+    both by eye on the owner's monitors (ADR 0025, departure 2).
 - **Frame-server mode** (`IsVideoFrameServerEnabled`: "the media player does not render video content. Instead, your app should
   register for the VideoFrameAvailable event and call CopyFrameToVideoSurface", API reference, ms.date 2017-02-08): the pages say
   nothing about 10-bit, colour space or HDR metadata, and a user report (microsoft-ui-xaml #6610, closed 2023-10-25) found float targets

@@ -128,12 +128,18 @@ The existing client's behaviour is the default on every platform; where ours dif
    itself (H.264, HEVC, VP9, AV1 and others in MKV, "Supported codecs", ms.date 2026-05-12), so step 2 is empty on Windows and no
    libavformat muxer is enabled. Why: nothing to remux into. Source: notes, "Formats Media Foundation plays". Checked on the device in
    task W1. Needs the owner's approval.
-2. **Windows: Dolby Vision on libmpv, not the server.** What differs: the existing client shows true Dolby Vision only natively and
-   sends a profile without a compatible base layer (profile 5) to the server. On Windows, Media Foundation shows Dolby Vision only with
-   the Dolby Vision Extensions on "a Dolby Vision licensed device" (Store page), and through WinUI 3 not verified; libmpv applies the
-   Dolby Vision metadata itself and outputs HDR10 or SDR (ADR 0007, ADR 0019). Proposed: Dolby Vision goes native only where task W1
-   shows it works with the extension on a licensed display; otherwise every profile (5, 7, 8) goes to libmpv, and never to the server
-   for Dolby Vision alone. Why: a server transcode of profile 5 loses the HDR, libmpv keeps it as HDR10. Needs the owner's approval.
+2. **Windows: Dolby Vision prefers libmpv.** What differs: the existing client shows true Dolby Vision on its native player or its
+   remux and sends a profile without a compatible base layer (profile 5) to the server. On Windows, Media Foundation shows Dolby Vision
+   only with the Dolby Vision Extensions on "a Dolby Vision licensed device" (Store page), Microsoft's requirement for external HDR
+   displays is HDR10, and through WinUI 3 it is not verified; elsewhere it would show only the base layer (HDR10 with static metadata
+   for profile 8.1, nothing usable for profile 5; inferred). libplacebo, libmpv's renderer, reads the Dolby Vision metadata and
+   reshapes each frame ("including Profile 5 conversion to HDR/PQ or SDR", its README), and mpv keeps that metadata by default.
+   Proposed: on Windows a Dolby Vision file (profiles 5, 7, 8) goes to libmpv first, and never to the server for Dolby Vision alone;
+   native only on a display Windows reports in Dolby Vision mode with the extension installed, if task W1 or a later check shows it
+   works. Why: a better picture than the base layer on the HDR10 monitors most users have, and no server transcode that drops HDR.
+   The owner's PC (an HDR10-only DisplayHDR 400 monitor and an SDR one) can compare libmpv's conversion with Media Foundation's base
+   layer by eye, HDR10+ likewise; a Dolby Vision certified built-in laptop screen is not testable by the owner. Sources: notes,
+   "HDR". Needs the owner's approval.
 3. **Windows: picture subtitles native, if task W1 shows them.** What differs: Windows lists VobSub and PGS among its timed text
    formats and exposes `ImageSubtitle` tracks with `ImageCue` bitmaps, which our view could draw (`ApplicationPresented`). If in-band
    PGS from MKV arrives that way, PGS stays on the native route instead of moving the file to libmpv. Why: no engine switch on a track
@@ -195,8 +201,10 @@ owner's PC, as the D2 spike was; the rest waits for its notes.
 
 **Windows**
 - **W1** (spike/windows-native-player): a throwaway WinUI 3 prototype (Windows App SDK 2.5.1, unpackaged, as the app) with
-  `MediaPlayerElement` under our XAML controls, on the owner's PC. Checks: XAML over the video (no flicker, Narrator); HDR10, HLG,
-  HDR10+ and Dolby Vision with and without the Dolby Vision Extensions; MKV with H.264, HEVC (with and without the HEVC extension), VP9,
+  `MediaPlayerElement` under our XAML controls, on the owner's PC. Checks: XAML over the video (no flicker, Narrator); HDR10 and HLG;
+  Dolby Vision (profiles 5 and 8.1) and HDR10+ compared by eye between Media Foundation and libmpv on the HDR10-only monitor and the
+  SDR one (does either route use the dynamic metadata for tone mapping on a display of about 400 nit?), with and without the Dolby
+  Vision Extensions (true Dolby Vision is not testable on the owner's displays); MKV with H.264, HEVC (with and without the HEVC extension), VP9,
   AV1; AC-3, E-AC-3 and E-AC-3 JOC on 24H2, TrueHD and DTS (expected to fail), multichannel and spatial sound; in-band SRT, ASS and PGS
   in MKV and what reaches `ApplicationPresented`; `DecoderStatus` on an unsupported track; `CodecQuery` from an unpackaged app,
   including Store codecs; the Store link; progressive and HLS fMP4 through the relay on 127.0.0.1; SMTC with `CommandManager` off,
