@@ -27,8 +27,16 @@ What Jellyfin 12.3 does (tag v12.3, 06de749, source read 2026-10-27; not checked
 
 ## Decision
 1. **One socket per browse session** (`current-app`, `browse/live.rs`): opened with the session's first `Browse`, closed when its
-   last list is dropped or the session ends (sign-out, removal, a new sign-in). The app has no signal for going to the background
-   yet: the socket stays open there too (follow-up: pause it in the background).
+   last list is dropped or the session ends (sign-out, removal, a new sign-in).
+   Amended 2026-10-28 (owner): closed after the window has been minimized for a minute, reopened on restore. The platform reports
+   the window's minimized state (`App::window_minimized`, `Core::window_minimized` in current-ffi) and the core keeps the rule: the
+   socket closes once the window has been minimized for `LIVE_PAUSE_AFTER` (60 s), counted from the minimize, and no attempt is
+   made while it stays minimized; a restore opens it again at once, followed by the usual resync (decision 6). A quick minimize and
+   restore changes nothing, and a window that is behind other apps or not focused, but not minimized, keeps its socket. Playback
+   does not depend on the socket and goes on while minimized. Windows reports it from the window's presenter state
+   (`OverlappedPresenter.State`, read on every `AppWindow.Changed` and activation; `IsIconic` under the player's full-screen
+   presenter); a restore also activates the window, which is the foreground return of decision 5. The macOS app will report
+   miniaturize the same way (M3).
 2. **What it carries.** `UserDataChanged` goes into the store as a server's answer that arrived now (newest wins, wanted changes on
    top), so every page shows it; the lists chosen by marks read again a moment later, as after a mark. Everything else is ignored:
    remote control (`Play`, `GeneralCommand`, `Playstate`), sessions, library changes, and kinds not known yet.
@@ -54,7 +62,8 @@ What Jellyfin 12.3 does (tag v12.3, 06de749, source read 2026-10-27; not checked
    cpufeatures 0.3.1, rand 0.10.3, rand_core 0.10.1, chacha20 0.10.2 (each MIT OR Apache-2.0), data-encoding 2.11.1 (MIT).
 
 ## Not verified
-A real server (the endpoint path, the batching, the echo of our own saves, the 403); upgrades through an HTTP proxy; how other
+On Windows, which `AppWindow.Changed` flags or activation a minimize and a restore raise, and what a minimize from the player's
+full screen does to the presenter (the owner checks both on their PC). A real server (the endpoint path, the batching, the echo of our own saves, the 403); upgrades through an HTTP proxy; how other
 clients show our session. A push built before a later save of ours but delivered after its answer would show the older state until
 the next read (the HTTP answer and the socket are separate connections); Jellyfin builds each batch when it sends it, which makes
 this unlikely.
