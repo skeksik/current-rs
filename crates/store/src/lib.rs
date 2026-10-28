@@ -25,7 +25,7 @@ pub use gateway::{
     get_gateway_secret, remove_address, set_gateway_secret,
 };
 pub use navigation::{Anchor, NavigationScope, NavigationSettings, Placement};
-pub use playback::{PlaybackSettings, StreamQuality};
+pub use playback::{PlaybackSettings, PlayerChoice, StreamQuality};
 pub use secrets::{
     KeyringSecrets, MemorySecrets, SERVICE_NAME, Secret, SecretKey, Secrets, SecretsError,
 };
