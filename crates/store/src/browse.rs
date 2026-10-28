@@ -306,7 +306,7 @@ impl EntryKey for KindPage {
 }
 
 /// The server and the rest of a key, `service/server key/rest`; `None` for a key this version cannot read.
-fn parse_key(key: &str) -> Option<(ServerRef, &str)> {
+pub(crate) fn parse_key(key: &str) -> Option<(ServerRef, &str)> {
     let mut parts = key.splitn(3, '/');
     let (service, server, rest) = (parts.next()?, parts.next()?, parts.next()?);
     if service.is_empty() || server.is_empty() || rest.is_empty() {

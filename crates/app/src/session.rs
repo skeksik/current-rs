@@ -1021,11 +1021,14 @@ impl Shared {
             self.check_writable()?;
             let shared = self.clone();
             let removed = server.clone();
-            // The libraries remembered for it go in the same save.
+            // The libraries remembered for it, and its users' arrangements, go in the same save.
             blocking("save", move || {
                 shared.commit_with(
                     |servers, _| servers.retain(|saved| saved.server != removed),
-                    |settings| settings.browse.forget_server(&removed),
+                    |settings| {
+                        settings.browse.forget_server(&removed);
+                        settings.navigation.forget_server(&removed);
+                    },
                 )
             })
             .await??;
