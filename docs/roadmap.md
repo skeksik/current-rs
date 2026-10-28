@@ -269,7 +269,7 @@ Fix and polish:
 - [ ] Reorder or hide the pane's items within their groups (Favourites, Recently added; the libraries), Home and Settings fixed, and
       reorder Home's rows (owner, 2026-10-26); where the order is kept (locally or the user's Jellyfin library order) to be researched
 - [x] Per-type pages as pane tabs: Movies and Series, every library's, with a library's Sort, Filter, View and remembered choices,
-      under Home (owner, 2026-10-28; ADR 0018 §6, amended; PR #PR)
+      under Home (owner, 2026-10-28; ADR 0018 §6, amended; PR #101)
 - [ ] Per-type pages for Episodes and Collections (their Favourites rows' headers open today's page; not wanted for now, owner,
       2026-10-28)
 - [ ] View settings per Home row: dropped for now (owner, 2026-10-28)
