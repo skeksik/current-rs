@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use current_model::{
     EngineErrorKind, ItemRef, MediaKind, PlaybackProblem, PlayerState, Route, RouteLabel,
-    RouteReason, Segment, SegmentKind, StreamAction, SubtitleChoice, TrackChoice, TranscodingFacts,
+    RouteReason, Segment, SegmentKind, ServerOffer, StreamAction, SubtitleChoice, TrackChoice,
+    TranscodingFacts,
 };
 
 use crate::clock::Clock;
@@ -196,7 +197,7 @@ fn a_resume_goes_into_the_request_and_the_file_and_starts_reporting_at_the_first
     assert_eq!(start.media_source, "source-1");
     assert_eq!(start.audio, Some(1));
     assert_eq!(start.subtitle, None);
-    assert_eq!(start.route, Route::DirectPlay);
+    assert_eq!(start.route, Route::AppEngine);
     assert!(!start.paused);
     assert_eq!(player.state(), PlayerState::Playing);
 }
@@ -658,12 +659,12 @@ fn the_servers_transcoding_facts_correct_the_route_after_start() {
     player.play(MediaKind::MOVIE, Duration::ZERO);
     assert_eq!(
         player.player.status().route.map(|route| route.label()),
-        Some(RouteLabel::Transcode)
+        Some(RouteLabel::ServerTranscode)
     );
     player.start();
     assert_eq!(
         player.player.status().route.map(|route| route.label()),
-        Some(RouteLabel::Remux)
+        Some(RouteLabel::ServerRemux)
     );
     assert!(
         player
@@ -675,7 +676,7 @@ fn the_servers_transcoding_facts_correct_the_route_after_start() {
 }
 
 fn with_segments(player: &mut Harness, segments: Vec<Segment>) {
-    let mut with = answer(Route::DirectPlay, vec![]);
+    let mut with = answer(ServerOffer::DirectPlay, vec![]);
     with.source.has_segments = true;
     player.server.answer(Ok(with));
     player.server.state().segments = segments;
@@ -1055,7 +1056,7 @@ fn a_preferred_quality_at_or_above_the_original_plays_the_original_with_one_plan
 #[test]
 fn a_source_without_a_bitrate_plays_at_the_preferred_quality() {
     let mut player = Harness::new(AutoSkip::off());
-    let mut unknown = answer(Route::DirectPlay, vec![]);
+    let mut unknown = answer(ServerOffer::DirectPlay, vec![]);
     unknown.source.bitrate = None;
     player.server.answer(Ok(unknown));
     player.player.set_quality_preference(QualityPreference {
@@ -1095,7 +1096,7 @@ fn nothing_published_or_loaded_shows_a_secret() {
         player.player.engine(),
         player.player.details(),
         player.player.status(),
-        answer(Route::DirectPlay, vec![]),
+        answer(ServerOffer::DirectPlay, vec![]),
     );
     for secret in SECRETS {
         assert!(!shown.contains(secret), "{secret} shown");
@@ -1104,14 +1105,14 @@ fn nothing_published_or_loaded_shows_a_secret() {
 
 #[test]
 fn a_relayed_stream_loads_the_relay_url_and_opens_references_only_for_hls() {
-    let progressive = Route::ServerStream {
+    let progressive = ServerOffer::Stream {
         protocol: current_model::StreamProtocol::Progressive,
         container: Some("mkv".into()),
         video: StreamAction::Copy,
         audio: StreamAction::Transcode,
     };
     for (route, references) in [
-        (Route::DirectPlay, false),
+        (ServerOffer::DirectPlay, false),
         (progressive, false),
         (hls(StreamAction::Copy, StreamAction::Copy), true),
     ] {

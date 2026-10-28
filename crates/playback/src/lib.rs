@@ -5,8 +5,10 @@
 mod clock;
 mod controller;
 mod engine;
+mod engines;
 pub mod planner;
 mod quality;
+pub mod route;
 mod server;
 mod status;
 mod stream;
@@ -21,11 +23,15 @@ pub use controller::{
     AUTOPLAY_COUNTDOWN, Controller, NEXT_EPISODE_LEAD, PROGRESS_INTERVAL, STATE_INTERVAL,
 };
 pub use engine::{EndReason, Engine, EngineEvent, EngineFile, EngineTrack, ExternalSubtitle};
-pub use planner::{PlanNote, Planned};
+pub use engines::{
+    DeviceRemux, DisplayKind, EnginePreference, EngineProfile, Engines, PlatformRules,
+};
+pub use planner::{PlanNote, Planned, RouteInputs};
 pub use quality::{
     Quality, QualityOption, QualityPreference, QualityTarget, listed_quality,
     preferred_quality_options, quality_options, resolution_name, snap_quality,
 };
+pub use route::{RouteChoice, RouteContext};
 pub use server::{
     MediaServer, PlanRequest, ProgressReport, ServerAnswer, StopReport, TranscodePermissions,
 };
@@ -34,7 +40,7 @@ pub use stream::{EngineStream, StreamAuth, StreamUrl};
 
 /// The playback types of `current-model` this crate's API uses, so callers need not name both crates.
 pub use current_model::{
-    EngineCapabilities, EngineErrorKind, MediaSource, MediaStream, PlaybackPlan, PlaybackProblem,
-    PlayerState, Route, RouteLabel, RouteReason, Segment, SegmentKind, SubtitleChoice, TrackChoice,
-    TranscodingFacts,
+    EngineCapabilities, EngineErrorKind, EngineRole, GapKind, MediaSource, MediaStream,
+    PlaybackPlan, PlaybackProblem, PlayerState, Route, RouteLabel, RouteReason, Segment,
+    SegmentKind, ServerOffer, SubtitleChoice, TrackChoice, TrackGap, TranscodingFacts,
 };

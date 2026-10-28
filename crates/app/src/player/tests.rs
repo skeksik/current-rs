@@ -115,7 +115,7 @@ async fn a_direct_play_starts_reports_and_closes_in_order() {
     assert_eq!(status.duration, Some(DURATION));
     assert_eq!(
         status.route.as_ref().map(|route| route.label()),
-        Some(RouteLabel::DirectPlay)
+        Some(RouteLabel::AppEngine)
     );
     assert_eq!(status.audio_tracks.len(), 1);
     eventually(|| reports(&stand_in) == ["/Sessions/Playing"]).await;
@@ -207,7 +207,7 @@ async fn nothing_the_player_publishes_holds_a_url_or_the_token() {
     let status = until(&player.state(), playing).await;
     assert_eq!(
         status.route.as_ref().map(|route| route.label()),
-        Some(RouteLabel::Remux)
+        Some(RouteLabel::ServerRemux)
     );
     let info = player.playback_info().await.unwrap();
     assert!(info.details.unwrap().transcoding.is_some());

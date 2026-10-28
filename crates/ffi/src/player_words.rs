@@ -80,15 +80,15 @@ impl Core {
         current_app::position_label(ms, duration_ms)
     }
 
-    /// The route's label: "Direct play", "Remux", "Direct stream", "Transcode".
+    /// The route's label: "Direct play", "Remux", "Direct stream", "Transcode" (one engine; W3 brings ADR 0025's labels).
     pub fn route_name(&self, route: RouteKind) -> String {
         let label = match route {
-            RouteKind::DirectPlay => RouteLabel::DirectPlay,
-            RouteKind::Remux => RouteLabel::Remux,
-            RouteKind::DirectStream => RouteLabel::DirectStream,
-            RouteKind::Transcode => RouteLabel::Transcode,
+            RouteKind::DirectPlay => RouteLabel::AppEngine,
+            RouteKind::Remux => RouteLabel::ServerRemux,
+            RouteKind::DirectStream => RouteLabel::ServerDirectStream,
+            RouteKind::Transcode => RouteLabel::ServerTranscode,
         };
-        current_app::route_name(label).to_owned()
+        current_app::route_name_one_engine(label).to_owned()
     }
 
     /// Why the server streams rather than plays the file directly, in plain words; a reason no release knows is its own name.

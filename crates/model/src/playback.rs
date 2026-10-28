@@ -210,14 +210,15 @@ pub enum StreamProtocol {
     Progressive,
 }
 
-/// How a media source reaches the engine. Closed: Current defines the routes (ADR 0019, "Route planner").
+/// What the server offered for a source: direct play (the device reads the file as it is, on whichever local route plays it), or a
+/// stream it makes. The service crate maps its answer to this; the planner in `current-playback` turns it into a [`Route`] with
+/// the engines the player has (ADR 0025, "How the core decides"). Closed: Current defines it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Route {
-    /// The engine reads the file as it is.
+pub enum ServerOffer {
     DirectPlay,
-    /// The server makes a stream for the engine. With both streams copied it is a remux; with only the video copied, what the UI
-    /// calls "direct stream"; otherwise a transcode.
-    ServerStream {
+    /// The server makes a stream. With both streams copied it is a remux; with only the video copied, a direct stream; otherwise a
+    /// transcode.
+    Stream {
         protocol: StreamProtocol,
         /// The stream's container (for example `mp4` for fMP4 segments, `ts`).
         container: Option<String>,
@@ -226,35 +227,123 @@ pub enum Route {
     },
 }
 
-/// What the UI calls a route.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum RouteLabel {
-    DirectPlay,
-    Remux,
-    DirectStream,
-    Transcode,
-}
-
-impl Route {
-    pub fn label(&self) -> RouteLabel {
-        match self {
-            Self::DirectPlay => RouteLabel::DirectPlay,
-            Self::ServerStream { video, audio, .. } => match (video, audio) {
-                (StreamAction::Copy, StreamAction::Copy) => RouteLabel::Remux,
-                (StreamAction::Copy, StreamAction::Transcode) => RouteLabel::DirectStream,
-                (StreamAction::Transcode, _) => RouteLabel::Transcode,
-            },
-        }
-    }
-
+impl ServerOffer {
     pub fn is_direct_play(&self) -> bool {
         *self == Self::DirectPlay
     }
 }
 
+/// Which of a player's engines plays a route (ADR 0025): the platform's own player, or ours (libmpv). Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EngineRole {
+    /// The platform's player (Media Foundation on Windows, AVPlayer on Apple, GStreamer on Linux).
+    Native,
+    /// Our own engine, libmpv.
+    App,
+}
+
+/// How a media source reaches an engine, in ADR 0025's order: the native player, a remux on the device for the native player, the
+/// app engine, the server's stream. Closed: Current defines the routes (ADR 0019, "Route planner", amended by ADR 0025).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Route {
+    /// The native engine reads the file as it is.
+    Native,
+    /// The core repackages the file, without decoding, into a container the native engine reads.
+    DeviceRemux,
+    /// The app engine reads the file as it is.
+    AppEngine,
+    /// The server makes a stream, played by `engine`. With both streams copied it is a remux; with only the video copied, a direct
+    /// stream; otherwise a transcode.
+    ServerStream {
+        engine: EngineRole,
+        protocol: StreamProtocol,
+        /// The stream's container (for example `mp4` for fMP4 segments, `ts`).
+        container: Option<String>,
+        video: StreamAction,
+        audio: StreamAction,
+    },
+}
+
+/// What the UI calls a route (ADR 0025, "Routes and reasons").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RouteLabel {
+    Native,
+    DeviceRemux,
+    AppEngine,
+    ServerRemux,
+    ServerDirectStream,
+    ServerTranscode,
+}
+
+impl Route {
+    pub fn label(&self) -> RouteLabel {
+        match self {
+            Self::Native => RouteLabel::Native,
+            Self::DeviceRemux => RouteLabel::DeviceRemux,
+            Self::AppEngine => RouteLabel::AppEngine,
+            Self::ServerStream { video, audio, .. } => match (video, audio) {
+                (StreamAction::Copy, StreamAction::Copy) => RouteLabel::ServerRemux,
+                (StreamAction::Copy, StreamAction::Transcode) => RouteLabel::ServerDirectStream,
+                (StreamAction::Transcode, _) => RouteLabel::ServerTranscode,
+            },
+        }
+    }
+
+    /// The device reads the file itself (for Jellyfin the play method `DirectPlay`): every route but a server stream.
+    pub fn is_local(&self) -> bool {
+        !matches!(self, Self::ServerStream { .. })
+    }
+
+    /// The engine that plays the route.
+    pub fn engine(&self) -> EngineRole {
+        match self {
+            Self::Native | Self::DeviceRemux => EngineRole::Native,
+            Self::AppEngine => EngineRole::App,
+            Self::ServerStream { engine, .. } => *engine,
+        }
+    }
+
+    /// The server's stream offered in `offer`, played by `engine`; `None` for direct play.
+    pub fn server_stream(offer: &ServerOffer, engine: EngineRole) -> Option<Self> {
+        match offer {
+            ServerOffer::DirectPlay => None,
+            ServerOffer::Stream {
+                protocol,
+                container,
+                video,
+                audio,
+            } => Some(Self::ServerStream {
+                engine,
+                protocol: *protocol,
+                container: container.clone(),
+                video: *video,
+                audio: *audio,
+            }),
+        }
+    }
+}
+
+/// What kind of track a local route lacks, for [`TrackGap`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GapKind {
+    Container,
+    Video,
+    Audio,
+    Subtitle,
+}
+
+/// What the native engine lacks for this file, with the reason [`RouteReason::NATIVE_LACKS`] (ADR 0025's `NativeLacks { track }`):
+/// the container, or the selected track's codec or format, by the server's name (`truehd`, `pgssub`). `None` when the server names
+/// none.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TrackGap {
+    pub kind: GapKind,
+    pub name: Option<String>,
+}
+
 open_value! {
-    /// Why a route is not direct play: the server's reasons, mapped by the service crate (unknown ones pass through under the
-    /// server's name), plus Current's own.
+    /// Why a route was chosen: the server's reasons for a stream, mapped by the service crate (unknown ones pass through under the
+    /// server's name), plus Current's own (ADR 0019, amended by ADR 0025: the local routes' reasons).
     RouteReason {
         CONTAINER_NOT_SUPPORTED = "container_not_supported",
         VIDEO_CODEC_NOT_SUPPORTED = "video_codec_not_supported",
@@ -290,6 +379,28 @@ open_value! {
         FALLBACK_AFTER_ENGINE_ERROR = "fallback_after_engine_error",
         /// Current's: the user asked for a transcode.
         USER_CHOSE_TRANSCODE = "user_chose_transcode",
+        /// Current's (ADR 0025): the native engine plays the file and every selected track.
+        NATIVE_FULLY_COMPATIBLE = "native_fully_compatible",
+        /// Current's (ADR 0025): the remux on the device keeps the original video and audio.
+        KEEPS_ORIGINAL_STREAMS = "keeps_original_streams",
+        /// Current's (ADR 0025): the native engine lacks a track; the plan's `native_lacks` says which.
+        NATIVE_LACKS = "native_lacks",
+        /// Current's (ADR 0025): the selected subtitle needs rendering (a picture format, or styled ASS) that the native route lacks.
+        SUBTITLE_NEEDS_RENDERING = "subtitle_needs_rendering",
+        /// Current's (ADR 0025): no remux on the device for Dolby Vision profile 7.
+        DOLBY_VISION_PROFILE_7 = "dolby_vision_profile_7",
+        /// Current's (ADR 0025): the previous local route could not start.
+        PREVIOUS_ROUTE_FAILED = "previous_route_failed",
+        /// Current's (ADR 0025): the user chose "Play with app engine" for this playback.
+        USER_CHOSE_APP_ENGINE = "user_chose_app_engine",
+        /// Current's (ADR 0025): the "Player" setting is "Always app engine".
+        SETTING_ALWAYS_APP_ENGINE = "setting_always_app_engine",
+        /// Current's (ADR 0025, departure 2): Dolby Vision plays on the app engine first.
+        DOLBY_VISION_ON_APP_ENGINE = "dolby_vision_on_app_engine",
+        /// Current's (ADR 0025, departure 8): PQ video on an SDR display plays on the app engine, which tone-maps it.
+        HDR_ON_SDR_DISPLAY = "hdr_on_sdr_display",
+        /// Current's (ADR 0025): the native engine ignores the speed chosen with this track.
+        SPEED_NOT_SUPPORTED = "speed_not_supported",
     }
 }
 
@@ -322,8 +433,13 @@ pub struct PlaybackPlan {
     /// The server's id for this playback, reported with every progress report.
     pub play_session_id: String,
     pub route: Route,
-    /// Empty for direct play.
+    /// Why this route: the server's and Current's reasons for a stream, the local check's for a local route; empty for a local
+    /// route on a player with only the app engine (ADR 0019 as before ADR 0025).
     pub reasons: Vec<RouteReason>,
+    /// With [`RouteReason::NATIVE_LACKS`]: what the native engine lacks.
+    pub native_lacks: Vec<TrackGap>,
+    /// The routes tried before this one in this play that could not start, oldest first (ADR 0025, "Fallback on a failed start").
+    pub failed_routes: Vec<Route>,
     pub start: Duration,
     pub tracks: TrackChoice,
 }
@@ -505,26 +621,56 @@ mod tests {
     }
 
     #[test]
-    fn route_labels_follow_what_is_copied() {
+    fn route_labels_follow_the_engine_and_what_is_copied() {
         let stream = |video, audio| Route::ServerStream {
+            engine: EngineRole::App,
             protocol: StreamProtocol::Hls,
             container: Some("mp4".into()),
             video,
             audio,
         };
-        assert_eq!(Route::DirectPlay.label(), RouteLabel::DirectPlay);
+        assert_eq!(Route::Native.label(), RouteLabel::Native);
+        assert_eq!(Route::DeviceRemux.label(), RouteLabel::DeviceRemux);
+        assert_eq!(Route::AppEngine.label(), RouteLabel::AppEngine);
         assert_eq!(
             stream(StreamAction::Copy, StreamAction::Copy).label(),
-            RouteLabel::Remux
+            RouteLabel::ServerRemux
         );
         assert_eq!(
             stream(StreamAction::Copy, StreamAction::Transcode).label(),
-            RouteLabel::DirectStream
+            RouteLabel::ServerDirectStream
         );
         assert_eq!(
             stream(StreamAction::Transcode, StreamAction::Copy).label(),
-            RouteLabel::Transcode
+            RouteLabel::ServerTranscode
         );
+    }
+
+    #[test]
+    fn routes_know_their_engine_and_whether_they_are_local() {
+        assert_eq!(Route::Native.engine(), EngineRole::Native);
+        assert_eq!(Route::DeviceRemux.engine(), EngineRole::Native);
+        assert_eq!(Route::AppEngine.engine(), EngineRole::App);
+        assert!(
+            Route::Native.is_local()
+                && Route::DeviceRemux.is_local()
+                && Route::AppEngine.is_local()
+        );
+        let offer = ServerOffer::Stream {
+            protocol: StreamProtocol::Progressive,
+            container: Some("mkv".into()),
+            video: StreamAction::Copy,
+            audio: StreamAction::Transcode,
+        };
+        let route = Route::server_stream(&offer, EngineRole::Native).expect("a stream");
+        assert_eq!(route.engine(), EngineRole::Native);
+        assert!(!route.is_local());
+        assert_eq!(route.label(), RouteLabel::ServerDirectStream);
+        assert_eq!(
+            Route::server_stream(&ServerOffer::DirectPlay, EngineRole::App),
+            None
+        );
+        assert!(ServerOffer::DirectPlay.is_direct_play() && !offer.is_direct_play());
     }
 
     #[test]

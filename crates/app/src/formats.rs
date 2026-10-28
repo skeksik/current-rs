@@ -386,14 +386,14 @@ fn codec_names(codecs: &[Codec], names: impl Fn(&Codec) -> Option<&'static str>)
     either(&names)
 }
 
-fn video_name(codec: &Codec) -> Option<&'static str> {
+pub(crate) fn video_name(codec: &Codec) -> Option<&'static str> {
     VIDEO
         .iter()
         .find(|(known, _, _)| known == codec)
         .map(|(_, name, _)| *name)
 }
 
-fn audio_name(codec: &Codec) -> Option<&'static str> {
+pub(crate) fn audio_name(codec: &Codec) -> Option<&'static str> {
     AUDIO
         .iter()
         .find(|(known, _)| known == codec)
@@ -623,7 +623,7 @@ fn converts_text(format: &str) -> bool {
     !format.eq_ignore_ascii_case("ass") && !format.eq_ignore_ascii_case("ssa")
 }
 
-fn subtitle_name(format: &SubtitleFormat) -> String {
+pub(crate) fn subtitle_name(format: &SubtitleFormat) -> String {
     SUBTITLES
         .iter()
         .find(|(spellings, _, _)| {

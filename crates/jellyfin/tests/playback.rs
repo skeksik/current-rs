@@ -10,9 +10,10 @@ use current_jellyfin::{
     PlaybackError, PlaybackRequest, ProgressReport, StopReport,
 };
 use current_model::{
-    Codec, CodecSupport, Container, EngineCapabilities, ItemId, Route, RouteLabel, RouteReason,
-    SegmentKind, ServerKey, ServerRef, ServiceType, StreamAction, StreamKind, StreamProtocol,
-    SubtitleChoice, SubtitleDelivery, SubtitleFormat, SubtitleMode, TrackChoice, VideoRangeType,
+    Codec, CodecSupport, Container, EngineCapabilities, EngineRole, ItemId, Route, RouteLabel,
+    RouteReason, SegmentKind, ServerKey, ServerOffer, ServerRef, ServiceType, StreamAction,
+    StreamKind, StreamProtocol, SubtitleChoice, SubtitleDelivery, SubtitleFormat, SubtitleMode,
+    TrackChoice, VideoRangeType,
 };
 use current_net::{FixedAddress, RequestLog, Url};
 use serde_json::Value;
@@ -280,7 +281,7 @@ async fn direct_play_builds_the_static_url_and_sends_the_profile() {
         .unwrap();
     assert_eq!(answer.play_session_id, PLAY_SESSION);
     let (source, stream) = answer.playable(Some(SOURCE)).unwrap();
-    assert_eq!(stream.route, Route::DirectPlay);
+    assert_eq!(stream.offer, ServerOffer::DirectPlay);
     assert!(stream.reasons.is_empty());
     assert_eq!(
         stream.url.expose(),
@@ -359,8 +360,8 @@ async fn an_hls_transcode_reads_its_reasons_from_the_url() {
         .unwrap();
     let (_, stream) = answer.playable(None).unwrap();
     assert_eq!(
-        stream.route,
-        Route::ServerStream {
+        stream.offer,
+        ServerOffer::Stream {
             protocol: StreamProtocol::Hls,
             container: Some("mp4".into()),
             // The PGS subtitle is burned in, so the video is converted although HEVC could be copied.
@@ -368,7 +369,10 @@ async fn an_hls_transcode_reads_its_reasons_from_the_url() {
             audio: StreamAction::Copy,
         }
     );
-    assert_eq!(stream.route.label(), RouteLabel::Transcode);
+    assert_eq!(
+        Route::server_stream(&stream.offer, EngineRole::App).map(|route| route.label()),
+        Some(RouteLabel::ServerTranscode)
+    );
     assert_eq!(
         stream.reasons,
         vec![
@@ -519,13 +523,14 @@ async fn playstate_reports_carry_the_session_tracks_and_method() {
         muted: false,
         volume: Some(80),
         can_seek: true,
-        route: Route::DirectPlay,
+        route: Route::AppEngine,
     };
     client.report_start(&report).await.unwrap();
     let transcode = ProgressReport {
         paused: true,
         subtitle: Some(3),
         route: Route::ServerStream {
+            engine: EngineRole::App,
             protocol: StreamProtocol::Hls,
             container: Some("mp4".into()),
             video: StreamAction::Copy,

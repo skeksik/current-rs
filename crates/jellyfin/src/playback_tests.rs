@@ -67,10 +67,10 @@ fn pairs(query: &str) -> Vec<(String, String)> {
     url_query_pairs(query)
 }
 
-fn actions(route: &Route) -> (StreamAction, StreamAction) {
-    match route {
-        Route::ServerStream { video, audio, .. } => (*video, *audio),
-        Route::DirectPlay => panic!("not a server stream"),
+fn actions(offer: &ServerOffer) -> (StreamAction, StreamAction) {
+    match offer {
+        ServerOffer::Stream { video, audio, .. } => (*video, *audio),
+        ServerOffer::DirectPlay => panic!("not a server stream"),
     }
 }
 

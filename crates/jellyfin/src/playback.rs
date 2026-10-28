@@ -16,9 +16,9 @@ use std::time::Duration;
 
 use current_model::{
     AudioFacts, Codec, EngineCapabilities, ItemId, MediaSource, MediaStream, PlaybackPreferences,
-    Route, RouteReason, Segment, SegmentKind, StreamAction, StreamKind, StreamProtocol,
-    SubtitleChoice, SubtitleDelivery, SubtitleMode, TrackChoice, TranscodingFacts, VideoFacts,
-    VideoRange, VideoRangeType,
+    Route, RouteReason, Segment, SegmentKind, ServerOffer, StreamAction, StreamKind,
+    StreamProtocol, SubtitleChoice, SubtitleDelivery, SubtitleMode, TrackChoice, TranscodingFacts,
+    VideoFacts, VideoRange, VideoRangeType,
 };
 use current_net::{NetError, Request, Url};
 
@@ -93,7 +93,8 @@ pub struct SourceAnswer {
 /// reasons and codecs in its URL; the session's [`TranscodingFacts`] tell after start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlayableStream {
-    pub route: Route,
+    /// Direct play or the server's stream; the planner picks the engine (ADR 0025).
+    pub offer: ServerOffer,
     /// Empty for direct play.
     pub reasons: Vec<RouteReason>,
     pub url: StreamUrl,
@@ -150,7 +151,7 @@ pub struct ProgressReport {
     /// 0 to 100.
     pub volume: Option<u8>,
     pub can_seek: bool,
-    /// Gives the play method: `DirectPlay` or `Transcode`.
+    /// Gives the play method: `DirectPlay` for a local route, `Transcode` for a server stream.
     pub route: Route,
 }
 
@@ -230,7 +231,7 @@ impl JellyfinClient {
                 let source = map_source(&source);
                 let stream = if direct {
                     Some(PlayableStream {
-                        route: Route::DirectPlay,
+                        offer: ServerOffer::DirectPlay,
                         reasons: Vec::new(),
                         url: static_url(
                             &base,
@@ -387,7 +388,7 @@ fn progress_body(report: &ProgressReport) -> wire::PlaybackProgressInfo<'_> {
         is_muted: report.muted,
         volume_level: report.volume.map(|volume| i32::from(volume.min(100))),
         can_seek: report.can_seek,
-        play_method: if report.route.is_direct_play() {
+        play_method: if report.route.is_local() {
             "DirectPlay"
         } else {
             "Transcode"
@@ -467,9 +468,9 @@ fn server_stream(
             .filter(|ext| !ext.is_empty())
             .map(str::to_owned)
     });
-    let (route, reasons) = predict(protocol, container, &pairs, source);
+    let (offer, reasons) = predict(protocol, container, &pairs, source);
     Some(PlayableStream {
-        route,
+        offer,
         reasons,
         url: StreamUrl(url),
     })
@@ -519,7 +520,7 @@ fn predict(
     container: Option<String>,
     pairs: &[(String, String)],
     source: &MediaSource,
-) -> (Route, Vec<RouteReason>) {
+) -> (ServerOffer, Vec<RouteReason>) {
     let value = |key: &str| {
         pairs
             .iter()
@@ -572,7 +573,7 @@ fn predict(
         StreamAction::Copy
     };
     (
-        Route::ServerStream {
+        ServerOffer::Stream {
             protocol,
             container,
             video,

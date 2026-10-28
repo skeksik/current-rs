@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use current_model::{
     EngineCapabilities, ItemRef, ItemSummary, MediaSource, MediaStream, PlaybackPreferences,
-    PlaybackProblem, Route, RouteReason, Segment, TrackChoice, TranscodingFacts,
+    PlaybackProblem, Route, RouteReason, Segment, ServerOffer, TrackChoice, TranscodingFacts,
 };
 
 use crate::quality::Quality;
@@ -31,8 +31,9 @@ pub struct PlanRequest {
 pub struct ServerAnswer {
     pub play_session_id: String,
     pub source: MediaSource,
-    /// Before start, whether a server stream copies is predicted from the reasons; [`TranscodingFacts`] tell after start.
-    pub route: Route,
+    /// Direct play, or the server's stream; the planner picks the route and engine (ADR 0025). Before start, whether a server
+    /// stream copies is predicted from the reasons; [`TranscodingFacts`] tell after start.
+    pub offer: ServerOffer,
     /// The server's reasons; empty for direct play.
     pub reasons: Vec<RouteReason>,
     /// On the server's address, with the session token; the engine gets [`MediaServer::stream_url`]'s.
@@ -77,7 +78,7 @@ pub struct ProgressReport {
     /// 0 to 100.
     pub volume: u8,
     pub can_seek: bool,
-    /// Gives the play method: direct play or transcode.
+    /// Gives the play method: direct play for a local route, transcode for a server stream.
     pub route: Route,
 }
 

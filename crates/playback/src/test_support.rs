@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use current_model::{
     Codec, CodecSupport, Container, EngineCapabilities, EngineErrorKind, ItemId, ItemRef,
-    ItemSummary, MediaKind, MediaSource, MediaStream, PlaybackPreferences, PlaybackProblem, Route,
-    RouteReason, Segment, ServerKey, ServerRef, ServiceType, StreamAction, StreamKind,
+    ItemSummary, MediaKind, MediaSource, MediaStream, PlaybackPreferences, PlaybackProblem,
+    RouteReason, Segment, ServerKey, ServerOffer, ServerRef, ServiceType, StreamAction, StreamKind,
     StreamProtocol, SubtitleDelivery, SubtitleMode, TranscodingFacts, UserState,
 };
 
@@ -256,7 +256,7 @@ impl MediaServer for FakeServer {
         let mut answer = state
             .answers
             .pop_front()
-            .unwrap_or_else(|| Ok(answer(Route::DirectPlay, vec![])))?;
+            .unwrap_or_else(|| Ok(answer(ServerOffer::DirectPlay, vec![])))?;
         answer.play_session_id = format!("ps-{count}");
         Ok(answer)
     }
@@ -441,8 +441,8 @@ pub fn source() -> MediaSource {
     }
 }
 
-pub fn hls(video: StreamAction, audio: StreamAction) -> Route {
-    Route::ServerStream {
+pub fn hls(video: StreamAction, audio: StreamAction) -> ServerOffer {
+    ServerOffer::Stream {
         protocol: StreamProtocol::Hls,
         container: Some("mp4".into()),
         video,
@@ -450,11 +450,11 @@ pub fn hls(video: StreamAction, audio: StreamAction) -> Route {
     }
 }
 
-pub fn answer(route: Route, reasons: Vec<RouteReason>) -> ServerAnswer {
+pub fn answer(offer: ServerOffer, reasons: Vec<RouteReason>) -> ServerAnswer {
     ServerAnswer {
         play_session_id: "ps-1".into(),
         source: source(),
-        route,
+        offer,
         reasons,
         url: StreamUrl::new(format!(
             "https://media.example.com/Videos/e1/stream?static=true&ApiKey={}",

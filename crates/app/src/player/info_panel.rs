@@ -3,12 +3,12 @@
 //! information holds none. The sizes are measured by the platform ([`PanelSizes`]); numbers with decimals use the UI's decimal
 //! separator ([`NumberFormat`]), as the Windows app's .NET formats did before these lines moved here.
 
-use current_model::{Route, StreamProtocol};
+use current_model::{Route, RouteReason, StreamProtocol};
 
 use super::PlaybackInfo;
 use super::backend::DisplayFacts;
 use super::labels::bitrate_label;
-use super::words::{plan_note_text, reason_text, route_name};
+use super::words::{native_lacks_text, plan_note_text, reason_text, route_name_one_engine};
 use crate::numbers::NumberFormat;
 
 /// What the platform measures for the panel's last line: the swap chain panel's size in physical pixels, the view's and the
@@ -36,7 +36,7 @@ pub fn info_panel_lines(
     let plan = details.and_then(|details| details.plan.as_ref());
     if let Some(plan) = plan {
         let (protocol, container) = match &plan.route {
-            Route::DirectPlay => (None, None),
+            Route::Native | Route::DeviceRemux | Route::AppEngine => (None, None),
             Route::ServerStream {
                 protocol,
                 container,
@@ -51,12 +51,20 @@ pub fn info_panel_lines(
             ),
         };
         lines.push(join([
-            Some(route_name(plan.route.label()).to_owned()),
+            // One engine until W3 brings the native one: today's names (ADR 0019).
+            Some(route_name_one_engine(plan.route.label()).to_owned()),
             protocol.map(str::to_owned),
             container.map(str::to_owned),
         ]));
         for reason in &plan.reasons {
-            lines.push(format!("• {}", reason_text(reason.as_str())));
+            if *reason == RouteReason::NATIVE_LACKS && !plan.native_lacks.is_empty() {
+                // What the native player lacks, track by track, in place of the general reason.
+                for gap in &plan.native_lacks {
+                    lines.push(format!("• {}", native_lacks_text(gap)));
+                }
+            } else {
+                lines.push(format!("• {}", reason_text(reason.as_str())));
+            }
         }
     }
     for note in details
@@ -217,9 +225,9 @@ fn size(width: Option<u32>, height: Option<u32>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use current_model::{
-        AudioFacts, Codec, ItemId, ItemRef, MediaSource, MediaStream, PlaybackPlan, RouteReason,
-        ServerKey, ServerRef, ServiceType, StreamAction, StreamKind, TrackChoice, TranscodingFacts,
-        VideoFacts, VideoRangeType,
+        AudioFacts, Codec, EngineRole, ItemId, ItemRef, MediaSource, MediaStream, PlaybackPlan,
+        RouteReason, ServerKey, ServerRef, ServiceType, StreamAction, StreamKind, TrackChoice,
+        TranscodingFacts, VideoFacts, VideoRangeType,
     };
     use current_playback::{PlanNote, PlaybackDetails};
 
@@ -375,6 +383,7 @@ mod tests {
                     },
                     play_session_id: String::new(),
                     route: Route::ServerStream {
+                        engine: EngineRole::App,
                         protocol: StreamProtocol::Hls,
                         container: Some("mp4".into()),
                         video: StreamAction::Copy,
@@ -384,6 +393,8 @@ mod tests {
                         RouteReason::from("audio_codec_not_supported"),
                         RouteReason::from("a_reason_no_release_knows"),
                     ],
+                    native_lacks: Vec::new(),
+                    failed_routes: Vec::new(),
                     start: std::time::Duration::ZERO,
                     tracks: TrackChoice::default(),
                 }),
