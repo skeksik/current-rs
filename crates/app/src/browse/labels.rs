@@ -220,6 +220,17 @@ mod tests {
     }
 
     #[test]
+    fn long_runtimes_count_whole_hours_without_wrapping() {
+        assert_eq!(runtime_label(ms(24 * 3_600_000)), "24 h 0 min");
+        assert_eq!(
+            runtime_label(ms(25 * 3_600_000 + 12 * 60_000)),
+            "25 h 12 min"
+        );
+        assert_eq!(time_left_short(ms(25 * 3_600_000 + 12 * 60_000)), "25h 12m");
+        assert_eq!(time_left_label(ms(100 * 3_600_000)), "100 h 0 min left");
+    }
+
+    #[test]
     fn time_left_counts_under_a_minute_as_one() {
         assert_eq!(time_left_short(ms(72 * 60_000)), "1h 12m");
         assert_eq!(time_left_short(ms(45 * 60_000)), "45m");

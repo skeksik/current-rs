@@ -17,12 +17,12 @@ const MS_PER_SECOND: i64 = 1_000;
 const MS_PER_MINUTE: i64 = 60 * MS_PER_SECOND;
 const MS_PER_HOUR: i64 = 60 * MS_PER_MINUTE;
 
-/// The hours, minutes and seconds components of a time in milliseconds, below 0 as 0, as .NET's `TimeSpan` has them: the hours
-/// component is the hours of the day, 0 to 23 ("TimeSpan.Hours: the hour component", learn.microsoft.com, read 2026-10-27).
+/// The hours, minutes and seconds of a time in milliseconds, below 0 as 0: the whole hours in total, so a day or more does not wrap
+/// (the owner's choice, 2026-10-28), then the minutes and seconds within the hour.
 fn components(ms: i64) -> (i64, i64, i64) {
     let ms = ms.max(0);
     (
-        (ms / MS_PER_HOUR) % 24,
+        ms / MS_PER_HOUR,
         (ms / MS_PER_MINUTE) % 60,
         (ms / MS_PER_SECOND) % 60,
     )
@@ -30,8 +30,8 @@ fn components(ms: i64) -> (i64, i64, i64) {
 
 /// A time as the player shows it: "1:02:03" from an hour on, else "2:03" (the Windows app wrote .NET's `TimeSpan` formats
 /// `h\:mm\:ss` and `m\:ss`, whose escaped colons are literals, so the culture changes nothing: "Custom TimeSpan format strings",
-/// learn.microsoft.com, read 2026-10-27). Below 0 is "0:00". `h` is the hours component, not the total, so 24 hours or more wrap
-/// ("25:00:00" shows "1:00:00"), as they did in C#: kept until the roadmap's fix.
+/// learn.microsoft.com, read 2026-10-27). Below 0 is "0:00". The hours are the whole hours in total, so 25 h 0 min 30 s shows
+/// "25:00:30" where .NET's `h`, the hours of the day, wrapped to "1:00:30" (the owner's choice, 2026-10-28).
 pub fn time_label(ms: i64) -> String {
     let (hours, minutes, seconds) = components(ms);
     if ms >= MS_PER_HOUR {
@@ -44,23 +44,18 @@ pub fn time_label(ms: i64) -> String {
 /// A time as a screen reader should say it: "1 hour 2 minutes 3 seconds", "0 seconds" (Narrator reads "1:02:03" as a time of day).
 /// The hours are the whole hours in total, so this does not wrap at 24.
 pub fn spoken_time(ms: i64) -> String {
-    let ms = ms.max(0);
-    let (_, minutes, seconds) = components(ms);
-    let parts: Vec<String> = [
-        (ms / MS_PER_HOUR, "hour"),
-        (minutes, "minute"),
-        (seconds, "second"),
-    ]
-    .into_iter()
-    .filter(|(count, _)| *count > 0)
-    .map(|(count, unit)| {
-        if count == 1 {
-            format!("1 {unit}")
-        } else {
-            format!("{count} {unit}s")
-        }
-    })
-    .collect();
+    let (hours, minutes, seconds) = components(ms);
+    let parts: Vec<String> = [(hours, "hour"), (minutes, "minute"), (seconds, "second")]
+        .into_iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, unit)| {
+            if count == 1 {
+                format!("1 {unit}")
+            } else {
+                format!("{count} {unit}s")
+            }
+        })
+        .collect();
     if parts.is_empty() {
         "0 seconds".to_owned()
     } else {
@@ -280,10 +275,13 @@ mod tests {
             (H, "1:00:00"),
             (H + 2 * M + 3 * S, "1:02:03"),
             (12 * H + 34 * M + 56 * S, "12:34:56"),
-            (23 * H + 59 * M + 59 * S, "23:59:59"),
-            // The hours component wraps at a day, as .NET's "h" did (roadmap: "Fix and polish").
-            (24 * H, "0:00:00"),
-            (25 * H + 2 * M + 3 * S, "1:02:03"),
+            (23 * H + 59 * M + 59 * S + 999, "23:59:59"),
+            // Whole hours in total: a day or more does not wrap, as .NET's "h" did.
+            (24 * H, "24:00:00"),
+            (25 * H + 30 * S, "25:00:30"),
+            (25 * H + 2 * M + 3 * S, "25:02:03"),
+            (99 * H + 59 * M + 59 * S, "99:59:59"),
+            (123 * H + 4 * M + 5 * S, "123:04:05"),
         ];
         for (ms, text) in cases {
             assert_eq!(time_label(ms), text, "{ms}");
