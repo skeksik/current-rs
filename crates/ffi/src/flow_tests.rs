@@ -690,6 +690,15 @@ fn network_reports_are_accepted() {
 }
 
 #[test]
+fn window_reports_are_accepted_from_the_ui_thread() {
+    let core = Core::new().unwrap();
+    core.window_minimized(true);
+    core.window_minimized(true);
+    core.window_minimized(false);
+    core.returned_to_foreground();
+}
+
+#[test]
 fn network_facts_convert() {
     let facts: current_model::NetworkFacts = NetworkFacts {
         connectivity: Connectivity::Offline,

@@ -455,6 +455,13 @@ impl Core {
         self.app.returned_to_foreground();
     }
 
+    /// The app's window is minimized (`true`) or no longer is (`false`): report it on every change. The live updates' socket
+    /// closes once the window has been minimized for a minute and opens again on its restore (ADR 0023). Not focused or behind
+    /// other windows is not minimized. A restore after a minimize is also a return to the foreground: report both.
+    pub fn window_minimized(&self, minimized: bool) {
+        self.app.window_minimized(minimized);
+    }
+
     /// The request log as text, oldest first, redacted (ADR 0006).
     pub fn diagnostics_text(&self) -> String {
         self.app.diagnostics_text()
