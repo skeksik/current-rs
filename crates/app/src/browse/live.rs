@@ -3,7 +3,9 @@
 //! made on another device, by playback or by the server shows on every page without a refresh.
 //!
 //! - **Lifetime**: from the session's first `Browse` until its last list is dropped or the session ends (sign-out, removal, a new
-//!   sign-in). The app has no signal for going to the background yet, so the socket stays open there too (a follow-up).
+//!   sign-in). It closes once the app's window has been minimized for [`LIVE_PAUSE_AFTER`] ([`super::Hub::window_minimized`]) and
+//!   opens again when the window is restored; no attempt is made in between. A quick minimize and restore changes nothing, and a
+//!   window that is merely behind others or not focused keeps it. Playback does not depend on it.
 //! - **Keep-alive**: Jellyfin drops a socket that sends no `KeepAlive` within the time its `ForceKeepAlive` gives (60 s in 12.3);
 //!   one goes at once and then every half of it, and the server answers each. A socket that hears nothing for twice that time is
 //!   taken for lost and opened again.
@@ -20,6 +22,7 @@ use std::time::Duration;
 
 use current_jellyfin::{AuthError, LiveMessage};
 use current_model::ServerStatus;
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 use super::{Context, RESYNC_LIMIT};
@@ -31,6 +34,8 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const STABLE_AFTER: Duration = Duration::from_secs(60);
 /// The keep-alive time until the server's `ForceKeepAlive` says (Jellyfin 12.3's `WebSocketLostTimeout`).
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(60);
+/// How long the app's window stays minimized before the socket closes (the owner's rule, 2026-10-28: ADR 0023, decision 1).
+pub const LIVE_PAUSE_AFTER: Duration = Duration::from_secs(60);
 
 /// How a connection ended.
 enum Ended {
@@ -40,6 +45,33 @@ enum Ended {
     Refused,
     /// Broken or not reached: try again after the backoff. `lived` is how long it was open.
     Broken { lived: Duration },
+    /// Closed because the window has been minimized for [`LIVE_PAUSE_AFTER`]: open again when it is restored.
+    Paused,
+}
+
+/// Whether the window has been minimized for [`LIVE_PAUSE_AFTER`] by now.
+fn is_paused(minimized: &watch::Receiver<Option<Instant>>) -> bool {
+    minimized
+        .borrow()
+        .is_some_and(|since| since + LIVE_PAUSE_AFTER <= Instant::now())
+}
+
+/// Resolves once the window has been minimized for [`LIVE_PAUSE_AFTER`], counted from when it was minimized; a restore before
+/// then starts over. Never resolves once the app is gone.
+async fn paused(mut minimized: watch::Receiver<Option<Instant>>) {
+    loop {
+        let since = *minimized.borrow_and_update();
+        let changed = match since {
+            Some(since) => tokio::select! {
+                () = tokio::time::sleep_until(since + LIVE_PAUSE_AFTER) => return,
+                changed = minimized.changed() => changed,
+            },
+            None => minimized.changed().await,
+        };
+        if changed.is_err() {
+            return std::future::pending().await;
+        }
+    }
 }
 
 /// What of the server's status makes the socket try again at once: another address, reached again, a gateway signed in to.
@@ -65,7 +97,17 @@ impl Context {
 async fn run(context: Weak<Context>) {
     let mut backoff = MIN_BACKOFF;
     let mut attempt: u64 = 0;
+    let Some(mut minimized) = context.upgrade().map(|strong| strong.minimized.clone()) else {
+        return;
+    };
     loop {
+        if is_paused(&minimized) {
+            // No attempt while the window stays minimized; its restore opens the socket at once.
+            if minimized.wait_for(Option::is_none).await.is_err() {
+                return;
+            }
+            backoff = MIN_BACKOFF;
+        }
         let (ended, mut status) = {
             let Some(strong) = context.upgrade() else {
                 return;
@@ -75,10 +117,11 @@ async fn run(context: Weak<Context>) {
             };
             let status = shared.capabilities.subscribe();
             drop(strong);
-            (connect(&context).await, status)
+            (connect(&context, minimized.clone()).await, status)
         };
         let wait = match ended {
             Ended::Gone => return,
+            Ended::Paused => continue,
             Ended::Refused => None,
             Ended::Broken { lived } => {
                 if lived >= STABLE_AFTER {
@@ -119,12 +162,14 @@ async fn run(context: Weak<Context>) {
             () = sleep => {}
             () = changed => backoff = MIN_BACKOFF,
             () = wake.notified() => backoff = MIN_BACKOFF,
+            // The window stayed minimized during the wait: the top of the loop waits for its restore instead.
+            () = paused(minimized.clone()) => {}
         }
     }
 }
 
 /// One connection, from opening to its end.
-async fn connect(context: &Weak<Context>) -> Ended {
+async fn connect(context: &Weak<Context>, minimized: watch::Receiver<Option<Instant>>) -> Ended {
     let client = {
         let Some(context) = context.upgrade() else {
             return Ended::Gone;
@@ -163,6 +208,8 @@ async fn connect(context: &Weak<Context>) -> Ended {
     let mut keep_alive = DEFAULT_KEEP_ALIVE;
     let mut heard = Instant::now();
     let mut next_keep_alive = Instant::now() + keep_alive / 2;
+    let paused = paused(minimized);
+    tokio::pin!(paused);
     loop {
         let lost = heard + keep_alive * 2;
         let message = tokio::select! {
@@ -175,6 +222,8 @@ async fn connect(context: &Weak<Context>) -> Ended {
                 continue;
             }
             () = tokio::time::sleep_until(lost) => return broken(),
+            // The socket drops with this function: Jellyfin sees it close.
+            () = &mut paused => return Ended::Paused,
         };
         let Ok(message) = message else {
             return broken();

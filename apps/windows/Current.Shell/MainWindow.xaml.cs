@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Current.Bindings;
 using Current.Shell.Browsing;
 using Current.Shell.Pages;
@@ -39,6 +40,9 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     private const double MinWindowHeight = 500;
 
     private bool _wasDeactivated;
+
+    /// <summary>Whether the core was last told the window is minimized (<see cref="ReportMinimized"/>).</summary>
+    private bool _reportedMinimized;
 
     private FrameworkElement? _paneToggleButton;
 
@@ -379,6 +383,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// </summary>
     private void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
     {
+        ReportMinimized();
         if (!args.DidPresenterChange)
         {
             return;
@@ -389,6 +394,36 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         Grid.SetRowSpan(Player, full ? 2 : 1);
         Player.FullScreenChanged(full);
     }
+
+    /// <summary>
+    /// Tells the core when the window is minimized or restored: the live updates' socket closes after a minute minimized and opens
+    /// again on the restore (ADR 0023, decision 1); playback goes on. A window behind others or not focused is not minimized. The
+    /// state is read on every <c>AppWindow.Changed</c> and every activation or deactivation, and reported only when it differs: the docs
+    /// say <c>DidPresenterChange</c> is set "When a new presenter is applied (the AppWindow.Presenter property changes)" ("Manage app
+    /// windows", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-28), and name no flag for a minimize or a restore, so which
+    /// event comes first is not verified. <c>OverlappedPresenter.State</c> is "the state of the presenter" (Minimized, Maximized or
+    /// Restored; learn.microsoft.com, updated 2026-07-28, read 2026-10-28). The player's full screen uses the full-screen presenter,
+    /// which has no state: there <c>IsIconic</c> answers, which "Determines whether the specified window is minimized (iconic)"
+    /// (learn.microsoft.com, updated 2025-07-01, read 2026-10-28). A restore after a minimize also activates the window, so
+    /// <see cref="OnActivated"/> reports the return to the foreground as well: the socket reopens from this report, the lists
+    /// refresh from that one.
+    /// </summary>
+    private void ReportMinimized()
+    {
+        var minimized = AppWindow.Presenter is OverlappedPresenter overlapped
+            ? overlapped.State == OverlappedPresenterState.Minimized
+            : IsIconic(Microsoft.UI.Win32Interop.GetWindowFromWindowId(AppWindow.Id));
+        if (minimized == _reportedMinimized)
+        {
+            return;
+        }
+        _reportedMinimized = minimized;
+        App.WindowMinimized(minimized);
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsIconic(IntPtr window);
 
     /// <summary>Whether the window waits for the player before it closes, and whether that wait is over.</summary>
     private bool _closingPlayerFirst, _playerClosedForWindow;
@@ -468,6 +503,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// </summary>
     private void OnActivated(object sender, WindowActivatedEventArgs args)
     {
+        ReportMinimized();
         if (args.WindowActivationState == WindowActivationState.Deactivated)
         {
             _wasDeactivated = true;

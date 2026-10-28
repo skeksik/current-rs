@@ -257,6 +257,19 @@ public partial class App : Application
         }
     }
 
+    /// <summary>The main window was minimized, or restored: the core closes the live updates' socket after a minute minimized (ADR 0023).</summary>
+    internal static void WindowMinimized(bool minimized)
+    {
+        try
+        {
+            Core?.WindowMinimized(minimized);
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: window-minimized failed: {error.GetType().Name}");
+        }
+    }
+
     /// <summary>A later launch was redirected here: show the main window. Called on any thread.</summary>
     internal static void BringToFront() => _ui?.TryEnqueue(() =>
     {

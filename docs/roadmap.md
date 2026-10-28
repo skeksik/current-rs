@@ -256,7 +256,8 @@ Fix and polish:
       read or patched last. The owner re-checks the sequence on their PC after merge
 - [x] One source of truth for each item's user state on every page (owner, 2026-10-27; PR 97)
 - [x] Live updates of each item's user state from the server's WebSocket (`UserDataChanged`, ADR 0023) (owner, 2026-10-27; PR 98)
-- [ ] Pause the live updates' socket while the app is in the background (ADR 0023: the app has no background signal yet)
+- [x] Pause the live updates' socket while the app is in the background: closed after the window has been minimized for a minute,
+      reopened on restore (owner, 2026-10-28; ADR 0023 decision 1 amended; PR 100)
 - [ ] The M2 device checks still open (see M2): Dolby Vision profiles 5, 7 and 8, HDR10+, 120 Hz, intro and credits skip with a segment
       plugin, the 60 s stall timeout on a real stall; remux and the gateways were checked in the relay check (PR 81)
 - [x] Quality menu named by what the server will send for this file: model its bitrate rules in the core (audio share, codec, frame

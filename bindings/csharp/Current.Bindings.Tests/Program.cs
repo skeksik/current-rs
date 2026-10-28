@@ -39,6 +39,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("discovery ends", FlowTests.DiscoveryEnds),
     ("flow subscriptions are released", FlowTests.FlowSubscriptionsAreReleased),
     ("network reports are accepted", FlowTests.NetworkReportsAreAccepted),
+    ("window reports are accepted", FlowTests.WindowReportsAreAccepted),
     ("diagnostics after a sign-in hold nothing private", FlowTests.DiagnosticsAfterASignInHoldNothingPrivate),
     ("cancelling while signing in returns to Ready", FlowTests.CancellingWhileSigningInReturnsToReady),
     ("cancelling while Quick Connect waits stops polling", FlowTests.CancellingWhileQuickConnectWaitsStopsPolling),
