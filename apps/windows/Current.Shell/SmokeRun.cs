@@ -291,6 +291,11 @@ internal static class SmokeRun
             window.FollowBrowsing(hub);
             var listed = await WaitUntilAsync(() => window.LibraryItemCount == 2);
             check(listed, $"the navigation lists the server's libraries ({window.LibraryItemCount})");
+            // The pane's edit mode (ADR 0024) and back: Home shows again, and the libraries' items with it.
+            window.EditNavigation(true);
+            window.EditNavigation(false);
+            check(!window.IsEditingNavigation && window.HomeItemShown && window.LibraryItemCount == 2,
+                $"leaving the pane's edit mode shows Home and the libraries again ({window.HomeItemShown}, {window.LibraryItemCount})");
             if (hub.Servers.FirstOrDefault() is not { } server)
             {
                 check(false, "a browse session for the stand-in");

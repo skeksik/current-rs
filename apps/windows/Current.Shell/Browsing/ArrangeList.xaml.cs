@@ -34,8 +34,8 @@ public sealed partial class ArrangeList : UserControl
         set => Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(List, value);
     }
 
-    /// <summary>Moves the row with this key to this index (of the group as shown, hidden rows included).</summary>
-    public Func<string, int, Task>? Move { get; set; }
+    /// <summary>Moves the row with this key right after the row with the second key (null: first), as the list shows them.</summary>
+    public Func<string, string?, Task>? Move { get; set; }
 
     /// <summary>Hides (true) or shows the row with this key.</summary>
     public Func<string, bool, Task>? SetHidden { get; set; }
@@ -100,7 +100,9 @@ public sealed partial class ArrangeList : UserControl
         {
             return;
         }
-        Run(Move?.Invoke(row.Key, to));
+        // The row that will be above it: in the list without it, the one before its new place.
+        var others = Rows.Where(other => !ReferenceEquals(other, row)).ToList();
+        Run(Move?.Invoke(row.Key, to > 0 ? others[to - 1].Key : null));
         Announce.Say(this, $"{row.Name}, moved to position {to + 1} of {Rows.Count}", "arrange");
     }
 
@@ -113,7 +115,8 @@ public sealed partial class ArrangeList : UserControl
         }
         foreach (var row in args.Items.OfType<ArrangeRow>())
         {
-            Run(Move?.Invoke(row.Key, Rows.IndexOf(row)));
+            var at = Rows.IndexOf(row);
+            Run(Move?.Invoke(row.Key, at > 0 ? Rows[at - 1].Key : null));
         }
     }
 
@@ -148,7 +151,7 @@ public sealed partial class ArrangeList : UserControl
     }
 
     // async void, as event handlers are: it catches everything itself. A failed save leaves the group as the core had it, which it
-    // publishes again; the owner of the list shows why (App.ShowNotice).
+    // publishes again (the pane's groups), or the owner reads again (Home's rows), so a drop shown ahead goes back; a notice says why.
     private static async void Run(Task? change)
     {
         if (change is null)

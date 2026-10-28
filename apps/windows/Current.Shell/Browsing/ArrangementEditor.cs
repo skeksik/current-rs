@@ -117,15 +117,28 @@ internal sealed class ArrangementEditor : IDisposable
         {
             ListName = name,
             // Home's rows have no subscription of their own: read again after each change. The pane's follow the hub.
-            Move = async (key, to) =>
+            // Read again after a failed save too, so a drop shown ahead goes back.
+            Move = async (key, after) =>
             {
-                await session.MoveAsync(group, key, to);
-                ShowAgainIfHome();
+                try
+                {
+                    await session.MoveAsync(group, key, after);
+                }
+                finally
+                {
+                    ShowAgainIfHome();
+                }
             },
             SetHidden = async (key, hidden) =>
             {
-                await session.SetHiddenAsync(group, key, hidden);
-                ShowAgainIfHome();
+                try
+                {
+                    await session.SetHiddenAsync(group, key, hidden);
+                }
+                finally
+                {
+                    ShowAgainIfHome();
+                }
             },
         };
     }

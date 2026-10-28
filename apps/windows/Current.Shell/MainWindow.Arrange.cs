@@ -29,16 +29,7 @@ public sealed partial class MainWindow
         var hub = App.Browsing;
         if (_editing && (hub is null || !hub.IsAvailable || !NavView.IsPaneOpen))
         {
-            _editing = false;
-            _editLists.Clear();
-            EditGroups.Children.Clear();
-            EditPane.Visibility = Visibility.Collapsed;
-            SetSettingsItemEnabled(true);
-            if (hub is not null)
-            {
-                // The pane's items as they were.
-                ShowLibraries(hub);
-            }
+            LeaveEditMode();
             return;
         }
         EditNavItem.Visibility = !_editing && hub is { IsAvailable: true } && NavView.IsPaneOpen
@@ -63,6 +54,12 @@ public sealed partial class MainWindow
             return;
         }
         _editing = true;
+        // What shows now, given back on leaving: ShowLibraries sets the items it manages again, but not Home.
+        _shownBeforeEdit.Clear();
+        foreach (var item in NavView.MenuItems.OfType<FrameworkElement>())
+        {
+            _shownBeforeEdit[item] = item.Visibility;
+        }
         EditPane.Visibility = Visibility.Visible;
         // Fixed and dimmed while the lists show (the mock); Done, Escape or closing the pane leaves.
         SetSettingsItemEnabled(false);
@@ -70,6 +67,10 @@ public sealed partial class MainWindow
         EditDoneButton.Focus(FocusState.Programmatic);
     }
 
+    /// <summary>The top-level items' visibility when edit mode opened.</summary>
+    private readonly Dictionary<FrameworkElement, Visibility> _shownBeforeEdit = [];
+
+    /// <summary>The one way out of edit mode: every top-level item as it was, then the pane's items as the arrangement now is.</summary>
     private void LeaveEditMode()
     {
         if (!_editing)
@@ -81,6 +82,11 @@ public sealed partial class MainWindow
         EditGroups.Children.Clear();
         EditPane.Visibility = Visibility.Collapsed;
         SetSettingsItemEnabled(true);
+        foreach (var (item, visibility) in _shownBeforeEdit)
+        {
+            item.Visibility = visibility;
+        }
+        _shownBeforeEdit.Clear();
         if (App.Browsing is { } hub)
         {
             ShowLibraries(hub);
@@ -99,6 +105,24 @@ public sealed partial class MainWindow
             settings.IsEnabled = enabled;
         }
     }
+
+    /// <summary>For the smoke run: enters or leaves edit mode as the pencil and Done do.</summary>
+    internal void EditNavigation(bool on)
+    {
+        if (on)
+        {
+            EnterEditMode();
+        }
+        else
+        {
+            LeaveEditMode();
+        }
+    }
+
+    /// <summary>For the smoke run: whether edit mode is open, and whether Home's item shows.</summary>
+    internal bool IsEditingNavigation => _editing;
+
+    internal bool HomeItemShown => HomeItem.Visibility == Visibility.Visible;
 
     private void OnEditDone(object sender, RoutedEventArgs e)
     {
@@ -153,7 +177,7 @@ public sealed partial class MainWindow
                     list = new ArrangeList
                     {
                         ListName = servers.Count > 1 ? $"{name}, {hub.ServerName(server.Server)}" : name,
-                        Move = (item, to) => session.MoveAsync(group, item, to),
+                        Move = (item, after) => session.MoveAsync(group, item, after),
                         SetHidden = (item, hidden) => session.SetHiddenAsync(group, item, hidden),
                     };
                     _editLists[key] = list;

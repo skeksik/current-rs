@@ -52,14 +52,15 @@ public sealed partial class Browse
         Array.ConvertAll(_browse.HomeLayout(), setting => new HomeRowSetting(MapBrowse.From(setting.Row), setting.Hidden));
 
     /// <summary>
-    /// Moves <paramref name="key"/> to <paramref name="index"/> in <paramref name="group"/> (an index in the group as arranged, hidden
-    /// items included) and saves it. The pane's subscription and Home follow. Not cancellable: it is one small write.
+    /// Moves <paramref name="key"/> in <paramref name="group"/> right after <paramref name="after"/>, the item shown above it where the
+    /// user dropped it (null: first in its group), and saves it. By key, not index, so a group that changed meanwhile still puts it
+    /// where the user saw it. The pane's subscription and Home follow, also after a failed save. Not cancellable: one small write.
     /// </summary>
     /// <exception cref="CoreStoreException">The settings could not be saved; nothing changed.</exception>
-    public Task MoveAsync(NavGroup group, string key, int index) =>
+    public Task MoveAsync(NavGroup group, string key, string? after) =>
         CoreCall.RunUncancellableAsync(async () =>
         {
-            await _browse.MoveItem(ToFfi(group), key, (uint)Math.Max(0, index)).ConfigureAwait(false);
+            await _browse.MoveItem(ToFfi(group), key, after).ConfigureAwait(false);
             return true;
         });
 

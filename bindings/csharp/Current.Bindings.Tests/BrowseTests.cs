@@ -635,7 +635,7 @@ internal static class BrowseTests
         Check(pane.Value!.Views.Select(view => view.Key).SequenceEqual([PaneEntry.Favourites, PaneEntry.RecentlyAdded]),
             "the views in the app's order");
 
-        await browse.MoveAsync(NavGroup.Libraries, StandIn.ShowsLibraryId, 0);
+        await browse.MoveAsync(NavGroup.Libraries, StandIn.ShowsLibraryId, null);
         await Eventually("moved", ui,
             () => PaneIds(pane.Value).SequenceEqual([StandIn.ShowsLibraryId, StandIn.FilmsLibraryId]));
         await browse.SetHiddenAsync(NavGroup.Libraries, StandIn.FilmsLibraryId, true);
