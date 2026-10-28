@@ -767,3 +767,92 @@ fn a_search_narrowed_to_people_and_a_persons_titles_cross() {
         slots.len() == 2 && slots.iter().all(|slot| matches!(slot, Slot::Item { .. }))
     });
 }
+
+impl PaneListener for Recorder<Option<PaneLayout>> {
+    fn on_value(&self, value: Option<PaneLayout>) {
+        self.send(value);
+    }
+}
+
+/// Waits for the layouts `rx` hears until `check` passes.
+fn pane_becomes(
+    rx: &Receiver<Option<PaneLayout>>,
+    check: impl Fn(&PaneLayout) -> bool,
+) -> PaneLayout {
+    loop {
+        if let Some(layout) = rx.recv_timeout(WAIT).expect("the pane")
+            && check(&layout)
+        {
+            return layout;
+        }
+    }
+}
+
+fn library_ids(layout: &PaneLayout) -> Vec<&str> {
+    layout
+        .libraries
+        .iter()
+        .map(|entry| entry.library.item.id.as_str())
+        .collect()
+}
+
+#[test]
+fn the_arrangement_crosses_the_bridge_and_is_saved() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = |name: &str| temp.path().join(name).to_str().unwrap().to_owned();
+    let core = block_on(crate::open_core(
+        path("data"),
+        path("cache"),
+        String::new(),
+        crate::SecretStore::Memory,
+    ))
+    .unwrap();
+    let stand_in = stand_in();
+    let (core, server) = sign_in(core, &stand_in);
+    let browse = core.browse(server.clone()).unwrap();
+    let (listener, rx) = recorder();
+    let _pane = browse.subscribe_pane(listener);
+    let layout = pane_becomes(&rx, |layout| layout.libraries.len() == 2);
+    assert_eq!(library_ids(&layout), [FILMS_LIBRARY_ID, SHOWS_LIBRARY_ID]);
+    assert!(
+        layout
+            .libraries
+            .iter()
+            .all(|entry| !entry.hidden && !entry.hidden_on_server)
+    );
+
+    block_on(browse.move_item(NavGroup::Libraries, SHOWS_LIBRARY_ID.into(), None)).unwrap();
+    pane_becomes(&rx, |layout| {
+        library_ids(layout) == [SHOWS_LIBRARY_ID, FILMS_LIBRARY_ID]
+    });
+    block_on(browse.set_hidden(NavGroup::Views, "favourites".into(), true)).unwrap();
+    pane_becomes(&rx, |layout| {
+        layout
+            .views
+            .iter()
+            .any(|view| view.key == "favourites" && view.hidden)
+    });
+    let latest = format!("latest:{FILMS_LIBRARY_ID}");
+    block_on(browse.set_hidden(NavGroup::HomeRows, latest.clone(), true)).unwrap();
+    let rows = browse.home_layout();
+    assert!(
+        rows.iter()
+            .any(|setting| setting.row.key == latest && setting.hidden)
+    );
+    assert_eq!(rows[0].row.kind, HomeRowKind::ContinueWatching);
+    // Saved per server and user in the settings file.
+    let file = std::fs::read_to_string(temp.path().join("data").join(current_store::SETTINGS_FILE))
+        .unwrap();
+    assert!(file.contains("\"navigation\""), "{file}");
+    assert!(
+        file.contains(&format!("\"jellyfin/{}/", server.key)),
+        "{file}"
+    );
+    assert!(file.contains("\"home_rows\""), "{file}");
+
+    // Reset: the server's order again.
+    block_on(browse.reset_group(NavGroup::Libraries)).unwrap();
+    pane_becomes(&rx, |layout| {
+        library_ids(layout) == [FILMS_LIBRARY_ID, SHOWS_LIBRARY_ID]
+    });
+}

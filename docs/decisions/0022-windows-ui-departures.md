@@ -49,6 +49,20 @@ Each choice below stays until the owner changes it.
    handle any input events on itself" (Control.IsEnabled, learn.microsoft.com, updated 2026-07-28, read 2026-10-27). Its own name says
    why, "Catalog (needs Seerr)", as its tooltip may then not show (not verified), nor is how Narrator reads it verified.
 
+8. **An edit mode in the navigation pane** (owner, 2026-10-28; ADR 0024). NavigationView has no reordering or editing of its own: its
+   class reference lists no `CanReorderItems`, `CanDragItems` or reorder event (learn.microsoft.com, Windows App SDK 2.0, updated
+   2026-07-28, read 2026-10-28), and its guide does not mention it ("NavigationView", ms.date 2026-10-02, read 2026-10-28). Windows'
+   own pattern for showing and hiding items is a switch on a Settings page (Start settings' "Folders", "Customize the Windows Start
+   menu", support.microsoft.com, read 2026-10-28), which Current has as well, under Personalization. Reason: the owner chose this
+   design, to arrange the pane where it is. In edit mode the pane's items give way to one reorderable ListView per group (Movies and
+   Series, Favourites and Recently added, the libraries), each item with a drag handle, Move up and Move down, and an eye to show or
+   hide it; Home and Settings show dimmed and fixed. Done, Escape, choosing a page or closing the pane leaves it. The nearest Windows precedent,
+   Quick settings' edit mode (pencil, unpin, drag, Done), is described only by third-party sources (not verified with Microsoft).
+9. **An "Edit navigation" item in the pane's footer**, with a pencil, above Settings, shown only while the pane is open (owner,
+   2026-10-28; ADR 0024). The NavigationView guide's footer holds Settings and items like it; an edit command there is the owner's
+   choice. Reason: the owner chose this entry, the only one into edit mode. Whether footer items sit above the Settings item is not
+   verified.
+
 ## Consequences
 - A review checks a new menu, title bar item or shade against this list before calling it a departure.
 - macOS and Linux decide their own; none of these carries over without the owner's choice for that platform.

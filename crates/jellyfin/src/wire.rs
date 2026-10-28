@@ -57,6 +57,8 @@ pub(crate) struct UserDto {
 pub(crate) struct UserConfiguration {
     /// The libraries the user keeps out of "latest" (`Guid[]`, 32 hex digits each).
     pub latest_items_excludes: Option<Vec<String>>,
+    /// The libraries the user keeps out of "My media" (`Guid[]`); `GET UserViews` leaves them out unless asked for them.
+    pub my_media_excludes: Option<Vec<String>>,
 }
 
 /// `MediaBrowser.Model.QuickConnect.QuickConnectResult`, the fields this crate reads.

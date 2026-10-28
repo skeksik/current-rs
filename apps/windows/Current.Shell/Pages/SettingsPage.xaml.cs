@@ -61,6 +61,7 @@ public sealed partial class SettingsPage : Page
             RememberSortSwitch.IsEnabled = RememberFilterSwitch.IsEnabled = RememberViewSwitch.IsEnabled = true;
             Servers ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
             Servers.Start();
+            ShowArrangement();
             Bindings.Update();
             await ShowCacheSizeAsync(core);
         }
@@ -74,6 +75,45 @@ public sealed partial class SettingsPage : Page
     {
         _loaded = false;
         Servers?.Stop();
+        HideArrangement();
+    }
+
+    // The pane's and Home's arrangement (ADR 0024) -------------------------------------------------------------------------------------
+
+    private Browsing.ArrangementEditor? _paneEditor;
+    private Browsing.ArrangementEditor? _homeEditor;
+
+    /// <summary>The two expanders' editors, live from Loaded to Unloaded; the expanders show while a server is signed in.</summary>
+    private void ShowArrangement()
+    {
+        if (App.Browsing is not { } hub || _paneEditor is not null)
+        {
+            return;
+        }
+        _paneEditor = new Browsing.ArrangementEditor(hub, home: false);
+        _homeEditor = new Browsing.ArrangementEditor(hub, home: true);
+        NavigationEditorHost.Content = _paneEditor.Root;
+        HomeEditorHost.Content = _homeEditor.Root;
+        hub.Changed += OnBrowsingChanged;
+        OnBrowsingChanged(hub, EventArgs.Empty);
+    }
+
+    private void OnBrowsingChanged(object? sender, EventArgs e)
+    {
+        var shown = App.Browsing is { IsAvailable: true } ? Visibility.Visible : Visibility.Collapsed;
+        NavigationExpander.Visibility = HomeExpander.Visibility = shown;
+    }
+
+    private void HideArrangement()
+    {
+        if (App.Browsing is { } hub)
+        {
+            hub.Changed -= OnBrowsingChanged;
+        }
+        _paneEditor?.Dispose();
+        _homeEditor?.Dispose();
+        _paneEditor = _homeEditor = null;
+        NavigationEditorHost.Content = HomeEditorHost.Content = null;
     }
 
     /// <summary>The combo's items in order: Light, Dark, Windows default (SettingsPage.xaml).</summary>

@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::browse::BrowseSettings;
+use crate::navigation::NavigationSettings;
 use crate::playback::PlaybackSettings;
 use crate::{DeviceId, StoreError};
 
@@ -64,6 +65,10 @@ pub struct Settings {
     pub browse: BrowseSettings,
     /// A stored `browse` that is not an object, kept until browse settings are changed here.
     unknown_browse: Option<Value>,
+    /// How the user arranged the pane's groups and Home's rows, per server and user (ADR 0024): open values.
+    pub navigation: NavigationSettings,
+    /// A stored `navigation` that is not an object, kept until an arrangement is changed here.
+    unknown_navigation: Option<Value>,
     /// Fields this version does not know, written back unchanged.
     extra: Map<String, Value>,
 }
@@ -80,6 +85,8 @@ impl Settings {
             unknown_playback: None,
             browse: BrowseSettings::default(),
             unknown_browse: None,
+            navigation: NavigationSettings::default(),
+            unknown_navigation: None,
             extra: Map::new(),
         }
     }
@@ -121,6 +128,9 @@ struct Stored {
     /// Added with the remembered library choices (2026-10-26); older files have none. Any JSON value, as `app_theme`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     browse: Option<Value>,
+    /// Added with the pane's and Home's arrangement (ADR 0024, 2026-10-28); older files have none. Any JSON value, as `app_theme`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    navigation: Option<Value>,
     #[serde(flatten)]
     extra: Map<String, Value>,
 }
@@ -372,6 +382,9 @@ impl SettingsStore {
             next.unknown_browse = None;
             next.browse.changed_from(&state.settings.browse);
         }
+        if next.navigation != state.settings.navigation {
+            next.unknown_navigation = None;
+        }
         if next != state.settings {
             self.write(&next, SETTINGS_VERSION)?;
             state.settings = next;
@@ -399,6 +412,10 @@ impl SettingsStore {
                 .unknown_browse
                 .clone()
                 .or_else(|| settings.browse.write()),
+            navigation: settings
+                .unknown_navigation
+                .clone()
+                .or_else(|| settings.navigation.write()),
             extra: settings.extra.clone(),
         };
         let mut object = Map::new();
@@ -470,6 +487,7 @@ fn from_stored(stored: Stored) -> Result<(Settings, bool), StoreError> {
     };
     let (playback, unknown_playback) = PlaybackSettings::read(stored.playback);
     let (browse, unknown_browse) = BrowseSettings::read(stored.browse);
+    let (navigation, unknown_navigation) = NavigationSettings::read(stored.navigation);
     let settings = Settings {
         device_id,
         servers: stored.servers.into_iter().map(SavedServer::from).collect(),
@@ -480,6 +498,8 @@ fn from_stored(stored: Stored) -> Result<(Settings, bool), StoreError> {
         unknown_playback,
         browse,
         unknown_browse,
+        navigation,
+        unknown_navigation,
         extra: stored.extra,
     };
     Ok((settings, made))
@@ -1015,6 +1035,57 @@ mod tests {
         let (store, _) = SettingsStore::open(temp.path()).unwrap();
         store.update(|s| s.last_server_key = 2).unwrap();
         assert!(read_json(temp.path()).get("browse").is_none());
+    }
+
+    #[test]
+    fn navigation_settings_round_trip_and_unknown_values_stay() {
+        use crate::{Anchor, NavigationScope, Placement};
+        use current_model::UserId;
+        let temp = tempfile::tempdir().unwrap();
+        write_file(
+            temp.path(),
+            r#"{"version": 1, "device_id": "abc", "navigation": {"later": [1]}}"#,
+        );
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        let scope = NavigationScope::new(saved_server().server, UserId::new("u1"));
+        let mut moved = Placement::new("seen_recently");
+        moved.after = Some(Anchor::First);
+        store
+            .update(|s| {
+                s.navigation
+                    .set_group(&scope, "home_rows", vec![moved.clone()])
+            })
+            .unwrap();
+        let file = read_json(temp.path());
+        assert_eq!(file["navigation"]["later"], serde_json::json!([1]));
+        assert_eq!(
+            file["navigation"]["jellyfin/1/u1"]["home_rows"],
+            serde_json::json!([{"key": "seen_recently", "after": ""}])
+        );
+        let reopened = SettingsStore::open(temp.path()).unwrap().0.get().navigation;
+        assert_eq!(reopened.group(&scope, "home_rows"), [moved]);
+        // A `navigation` that is not an object is kept until an arrangement is changed here.
+        let temp = tempfile::tempdir().unwrap();
+        write_file(
+            temp.path(),
+            r#"{"version": 1, "device_id": "abc", "navigation": "later"}"#,
+        );
+        let (store, _) = SettingsStore::open(temp.path()).unwrap();
+        store.update(|s| s.last_server_key = 2).unwrap();
+        assert_eq!(read_json(temp.path())["navigation"], "later");
+        store
+            .update(|s| s.navigation.set_group(&scope, "tabs", Vec::new()))
+            .unwrap();
+        assert_eq!(read_json(temp.path())["navigation"], "later");
+        let mut hidden = Placement::new("movie");
+        hidden.hidden = Some(true);
+        store
+            .update(|s| s.navigation.set_group(&scope, "tabs", vec![hidden]))
+            .unwrap();
+        assert_eq!(
+            read_json(temp.path())["navigation"],
+            serde_json::json!({"jellyfin/1/u1": {"tabs": [{"key": "movie", "hidden": true}]}})
+        );
     }
 
     #[test]

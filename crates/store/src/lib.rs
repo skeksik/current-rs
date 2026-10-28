@@ -9,6 +9,7 @@ mod browse;
 mod device;
 mod error;
 mod gateway;
+mod navigation;
 mod playback;
 mod secrets;
 mod settings;
@@ -23,6 +24,7 @@ pub use gateway::{
     AddressRemoval, GatewayKey, GatewaySecret, delete_gateway_secret, forget_gateway_secret,
     get_gateway_secret, remove_address, set_gateway_secret,
 };
+pub use navigation::{Anchor, NavigationScope, NavigationSettings, Placement};
 pub use playback::{PlaybackSettings, StreamQuality};
 pub use secrets::{
     KeyringSecrets, MemorySecrets, SERVICE_NAME, Secret, SecretKey, Secrets, SecretsError,

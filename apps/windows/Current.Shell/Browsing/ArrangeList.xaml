@@ -1,0 +1,105 @@
+<UserControl
+    x:Class="Current.Shell.Browsing.ArrangeList"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Current.Shell.Browsing"
+    IsTabStop="False">
+    <!-- One group the user arranges (ADR 0024): the pane's tabs, views or libraries, or Home's rows. A ListView the user reorders by
+         dragging, as Microsoft's: "ListViews support drag-based reordering out of the box ... At minimum, you add the AllowDrop and
+         CanReorderItems properties" ("Drag and drop", learn.microsoft.com, ms.date 2026-09-27, read 2026-10-28); CanDragItems too, for
+         the DragItemsCompleted event: "In order to receive the DragItemsStarting and DragItemsCompleted events while reordering items,
+         the CanDragItems property must be set to true" (ListViewBase.CanReorderItems, learn.microsoft.com, updated 2026-07-28, read
+         2026-10-28). Each row also has Move up and Move down buttons and Alt+Up and Alt+Down, the keyboard's way (whether ListView
+         reorders from the keyboard on its own is not verified; Alt+Up and Alt+Down as a Windows convention not verified either), and
+         a show switch: a ToggleSwitch in Settings and the Home dialog, an eye toggle button in the 300 px pane (Compact), where a
+         ToggleSwitch's width does not fit. Glyphs: Segoe Fluent Icons E784 "GripperBarVertical", E70E "ChevronUp", E70D "ChevronDown",
+         E890 "View" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-28). -->
+    <ListView
+        x:Name="List"
+        ItemsSource="{x:Bind Rows}"
+        SelectionMode="None"
+        CanReorderItems="True"
+        CanDragItems="True"
+        AllowDrop="True"
+        DragItemsCompleted="OnDragItemsCompleted"
+        PreviewKeyDown="OnListKeyDown">
+        <ListView.ItemTemplate>
+            <DataTemplate x:DataType="local:ArrangeRow">
+                <Grid ColumnSpacing="8" Padding="0,4" Opacity="{x:Bind RowOpacity, Mode=OneWay}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <FontIcon
+                        VerticalAlignment="Center"
+                        FontSize="16"
+                        Glyph="&#xE784;"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        AutomationProperties.AccessibilityView="Raw" />
+                    <FontIcon
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        FontSize="16"
+                        Glyph="{x:Bind Glyph}"
+                        Visibility="{x:Bind GlyphVisibility}"
+                        AutomationProperties.AccessibilityView="Raw" />
+                    <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                        <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="{x:Bind Note, Mode=OneWay}"
+                            Visibility="{x:Bind NoteVisibility, Mode=OneWay}" />
+                    </StackPanel>
+                    <Button
+                        Grid.Column="3"
+                        Padding="8"
+                        VerticalAlignment="Center"
+                        Tag="{x:Bind}"
+                        IsEnabled="{x:Bind CanMoveUp, Mode=OneWay}"
+                        AutomationProperties.Name="{x:Bind MoveUpLabel, Mode=OneWay}"
+                        ToolTipService.ToolTip="Move up (Alt+Up)"
+                        Click="OnMoveUp">
+                        <FontIcon FontSize="12" Glyph="&#xE70E;" />
+                    </Button>
+                    <Button
+                        Grid.Column="4"
+                        Padding="8"
+                        VerticalAlignment="Center"
+                        Tag="{x:Bind}"
+                        IsEnabled="{x:Bind CanMoveDown, Mode=OneWay}"
+                        AutomationProperties.Name="{x:Bind MoveDownLabel, Mode=OneWay}"
+                        ToolTipService.ToolTip="Move down (Alt+Down)"
+                        Click="OnMoveDown">
+                        <FontIcon FontSize="12" Glyph="&#xE70D;" />
+                    </Button>
+                    <Grid Grid.Column="5" VerticalAlignment="Center">
+                        <ToggleSwitch
+                            MinWidth="0"
+                            OnContent="On"
+                            OffContent="Off"
+                            Tag="{x:Bind}"
+                            IsOn="{x:Bind IsShown, Mode=OneWay}"
+                            Visibility="{x:Bind SwitchVisibility}"
+                            AutomationProperties.Name="{x:Bind ShowLabel, Mode=OneWay}"
+                            Toggled="OnSwitchToggled" />
+                        <ToggleButton
+                            Padding="8"
+                            Tag="{x:Bind}"
+                            IsChecked="{x:Bind IsShown, Mode=OneWay}"
+                            Visibility="{x:Bind ButtonVisibility}"
+                            AutomationProperties.Name="{x:Bind ShowLabel, Mode=OneWay}"
+                            ToolTipService.ToolTip="Show in the navigation pane"
+                            Click="OnShowClick">
+                            <FontIcon FontSize="12" Glyph="&#xE890;" />
+                        </ToggleButton>
+                    </Grid>
+                </Grid>
+            </DataTemplate>
+        </ListView.ItemTemplate>
+    </ListView>
+</UserControl>

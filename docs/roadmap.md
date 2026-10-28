@@ -266,8 +266,10 @@ Fix and polish:
 - [ ] AV1 as a transcoding target where the server has an AV1 encoder (the device profile asks `hevc,h264` today; ADR 0019)
 - [ ] MPEG-4 Part 2 (DivX, Xvid) in the engine's codec table, so it plays directly instead of being converted (a device profile change;
       the supported formats page shows "Server converts" today, ADR 0021)
-- [ ] Reorder or hide the pane's items within their groups (Favourites, Recently added; the libraries), Home and Settings fixed, and
-      reorder Home's rows (owner, 2026-10-26); where the order is kept (locally or the user's Jellyfin library order) to be researched
+- [x] Reorder or hide the pane's items within their groups (Movies and Series; Favourites, Recently added; the libraries), Home and
+      Settings fixed, and reorder and hide Home's rows (owner, 2026-10-26 and 2026-10-28): kept in Current per server and user, with
+      Jellyfin's order and "My media" hiding as the default; Settings → Personalization, the pane's edit mode and Edit Home (ADR 0024;
+      ADR 0022, departures 8 and 9)
 - [x] Per-type pages as pane tabs: Movies and Series, every library's, with a library's Sort, Filter, View and remembered choices,
       under Home (owner, 2026-10-28; ADR 0018 §6, amended; PR #101)
 - [ ] Per-type pages for Episodes and Collections (their Favourites rows' headers open today's page; not wanted for now, owner,

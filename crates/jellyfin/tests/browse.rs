@@ -350,7 +350,10 @@ async fn libraries_keep_the_servers_order_and_pass_unknown_types_through() {
     )
     .await;
     let libraries = client(&stand_in).libraries().await.unwrap();
-    assert_eq!(stand_in.only().path, "/UserViews");
+    let request = stand_in.only();
+    assert_eq!(request.path, "/UserViews");
+    // With the libraries kept out of "My media": the navigation shows them hidden (ADR 0024).
+    assert_eq!(request.query["includeHidden"], "true");
     let names: Vec<_> = libraries.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(
         names,
@@ -846,4 +849,22 @@ async fn the_session_keeps_the_libraries_left_out_of_latest() {
     );
     client.clear_token();
     assert!(client.latest_excludes().is_empty());
+}
+
+#[tokio::test]
+async fn the_session_keeps_the_libraries_left_out_of_my_media() {
+    let stand_in = StandIn::answering(
+        r#"{"Name":"Example User","Id":"5d1c0000000000000000000000000001","Policy":{},
+            "Configuration":{"MyMediaExcludes":["11b00000000000000000000000000003",""],"OrderedViews":[]}}"#,
+    )
+    .await;
+    let client = client(&stand_in);
+    assert!(client.hidden_libraries().is_empty());
+    client.current_user().await.unwrap();
+    assert_eq!(
+        client.hidden_libraries(),
+        [item("11b00000000000000000000000000003")]
+    );
+    client.clear_token();
+    assert!(client.hidden_libraries().is_empty());
 }

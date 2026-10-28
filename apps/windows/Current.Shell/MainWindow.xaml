@@ -229,7 +229,7 @@
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
                 <!-- Movies and Series, every film and every series of the server (owner, 2026-10-28): right under Home, above the
                      separator, with one server signed in here; with more, first inside each server's item under Libraries
-                     (ShowLibraries). Each shows only while the core lists it (Views.KindTabs: a library of its type is listed); titles
+                     (ShowLibraries). Each shows while the core lists it (the pane layout: a library of its type, not hidden by the user); titles
                      from the core (Views.Title). Glyphs: Segoe Fluent Icons E8B2 "Movies" and E7F4 "TVMonitor", as the films and TV
                      libraries' ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-28). -->
                 <NavigationViewItem x:Name="MoviesItem" Visibility="Collapsed">
@@ -275,6 +275,79 @@
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
+            <!-- Edit mode (ADR 0024; ADR 0022, departures 8 and 9, owner, 2026-10-28): the pencil above Settings opens it, shown
+                 only while the pane is open (full or over the page) and a server is signed in. NavigationView has no reordering of its
+                 own (no CanReorderItems or reorder event in its class reference, updated 2026-07-28, read 2026-10-28), so edit mode
+                 swaps the pane's items for one reorderable list per group (Browsing/ArrangeList) in the pane's custom content.
+                 Whether the footer items sit above the Settings item, as the design has it, is not verified. Glyph: Segoe Fluent
+                 Icons E70F "Edit" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-28). -->
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem
+                    x:Name="EditNavItem"
+                    Content="Edit navigation"
+                    Visibility="Collapsed"
+                    SelectsOnInvoked="False">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE70F;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.FooterMenuItems>
+            <!-- Left with Done, Escape, by choosing a page, or by closing the pane. Each change is saved as it is made, so there is
+                 no Cancel; Reset is in Settings. The pane's custom content sits above its menu items, in an Auto row
+                 ("PaneCustomContentBorder", Grid.Row 4, above "ItemsContainerGrid", NavigationView.xaml, microsoft-ui-xaml main at
+                 b9fa30e, read 2026-10-28), so Home cannot show above the lists as itself: edit mode shows it there dimmed and fixed,
+                 as the design's mock has it, and the real item is collapsed meanwhile; Settings is disabled, which dims it, and stays
+                 where it is. -->
+            <NavigationView.PaneCustomContent>
+                <Grid x:Name="EditPane" Visibility="Collapsed" Padding="16,0,8,8" RowSpacing="8">
+                    <Grid.KeyboardAccelerators>
+                        <KeyboardAccelerator Key="Escape" Invoked="OnEditEscape" />
+                    </Grid.KeyboardAccelerators>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            Style="{StaticResource BodyStrongTextBlockStyle}"
+                            AutomationProperties.HeadingLevel="Level2"
+                            Text="Edit navigation" />
+                        <Button
+                            x:Name="EditDoneButton"
+                            Grid.Column="1"
+                            Style="{StaticResource AccentButtonStyle}"
+                            Content="Done"
+                            Click="OnEditDone" />
+                    </Grid>
+                    <TextBlock
+                        Grid.Row="1"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        TextWrapping="Wrap"
+                        Text="Drag an item, or use its arrows, to move it within its group." />
+                    <!-- Home, fixed: dimmed as a disabled item is (TextFillColorDisabledBrush), not a control. Glyph: Segoe Fluent
+                         Icons E80F "Home" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-28). -->
+                    <StackPanel
+                        Grid.Row="2"
+                        Margin="4,4,0,0"
+                        Orientation="Horizontal"
+                        Spacing="12"
+                        AutomationProperties.Name="Home, always shows first">
+                        <FontIcon FontSize="16" Glyph="&#xE80F;" Foreground="{ThemeResource TextFillColorDisabledBrush}" />
+                        <TextBlock Text="Home" Foreground="{ThemeResource TextFillColorDisabledBrush}" />
+                    </StackPanel>
+                    <ScrollViewer x:Name="EditScroll" Grid.Row="3">
+                        <StackPanel x:Name="EditGroups" Spacing="4" />
+                    </ScrollViewer>
+                </Grid>
+            </NavigationView.PaneCustomContent>
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />

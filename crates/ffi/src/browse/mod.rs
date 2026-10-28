@@ -7,6 +7,7 @@
 //! Each object holds its `current-app` counterpart: dropping it (every foreign reference, and every subscription it started)
 //! stops its requests.
 
+mod arrangement;
 mod problems;
 mod records;
 mod remember;
@@ -21,6 +22,7 @@ use tokio::runtime::Handle;
 use crate::subscribe::{self, LiveListeners};
 use crate::{CancelToken, Core, CoreError, ServerRef, TaskHandle, cancel};
 
+pub use arrangement::{HomeRowSetting, NavGroup, PaneEntry, PaneLayout, PaneLibrary, PaneListener};
 pub use problems::{BrowseProblem, ImageProblem};
 pub use records::{
     Artwork, AspectRatio, BrowseNotice, CalendarDate, Chapter, EpisodeLinks, GridTools, HomeRow,

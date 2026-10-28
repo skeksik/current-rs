@@ -64,7 +64,7 @@ public sealed partial class CoreHost
 }
 
 /// <summary>Browsing one session of a signed-in Jellyfin server. Dispose it when no page uses it.</summary>
-public sealed class Browse : IDisposable
+public sealed partial class Browse : IDisposable
 {
     private readonly Ffi.Browse _browse;
 

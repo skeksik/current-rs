@@ -66,9 +66,13 @@ pub struct SearchGroup {
 }
 
 impl JellyfinClient {
-    /// The user's libraries (`GET UserViews`), in the user's order and without the views they hid.
+    /// The user's libraries (`GET UserViews?includeHidden=true`), in the user's order, with the views they keep out of "My media"
+    /// ([`JellyfinClient::hidden_libraries`]): Jellyfin 12.3 orders by `OrderedViews` whether or not it leaves those out
+    /// (`UserViewManager.GetUserViews`, read 2026-10-28; ADR 0024).
     pub async fn libraries(&self) -> Result<Vec<Library>, AuthError> {
-        let result: ItemsResult = self.get_json(Request::get("/UserViews")).await?;
+        let result: ItemsResult = self
+            .get_json(Request::get("/UserViews").query("includeHidden", "true"))
+            .await?;
         Ok(result
             .items
             .into_iter()

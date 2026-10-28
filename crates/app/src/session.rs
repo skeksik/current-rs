@@ -185,6 +185,8 @@ pub(crate) struct Shared {
     next_session: AtomicU64,
     /// Orders session changes (see the module documentation).
     changes: tokio::sync::Mutex<()>,
+    /// How the user arranged the pane and Home, per server and user (ADR 0024).
+    pub(crate) navigation: crate::navigation::Arrangements,
 }
 
 /// Where a sign-in goes: a server just found by setup, or one already saved.
@@ -234,7 +236,13 @@ impl Shared {
             roaming: Mutex::new(Roaming::default()),
             next_session: AtomicU64::new(1),
             changes: tokio::sync::Mutex::new(()),
+            navigation: crate::navigation::Arrangements::new(),
         }
+    }
+
+    /// The settings file, when the app stores anything.
+    pub(crate) fn settings(&self) -> Option<&SettingsStore> {
+        self.storage.as_ref().map(|storage| &storage.settings)
     }
 
     pub(crate) fn servers(&self) -> Vec<SavedServer> {
@@ -793,6 +801,13 @@ impl Shared {
                 .map(|library| ItemRef::new(server.clone(), library.id))
                 .collect();
             client.set_latest_excludes(excludes);
+            client.set_hidden_libraries(
+                signed_in
+                    .hidden_libraries
+                    .into_iter()
+                    .map(|library| ItemRef::new(server.clone(), library.id))
+                    .collect(),
+            );
             self.install(Arc::new(client), user.id.clone(), CHECKED);
             // Race now, so that the status soon shows the address in use.
             provider.retry_now();
@@ -1021,14 +1036,19 @@ impl Shared {
             self.check_writable()?;
             let shared = self.clone();
             let removed = server.clone();
-            // The libraries remembered for it go in the same save.
+            // The libraries remembered for it, and its users' arrangements, go in the same save.
             blocking("save", move || {
                 shared.commit_with(
                     |servers, _| servers.retain(|saved| saved.server != removed),
-                    |settings| settings.browse.forget_server(&removed),
+                    |settings| {
+                        settings.browse.forget_server(&removed);
+                        settings.navigation.forget_server(&removed);
+                    },
                 )
             })
             .await??;
+            // Without a settings file, the arrangements kept for the run go too.
+            self.navigation.forget_server(&server);
             let session = lock(&self.sessions).remove(&server);
             self.forget_gateways(&server);
             // Dropping the link stops its follow task; the provider itself lives on for the logouts below.

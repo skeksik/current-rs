@@ -14,6 +14,7 @@ mod gateway_sign_in;
 mod images;
 mod library_choices;
 mod list;
+pub mod navigation;
 mod numbers;
 mod player;
 mod problems;
@@ -68,6 +69,7 @@ pub use browse::{
     action_failed_title, details_facts, facts_line, item_count_label, person_kind_name,
     search_status, size_on_disk, tile_name, tile_subtitle, tile_title,
 };
+pub use browse::{HomeRowSetting, NavGroup, PaneEntry, PaneLayout, PaneLibrary};
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use formats::{
     DecoderProfile, FormatRow, FormatSupport, FormatTab, FormatTabKind, HardwareDecoding,

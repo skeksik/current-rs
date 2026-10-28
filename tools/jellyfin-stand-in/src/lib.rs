@@ -651,6 +651,12 @@ impl Controls {
             .sort_by_key(|view| rank(&view.id));
     }
 
+    /// The libraries the user keeps out of "My media": `/UserViews` leaves them out unless asked with `includeHidden=true`, and
+    /// `/Users/Me` and the sign-in report them in `MyMediaExcludes` from now on.
+    pub fn set_my_media_excludes(&self, libraries: &[&str]) {
+        lock(&self.state.views).excluded = libraries.iter().map(|id| (*id).to_owned()).collect();
+    }
+
     /// The ids of the user's libraries, in the user's order.
     pub fn library_ids(&self) -> Vec<String> {
         lock(&self.state.views)
@@ -1290,8 +1296,15 @@ fn user(state: &State) -> String {
         .map(|id| format!("\"{id}\""))
         .collect();
     let excludes = excludes.join(",");
+    let mut hidden: Vec<String> = lock(&state.views)
+        .excluded
+        .iter()
+        .map(|id| format!("\"{id}\""))
+        .collect();
+    hidden.sort();
+    let hidden = hidden.join(",");
     format!(
-        r#"{{"Name":"{USER_NAME}","Id":"{USER_ID}","Configuration":{{"LatestItemsExcludes":[{excludes}],"AudioLanguagePreference":"eng","PlayDefaultAudioTrack":true,"SubtitleLanguagePreference":"","SubtitleMode":"Default","RememberAudioSelections":true,"RememberSubtitleSelections":true,"EnableNextEpisodeAutoPlay":true}},"Policy":{{"IsAdministrator":false,"EnableMediaPlayback":true,"EnableVideoPlaybackTranscoding":true,"EnablePlaybackRemuxing":false,"ForceRemoteSourceTranscoding":false,"RemoteClientBitrateLimit":{REMOTE_BITRATE_LIMIT}}}}}"#
+        r#"{{"Name":"{USER_NAME}","Id":"{USER_ID}","Configuration":{{"LatestItemsExcludes":[{excludes}],"MyMediaExcludes":[{hidden}],"AudioLanguagePreference":"eng","PlayDefaultAudioTrack":true,"SubtitleLanguagePreference":"","SubtitleMode":"Default","RememberAudioSelections":true,"RememberSubtitleSelections":true,"EnableNextEpisodeAutoPlay":true}},"Policy":{{"IsAdministrator":false,"EnableMediaPlayback":true,"EnableVideoPlaybackTranscoding":true,"EnablePlaybackRemuxing":false,"ForceRemoteSourceTranscoding":false,"RemoteClientBitrateLimit":{REMOTE_BITRATE_LIMIT}}}}}"#
     )
 }
 
