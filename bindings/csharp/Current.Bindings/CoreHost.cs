@@ -149,6 +149,12 @@ public sealed partial class CoreHost : IDisposable
     /// <summary>The app came back to the foreground: unreachable servers try again at once.</summary>
     public void ReturnedToForeground() => _core.ReturnedToForeground();
 
+    /// <summary>
+    /// The main window is minimized, or no longer is: report it on every change. The live updates' socket closes once the window has
+    /// been minimized for a minute and opens again on its restore (ADR 0023). A restore is also a return to the foreground.
+    /// </summary>
+    public void WindowMinimized(bool minimized) => _core.WindowMinimized(minimized);
+
     /// <summary>How many listeners the core still holds. A diagnostic for leak checks: it falls when subscriptions are disposed.</summary>
     public ulong LiveListeners => _core.LiveListeners();
 

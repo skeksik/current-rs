@@ -476,6 +476,16 @@ internal static class FlowTests
         return Task.CompletedTask;
     }
 
+    public static Task WindowReportsAreAccepted()
+    {
+        using var core = CoreHost.Create();
+        core.WindowMinimized(true);
+        core.WindowMinimized(true);
+        core.WindowMinimized(false);
+        core.ReturnedToForeground();
+        return Task.CompletedTask;
+    }
+
     public static async Task DiagnosticsAfterASignInHoldNothingPrivate()
     {
         using var standIn = StandIn.Start();
