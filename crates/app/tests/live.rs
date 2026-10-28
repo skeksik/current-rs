@@ -1,11 +1,13 @@
 //! Live updates of user state (ADR 0023) through `App` against the Jellyfin stand-in's WebSocket: a mark made on another device
 //! shows on every page without a refresh; the socket opens again after it drops and reads what changed meanwhile; it answers the
 //! server's keep-alive, ignores remote control, never declares the session controllable, carries the gateway's header, and does
-//! not retry a refusal in a loop.
+//! not retry a refusal in a loop; it closes once the window has been minimized for a minute and opens again on its restore.
 
 use std::time::Duration;
 
-use current_app::{AddServerState, App, Browse, HeaderInput, PagedItems, SignInState, Slot};
+use current_app::{
+    AddServerState, App, Browse, HeaderInput, LIVE_PAUSE_AFTER, PagedItems, SignInState, Slot,
+};
 use current_model::{ItemId, ItemQuery, ItemRef, Library, ServerRef, UserState};
 use jellyfin_stand_in::library::{FILM_IDS, FILMS_LIBRARY_ID};
 use jellyfin_stand_in::{GATE_HEADER, GATE_HEADER_VALUE, Gate, PASSWORD, StandIn, USER_NAME};
@@ -16,9 +18,17 @@ async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
         if check() {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        real_wait(Duration::from_millis(10)).await;
     }
     panic!("not within 5 s: {what}");
+}
+
+/// Waits `time` of real time, also while tokio's clock is stopped ([`tokio::time::pause`]): a blocking task holds the stopped clock
+/// where it is, while the sockets' traffic, some of which runs on other threads, goes on.
+async fn real_wait(time: Duration) {
+    tokio::task::spawn_blocking(move || std::thread::sleep(time))
+        .await
+        .unwrap();
 }
 
 /// Sets up and signs in to the stand-in (with the gateway's header when it asks for one), and waits until the session has an
@@ -211,4 +221,130 @@ async fn the_socket_carries_the_gateway_s_header() {
         in_grid(&grid, &film).is_some_and(|state| state.played)
     })
     .await;
+}
+
+/// The live updates' first wait before a reconnect (ADR 0023, decision 5).
+const MIN_BACKOFF: Duration = Duration::from_secs(1);
+
+/// How many times the client asked the stand-in for a socket.
+fn socket_requests(stand_in: &StandIn) -> usize {
+    stand_in
+        .paths()
+        .iter()
+        .filter(|path| *path == "/socket")
+        .count()
+}
+
+/// Lets `time` pass on tokio's stopped clock a second at a time, with the sockets' traffic (the keep-alives) in between: one jump
+/// would outrun the server's answers and the socket would be taken for lost.
+async fn pass(time: Duration) {
+    let mut left = time;
+    while !left.is_zero() {
+        let step = left.min(Duration::from_secs(1));
+        tokio::time::advance(step).await;
+        left -= step;
+        real_wait(Duration::from_millis(1)).await;
+    }
+}
+
+/// Signs in, opens a grid holding `film`, and waits for its socket; then stops tokio's clock, so the minute the window stays
+/// minimized is not a real one ([`tokio::time::advance`]).
+async fn minimizable(stand_in: &StandIn, app: &App, film: &str) -> (Browse, PagedItems, ItemRef) {
+    let server = signed_in(stand_in, app).await;
+    let browse = app.browse(&server).unwrap();
+    let film = item(&server, film);
+    let grid = films(&browse, &server);
+    eventually("the grid", || in_grid(&grid, &film).is_some()).await;
+    eventually("the socket", || stand_in.socket_count() == 1).await;
+    assert_eq!(socket_requests(stand_in), 1);
+    tokio::time::pause();
+    (browse, grid, film)
+}
+
+#[tokio::test]
+async fn a_window_minimized_for_a_minute_closes_the_socket_and_its_restore_opens_it_again() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let (_browse, grid, film) = minimizable(&stand_in, &app, FILM_IDS[1]).await;
+
+    app.window_minimized(true);
+    pass(LIVE_PAUSE_AFTER - Duration::from_secs(1)).await;
+    assert_eq!(stand_in.socket_count(), 1, "still open within the delay");
+    pass(Duration::from_secs(2)).await;
+    eventually("the socket closes", || stand_in.socket_count() == 0).await;
+
+    // Marked while it is closed: no push reaches the client, and no attempt is made however long the window stays minimized.
+    stand_in.set_played_on_server(FILM_IDS[1], true);
+    pass(Duration::from_secs(30 * 60)).await;
+    assert_eq!(socket_requests(&stand_in), 1, "no attempt while minimized");
+    assert_eq!(stand_in.socket_count(), 0);
+    assert!(in_grid(&grid, &film).is_some_and(|state| !state.played));
+
+    // Restored: it opens at once, and the resync shows the mark.
+    app.window_minimized(false);
+    eventually("the socket again", || stand_in.socket_count() == 1).await;
+    assert_eq!(socket_requests(&stand_in), 2);
+    eventually("the grid shows the mark", || {
+        in_grid(&grid, &film).is_some_and(|state| state.played)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_quick_minimize_and_restore_keeps_the_socket() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let (_browse, grid, film) = minimizable(&stand_in, &app, FILM_IDS[0]).await;
+
+    app.window_minimized(true);
+    pass(LIVE_PAUSE_AFTER - Duration::from_secs(1)).await;
+    app.window_minimized(false);
+    // The minute counts from the minimize: once restored, the time passing changes nothing.
+    pass(LIVE_PAUSE_AFTER * 3).await;
+    // A second minimize counts afresh.
+    app.window_minimized(true);
+    pass(LIVE_PAUSE_AFTER / 2).await;
+    app.window_minimized(false);
+    pass(LIVE_PAUSE_AFTER).await;
+    assert_eq!(stand_in.socket_count(), 1);
+    assert_eq!(socket_requests(&stand_in), 1, "the same socket");
+
+    // And it still carries pushes.
+    stand_in.set_played_on_server(FILM_IDS[0], true);
+    eventually("the push", || {
+        in_grid(&grid, &film).is_some_and(|state| state.played)
+    })
+    .await;
+    assert_eq!(socket_requests(&stand_in), 1);
+}
+
+#[tokio::test]
+async fn a_socket_opened_again_while_minimized_closes_a_minute_after_the_minimize() {
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let (_browse, _grid, _film) = minimizable(&stand_in, &app, FILM_IDS[0]).await;
+
+    // Dropped within the delay: it opens again after its backoff, as any time.
+    app.window_minimized(true);
+    pass(LIVE_PAUSE_AFTER / 2).await;
+    stand_in.drop_sockets();
+    // Its backoff is at most a second, once the client has seen it close.
+    let mut waited = Duration::ZERO;
+    while !(socket_requests(&stand_in) == 2 && stand_in.socket_count() == 1) {
+        assert!(waited < MIN_BACKOFF * 5, "the socket again");
+        real_wait(Duration::from_millis(10)).await;
+        pass(Duration::from_millis(100)).await;
+        waited += Duration::from_millis(100);
+    }
+    // The minute counts from the minimize, not from that opening.
+    pass(LIVE_PAUSE_AFTER / 2 - waited - Duration::from_secs(1)).await;
+    assert_eq!(stand_in.socket_count(), 1, "still open within the minute");
+    pass(Duration::from_secs(2)).await;
+    eventually("the socket closes", || stand_in.socket_count() == 0).await;
+    pass(Duration::from_secs(30 * 60)).await;
+    assert_eq!(socket_requests(&stand_in), 2, "no attempt while minimized");
+
+    app.window_minimized(false);
+    eventually("the socket again", || stand_in.socket_count() == 1).await;
+    assert_eq!(socket_requests(&stand_in), 3);
 }

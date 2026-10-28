@@ -84,6 +84,8 @@ use store::{ItemStore, ReadTicket};
 /// How long after the last played or favourite change the lists that depend on it reload (ADR 0018, section 5).
 pub const DEPENDENT_RELOAD_DELAY: Duration = Duration::from_secs(1);
 
+pub use live::LIVE_PAUSE_AFTER;
+
 /// What every live list does when its session's items change.
 pub(crate) trait Live: Send + Sync {
     /// `item`'s user state is now `state`: patch every slot that shows it.
@@ -115,9 +117,11 @@ impl Notices {
     }
 }
 
-/// The app's browse state: the notices, and one [`Context`] per live session.
+/// The app's browse state: the notices, whether the window is minimized, and one [`Context`] per live session.
 pub(crate) struct Hub {
     notices: Arc<Notices>,
+    /// Since when the app's window is minimized, `None` while it is not ([`Hub::window_minimized`]).
+    minimized: watch::Sender<Option<tokio::time::Instant>>,
     contexts: Mutex<HashMap<ServerRef, Weak<Context>>>,
 }
 
@@ -128,6 +132,7 @@ impl Default for Hub {
                 tx: watch::Sender::new(None),
                 seq: AtomicU64::new(0),
             }),
+            minimized: watch::Sender::new(None),
             contexts: Mutex::new(HashMap::new()),
         }
     }
@@ -136,6 +141,24 @@ impl Default for Hub {
 impl Hub {
     pub(crate) fn notices(&self) -> watch::Receiver<Option<BrowseNotice>> {
         self.notices.tx.subscribe()
+    }
+
+    /// The platform's report that the app's window is minimized, or no longer is: every session's live updates close their socket
+    /// once it has been minimized for [`live::LIVE_PAUSE_AFTER`], and open it again when it is restored ([`live`]). A repeated report
+    /// changes nothing: the time counts from the first.
+    pub(crate) fn window_minimized(&self, minimized: bool) {
+        self.minimized
+            .send_if_modified(|since| match (minimized, *since) {
+                (true, None) => {
+                    *since = Some(tokio::time::Instant::now());
+                    true
+                }
+                (false, Some(_)) => {
+                    *since = None;
+                    true
+                }
+                _ => false,
+            });
     }
 
     /// A `Browse` over `server`'s live session, sharing that session's item states with every other `Browse` of it; `None` unless
@@ -167,6 +190,7 @@ impl Hub {
             Arc::downgrade(shared),
             runtime,
             self.notices.clone(),
+            self.minimized.subscribe(),
         ));
         contexts.insert(server.clone(), Arc::downgrade(&context));
         context.start_libraries(shared.capabilities.subscribe());
@@ -290,6 +314,8 @@ pub(crate) struct Context {
     live_wake: Arc<tokio::sync::Notify>,
     /// The live updates' task, stopped with the context.
     live: Mutex<Option<AbortHandle>>,
+    /// Since when the app's window is minimized ([`Hub::window_minimized`]): the socket closes after a while ([`live`]).
+    minimized: watch::Receiver<Option<tokio::time::Instant>>,
     libraries: Libraries,
     /// Orders the lists' reads and the server's answers ([`store::ItemStore`]).
     clock: AtomicU64,
@@ -314,6 +340,7 @@ impl Context {
         shared: Weak<Shared>,
         runtime: RuntimeHandle,
         notices: Arc<Notices>,
+        minimized: watch::Receiver<Option<tokio::time::Instant>>,
     ) -> Self {
         Self {
             server,
@@ -331,6 +358,7 @@ impl Context {
             answered: tokio::sync::Notify::new(),
             live_wake: Arc::new(tokio::sync::Notify::new()),
             live: Mutex::new(None),
+            minimized,
             libraries: Libraries::default(),
             clock: AtomicU64::new(0),
         }

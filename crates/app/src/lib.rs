@@ -41,13 +41,14 @@ pub use add_server::{AddServer, AddServerState, NewServer};
 pub use browse::{
     BACKLOG_PAGES, Browse, BrowseNotice, DEPENDENT_RELOAD_DELAY, DetailsView, FAVOURITE_ROW_KINDS,
     FAVOURITE_ROW_LIMIT, FILTERS_OFF_WHILE_SEARCHING, GridTools, HomeFeed, HomeRow, HomeRowKind,
-    HomeState, ItemAction, LATEST_LIMIT, LIBRARY_SEARCH_WINDOW, LoadState, MAX_PAGE_REQUESTS,
-    NEXT_UP_LIMIT, NoticeKind, PAGE_SIZE, PagedItems, PagedState, REFRESH_WHEN_SHOWN_AFTER,
-    RESUME_LIMIT, SIMILAR_LIMIT, SORT_OFF_WHILE_SEARCHING, SearchResults, SeriesRun, Slot,
-    SortChoice, TileShape, favourites_query, grid_tools, kind_query, library_filters,
-    library_query, library_search, library_search_note, library_sorts, library_toggle_filters,
-    recently_added_everywhere_query, recently_added_query, seen_recently_query, series_run,
-    tile_artwork, view_kinds, with_filter_choice, with_filter_toggle,
+    HomeState, ItemAction, LATEST_LIMIT, LIBRARY_SEARCH_WINDOW, LIVE_PAUSE_AFTER, LoadState,
+    MAX_PAGE_REQUESTS, NEXT_UP_LIMIT, NoticeKind, PAGE_SIZE, PagedItems, PagedState,
+    REFRESH_WHEN_SHOWN_AFTER, RESUME_LIMIT, SIMILAR_LIMIT, SORT_OFF_WHILE_SEARCHING, SearchResults,
+    SeriesRun, Slot, SortChoice, TileShape, favourites_query, grid_tools, kind_query,
+    library_filters, library_query, library_search, library_search_note, library_sorts,
+    library_toggle_filters, recently_added_everywhere_query, recently_added_query,
+    seen_recently_query, series_run, tile_artwork, view_kinds, with_filter_choice,
+    with_filter_toggle,
 };
 pub use browse::{
     BrowseView, CATALOG_NEEDS_SEERR, CATALOG_NEEDS_SEERR_LABEL, FAVOURITES_EMPTY,
@@ -745,6 +746,15 @@ impl App {
             provider.retry_now();
         }
         self.browse.refresh_all();
+    }
+
+    /// The platform's report that the app's window is minimized (`true`) or no longer is (`false`), on every change. Every
+    /// session's live updates close their socket once the window has been minimized for [`LIVE_PAUSE_AFTER`], and open it again
+    /// when it is restored, reading what the lists hold again (ADR 0023). A window that is merely behind others or not focused is
+    /// not minimized. Playback is not affected. Restoring is also a return to the foreground: the platform reports that too
+    /// ([`App::returned_to_foreground`]).
+    pub fn window_minimized(&self, minimized: bool) {
+        self.browse.window_minimized(minimized);
     }
 
     /// Browsing `server` (ADR 0018): `None` unless it is a Jellyfin server that is signed in (its status is available, as
