@@ -301,6 +301,13 @@ internal static class BrowseTests
             && ticked.ShowTitles, "a Favourites row's header: its kind's page, favourites ticked, posters with titles");
         Check(Views.Layout(BrowseView.Favourites) == ViewLayout.Rows && Views.Layout(BrowseView.Favourites, "movie") == ViewLayout.Grid
             && Views.Layout(BrowseView.RecentlyAdded) == ViewLayout.Grid, "only the Favourites tab is rows");
+        var tv = BigLibrary() with { Item = new ItemRef(FirstServer, "tv"), Collection = "tv_shows" };
+        var music = BigLibrary() with { Item = new ItemRef(FirstServer, "music"), Collection = "music" };
+        Check(Views.KindTabs([tv, music, BigLibrary()]).SequenceEqual(["movie", "series"]) && Views.KindTabs([music]).Count == 0
+            && Views.KindTabs([BigLibrary() with { Collection = null }]).Count == 0, "a kind tab shows while a library of its type is listed");
+        Check(Views.Remembers(BrowseView.Everything, "movie") && Views.Remembers(BrowseView.Everything, "series")
+            && !Views.Remembers(BrowseView.Everything, "episode") && !Views.Remembers(BrowseView.RecentlyAdded),
+            "only the kind tabs' pages remember");
         var menu = Views.FilterMenu(BrowseView.RecentlyAdded);
         Check(menu.Kinds.SequenceEqual([null, "movie", "series"]) && menu.Filters, "Recently added narrows by type, and filters");
         Check(Views.FilterMenu(null).Kinds.Count == 0 && Views.FilterMenu(BrowseView.Everything, "movie").Kinds.Count == 0
@@ -384,6 +391,24 @@ internal static class BrowseTests
         Check(core.LibraryOpening(BigLibrary()).Query.Filters.Count == 0, "filters the menu no longer offers are dropped");
         var home = core.LibraryOpening(BigLibrary(), ItemQuery.RecentlyAdded(BigLibrary()));
         Check(home.Query.Sort.SequenceEqual(["date_created"]) && !home.Wide && home.ShowTitles, "a Home header ignores what is remembered");
+
+        // A kind tab's page remembers its own, as a library; a Favourites row's header opens it with the favourites ticked.
+        var tab = core.ViewOpening(FirstServer, BrowseView.Everything, "movie");
+        Check(tab.Query.Kinds.SequenceEqual(["movie"]) && tab.Query.Sort.SequenceEqual(["sort_name"]) && !tab.Wide,
+            "the Movies tab, nothing remembered yet");
+        await core.RememberViewChoicesAsync(FirstServer, BrowseView.Everything, "movie", new LibraryChoices(
+            new SortChoice("date_created", SortOrder.Descending), ["played"], new LibraryView(LibraryView.Wide, true)));
+        var tabRemembered = core.ViewOpening(FirstServer, BrowseView.Everything, "movie");
+        Check(tabRemembered.Query.Sort.SequenceEqual(["date_created"]) && tabRemembered.Query.Filters.SequenceEqual(["played"])
+            && tabRemembered.Wide, "the Movies tab opens with what is remembered");
+        Check(core.ViewOpening(FirstServer, BrowseView.Everything, "series").Query.Sort.SequenceEqual(["sort_name"]),
+            "the Series tab remembers its own");
+        var fromHeader = core.ViewOpening(FirstServer, BrowseView.Everything, "movie", favourite: true);
+        Check(fromHeader.Query.Filters.SequenceEqual(["favourite"]) && !fromHeader.Wide, "a Favourites header ignores what is remembered");
+        using var movies = browse.OpenItems(tabRemembered.Query with { Filters = [] });
+        using var moviesGrid = movies.Collect(ui);
+        await Eventually("the Movies tab's items", ui, () => moviesGrid.Items.Count > 0 && moviesGrid.Items[0] is Slot.Item);
+        Check(moviesGrid.Items.OfType<Slot.Item>().All(slot => slot.Summary.Kind == "movie"), "the Movies tab lists films only");
     }
 
     public static async Task SearchFiltersNarrowAndAPersonOpensTheirTitles()

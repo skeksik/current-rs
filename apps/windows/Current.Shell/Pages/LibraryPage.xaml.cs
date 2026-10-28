@@ -72,6 +72,9 @@ public sealed partial class LibraryPage : Page, IRefreshable
     /// <summary>The view across every library shown (<see cref="ViewArgs"/>), or null for a library.</summary>
     private BrowseView? _view;
 
+    /// <summary>The view shown, whose choices the core remembers when it is a kind tab's page (Movies, Series); null for a library.</summary>
+    private ViewArgs? _shownView;
+
 
     /// <summary>
     /// The Filter menu's media types, for a view across every library (owner, 2026-10-26): the core's (Views.FilterMenu), every type
@@ -229,6 +232,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
         }
         var library = App.Browsing.FindLibrary(args.Library.Item) ?? args.Library;
         _view = null;
+        _shownView = null;
         ShowFilterMenu(null, null);
         TitleText.Text = library.Name;
         ShowSearchName(library.Name);
@@ -282,8 +286,9 @@ public sealed partial class LibraryPage : Page, IRefreshable
     }
 
     /// <summary>
-    /// A view across every library (the Favorites or Recently added tab) in the same grid: its own query from the core, nothing
-    /// remembered, and Back and Forward returning to where it was left, as a library's.
+    /// A view across every library (the Favorites or Recently added tab, or a kind's page: the Movies and Series tabs) in the same
+    /// grid: its own query from the core, a kind tab's page with what it remembers as a library does (owner, 2026-10-28), and Back
+    /// and Forward returning to where it was left, as a library's.
     /// </summary>
     private void ShowView(ViewArgs view, NavigationMode mode)
     {
@@ -295,9 +300,13 @@ public sealed partial class LibraryPage : Page, IRefreshable
         var title = Views.Title(view.View, view.Kind);
         TitleText.Text = title;
         _view = view.View;
-        // A Favourites row's header opens its kind's page with the favourites tick on (owner, 2026-10-27); nothing is remembered for
-        // a view (the core's opening).
-        var opening = Views.Opening(view.View, view.Kind, view.Favourite);
+        _shownView = view;
+        _library = null;
+        // The core's opening: a kind tab's page with its remembered sort, filter and view, each while Settings remembers it; a
+        // Favourites row's header opens its kind's page with the favourites tick on and nothing remembered (owner, 2026-10-27 and
+        // 2026-10-28); the other views remember nothing.
+        var opening = App.Core?.ViewOpening(view.Server, view.View, view.Kind, view.Favourite)
+            ?? Views.Opening(view.View, view.Kind, view.Favourite);
         var first = opening.Query;
         // Recently added narrows by media type in its Filter menu; a kind's page is one type already (the core's menu).
         ShowFilterMenu(view.View, view.Kind);
@@ -332,6 +341,7 @@ public sealed partial class LibraryPage : Page, IRefreshable
         }
         TitleText.Text = person.Name;
         _view = null;
+        _shownView = null;
         // One person's titles: the Filter menu a library has (the core's menu).
         ShowFilterMenu(null, null);
         ShowSearchName(person.Name);
@@ -615,18 +625,25 @@ public sealed partial class LibraryPage : Page, IRefreshable
         e.Handled = LibrarySearch.Focus(FocusState.Keyboard);
 
     /// <summary>
-    /// Tells the core what the user chose here; it keeps each part only while Settings remembers it. A failed save loses nothing the
-    /// grid shows, so it is only traced.
+    /// Tells the core what the user chose here, in a library or a view; it keeps each part only while Settings remembers it, and for
+    /// a view only on a kind tab's page. A failed save loses nothing the grid shows, so it is only traced.
     /// </summary>
     private async void Remember(LibraryChoices choices)
     {
-        if (_library is not { } library || App.Core is not { } core)
+        if (App.Core is not { } core)
         {
             return;
         }
         try
         {
-            await core.RememberLibraryChoicesAsync(library, choices);
+            if (_library is { } library)
+            {
+                await core.RememberLibraryChoicesAsync(library, choices);
+            }
+            else if (_shownView is { } view)
+            {
+                await core.RememberViewChoicesAsync(view.Server, view.View, view.Kind, choices);
+            }
         }
         catch (Exception error)
         {

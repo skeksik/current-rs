@@ -62,7 +62,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("the Favourites tab is a row per kind", BrowseTests.FavouritesAreARowPerKind),
     ("search filters narrow, and a person opens their titles", BrowseTests.SearchFiltersNarrowAndAPersonOpensTheirTitles),
     ("views, rows, names and times are the core's", BrowseTests.ViewsAndRowsAreTheCores),
-    ("the views' grids open their items, and a library opens with what is remembered", BrowseTests.ViewGridsOpenTheirItems),
+    ("the views' grids open their items, and a library and a kind tab open with what is remembered", BrowseTests.ViewGridsOpenTheirItems),
     ("no browse without a signed-in server", BrowseTests.NoBrowseWithoutASignedInServer),
     ("browse subscriptions are released", BrowseTests.BrowseSubscriptionsAreReleased),
     ("Play starts the item from where the core says", BrowseTests.PlayStartsTheItemFromWhereTheCoreSays),

@@ -85,9 +85,25 @@ public static class Views
     public static ViewLayout Layout(BrowseView view, string? kind = null) =>
         Ffi.CurrentFfiMethods.ViewLayout(MapViews.ToFfi(view), kind) == Ffi.ViewLayout.Rows ? ViewLayout.Rows : ViewLayout.Grid;
 
-    /// <summary>What a view's grid opens with when opened anew: its query, posters with titles; nothing is remembered for a view.</summary>
+    /// <summary>What a view's grid opens with when nothing is remembered: its query, posters with titles. A kind tab's page opens
+    /// with <see cref="CoreHost.ViewOpening"/>, which adds what it remembers.</summary>
     public static GridOpening Opening(BrowseView view, string? kind = null, bool favourite = false) =>
         MapViews.From(Ffi.CurrentFfiMethods.ViewOpening(MapViews.ToFfi(view), kind, favourite));
+
+    /// <summary>
+    /// The media kinds whose tab a server with <paramref name="libraries"/> (its list, in the user's order) shows in the navigation,
+    /// in the tabs' order: <c>movie</c> while a film library is listed, <c>series</c> while a TV library is. Each tab is
+    /// <see cref="BrowseView.Everything"/> of its kind, titled by <see cref="Title"/>.
+    /// </summary>
+    public static IReadOnlyList<string> KindTabs(IReadOnlyList<Library> libraries)
+    {
+        ArgumentNullException.ThrowIfNull(libraries);
+        return Ffi.CurrentFfiMethods.KindTabs(libraries.Select(MapBrowse.ToFfi).ToArray());
+    }
+
+    /// <summary>Whether <paramref name="view"/> narrowed to <paramref name="kind"/> remembers its choices, as a library does: a kind
+    /// tab's page, also when a Favourites row's header opened it.</summary>
+    public static bool Remembers(BrowseView view, string? kind = null) => Ffi.CurrentFfiMethods.ViewRemembers(MapViews.ToFfi(view), kind);
 
     /// <summary>The Filter menu of a grid showing <paramref name="view"/> (null: a library) narrowed to <paramref name="kind"/>.</summary>
     public static FilterMenu FilterMenu(BrowseView? view, string? kind = null)
@@ -274,6 +290,38 @@ public sealed partial class CoreHost
     {
         ArgumentNullException.ThrowIfNull(library);
         return MapViews.From(_core.LibraryOpening(MapBrowse.ToFfi(library), homeQuery is { } query ? MapBrowse.ToFfi(query) : null));
+    }
+
+    /// <summary>
+    /// What <paramref name="view"/> narrowed to <paramref name="kind"/> of <paramref name="server"/> opens with when opened anew: a
+    /// kind tab's page (<see cref="Views.Remembers"/>) opened from its tab with its remembered sort, filters (only if the Filter menu
+    /// still offers every one) and view, each while Settings remembers it; opened from a Favourites row's header
+    /// (<paramref name="favourite"/>), or any other view, <see cref="Views.Opening"/>.
+    /// </summary>
+    public GridOpening ViewOpening(ServerRef server, BrowseView view, string? kind = null, bool favourite = false)
+    {
+        ArgumentNullException.ThrowIfNull(server);
+        return MapViews.From(_core.ViewOpening(Map.ToFfi(server), MapViews.ToFfi(view), kind, favourite));
+    }
+
+    /// <summary>
+    /// Remembers the user's choices in <paramref name="view"/> narrowed to <paramref name="kind"/> of <paramref name="server"/>, as
+    /// <see cref="RememberLibraryChoicesAsync"/> does a library's; nothing is written for a view that does not remember
+    /// (<see cref="Views.Remembers"/>).
+    /// </summary>
+    /// <exception cref="CoreStoreException">The settings could not be saved: nothing changed.</exception>
+    public Task RememberViewChoicesAsync(ServerRef server, BrowseView view, string? kind, LibraryChoices choices)
+    {
+        ArgumentNullException.ThrowIfNull(server);
+        ArgumentNullException.ThrowIfNull(choices);
+        var ffiServer = Map.ToFfi(server);
+        var ffiView = MapViews.ToFfi(view);
+        var ffiChoices = LibraryMap.ToFfi(choices);
+        return CoreCall.RunUncancellableAsync(async () =>
+        {
+            await _core.RememberViewChoices(ffiServer, ffiView, kind, ffiChoices).ConfigureAwait(false);
+            return true;
+        });
     }
 }
 

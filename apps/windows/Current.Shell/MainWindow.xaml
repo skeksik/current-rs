@@ -227,6 +227,21 @@
                  more than one (ShowLibraries). -->
             <NavigationView.MenuItems>
                 <NavigationViewItem x:Name="HomeItem" Content="Home" Tag="home" Icon="Home" />
+                <!-- Movies and Series, every film and every series of the server (owner, 2026-10-28): right under Home, above the
+                     separator, with one server signed in here; with more, first inside each server's item under Libraries
+                     (ShowLibraries). Each shows only while the core lists it (Views.KindTabs: a library of its type is listed); titles
+                     from the core (Views.Title). Glyphs: Segoe Fluent Icons E8B2 "Movies" and E7F4 "TVMonitor", as the films and TV
+                     libraries' ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-28). -->
+                <NavigationViewItem x:Name="MoviesItem" Visibility="Collapsed">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8B2;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem x:Name="SeriesItem" Visibility="Collapsed">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE7F4;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <!-- Between Home and the libraries (owner, 2026-10-26); shown only while there are libraries (ShowLibraries). -->
                 <NavigationViewItemSeparator x:Name="LibrariesSeparator" Visibility="Collapsed" />
                 <!-- Views across every library, under the separator and above Libraries (owner, 2026-10-26): with one server signed in here; with more, inside each
