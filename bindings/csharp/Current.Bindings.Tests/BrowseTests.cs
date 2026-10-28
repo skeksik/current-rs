@@ -618,4 +618,42 @@ internal static class BrowseTests
         collection.SetVisibleRange(0, 10);
         items.Dispose();
     }
+
+    private static string[] PaneIds(PaneLayout? layout) =>
+        [.. (layout?.Libraries ?? []).Select(entry => (entry.Hidden ? "!" : "") + entry.Library.Item.Id)];
+
+    public static async Task ThePaneFollowsTheUsersArrangement()
+    {
+        using var standIn = StandIn.Start();
+        using var core = await SignedIn(standIn);
+        using var browse = core.Browse(FirstServer);
+        var ui = new ManualDispatcher();
+        using var pane = browse.ObservePane(ui);
+        await Eventually("the pane in the server's order", ui,
+            () => PaneIds(pane.Value).SequenceEqual([StandIn.FilmsLibraryId, StandIn.ShowsLibraryId]));
+        Check(pane.Value!.Tabs.Select(tab => tab.Key).SequenceEqual(["movie", "series"]), "the tabs in the app's order");
+        Check(pane.Value!.Views.Select(view => view.Key).SequenceEqual([PaneEntry.Favourites, PaneEntry.RecentlyAdded]),
+            "the views in the app's order");
+
+        await browse.MoveAsync(NavGroup.Libraries, StandIn.ShowsLibraryId, 0);
+        await Eventually("moved", ui,
+            () => PaneIds(pane.Value).SequenceEqual([StandIn.ShowsLibraryId, StandIn.FilmsLibraryId]));
+        await browse.SetHiddenAsync(NavGroup.Libraries, StandIn.FilmsLibraryId, true);
+        await Eventually("hidden", ui,
+            () => PaneIds(pane.Value).SequenceEqual([StandIn.ShowsLibraryId, "!" + StandIn.FilmsLibraryId]));
+        await browse.SetHiddenAsync(NavGroup.Tabs, "series", true);
+        await Eventually("a tab hidden", ui, () => pane.Value!.Tabs.Any(tab => tab.Key == "series" && tab.Hidden));
+
+        // Home's rows for the editor: every row, a Latest row each, the one hidden marked.
+        var latest = $"latest:{StandIn.FilmsLibraryId}";
+        await browse.SetHiddenAsync(NavGroup.HomeRows, latest, true);
+        var rows = browse.HomeLayout();
+        Check(rows[0].Row.Kind == HomeRowKind.ContinueWatching, "Continue watching first");
+        Check(rows.Any(setting => setting.Row.Key == latest && setting.Hidden && setting.Row.Library?.Id == StandIn.FilmsLibraryId),
+            "the hidden Latest row, with its library");
+
+        await browse.ResetAsync(NavGroup.Libraries);
+        await Eventually("reset", ui,
+            () => PaneIds(pane.Value).SequenceEqual([StandIn.FilmsLibraryId, StandIn.ShowsLibraryId]));
+    }
 }

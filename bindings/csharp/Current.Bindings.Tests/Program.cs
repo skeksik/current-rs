@@ -67,6 +67,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("browse subscriptions are released", BrowseTests.BrowseSubscriptionsAreReleased),
     ("Play starts the item from where the core says", BrowseTests.PlayStartsTheItemFromWhereTheCoreSays),
     ("the libraries follow the server, and a gone one is not available", BrowseTests.LibrariesFollowTheServer),
+    ("the pane follows the user's arrangement, and Home's rows list for the editor", BrowseTests.ThePaneFollowsTheUsersArrangement),
     ("the problems' texts are the core's", TextTests.ProblemTextsAreTheCores),
     ("tile lines, names and notices are the core's", TextTests.TileTextsAreTheCores),
     ("sizes, counts, facts and the search status are the core's", TextTests.NumbersAndStatusesAreTheCores),
