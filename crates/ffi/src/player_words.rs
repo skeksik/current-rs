@@ -54,7 +54,8 @@ impl From<&PlanNoteInfo> for PlanNote {
 
 #[uniffi::export]
 impl Core {
-    /// A time as the player shows it: "1:02:03" from an hour on, else "2:03". The hours wrap at 24, as the Windows app's did.
+    /// A time as the player shows it: "1:02:03" from an hour on, else "2:03". The hours are the whole hours in total: 25 h 0 min
+    /// 30 s is "25:00:30".
     pub fn time_label(&self, ms: i64) -> String {
         current_app::time_label(ms)
     }
@@ -248,6 +249,7 @@ mod tests {
         core.set_decimal_separator(",".into());
         assert_eq!(core.time_label(3_723_000), "1:02:03");
         assert_eq!(core.time_label(-1), "0:00");
+        assert_eq!(core.time_label(25 * 3_600_000 + 30_000), "25:00:30");
         assert_eq!(core.spoken_time(3_723_000), "1 hour 2 minutes 3 seconds");
         assert_eq!(core.elapsed_label(1_000), "Time elapsed 1 second");
         assert_eq!(core.remaining_label(-500), "Time remaining 0 seconds");
