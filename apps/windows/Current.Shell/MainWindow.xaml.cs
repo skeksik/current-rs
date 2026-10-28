@@ -303,6 +303,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     {
         NamePaneToggleButton();
         UpdateBackButton();
+        // The pencil shows only while the pane is open, and closing the pane leaves edit mode.
+        ShowEditNavigation();
     });
 
     /// <summary>
@@ -518,6 +520,13 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     private void OnItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)
     {
+        if (ReferenceEquals(args.InvokedItemContainer, EditNavItem))
+        {
+            EnterEditMode();
+            return;
+        }
+        // Choosing a page leaves edit mode (MainWindow.Arrange.cs).
+        LeaveEditMode();
         if (args.IsSettingsInvoked)
         {
             Navigate(typeof(SettingsPage), args.RecommendedNavigationTransitionInfo);
@@ -572,10 +581,11 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     }
 
     /// <summary>
-    /// The library items follow the core's lists in place: an item for a library still listed is kept (and renamed), a new library's
-    /// item is inserted where the user's order puts it, a gone library's item is removed, and the rest stay as they are, so the
-    /// selection and keyboard focus stay on what they were on. They sit inside the Libraries item, inside an item per server when
-    /// more than one is signed in.
+    /// The pane's items follow the core's arrangement (ADR 0024) in place: an item still shown is kept (and renamed), a new one is
+    /// inserted where the user's order puts it, one gone or hidden is removed, and the rest stay as they are, so the selection and
+    /// keyboard focus stay on what they were on. The libraries sit inside the Libraries item, inside an item per server when more
+    /// than one is signed in; with one server its Movies and Series sit under Home and its views above Libraries, each in the user's
+    /// order.
     /// </summary>
     private void ShowLibraries(BrowseHub hub)
     {
@@ -589,18 +599,35 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         var all = new List<object>();
         // The views across every library: above Libraries with one server, first inside each server's item with more.
         var single = servers.Count == 1 ? servers[0].Server : null;
-        // Movies and Series under Home with one server, each while the core lists it (a library of its type is listed).
-        IReadOnlyList<string> singleTabs = single is null ? [] : Views.KindTabs(servers[0].Libraries);
+        var singlePane = servers.Count == 1 ? servers[0].Pane : null;
+        // Movies and Series under Home with one server, each while the core lists it (a library of its type is listed) and the user
+        // has not hidden it, in the user's order.
+        var tabOrder = (singlePane?.Tabs ?? []).Select(tab => tab.Key).ToList();
         foreach (var (item, kind) in KindTabItems)
         {
-            var shown = singleTabs.Contains(kind);
+            var shown = singlePane?.Tabs.Any(tab => tab.Key == kind && !tab.Hidden) ?? false;
             item.Tag = shown ? new ViewArgs(single!, BrowseView.Everything, kind) : null;
             item.Content = Views.Title(BrowseView.Everything, kind);
             item.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
         }
-        FavouritesItem.Tag = single is null ? null : new ViewArgs(single, BrowseView.Favourites);
-        RecentItem.Tag = single is null ? null : new ViewArgs(single, BrowseView.RecentlyAdded);
-        FavouritesItem.Visibility = RecentItem.Visibility = single is null ? Visibility.Collapsed : Visibility.Visible;
+        var viewOrder = (singlePane?.Views ?? []).Select(view => view.Key).ToList();
+        foreach (var (item, key) in ViewItems)
+        {
+            var shown = singlePane?.Views.Any(view => view.Key == key && !view.Hidden) ?? false;
+            item.Tag = shown ? new ViewArgs(single!, PaneRows.ViewOf(key)) : null;
+            item.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+        }
+        // The top level in the user's order: Home, the tabs, the separator, the views, Libraries. Collapsed items keep a place.
+        static int Rank(List<string> order, string key)
+        {
+            var at = order.IndexOf(key);
+            return at >= 0 ? at : int.MaxValue;
+        }
+        var topLevel = new List<object> { HomeItem };
+        topLevel.AddRange(KindTabItems.OrderBy(tab => Rank(tabOrder, tab.Kind)).Select(tab => (object)tab.Item));
+        topLevel.Add(LibrariesSeparator);
+        topLevel.AddRange(ViewItems.OrderBy(view => Rank(viewOrder, view.Key)).Select(view => (object)view.Item));
+        topLevel.Add(LibrariesItem);
         foreach (var server in servers)
         {
             var into = top;
@@ -617,11 +644,13 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
                 all.Add(group);
                 into = [];
                 wanted.Add((group.MenuItems, into));
-                // The server's Movies and Series first, as under Home with one server, then its Favourites and Recently added.
-                var views = Views.KindTabs(server.Libraries)
-                    .Select(kind => (Tag: new ViewArgs(server.Server, BrowseView.Everything, kind), Glyph: KindTabGlyph(kind)))
-                    .Concat(new[] { (BrowseView.Favourites, "\uEB51"), (BrowseView.RecentlyAdded, "\uE823") }
-                        .Select(view => (Tag: new ViewArgs(server.Server, view.Item1), Glyph: view.Item2)));
+                // The server's Movies and Series first, as under Home with one server, then its Favourites and Recently added, each in
+                // the user's order and without those the user hid.
+                var pane = server.Pane;
+                var views = (pane?.Tabs ?? []).Where(tab => !tab.Hidden)
+                    .Select(tab => (Tag: new ViewArgs(server.Server, BrowseView.Everything, tab.Key), Glyph: KindTabGlyph(tab.Key)))
+                    .Concat((pane?.Views ?? []).Where(view => !view.Hidden)
+                        .Select(view => (Tag: new ViewArgs(server.Server, PaneRows.ViewOf(view.Key)), Glyph: PaneRows.ViewGlyph(view.Key))));
                 foreach (var (tag, glyph) in views)
                 {
                     var item = _libraryItems.OfType<NavigationViewItem>().FirstOrDefault(known => Equals(known.Tag, tag))
@@ -630,7 +659,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
                     all.Add(item);
                 }
             }
-            foreach (var library in server.Libraries)
+            // The libraries the user has not hidden, in the user's order.
+            foreach (var library in (server.Pane?.Libraries ?? []).Where(entry => !entry.Hidden).Select(entry => entry.Library))
             {
                 var item = _libraryItems.OfType<NavigationViewItem>()
                     .FirstOrDefault(known => known.Tag is LibraryArgs args && args.Library.Item == library.Item);
@@ -661,6 +691,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         {
             gone.MenuItems.Clear();
         }
+        // The top level last: its items never change parent.
+        wanted.Add((NavView.MenuItems, topLevel));
         foreach (var (items, want) in wanted)
         {
             for (var i = items.Count - 1; i >= 0; i--)
@@ -686,38 +718,25 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         }
         _libraryItems.Clear();
         _libraryItems.AddRange(all);
-        var any = top.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        LibrariesSeparator.Visibility = any;
-        LibrariesItem.Visibility = any;
+        LibrariesItem.Visibility = top.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // Between Home's items and the rest, while anything shows below it.
+        LibrariesSeparator.Visibility = top.Count > 0 || ViewItems.Any(view => view.Item.Visibility == Visibility.Visible)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        ShowEditNavigation();
     }
 
-    /// <summary>The Movies and Series items under Home, by the kind each shows (Views.KindTabs' kinds).</summary>
+    /// <summary>The Favourites and Recently added items above Libraries, by the key the core's Views group gives each.</summary>
+    private (NavigationViewItem Item, string Key)[] ViewItems => [(FavouritesItem, PaneEntry.Favourites), (RecentItem, PaneEntry.RecentlyAdded)];
+
+    /// <summary>The Movies and Series items under Home, by the kind each shows (the pane layout's tab keys).</summary>
     private (NavigationViewItem Item, string Kind)[] KindTabItems => [(MoviesItem, "movie"), (SeriesItem, "series")];
 
-    /// <summary>A kind tab's icon, as the library of its type's (LibraryGlyph): E8B2 Movies, E7F4 TVMonitor.</summary>
-    private static string KindTabGlyph(string kind) => kind switch
-    {
-        "movie" => "\uE8B2",
-        "series" => "\uE7F4",
-        _ => "\uE8B7",
-    };
+    /// <summary>A kind tab's icon (PaneRows.KindTabGlyph).</summary>
+    private static string KindTabGlyph(string kind) => PaneRows.KindTabGlyph(kind);
 
-    /// <summary>
-    /// A library's icon by what it holds, from Segoe Fluent Icons ("Segoe Fluent Icons font", learn.microsoft.com, ms.date
-    /// 2026-10-13, read 2026-10-25): E8B2 Movies, E7F4 TVMonitor, E8D6 Audio, E714 Video, E91B Photo, E82D Dictionary, E8F1
-    /// Library, E8B7 Folder.
-    /// </summary>
-    private static string LibraryGlyph(string? collection) => collection switch
-    {
-        "movies" => "\uE8B2",
-        "tv_shows" => "\uE7F4",
-        "music" => "\uE8D6",
-        "music_videos" or "home_videos" => "\uE714",
-        "photos" => "\uE91B",
-        "books" => "\uE82D",
-        "box_sets" or "playlists" => "\uE8F1",
-        _ => "\uE8B7",
-    };
+    /// <summary>A library's icon by what it holds (PaneRows.LibraryGlyph).</summary>
+    private static string LibraryGlyph(string? collection) => PaneRows.LibraryGlyph(collection);
 
     private static ServerRef? ServerOf(object? parameter) => parameter switch
     {
@@ -1093,6 +1112,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     private void OnNavigated(object sender, NavigationEventArgs e)
     {
+        LeaveEditMode();
         _shownParameter = e.Parameter;
         PruneKeptDetails();
         DropSignInHistory();

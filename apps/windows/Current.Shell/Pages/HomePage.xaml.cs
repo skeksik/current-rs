@@ -145,6 +145,44 @@ public sealed partial class HomePage : Page, IRefreshable
         // The sections stay with the kept page, so it shows them as they were when it is shown again.
     }
 
+    /// <summary>A dialog is open: a second one is not started.</summary>
+    private bool _editingHome;
+
+    /// <summary>
+    /// Edit Home (ADR 0024): the rows' list of each signed-in server in a dialog, the same editor as Settings' "Home" expander. Each
+    /// change is saved at once and the rows behind the dialog follow, so the dialog has only Done.
+    /// </summary>
+    // async void, as event handlers are: it catches everything itself.
+    private async void OnEditHome(object sender, RoutedEventArgs e)
+    {
+        if (_editingHome || App.Browsing is not { IsAvailable: true } hub || XamlRoot is null)
+        {
+            return;
+        }
+        _editingHome = true;
+        using var editor = new ArrangementEditor(hub, home: true);
+        try
+        {
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = "Edit Home",
+                Content = new ScrollViewer { Content = editor.Root, MaxHeight = 480 },
+                CloseButtonText = "Done",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            await dialog.ShowAsync();
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: the Edit Home dialog failed: {error.GetType().Name}");
+        }
+        finally
+        {
+            _editingHome = false;
+        }
+    }
+
     private void OnBrowseChanged(object? sender, EventArgs e)
     {
         if (_loaded && App.Browsing is { } hub)
@@ -158,6 +196,7 @@ public sealed partial class HomePage : Page, IRefreshable
     {
         var servers = hub.Servers;
         Feed.Visibility = hub.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
+        EditHomeButton.Visibility = Feed.Visibility;
         M1Content.Visibility = hub.IsAvailable ? Visibility.Collapsed : Visibility.Visible;
         TitleText.Style = (Style)Application.Current.Resources[
             hub.IsAvailable ? "WidePageTitleTextBlockStyle" : "PageTitleTextBlockStyle"];

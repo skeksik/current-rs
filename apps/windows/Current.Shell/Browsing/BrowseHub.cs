@@ -242,6 +242,9 @@ internal sealed class ServerBrowse : IDisposable
     /// <summary>The core's list of the user's libraries: it follows the server.</summary>
     private readonly ValueSubscription<IReadOnlyList<Library>?> _libraries;
 
+    /// <summary>The pane's groups as the user arranged them (ADR 0024): they follow the libraries and every saved change.</summary>
+    private readonly ValueSubscription<PaneLayout?> _pane;
+
     /// <summary>Libraries that left the list in this session; one listed again leaves this set.</summary>
     private readonly HashSet<ItemRef> _gone = [];
 
@@ -255,9 +258,22 @@ internal sealed class ServerBrowse : IDisposable
         Session = session;
         _libraries = session.ObserveLibraries(ui);
         _libraries.PropertyChanged += OnLibrariesChanged;
+        _pane = session.ObservePane(ui);
+        _pane.PropertyChanged += OnPaneChanged;
     }
 
-    /// <summary>Raised on the UI thread when the core's list of libraries changed.</summary>
+    /// <summary>The pane's groups as the user arranged them, hidden items included; null until the libraries first loaded.</summary>
+    public PaneLayout? Pane => _pane.Value;
+
+    private void OnPaneChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!IsDisposed)
+        {
+            LibrariesChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>Raised on the UI thread when the core's list of libraries or the pane's arrangement changed.</summary>
     public event EventHandler? LibrariesChanged;
 
     /// <summary>The detail views of the history's detail pages, by their navigation parameter (the same object on Back).</summary>
@@ -433,6 +449,8 @@ internal sealed class ServerBrowse : IDisposable
         IsDisposed = true;
         _libraries.PropertyChanged -= OnLibrariesChanged;
         _libraries.Dispose();
+        _pane.PropertyChanged -= OnPaneChanged;
+        _pane.Dispose();
         foreach (var kept in _details.Values)
         {
             kept.View?.Dispose();

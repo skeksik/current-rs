@@ -3,7 +3,8 @@
 //!
 //! Rows, in order: Continue watching, Next up, Favourites and Recently added across every library, then Latest in each library in
 //! the user's order, skipping the libraries the user keeps out of "latest" and the kinds without a meaningful "latest", then Seen
-//! recently (owner, 2026-10-26). A row exists only while it has items, so no row assumes a
+//! recently (owner, 2026-10-26), as the default the user arranges: rows reordered and hidden in Current (ADR 0024), a hidden row not
+//! asked for. A row exists only while it has items, so no row assumes a
 //! library type exists. Rows load in parallel and each appears in its place as soon as it has items. A row that fails keeps what
 //! it showed from the last load (none the first time) and the state carries one failure for a Retry message.
 
