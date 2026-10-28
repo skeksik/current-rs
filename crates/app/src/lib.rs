@@ -27,14 +27,16 @@ use current_jellyfin::{
     AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, platform_name,
 };
 use current_model::{
-    AppTheme, Capabilities, ItemQuery, ItemRef, Library, NetworkFacts, SavedServer, ServerAddress,
-    ServerId, ServerRef,
+    AppTheme, Capabilities, ItemQuery, ItemRef, Library, MediaKind, NetworkFacts, SavedServer,
+    ServerAddress, ServerId, ServerRef,
 };
 use current_net::{
     Gateway, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError, RuntimeHandle,
     Url,
 };
-use current_store::{DeviceId, LibraryChoices, LoadReport, Secrets, SettingsStore, StoreError};
+use current_store::{
+    DeviceId, KindPage, LibraryChoices, LoadReport, Secrets, SettingsStore, StoreError,
+};
 use tokio::sync::watch;
 
 pub use add_server::{AddServer, AddServerState, NewServer};
@@ -52,14 +54,14 @@ pub use browse::{
 };
 pub use browse::{
     BrowseView, CATALOG_NEEDS_SEERR, CATALOG_NEEDS_SEERR_LABEL, FAVOURITES_EMPTY,
-    FAVOURITES_FAILED, FilterMenu, GridOpening, ItemOpens, NARROWED_SEARCH_LIMIT, RowDisplay,
-    RowLink, RowNote, RowTarget, SearchChoice, SearchFilter, SearchSource, SearchSourceChoice,
-    SearchTools, SearchTypeChoice, ViewLayout, catalog_available, favourites_status, filter_menu,
-    grid_opening, home_row_display, kind_choice_name, kind_group, library_filter_name,
-    library_sort_name, person_query, runtime_label, search_filter_in_effect, search_group_display,
-    search_note, search_result_display, search_tools, search_type_label, search_types,
-    time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
-    view_title,
+    FAVOURITES_FAILED, FilterMenu, GridOpening, ItemOpens, KIND_TABS, NARROWED_SEARCH_LIMIT,
+    RowDisplay, RowLink, RowNote, RowTarget, SearchChoice, SearchFilter, SearchSource,
+    SearchSourceChoice, SearchTools, SearchTypeChoice, ViewLayout, catalog_available,
+    favourites_status, filter_menu, grid_opening, home_row_display, kind_choice_name, kind_group,
+    kind_tabs, library_filter_name, library_sort_name, person_query, runtime_label,
+    search_filter_in_effect, search_group_display, search_note, search_result_display,
+    search_tools, search_type_label, search_types, time_left_label, time_left_short, view_layout,
+    view_link_tooltip, view_opening, view_query, view_remembers, view_title,
 };
 pub use browse::{
     DetailsFacts, FAILED_TILE_NAME, LIBRARY_GONE_MESSAGE, LIBRARY_GONE_TITLE, LOADING_TILE_NAME,
@@ -641,6 +643,63 @@ impl App {
             None => self.library_choices(&library.item),
         };
         grid_opening(library, home_query, &remembered)
+    }
+
+    /// What `view`'s grid of `server` opens with ([`view_opening`]): a kind tab's page ([`view_remembers`]) opened from its tab with
+    /// what [`App::view_choices`] remembers, as a library; opened from a Favourites row's header (`favourite`), or any other view,
+    /// its own query, posters with titles.
+    pub fn view_opening(
+        &self,
+        server: &ServerRef,
+        view: BrowseView,
+        kind: Option<&MediaKind>,
+        favourite: bool,
+    ) -> GridOpening {
+        let remembered = if favourite {
+            LibraryChoices::default()
+        } else {
+            self.view_choices(server, view, kind)
+        };
+        view_opening(view, kind, favourite, &remembered)
+    }
+
+    /// What `view` of `server` remembers, as [`App::library_choices`] for a library: nothing for a view that does not remember
+    /// ([`view_remembers`]).
+    pub fn view_choices(
+        &self,
+        server: &ServerRef,
+        view: BrowseView,
+        kind: Option<&MediaKind>,
+    ) -> LibraryChoices {
+        match kind.filter(|_| view_remembers(view, kind)) {
+            Some(kind) => self.libraries.kind_choices(
+                self.settings(),
+                &KindPage::new(server.clone(), kind.clone()),
+            ),
+            None => LibraryChoices::default(),
+        }
+    }
+
+    /// Remembers the user's choices in `view` of `server`, as [`App::remember_library_choices`] does a library's; nothing for a view
+    /// that does not remember ([`view_remembers`]). Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// As [`App::remember_library_choices`].
+    pub fn remember_view_choices(
+        &self,
+        server: &ServerRef,
+        view: BrowseView,
+        kind: Option<&MediaKind>,
+        choices: LibraryChoices,
+    ) -> Result<(), StoreError> {
+        match kind.filter(|_| view_remembers(view, kind)) {
+            Some(kind) => self.libraries.remember_kind(
+                self.settings(),
+                &KindPage::new(server.clone(), kind.clone()),
+                &choices,
+            ),
+            None => Ok(()),
+        }
     }
 
     /// The UI's decimal separator ("." or ",", from the user's region), for the labels with decimals ([`App::number_format`]): a

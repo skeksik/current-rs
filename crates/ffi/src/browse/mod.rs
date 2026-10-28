@@ -41,9 +41,9 @@ pub use texts::{
 pub use views::{
     BrowseView, FilterMenu, GridOpening, ItemOpens, RowDisplay, RowLink, RowNote, RowTarget,
     TileShape, ViewLayout, favourites_status, grid_filter_menu, home_row_display, kind_choice_name,
-    kind_group_name, library_filter_name, library_sort_name, runtime_label, search_group_display,
-    time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
-    view_title,
+    kind_group_name, kind_tabs, library_filter_name, library_sort_name, runtime_label,
+    search_group_display, time_left_label, time_left_short, view_layout, view_link_tooltip,
+    view_opening, view_query, view_remembers, view_title,
 };
 
 /// Receives a grid's slots: `[Reset]` first, then batches of diffs, on a core thread. Apply each batch in order. It must only hand

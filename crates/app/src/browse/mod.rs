@@ -72,9 +72,10 @@ pub use texts::{
     search_status, size_on_disk, tile_name, tile_subtitle, tile_title,
 };
 pub use views::{
-    BrowseView, FilterMenu, GridOpening, ItemOpens, RowDisplay, RowLink, RowNote, RowTarget,
-    ViewLayout, filter_menu, grid_opening, home_row_display, search_group_display, view_layout,
-    view_link_tooltip, view_opening, view_query, view_title,
+    BrowseView, FilterMenu, GridOpening, ItemOpens, KIND_TABS, RowDisplay, RowLink, RowNote,
+    RowTarget, ViewLayout, filter_menu, grid_opening, home_row_display, kind_tabs,
+    search_group_display, view_layout, view_link_tooltip, view_opening, view_query, view_remembers,
+    view_title,
 };
 
 use libraries::Libraries;

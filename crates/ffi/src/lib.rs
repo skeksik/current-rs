@@ -51,9 +51,9 @@ pub use browse::{
 pub use browse::{
     BrowseView, FilterMenu, GridOpening, ItemOpens, RowDisplay, RowLink, RowNote, RowTarget,
     TileShape, ViewLayout, favourites_status, grid_filter_menu, home_row_display, kind_choice_name,
-    kind_group_name, library_filter_name, library_sort_name, runtime_label, search_group_display,
-    time_left_label, time_left_short, view_layout, view_link_tooltip, view_opening, view_query,
-    view_title,
+    kind_group_name, kind_tabs, library_filter_name, library_sort_name, runtime_label,
+    search_group_display, time_left_label, time_left_short, view_layout, view_link_tooltip,
+    view_opening, view_query, view_remembers, view_title,
 };
 pub use browse::{
     DetailsFacts, action_failed_title, failed_tile_name, library_gone_message, library_gone_title,

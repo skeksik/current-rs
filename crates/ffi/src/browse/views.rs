@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use current_model as model;
 
-use crate::Core;
+use crate::{Core, CoreError, ServerRef};
 
 use super::{HomeRow, HomeRowKind, ItemQuery, ItemRef, Library};
 
@@ -200,10 +200,36 @@ pub fn view_layout(view: BrowseView, kind: Option<String>) -> ViewLayout {
     }
 }
 
-/// What a view's grid opens with when opened anew: [`view_query`], posters with titles; nothing is remembered for a view.
+/// What a view's grid opens with when nothing is remembered: [`view_query`], posters with titles. A kind tab's page opens with
+/// [`Core::view_opening`], which adds what it remembers.
 #[uniffi::export]
 pub fn view_opening(view: BrowseView, kind: Option<String>, favourite: bool) -> GridOpening {
-    current_app::view_opening(view.into(), kind_of(kind).as_ref(), favourite).into()
+    current_app::view_opening(
+        view.into(),
+        kind_of(kind).as_ref(),
+        favourite,
+        &current_store::LibraryChoices::default(),
+    )
+    .into()
+}
+
+/// The media kinds whose tab a server with `libraries` (its list, in the user's order) shows in the navigation, in the tabs' order
+/// (owner, 2026-10-28): `movie` while a film library is listed, `series` while a TV library is. Each tab is [`BrowseView::Everything`]
+/// of its kind, titled by [`view_title`].
+#[uniffi::export]
+pub fn kind_tabs(libraries: Vec<Library>) -> Vec<String> {
+    let libraries: Vec<model::Library> = libraries.iter().map(Into::into).collect();
+    current_app::kind_tabs(&libraries)
+        .into_iter()
+        .map(|kind| kind.as_str().to_owned())
+        .collect()
+}
+
+/// Whether `view` narrowed to `kind` remembers its choices, as a library does: a kind tab's page, also when a Favourites row's header
+/// opened it.
+#[uniffi::export]
+pub fn view_remembers(view: BrowseView, kind: Option<String>) -> bool {
+    current_app::view_remembers(view.into(), kind_of(kind).as_ref())
 }
 
 /// The Filter menu of a grid showing `view` (`None`: a library) narrowed to `kind`: the media types only for a view without a kind.
@@ -318,6 +344,60 @@ impl Core {
         self.app
             .library_opening(&(&library).into(), home_query.as_ref().map(Into::into))
             .into()
+    }
+
+    /// What `view` narrowed to `kind` of `server` opens with when opened anew: a kind tab's page ([`view_remembers`]) opened from its
+    /// tab with the sort, filters (only if the Filter menu still offers every one) and view remembered there, each while Settings
+    /// remembers it; opened from a Favourites row's header (`favourite`), or any other view, [`view_opening`].
+    pub fn view_opening(
+        &self,
+        server: ServerRef,
+        view: BrowseView,
+        kind: Option<String>,
+        favourite: bool,
+    ) -> GridOpening {
+        self.app
+            .view_opening(
+                &(&server).into(),
+                view.into(),
+                kind_of(kind).as_ref(),
+                favourite,
+            )
+            .into()
+    }
+
+    /// What `view` narrowed to `kind` of `server` remembers, as [`Core::library_choices`]: nothing for a view that does not remember
+    /// ([`view_remembers`]).
+    pub fn view_choices(
+        &self,
+        server: ServerRef,
+        view: BrowseView,
+        kind: Option<String>,
+    ) -> super::LibraryChoices {
+        self.app
+            .view_choices(&(&server).into(), view.into(), kind_of(kind).as_ref())
+            .into()
+    }
+
+    /// Remembers the user's choices in `view` narrowed to `kind` of `server`, as [`Core::remember_library_choices`]; nothing is
+    /// written for a view that does not remember ([`view_remembers`]). Not cancellable.
+    ///
+    /// # Errors
+    /// As [`Core::set_remember_sort`].
+    pub async fn remember_view_choices(
+        &self,
+        server: ServerRef,
+        view: BrowseView,
+        kind: Option<String>,
+        choices: super::LibraryChoices,
+    ) -> Result<(), CoreError> {
+        let server: model::ServerRef = (&server).into();
+        let view: current_app::BrowseView = view.into();
+        let kind = kind_of(kind);
+        self.save_settings(move |app| {
+            app.remember_view_choices(&server, view, kind.as_ref(), choices.into())
+        })
+        .await
     }
 }
 
