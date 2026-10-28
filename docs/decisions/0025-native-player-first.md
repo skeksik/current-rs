@@ -191,7 +191,8 @@ The existing client's behaviour is the default on every platform; where ours dif
    so it is not included. Rule: when the display facts the UI reports say the window's display is SDR (`AdvancedColorKind` other than
    `HighDynamicRange`), a source with PQ transfer (HDR10, HDR10+, Dolby Vision) plays on libmpv first; on an HDR display the rule
    applies unchanged (HDR10 and HLG looked right natively there, owner). A display change during playback re-plans ("Track changes").
-   Reason `HdrOnSdrDisplay`. Approved by the owner (2026-10-28), as "HDR video on an SDR display"; narrowed to PQ by the HLG result.
+   Reason `HdrOnSdrDisplay`. Approved by the owner (2026-10-28), as "HDR video on an SDR display", then limited to PQ by the HLG
+   result (owner, 2026-10-28).
 
 ### What each platform gains and loses against today
 - **Windows.**
