@@ -318,6 +318,11 @@ Done when: a title can be found, requested and followed to "available", then pla
 - [ ] The M1, M2 and M4 screens in SwiftUI on the shared core; AVPlayer with our own subtitle layer (ADR 0010: libass, PGS/VobSub decoder in
       the core, External delivery from Jellyfin); Keychain; Now Playing, PiP, AirPlay
 - [ ] Local discovery from each up interface: list the IPv4 interfaces with `getifaddrs` and pass them to each search (ADR 0016)
+- [ ] Decide at M3 (owner, 2026-10-28): remux on the Mac instead of on the server. ADR 0008's route 2 sends MKV with H.264 or HEVC to
+      the server for an HLS remux; repackaging it on the device for AVPlayer (video and audio copied) would start and seek without a
+      server job, cover local MKV files (ADR 0008 gap 4) and keep Dolby Vision where AVPlayer takes the base layer (not profile 7). The
+      loopback relay (ADR 0020) could serve the result on 127.0.0.1. Needs FFmpeg's libavformat on macOS (a new dependency) and an
+      ADR 0008 amendment
 
 Done when: everything from M1, M2 and M4 works on a Mac.
 
