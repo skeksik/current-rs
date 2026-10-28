@@ -54,7 +54,8 @@ impl From<&PlanNoteInfo> for PlanNote {
 
 #[uniffi::export]
 impl Core {
-    /// A time as the player shows it: "1:02:03" from an hour on, else "2:03". The hours are the whole hours in total: 25 h 0 min 30 s is "25:00:30".
+    /// A time as the player shows it: "1:02:03" from an hour on, else "2:03". The hours are the whole hours in total: 25 h 0 min
+    /// 30 s is "25:00:30".
     pub fn time_label(&self, ms: i64) -> String {
         current_app::time_label(ms)
     }
