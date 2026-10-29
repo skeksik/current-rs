@@ -17,10 +17,13 @@ mod stream;
 mod controller_tests;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod two_engine_tests;
 
 pub use clock::{Clock, SystemClock};
 pub use controller::{
-    AUTOPLAY_COUNTDOWN, Controller, NEXT_EPISODE_LEAD, PROGRESS_INTERVAL, STATE_INTERVAL,
+    AUTOPLAY_COUNTDOWN, Controller, NEXT_EPISODE_LEAD, NativeEngine, PROGRESS_INTERVAL,
+    STATE_INTERVAL,
 };
 pub use engine::{EndReason, Engine, EngineEvent, EngineFile, EngineTrack, ExternalSubtitle};
 pub use engines::{

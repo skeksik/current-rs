@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use current_model::{EngineErrorKind, ImageType, ItemRef, ItemSummary, MediaKind, PlayerState};
-use current_playback::{Clock, Controller, EndReason, EngineEvent, PlayerEvent, PlayerStatus};
+use current_playback::{
+    Clock, Controller, DisplayKind, EndReason, EngineEvent, PlayerEvent, PlayerStatus,
+};
 use current_relay::RelayEvent;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
@@ -70,6 +72,7 @@ async fn start(
     display: DisplayFacts,
 ) -> Result<Player, PlayerError> {
     use super::mpv::MpvBackend;
+    let kind = display_kind(&display);
     let (events, raw) = mpsc::unbounded_channel();
     // Blocking: libmpv starts its threads and VO, and waits for an earlier engine of the process to go.
     let started =
@@ -90,7 +93,7 @@ async fn start(
     context
         .capabilities
         .remember(current_playback::Engine::capabilities(&backend));
-    Ok(spawn(context, backend, raw))
+    Ok(spawn(context, backend, raw, kind))
 }
 
 #[cfg(all(not(feature = "libmpv"), any(test, feature = "test-engine")))]
@@ -100,6 +103,7 @@ async fn start(
     display: DisplayFacts,
 ) -> Result<Player, PlayerError> {
     use super::test_engine::TestBackend;
+    let kind = display_kind(&display);
     let (events, raw) = mpsc::unbounded_channel();
     let started = tokio::task::spawn_blocking(move || TestBackend::start(events)).await;
     if !matches!(started, Ok(Ok(_))) {
@@ -114,7 +118,7 @@ async fn start(
     context
         .capabilities
         .remember(current_playback::Engine::capabilities(&backend));
-    Ok(spawn(context, backend, raw))
+    Ok(spawn(context, backend, raw, kind))
 }
 
 #[cfg(not(any(feature = "libmpv", test, feature = "test-engine")))]
@@ -126,7 +130,21 @@ async fn start(
     Err(PlayerError::EngineUnavailable)
 }
 
-fn spawn<B: Backend>(context: Context, backend: B, raw: mpsc::UnboundedReceiver<B::Raw>) -> Player {
+/// The display as departure 8 needs it (ADR 0025): SDR or HDR, from the facts the UI reports.
+fn display_kind(facts: &DisplayFacts) -> DisplayKind {
+    if facts.hdr {
+        DisplayKind::Hdr
+    } else {
+        DisplayKind::Sdr
+    }
+}
+
+fn spawn<B: Backend>(
+    context: Context,
+    backend: B,
+    raw: mpsc::UnboundedReceiver<B::Raw>,
+    display: DisplayKind,
+) -> Player {
     let (commands, receiver) = mpsc::unbounded_channel();
     let (state, state_rx) = watch::channel(PlayerStatus::default());
     let (now, now_rx) = watch::channel(NowPlaying::default());
@@ -148,7 +166,8 @@ fn spawn<B: Backend>(context: Context, backend: B, raw: mpsc::UnboundedReceiver<
         clock,
         context.prefs.quality_preference(),
         initial_skip,
-    );
+    )
+    .with_display(display);
     let driver = Driver {
         controller,
         context,
@@ -254,6 +273,8 @@ impl<B: Backend> Driver<B> {
             // playing keeps its quality.
             self.controller
                 .set_quality_preference(self.context.prefs.quality_preference());
+            self.controller
+                .set_engine_preference(self.context.prefs.engine_preference());
             match wake {
                 Wake::Command(Command::Close(done)) => {
                     self.close().await;
@@ -476,7 +497,11 @@ impl<B: Backend> Driver<B> {
             Action::DismissNext => controller.dismiss_next(),
             Action::SetVolume(volume) => controller.set_volume(volume),
             Action::SetMuted(muted) => controller.set_muted(muted),
-            Action::DisplayFacts(facts) => controller.engine_mut().set_display_facts(&facts),
+            Action::DisplayFacts(facts) => {
+                controller.engine_mut().set_display_facts(&facts);
+                // Departure 8 (ADR 0025): with the app engine only this changes no route.
+                controller.set_display(display_kind(&facts)).await;
+            }
             Action::CompositionSize(size) => controller.engine_mut().set_composition_size(size),
         }
     }

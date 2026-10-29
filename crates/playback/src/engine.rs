@@ -1,8 +1,9 @@
-//! The engine trait: what the controller asks of a player engine (libmpv in `current-mpv`, AVPlayer later) and what it hears back.
+//! The engine trait: what the controller asks of a player engine (libmpv in `current-mpv`, a platform's own player later) and what it
+//! hears back.
 //!
-//! One engine per player, owned by the controller. A new file (the next episode, a re-plan, the fallback) goes to the same engine
-//! through [`Engine::load`], which replaces the file playing: nothing here makes a second engine, and `current-mpv` allows only one
-//! libmpv core per process for now (owner, 2026-10-25).
+//! Up to two engines per player, owned by the controller (ADR 0025): the app engine (libmpv) and a native one. A new file (the next
+//! episode, a re-plan, the fallback) goes to the engine of its route through [`Engine::load`], which replaces the file playing there;
+//! `current-mpv` allows only one libmpv core per process for now (owner, 2026-10-25), which the native engine does not use.
 
 use std::time::Duration;
 
@@ -83,7 +84,13 @@ pub trait Engine {
     /// 0 to 100.
     fn set_volume(&mut self, volume: u8);
     fn set_muted(&mut self, muted: bool);
-    /// Unloads the file and keeps the engine for the next one.
+    /// The playback rate, 1 for normal speed. An engine that takes a rate but ignores it with the track playing says so with
+    /// [`EngineEvent::RatesSupported`].
+    fn set_speed(&mut self, speed: f64);
+    /// Unloads the file and keeps the engine for the next one. Once `stop` returns, the engine reports nothing more about that file
+    /// (no late end, error or position): the controller takes every event as the current file's. libmpv's events come on its own
+    /// thread in order after the command; a platform engine behind the bridge must hold to it too, which W3's bridge enforces (for
+    /// example by numbering each load and dropping events of an older one).
     fn stop(&mut self);
 }
 
@@ -103,6 +110,15 @@ pub enum EngineEvent {
     Paused(bool),
     /// Waiting for data (libmpv's `paused-for-cache`).
     Buffering(bool),
+    /// A selected track cannot be played although the file opened (ADR 0025, "Fallback on a failed start"): for Windows' player a
+    /// selected track whose decoder status is not fully supported or that failed to open (W1: the file plays on, that track silent
+    /// or blank). The engine reports the fact; the controller decides, as for an error.
+    TrackFailed(EngineErrorKind),
+    /// Whether the engine changes speed with the tracks playing (Windows' player: `IsSupportedPlaybackRateRange`; with an E-AC-3
+    /// Atmos track it takes a rate and ignores it, W1). An engine that can ignore rates reports it after every load and whenever it
+    /// changes (a track change); until the first report after a load the controller keeps what this engine said last, or takes
+    /// rates as supported on an engine new to the item. The controller decides (ADR 0025, "Track changes").
+    RatesSupported(bool),
     /// The file ended. With libmpv's `keep-open=yes` the end of the file is `eof-reached`, which the composition root reports as
     /// [`EndReason::Eof`].
     Ended(EndReason),
