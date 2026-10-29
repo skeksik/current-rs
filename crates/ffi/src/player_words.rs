@@ -9,7 +9,9 @@ use current_app::playback::PlanNote;
 use current_model::RouteLabel;
 
 use crate::Core;
-use crate::player_records::{PlanNoteInfo, PlaybackProblem, PlayerProblem, RouteKind, TrackInfo};
+use crate::player_records::{
+    PlanNoteInfo, PlaybackProblem, PlayerProblem, RouteKind, RouteLabelKind, TrackInfo,
+};
 
 /// What the platform measures for the info panel's last line: the swap chain panel's size in physical pixels, the view's and the
 /// content's sizes in physical pixels (device-independent size × the window's scale, so fractional), and the window's client size
@@ -89,6 +91,12 @@ impl Core {
             RouteKind::Transcode => RouteLabel::ServerTranscode,
         };
         current_app::route_name_one_engine(label).to_owned()
+    }
+
+    /// ADR 0025's route label for a player with a platform engine: "Native", "Remux on this device", "App engine", "Server remux",
+    /// "Server direct stream", "Server transcode".
+    pub fn route_label_name(&self, label: RouteLabelKind) -> String {
+        current_app::route_name(label.into()).to_owned()
     }
 
     /// Why the server streams rather than plays the file directly, in plain words; a reason no release knows is its own name.

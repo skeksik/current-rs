@@ -241,7 +241,8 @@ address without a gateway, which has none to pass.
   `URI`/`*-URI` attribute; the controller calls it through `MediaServer::check_playlist` for an HLS route with headers and marks
   `EngineFile::playlist_checked`, else fails with `PlaylistElsewhere`. Known limit: mpv re-reads the playlists after the check,
   which holds for Jellyfin's fixed VOD transcode playlists and not for a playlist that changes; the M3 relay enforces.
-- **Redaction:** no URL that carries a token or a cookie crosses `current-ffi`, enters the request log, the playback information view
+- **Redaction:** (amended 2026-10-29, ADR 0025 W3: except the relay URL handed to a platform engine, which holds the route's token
+  only, has no `Debug`, and the platform must not log) no URL that carries a token or a cookie crosses `current-ffi`, enters the request log, the playback information view
   or a file. The engine never sets `log-file`; it takes mpv's messages through `mpv_request_log_messages` at `info` (`v` while
   diagnosing), and replaces the session token, every gateway secret value and any `ApiKey=`/`api_key=` value with `<redacted>` before a
   line reaches the log; URL-valued properties (`path`, `stream-open-filename`, `playlist`, `filename`) are never read out. The playback
@@ -285,6 +286,8 @@ address without a gateway, which has none to pass.
 | Direction | What |
 |---|---|
 | UI to core | `open_player(composition_size, display_facts) -> Player` (the size is needed before the engine starts, ADR 0007); `set_composition_size`, `set_display_facts` (HDR, peak and SDR white nits, refresh rate) |
+| UI to core | Amended 2026-10-29 (ADR 0025, W3; needs the owner's approval): `open_player_with_platform_engine(size, display_facts, engine, codec_answers)` with the platform's own player, a UniFFI foreign trait (`PlatformEngine`: attach, load, add_subtitle, set_paused, seek_to, select_audio, select_subtitle, set_volume, set_muted, set_speed, stop, each returning `Result`), and the UI's answers to `windows_codec_queries()` (`CodecQuery` per `CodecSubtypes` name; the core maps them with its own table); `play_with_app_engine`; `set_player_choice` |
+| Core to UI | Amended 2026-10-29 (ADR 0025, W3): to the platform engine, `PlatformFile` with a URL on the loopback relay only (the route's token, never the session token; ADR 0020 amended), the load's generation and the tracks; from it, events through `PlatformEngineEvents::send(generation, event)` from any thread, those of an older or stopped load dropped. `RouteInfo` gains ADR 0025's label and the engine; the info panel names ADR 0025's routes, what the native player lacks and the routes that failed only when a platform engine is attached |
 | UI to core | Actions: `play(item, start)`, `pause`, `resume`, `toggle`, `seek_to`, `seek_by`, `stop`, `select_audio`, `select_subtitle`, `set_quality`, `skip_segment`, `play_next`, `set_volume`, `set_muted`; long ones async with a `CancelToken` |
 | Core to UI | `subscribe_state`: one value with `PlayerState`, position (throttled), duration, buffered, tracks, route label, segment under the position, next episode, problem |
 | Core to UI | `subscribe_swap_chain`: `SwapChain { handle, generation }` with `release()` |

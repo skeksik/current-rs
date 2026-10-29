@@ -124,9 +124,9 @@ fn quality_target<'a>(
 /// `current-playback`'s values that the player publishes.
 pub mod playback {
     pub use current_playback::{
-        AutoSkip, NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, QualityOption,
-        QualityPreference, QualityTarget, Track, preferred_quality_options, quality_options,
-        snap_quality,
+        AutoSkip, EndReason, EngineEvent, EngineTrack, NextEpisode, PlanNote, PlaybackDetails,
+        PlayerStatus, Quality, QualityOption, QualityPreference, QualityTarget, StreamUrl, Track,
+        preferred_quality_options, quality_options, snap_quality,
     };
 }
 pub use problems::{

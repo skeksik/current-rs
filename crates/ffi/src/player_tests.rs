@@ -319,8 +319,16 @@ fn the_playback_settings_switch_skipping() {
             skips_intros_and_credits: false,
             shows_quality_resolution: true,
             shows_all_qualities: false,
+            player: PlayerChoiceKind::Automatic,
         }
     );
+    // "Player" round trips (ADR 0025, choice 3).
+    block_on(core.set_player_choice(PlayerChoiceKind::AlwaysAppEngine)).unwrap();
+    assert_eq!(
+        core.playback_settings().player,
+        PlayerChoiceKind::AlwaysAppEngine
+    );
+    block_on(core.set_player_choice(PlayerChoiceKind::Automatic)).unwrap();
     let preferred = QualityChoice::Bitrate {
         bits_per_second: 20_000_000,
     };
@@ -401,6 +409,8 @@ const RECORD_TYPES: &[&str] = &[
     "PlaybackProblem",
     "PlayerStateKind",
     "RouteKind",
+    "RouteLabelKind",
+    "EngineKind",
     "StreamProtocolKind",
     "RouteInfo",
     "TrackInfo",
@@ -418,6 +428,7 @@ const RECORD_TYPES: &[&str] = &[
     "EngineOutputInfo",
     "PlaybackInfoSnapshot",
     "PlaybackSettingsSnapshot",
+    "PlayerChoiceKind",
     "QualityOptionInfo",
     "QualityMenuEntry",
 ];
