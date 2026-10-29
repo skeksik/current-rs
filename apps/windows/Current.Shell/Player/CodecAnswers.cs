@@ -9,8 +9,9 @@ namespace Current.Shell.Player;
 /// opens with Windows' own player (ADR 0025, W4): <c>CodecQuery.FindAllAsync(kind, CodecCategory.Decoder, subtype)</c> per question,
 /// which returns one entry per installed decoder and none when a Store extension is missing, and works unpackaged (W1 §3,
 /// docs/notes/windows-native-player.md). The subtype is the value of the <c>CodecSubtypes</c> property the core names (CodecSubtypes
-/// Class, learn.microsoft.com, ms.date 2017-02-08, read 2026-10-29: every name below is listed there). A name not in that list, or a
-/// query that fails, answers 0 decoders: the codec then plays on libmpv. Asked once per app run, in parallel, off the UI thread.
+/// Class, learn.microsoft.com, ms.date 2017-02-08, read 2026-10-29: every name below is listed there), except AV1's, asked for by its
+/// FOURCC (below). A name not in that list, or a query that fails, answers 0 decoders: the codec then plays on libmpv. Asked once per
+/// app run, in parallel, off the UI thread.
 /// </summary>
 internal static class CodecAnswers
 {
@@ -57,7 +58,10 @@ internal static class CodecAnswers
     {
         nameof(CodecSubtypes.VideoFormatH264) => CodecSubtypes.VideoFormatH264,
         nameof(CodecSubtypes.VideoFormatHevc) => CodecSubtypes.VideoFormatHevc,
-        nameof(CodecSubtypes.VideoFormatAv1) => CodecSubtypes.VideoFormatAv1,
+        // The CodecSubtypes page lists VideoFormatAv1, but the projection of the Windows SDK this app builds against
+        // (net10.0-windows10.0.26100.0) has no such property (CI, 2026-10-29; which SDK adds it is not verified). W1 §3 asked for AV1
+        // with the subtype "AV01" (its FOURCC) and got one entry per installed decoder, none without the extension.
+        "VideoFormatAv1" => "AV01",
         nameof(CodecSubtypes.VideoFormatVP90) => CodecSubtypes.VideoFormatVP90,
         nameof(CodecSubtypes.VideoFormatVP80) => CodecSubtypes.VideoFormatVP80,
         nameof(CodecSubtypes.VideoFormatMpeg2) => CodecSubtypes.VideoFormatMpeg2,
