@@ -76,7 +76,8 @@ pub trait PlatformEngine: Send + Sync {
     fn set_volume(&self, volume: u8) -> Result<(), PlatformError>;
     fn set_muted(&self, muted: bool) -> Result<(), PlatformError>;
     fn set_speed(&self, speed: f64) -> Result<(), PlatformError>;
-    /// After it returns, events of the file stopped are dropped whatever the engine sends.
+    /// The core closes the load's gate before this call: events about the file stopped are dropped from then on, whatever the
+    /// engine sends.
     fn stop(&self) -> Result<(), PlatformError>;
 }
 
@@ -127,6 +128,7 @@ pub(crate) struct PlatformBackend {
     engine: Arc<dyn PlatformEngine>,
     capabilities: EngineCapabilities,
     gate: Arc<LoadGate>,
+    relay_port: RelayPort,
 }
 
 impl PlatformBackend {
@@ -134,18 +136,35 @@ impl PlatformBackend {
         engine: Arc<dyn PlatformEngine>,
         capabilities: EngineCapabilities,
         gate: Arc<LoadGate>,
+        relay_port: RelayPort,
     ) -> Self {
         Self {
             engine,
             capabilities,
             gate,
+            relay_port,
         }
     }
 }
 
-/// Whether `url` is on the loopback relay: the only URLs a platform engine gets (ADR 0025).
-fn on_relay(url: &StreamUrl) -> bool {
-    url.expose().starts_with("http://127.0.0.1:")
+/// Where the relay listens now, if it does.
+pub(crate) type RelayPort = Box<dyn Fn() -> Option<u16> + Send>;
+
+/// Whether `url` is on the loopback relay listening on `port`: the only URLs a platform engine gets (ADR 0025). Parsed, not matched
+/// as text, so neither a server on the same PC (`http://127.0.0.1:8096/...`) nor a URL with user info before another host passes;
+/// and never one with a session token in its query.
+fn on_relay(url: &StreamUrl, port: Option<u16>) -> bool {
+    let (Some(port), Ok(url)) = (port, current_net::Url::parse(url.expose())) else {
+        return false;
+    };
+    url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port() == Some(port)
+        && url.username().is_empty()
+        && url.password().is_none()
+        && !url.query_pairs().any(|(name, _)| {
+            name.eq_ignore_ascii_case("apikey") || name.eq_ignore_ascii_case("api_key")
+        })
 }
 
 impl Engine for PlatformBackend {
@@ -156,7 +175,7 @@ impl Engine for PlatformBackend {
     fn load(&mut self, file: EngineFile) -> Result<(), EngineErrorKind> {
         // The controller relays every stream for the native engine; a URL off the relay would carry the session token across the
         // bridge, so it is refused here too.
-        if !on_relay(&file.url) {
+        if !on_relay(&file.url, (self.relay_port)()) {
             return Err(EngineErrorKind::LOADING_FAILED);
         }
         let generation = self.gate.next();
@@ -282,12 +301,43 @@ mod tests {
 
     const RELAYED: &str = "http://127.0.0.1:50123/route-token/Videos/e1/master.m3u8";
 
+    fn port() -> RelayPort {
+        Box::new(|| Some(50123))
+    }
+
+    #[test]
+    fn only_the_relays_own_address_passes() {
+        let check = |url: &str| on_relay(&StreamUrl::new(url), Some(50123));
+        assert!(check(RELAYED));
+        for refused in [
+            // A server on the same PC.
+            "http://127.0.0.1:8096/Videos/e1/stream?static=true&ApiKey=secret-token",
+            // User info before another host.
+            "http://127.0.0.1:50123@media.example.com/Videos/e1/stream",
+            "http://user:pass@127.0.0.1:50123/route-token/Videos/e1/stream",
+            // The relay's address with a session token.
+            "http://127.0.0.1:50123/route-token/Videos/e1/stream?api_key=secret-token",
+            "http://127.0.0.1:50123/route-token/Videos/e1/stream?APIKEY=secret-token",
+            "https://127.0.0.1:50123/route-token/Videos/e1/stream",
+            "http://localhost:50123/route-token/Videos/e1/stream",
+            "not a url",
+        ] {
+            assert!(!check(refused), "{refused}");
+        }
+        // Nothing passes while the relay does not listen.
+        assert!(!on_relay(&StreamUrl::new(RELAYED), None));
+    }
+
     #[test]
     fn each_load_has_the_next_generation_and_a_stop_closes_the_gate() {
         let engine = Arc::new(Recorder::default());
         let gate = Arc::new(LoadGate::default());
-        let mut backend =
-            PlatformBackend::new(engine.clone(), EngineCapabilities::default(), gate.clone());
+        let mut backend = PlatformBackend::new(
+            engine.clone(),
+            EngineCapabilities::default(),
+            gate.clone(),
+            port(),
+        );
         assert!(!gate.admits(0));
         backend.load(file(RELAYED)).unwrap();
         assert!(gate.admits(1));
@@ -309,8 +359,12 @@ mod tests {
     fn a_url_off_the_relay_never_reaches_the_platform() {
         let engine = Arc::new(Recorder::default());
         let gate = Arc::new(LoadGate::default());
-        let mut backend =
-            PlatformBackend::new(engine.clone(), EngineCapabilities::default(), gate.clone());
+        let mut backend = PlatformBackend::new(
+            engine.clone(),
+            EngineCapabilities::default(),
+            gate.clone(),
+            port(),
+        );
         let off = "https://media.example.com/Videos/e1/stream?ApiKey=secret-token";
         assert_eq!(
             backend.load(file(off)),
@@ -326,8 +380,12 @@ mod tests {
             fail_loads: Some(PlatformError::Unexpected),
             ..Recorder::default()
         });
-        let mut backend =
-            PlatformBackend::new(engine, EngineCapabilities::default(), Arc::default());
+        let mut backend = PlatformBackend::new(
+            engine,
+            EngineCapabilities::default(),
+            Arc::default(),
+            port(),
+        );
         assert_eq!(
             backend.load(file(RELAYED)),
             Err(EngineErrorKind::LOADING_FAILED)
@@ -346,8 +404,12 @@ mod tests {
             fail_loads: Some(PlatformError::Failed(EngineErrorKind::UNSUPPORTED_FORMAT)),
             ..Recorder::default()
         });
-        let mut backend =
-            PlatformBackend::new(failing, EngineCapabilities::default(), Arc::default());
+        let mut backend = PlatformBackend::new(
+            failing,
+            EngineCapabilities::default(),
+            Arc::default(),
+            port(),
+        );
         assert_eq!(
             backend.load(file(RELAYED)),
             Err(EngineErrorKind::UNSUPPORTED_FORMAT)

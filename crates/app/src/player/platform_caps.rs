@@ -69,6 +69,7 @@ const WINDOWS: &[Row] = &[
         subtype: "VideoFormatVP90",
         support: || CodecSupport::any(Codec::VP9),
     },
+    // VP8 shares the VP9 extension's listing (§3); its playback was not checked (not verified).
     Row {
         kind: CodecKind::Video,
         subtype: "VideoFormatVP80",
@@ -152,7 +153,8 @@ pub fn windows_engine(answers: &[CodecAnswer]) -> (EngineProfile, PlatformRules)
             .collect()
     };
     let capabilities = EngineCapabilities {
-        // §2: MKV, MP4, MPEG-TS and WebM played (MOV was not checked, so it goes to the app engine).
+        // §2: MKV, MP4, MPEG-TS and WebM played. MOV is not listed on its own; the server names MP4 and MOV files alike
+        // `mov,mp4,m4a,3gp,3g2,mj2`, which matches MP4, so they go to the native route (a `.mov` file natively is not verified).
         containers: vec![
             Container::MKV,
             Container::MP4,

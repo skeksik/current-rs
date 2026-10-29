@@ -71,8 +71,9 @@ struct Native {
 }
 
 impl NativeSetup {
-    /// Hands the platform engine its events object and makes it the controller's native engine.
-    fn attach(self) -> Result<Native, PlayerError> {
+    /// Hands the platform engine its events object and makes it the controller's native engine; `relay` says where the loopback
+    /// relay listens, the only address its URLs may have.
+    fn attach(self, relay: Arc<RelaySlot>) -> Result<Native, PlayerError> {
         let (events, receiver) = PlatformEvents::new();
         self.engine
             .attach(events)
@@ -80,7 +81,13 @@ impl NativeSetup {
                 kind: EngineErrorKind::LOADING_FAILED,
             })?;
         let gate = Arc::new(LoadGate::default());
-        let backend = PlatformBackend::new(self.engine, self.profile.capabilities, gate.clone());
+        let relay_port = Box::new(move || relay.relay().and_then(|relay| relay.port()));
+        let backend = PlatformBackend::new(
+            self.engine,
+            self.profile.capabilities,
+            gate.clone(),
+            relay_port,
+        );
         Ok(Native {
             engine: NativeEngine {
                 engine: Box::new(backend),
@@ -105,7 +112,8 @@ pub(crate) async fn open(
     if tokio::runtime::Handle::try_current().is_err() {
         return Err(PlayerError::NoRuntime);
     }
-    let native = native.map(NativeSetup::attach).transpose()?;
+    let relay = context.relay.clone();
+    let native = native.map(|native| native.attach(relay)).transpose()?;
     start(context, size, display, native).await
 }
 

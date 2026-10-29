@@ -243,7 +243,8 @@ address without a gateway, which has none to pass.
   `EngineFile::playlist_checked`, else fails with `PlaylistElsewhere`. Known limit: mpv re-reads the playlists after the check,
   which holds for Jellyfin's fixed VOD transcode playlists and not for a playlist that changes; the M3 relay enforces.
 - **Redaction:** (amended 2026-10-29, ADR 0025 W3: except the relay URL handed to a platform engine, which holds the route's token
-  only, has no `Debug`, and the platform must not log) no URL that carries a token or a cookie crosses `current-ffi`, enters the request log, the playback information view
+  only, is left out of `PlatformFile`'s exported `Debug` (the generated C# `ToString()` uses it; Swift's description not verified),
+  and the platform must not log) no URL that carries a token or a cookie crosses `current-ffi`, enters the request log, the playback information view
   or a file. The engine never sets `log-file`; it takes mpv's messages through `mpv_request_log_messages` at `info` (`v` while
   diagnosing), and replaces the session token, every gateway secret value and any `ApiKey=`/`api_key=` value with `<redacted>` before a
   line reaches the log; URL-valued properties (`path`, `stream-open-filename`, `playlist`, `filename`) are never read out. The playback

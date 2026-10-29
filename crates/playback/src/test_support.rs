@@ -243,6 +243,8 @@ pub struct ServerState {
     pub relay: bool,
     /// What `stream_url` fails with; `None` gives a URL.
     pub stream_problem: Option<PlaybackProblem>,
+    /// What `stream_url` fails with when asked to relay whatever the address (a stream for the native engine).
+    pub relay_problem: Option<PlaybackProblem>,
     /// Whether a stream from `stream_url` is live: not yet ended or replaced.
     pub stream_live: bool,
     /// How many times `end_stream` was called.
@@ -290,6 +292,7 @@ impl FakeServer {
                 always_relayed: Vec::new(),
                 relay: false,
                 stream_problem: None,
+                relay_problem: None,
                 stream_live: false,
                 stream_ends: 0,
                 engine_unloaded: None,
@@ -410,6 +413,9 @@ impl MediaServer for FakeServer {
         state.always_relayed.push(always_relay);
         state.stream_live = false;
         if let Some(problem) = state.stream_problem.clone() {
+            return Err(problem);
+        }
+        if always_relay && let Some(problem) = state.relay_problem.clone() {
             return Err(problem);
         }
         state.stream_live = true;

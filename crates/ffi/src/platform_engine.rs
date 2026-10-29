@@ -26,7 +26,7 @@ use crate::player::Player;
 use crate::player_records::{CompositionSize, DisplayFacts};
 use crate::{Core, CoreError};
 
-/// What a platform engine call failed with.
+/// What a platform engine call failed with. A `kind` that is not a short `[a-z0-9_]` name becomes `unexpected`.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum PlatformEngineError {
     /// A failure the platform knows, by an engine error kind's name (`loading_failed`, `unsupported_format`, `decoder_failed`, or the
@@ -47,10 +47,21 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for PlatformEngineError {
 impl From<PlatformEngineError> for PlatformError {
     fn from(error: PlatformEngineError) -> Self {
         match error {
-            PlatformEngineError::Failed { kind } => Self::Failed(EngineErrorKind::new(kind)),
+            PlatformEngineError::Failed { kind } => Self::Failed(error_kind(&kind)),
             PlatformEngineError::Unexpected => Self::Unexpected,
         }
     }
+}
+
+/// An error kind from the platform, as the core keeps it: a short `[a-z0-9_]` name, else `unexpected`, so no exception message,
+/// free text or URL from the platform reaches the UI or a `Debug`.
+fn error_kind(kind: &str) -> EngineErrorKind {
+    let clean = !kind.is_empty()
+        && kind.len() <= 64
+        && kind
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+    EngineErrorKind::new(if clean { kind } else { "unexpected" })
 }
 
 /// A track for the engine to show, by the server's stream index.
@@ -75,8 +86,12 @@ impl From<EngineTrack> for PlatformTrack {
 }
 
 /// One file to load. `url` is on the loopback relay (`http://127.0.0.1:<port>/<route token>/...`) and holds no session token; never
-/// log, store or show it. Its `Debug` leaves it out.
+/// log, store or show it. Its Rust `Debug` leaves the URL out, and it is exported (`uniffi::export(Debug)`) so the generated C#
+/// `ToString()` uses it instead of printing every member (uniffi-bindgen-cs v0.11.1+v0.31.0, `macros.cs`,
+/// `value_type_uniffi_traits`: "Display is preferred over Debug for ToString()", read 2026-10-29); Swift's generated description
+/// is not verified.
 #[derive(Clone, PartialEq, Eq, uniffi::Record)]
+#[uniffi::export(Debug)]
 pub struct PlatformFile {
     /// The load's number: every event about this file carries it ([`PlatformEngineEvents::send`]).
     pub generation: u64,
@@ -190,9 +205,9 @@ impl From<PlatformEvent> for EngineEvent {
             PlatformEvent::Ended { reason } => Self::Ended(match reason {
                 PlatformEndReason::Eof => EndReason::Eof,
                 PlatformEndReason::Stopped => EndReason::Stopped,
-                PlatformEndReason::Error { kind } => EndReason::Error(EngineErrorKind::new(kind)),
+                PlatformEndReason::Error { kind } => EndReason::Error(error_kind(&kind)),
             }),
-            PlatformEvent::TrackFailed { kind } => Self::TrackFailed(EngineErrorKind::new(kind)),
+            PlatformEvent::TrackFailed { kind } => Self::TrackFailed(error_kind(&kind)),
             PlatformEvent::RatesSupported { supported } => Self::RatesSupported(supported),
         }
     }
@@ -229,7 +244,7 @@ pub trait PlatformEngine: Send + Sync {
     fn set_muted(&self, muted: bool) -> Result<(), PlatformEngineError>;
     /// The playback rate, 1 for normal; within 0.01 to 100.
     fn set_speed(&self, speed: f64) -> Result<(), PlatformEngineError>;
-    /// Unloads the file. Events about it after this are dropped.
+    /// Unloads the file. The core stops taking its events before this call: anything sent about it is dropped.
     fn stop(&self) -> Result<(), PlatformEngineError>;
 }
 
@@ -365,5 +380,64 @@ impl Core {
             })?
             .map_err(|error| crate::player::player_error(&error))?;
         Ok(self.player(player))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_kinds_from_the_platform_are_short_names_or_unexpected() {
+        assert_eq!(
+            error_kind("decoder_failed"),
+            EngineErrorKind::DECODER_FAILED
+        );
+        assert_eq!(
+            error_kind("mf_e_invalid_format"),
+            EngineErrorKind::new("mf_e_invalid_format")
+        );
+        for bad in [
+            "",
+            "Decoder failed",
+            "System.Exception: boom at http://127.0.0.1:50123/token/Videos",
+            "token=secret",
+            &"a".repeat(65),
+        ] {
+            assert_eq!(error_kind(bad), EngineErrorKind::new("unexpected"), "{bad}");
+        }
+        let event: EngineEvent = PlatformEvent::TrackFailed {
+            kind: "see https://media.example.com".into(),
+        }
+        .into();
+        assert_eq!(
+            event,
+            EngineEvent::TrackFailed(EngineErrorKind::new("unexpected"))
+        );
+        let error: PlatformError = PlatformEngineError::Failed {
+            kind: "Access denied".into(),
+        }
+        .into();
+        assert_eq!(
+            error,
+            PlatformError::Failed(EngineErrorKind::new("unexpected"))
+        );
+    }
+
+    #[test]
+    fn a_files_debug_leaves_the_url_out() {
+        let file = PlatformFile {
+            generation: 2,
+            url: "http://127.0.0.1:50123/route-token/Videos/e1/stream".into(),
+            start_ms: 0,
+            audio: PlatformTrack::Auto,
+            subtitle: PlatformTrack::Off,
+            hls: false,
+        };
+        let shown = format!("{file:?}");
+        assert!(
+            !shown.contains("route-token") && !shown.contains("127.0.0.1"),
+            "{shown}"
+        );
     }
 }

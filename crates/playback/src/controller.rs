@@ -1381,6 +1381,14 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             .stream_url(&item, &planned.url, hls, always_relay)
         {
             Ok(stream) => stream,
+            // The relay could not start for the native engine, which may only get relayed streams: a failed route, so libmpv (which
+            // can be given the server's own URL on an address without a gateway) or the server is tried next.
+            Err(PlaybackProblem::LocalRelay) if always_relay => {
+                session.planned = Some(planned);
+                return Err(LoadFailure::Refused(
+                    current_model::EngineErrorKind::LOADING_FAILED,
+                ));
+            }
             Err(problem) => {
                 session.planned = None;
                 return Err(problem.into());
@@ -1534,6 +1542,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     }
 
     async fn fail(&mut self, problem: PlaybackProblem) {
+        // With two engines, the one that has the file lets it go (a failed re-plan after a native track failure leaves it loaded),
+        // and the platform engine's gate closes. With libmpv alone, as before ADR 0025.
+        if self.native.is_some() {
+            self.playing().stop();
+        }
         self.end_item(true).await;
         self.phase = Phase::Failed(problem);
         self.publish(true);
