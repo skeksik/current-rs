@@ -373,6 +373,7 @@ impl MediaServer for JellyfinMedia {
         item: &ItemRef,
         url: &StreamUrl,
         hls: bool,
+        always_relay: bool,
     ) -> Result<EngineStream, PlaybackProblem> {
         self.remove_route();
         let client = self.session()?;
@@ -385,7 +386,7 @@ impl MediaServer for JellyfinMedia {
             .address
             .position()
             .map(|position| self.shared.gateway_configured(client.server(), position));
-        if !relays(target.address.has_gateway(), configured) {
+        if !always_relay && !relays(target.address.has_gateway(), configured) {
             return Ok(EngineStream {
                 url: url.clone(),
                 auth: StreamAuth {

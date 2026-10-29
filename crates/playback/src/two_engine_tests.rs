@@ -749,3 +749,17 @@ fn the_fallbacks_reason_stays_with_the_re_plan_it_caused() {
             .contains(&RouteReason::FALLBACK_AFTER_ENGINE_ERROR)
     );
 }
+
+#[test]
+fn a_stream_for_the_native_engine_always_goes_through_the_relay() {
+    let mut two = Two::playing(movie());
+    assert_eq!(two.server.state().always_relayed, vec![true]);
+    // The relay's URL, with its route token only.
+    let native = two.native_commands();
+    let file = loads(&native)[0].clone();
+    assert!(file.url.expose().starts_with("http://127.0.0.1:"));
+    assert!(!file.url.expose().contains(crate::test_support::SECRETS[0]));
+    // On the app engine, as before: the address decides.
+    block_on(two.player.select_audio(2));
+    assert_eq!(two.server.state().always_relayed, vec![true, false]);
+}

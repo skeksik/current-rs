@@ -1374,7 +1374,9 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 ..
             }
         );
-        let stream = match self.server.stream_url(&item, &planned.url, hls) {
+        // A stream for the native engine always goes through the relay (ADR 0025, "URLs across the bridge").
+        let always_relay = planned.plan.route.engine() == EngineRole::Native;
+        let stream = match self.server.stream_url(&item, &planned.url, hls, always_relay) {
             Ok(stream) => stream,
             Err(problem) => {
                 session.planned = None;
