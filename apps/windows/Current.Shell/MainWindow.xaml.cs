@@ -334,12 +334,31 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         {
             return;
         }
+        ShowPlayer(core, target.Item.Item, fromStart ? TimeSpan.Zero : target.Start);
+    }
+
+    private void ShowPlayer(CoreHost core, ItemRef item, TimeSpan start)
+    {
         NavView.Visibility = Visibility.Collapsed;
         AppTitleBar.IsPaneToggleButtonVisible = false;
         ShowPageCommands(false);
-        _ = Player.PlayAsync(core, target.Item.Item, fromStart ? TimeSpan.Zero : target.Start);
+        _ = Player.PlayAsync(core, item, start);
         UpdateBackButton();
     }
+
+    /// <summary>For the smoke run: plays <paramref name="item"/> from its start with <paramref name="core"/>, as <see cref="Play"/>
+    /// does.</summary>
+    internal void PlayForTest(CoreHost core, ItemRef item) => ShowPlayer(core, item, TimeSpan.Zero);
+
+    internal PlayerState PlayerStateForTest => Player.StateForTest;
+
+    internal string? NativeFailureForTest => Player.NativeFailureForTest;
+
+    internal int? NativeFailureCodeForTest => Player.NativeFailureCodeForTest;
+
+    internal bool NativeSurfaceShownForTest => Player.NativeSurfaceShownForTest;
+
+    internal Task ClosePlayerForTestAsync() => Player.CloseAndWaitAsync();
 
     /// <summary>
     /// The title bar's search and Refresh belong to the pages, so they go while the player is open and come back with the page

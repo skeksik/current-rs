@@ -29,8 +29,9 @@ internal interface IPlayerHost
 }
 
 /// <summary>
-/// The player (ADR 0019 task 5, ADR 0007 "What M2 must do" item 3): libmpv's swap chain in a SwapChainPanel, with the composition size
-/// and the display's facts going to the core, auto-hiding transport controls over it, the skip button and the next-episode card as
+/// The player (ADR 0019 task 5, ADR 0007 "What M2 must do" item 3): libmpv's swap chain in a SwapChainPanel, and Windows' own player
+/// in a MediaPlayerElement over it (ADR 0025, W4: NativeEngine), the one the core's route plays on shown; the composition size and the
+/// display's facts going to the core, auto-hiding transport controls over it, the skip button and the next-episode card as
 /// the core reports them, playback info, keyboard shortcuts, full screen with the cursor hidden after inactivity, and the system media
 /// controls. It renders the core's PlayerState and sends actions; when anything shows is the core's, and so are the words (CoreHost).
 /// </summary>
@@ -57,6 +58,8 @@ public sealed partial class PlayerView : UserControl
     private CoreHost? _core;
     private DisplayWatcher? _display;
     private MediaControls? _media;
+    /// <summary>Windows' own player, beside libmpv in the same session; disposed after the session closes.</summary>
+    private NativeEngine? _native;
     private CancellationTokenSource? _play;
     /// <summary>The engine's open, which belongs to the player rather than to one play: a play that replaces another while the engine
     /// opens waits for the same open and plays on its session.</summary>
@@ -118,6 +121,8 @@ public sealed partial class PlayerView : UserControl
         // root, above the player, and they never reach it (owner's PC, 2026-10-25).
         Video.PointerPressed += (_, _) => Focus(FocusState.Pointer);
         Video.DoubleTapped += (_, _) => ToggleFullScreen();
+        NativeVideo.PointerPressed += (_, _) => Focus(FocusState.Pointer);
+        NativeVideo.DoubleTapped += (_, _) => ToggleFullScreen();
         ControlPanel.PointerEntered += (_, _) => _pointerOverPanel = true;
         ControlPanel.PointerExited += (_, _) => _pointerOverPanel = false;
         SeekBar.AddHandler(PointerPressedEvent, new PointerEventHandler((_, _) => _dragging = true), true);
@@ -225,24 +230,55 @@ public sealed partial class PlayerView : UserControl
             // Closed while laid out, with no play since.
             return;
         }
+        // Which decoders Windows has, then Windows' own player beside libmpv (ADR 0025, W4). Neither may keep the player from opening:
+        // without them (an edition without Media Foundation, a failed query) it opens with libmpv alone, as before W4.
+        NativeEngine? native = null;
+        IReadOnlyList<CodecQueryAnswer> answers = [];
+        try
+        {
+            answers = await CodecAnswers.GetAsync();
+            // The server's indices of the file's own audio streams, for the native engine's tracks (NativeEngine, "Tracks by Id").
+            native = new NativeEngine(DispatcherQueue,
+                () => State.AudioTracks.Where(track => !track.IsExternal).Select(track => track.Index).Order().ToList());
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: Windows' own player is not available, libmpv plays everything: {error.GetType().Name}");
+            native?.Dispose();
+            native = null;
+        }
+        if (!_open)
+        {
+            native?.Dispose();
+            return;
+        }
         var display = new DisplayWatcher(_window);
         PlayerSession session;
         try
         {
-            session = await PlayerSession.OpenAsync(core, new CompositionSize(size.Width, size.Height), display.Facts,
-                new DispatcherQueueUi(DispatcherQueue));
+            var composition = new CompositionSize(size.Width, size.Height);
+            var ui = new DispatcherQueueUi(DispatcherQueue);
+            session = native is null
+                ? await PlayerSession.OpenAsync(core, composition, display.Facts, ui)
+                : await PlayerSession.OpenWithPlatformEngineAsync(core, composition, display.Facts, native, answers, ui);
         }
         catch
         {
             display.Dispose();
+            native?.Dispose();
             throw;
         }
         if (!_open)
         {
             // Closed while opening, with no play since: the engine closes, and the next play waits for that.
             display.Dispose();
-            _closing = CloseSessionAsync(session);
+            _closing = CloseSessionAsync(session, native);
             return;
+        }
+        _native = native;
+        if (native is not null)
+        {
+            NativeVideo.SetMediaPlayer(native.Player);
         }
         _display = display;
         display.Changed += OnDisplayChanged;
@@ -363,6 +399,8 @@ public sealed partial class PlayerView : UserControl
         _showingState = true;
         try
         {
+            // The surface of the engine the route plays on (ADR 0025): Windows' own player over libmpv's panel, or the panel.
+            NativeVideo.Visibility = state.Route?.Engine == RouteEngine.Platform ? Visibility.Visible : Visibility.Collapsed;
             BusyRing.IsActive = state.State is PlayerStateKind.Preparing or PlayerStateKind.Loading or PlayerStateKind.Buffering
                 or PlayerStateKind.Seeking;
             var playing = state.State is PlayerStateKind.Playing or PlayerStateKind.Buffering or PlayerStateKind.Seeking;
@@ -1050,6 +1088,10 @@ public sealed partial class PlayerView : UserControl
         _media = null;
         Try("detaching the swap chain", () => PlayerNative.SetSwapChain(Video, IntPtr.Zero));
         _attached = IntPtr.Zero;
+        Try("detaching Windows' player", () => NativeVideo.SetMediaPlayer(null));
+        NativeVideo.Visibility = Visibility.Collapsed;
+        var native = _native;
+        _native = null;
         var session = _session;
         _session = null;
         _qualityOptions = null;
@@ -1082,7 +1124,11 @@ public sealed partial class PlayerView : UserControl
         // Without a session an earlier close may still run (or an open, which closes its own engine): _closing stays that.
         if (session is not null)
         {
-            _closing = CloseSessionAsync(session);
+            _closing = CloseSessionAsync(session, native);
+        }
+        else
+        {
+            native?.Dispose();
         }
         return _closing;
     }
@@ -1116,7 +1162,9 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
-    private static async Task CloseSessionAsync(PlayerSession session)
+    /// <summary>Closes the session, then Windows' player: the core stops its engines first. Called on the UI thread, which the
+    /// await comes back to, so the player is disposed there.</summary>
+    private static async Task CloseSessionAsync(PlayerSession session, NativeEngine? native)
     {
         try
         {
@@ -1126,5 +1174,15 @@ public sealed partial class PlayerView : UserControl
         {
             Trace.TraceError($"Current: closing the player failed: {error.GetType().Name}");
         }
+        Try("closing Windows' player", () => native?.Dispose());
     }
+
+    /// <summary>For the smoke run: the core's state of the player, and the native engine's last failure (kind and HRESULT).</summary>
+    internal PlayerState StateForTest => State;
+
+    internal string? NativeFailureForTest => _native?.LastFailure;
+
+    internal int? NativeFailureCodeForTest => _native?.LastFailureCode;
+
+    internal bool NativeSurfaceShownForTest => NativeVideo.Visibility == Visibility.Visible;
 }

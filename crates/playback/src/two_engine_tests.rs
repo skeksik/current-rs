@@ -627,6 +627,40 @@ fn a_re_plan_while_paused_stays_paused() {
 }
 
 #[test]
+fn a_pause_and_a_resume_follow_the_file_to_either_engine() {
+    // Paused natively, moved to libmpv (departure 8), resumed there, moved back: the native engine is told to play, and each load
+    // on either engine carries the session's pause.
+    let mut two = Two::new(movie_with("hevc", 10, VideoRangeType::HDR10));
+    block_on(two.player.set_display(DisplayKind::Hdr));
+    block_on(
+        two.player
+            .play(item("e1"), MediaKind::MOVIE, Duration::ZERO),
+    );
+    assert_eq!(two.plan().route, Route::Native);
+    assert_eq!(two.native_commands().last(), Some(&Command::Paused(false)));
+    two.start();
+    block_on(two.player.pause());
+    two.clear();
+    block_on(two.player.set_display(DisplayKind::Sdr));
+    assert_eq!(two.plan().route, Route::AppEngine);
+    let app = two.app_commands();
+    assert_eq!(loads(&app).len(), 1);
+    assert_eq!(app.last(), Some(&Command::Paused(true)));
+    two.start();
+    block_on(two.player.resume());
+    assert_eq!(two.app_commands(), vec![Command::Paused(false)]);
+    assert_eq!(two.player.status().state, PlayerState::Playing);
+    two.clear();
+    block_on(two.player.set_display(DisplayKind::Hdr));
+    assert_eq!(two.plan().route, Route::Native);
+    let native = two.native_commands();
+    assert_eq!(loads(&native).len(), 1);
+    assert_eq!(native.last(), Some(&Command::Paused(false)));
+    two.start();
+    assert_eq!(two.player.status().state, PlayerState::Playing);
+}
+
+#[test]
 fn a_native_engine_that_refuses_the_file_at_once_is_a_failed_route() {
     let mut two = Two::new(movie());
     two.native.0.lock().expect("fake engine").refuse_loads = true;

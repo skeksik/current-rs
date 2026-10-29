@@ -1463,8 +1463,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 LoadFailure::Problem(PlaybackProblem::Engine { kind })
             });
         }
-        if keep_paused {
-            engine.set_paused(true);
+        // With two engines every load tells the engine the session's pause, either way: the file can come back to an engine that
+        // still holds the pause of its last file (libmpv keeps `pause` across a `loadfile`, above) after a resume sent to the other
+        // engine. With libmpv alone only a pause is sent, as before.
+        if two_engines || keep_paused {
+            engine.set_paused(keep_paused);
         }
         self.phase = Phase::Loading;
         self.publish(true);

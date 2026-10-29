@@ -38,6 +38,14 @@
 
     <Grid x:Name="Root" Background="Black" KeyboardAcceleratorPlacementMode="Hidden">
         <SwapChainPanel x:Name="Video" AutomationProperties.AccessibilityView="Raw" />
+        <!-- Windows' own player (ADR 0025, W4: NativeEngine) over libmpv's panel, shown while the core's route plays on it, with its
+             transport controls off: ours above both. The panel stays laid out under it, so libmpv keeps its size for a fallback. -->
+        <MediaPlayerElement
+            x:Name="NativeVideo"
+            AreTransportControlsEnabled="False"
+            Stretch="Uniform"
+            Visibility="Collapsed"
+            AutomationProperties.AccessibilityView="Raw" />
 
         <ProgressRing
             x:Name="BusyRing"
