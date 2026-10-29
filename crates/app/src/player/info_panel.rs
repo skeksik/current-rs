@@ -8,7 +8,9 @@ use current_model::{Route, RouteReason, StreamProtocol};
 use super::PlaybackInfo;
 use super::backend::DisplayFacts;
 use super::labels::bitrate_label;
-use super::words::{native_lacks_text, plan_note_text, reason_text, route_name_one_engine};
+use super::words::{
+    native_lacks_text, plan_note_text, reason_text, route_name, route_name_one_engine,
+};
 use crate::numbers::NumberFormat;
 
 /// What the platform measures for the panel's last line: the swap chain panel's size in physical pixels, the view's and the
@@ -51,11 +53,24 @@ pub fn info_panel_lines(
             ),
         };
         lines.push(join([
-            // One engine until W3 brings the native one: today's names (ADR 0019).
-            Some(route_name_one_engine(plan.route.label()).to_owned()),
+            // ADR 0025's names with a platform engine beside libmpv; with libmpv alone, ADR 0019's as before.
+            Some(
+                if info.platform_engine {
+                    route_name(plan.route.label())
+                } else {
+                    route_name_one_engine(plan.route.label())
+                }
+                .to_owned(),
+            ),
             protocol.map(str::to_owned),
             container.map(str::to_owned),
         ]));
+        // The routes that could not start before this one, with a platform engine (with libmpv alone the fallback's reason says it).
+        if info.platform_engine {
+            for failed in &plan.failed_routes {
+                lines.push(format!("• {} could not start.", route_name(failed.label())));
+            }
+        }
         for reason in &plan.reasons {
             if *reason == RouteReason::NATIVE_LACKS && !plan.native_lacks.is_empty() {
                 // What the native player lacks, track by track, in place of the general reason.
@@ -362,6 +377,7 @@ mod tests {
             ..video.clone()
         };
         PlaybackInfo {
+            platform_engine: false,
             details: Some(PlaybackDetails {
                 plan: Some(PlaybackPlan {
                     item: ItemRef::new(
@@ -499,6 +515,40 @@ mod tests {
                 "• The native player can't decode Dolby TrueHD audio.",
                 "• The native player can't decode this H.264 (AVC) video.",
                 "• The subtitles need rendering the native player can't do.",
+            ]
+        );
+    }
+
+    #[test]
+    fn with_a_platform_engine_the_panel_names_adr_0025s_routes_and_the_failed_ones() {
+        let mut info = info();
+        info.platform_engine = true;
+        if let Some(plan) = info
+            .details
+            .as_mut()
+            .and_then(|details| details.plan.as_mut())
+        {
+            plan.route = Route::AppEngine;
+            plan.reasons = vec![RouteReason::PREVIOUS_ROUTE_FAILED];
+            plan.failed_routes = vec![Route::Native];
+        }
+        let lines = info_panel_lines(&info, None, &panel(), &dot());
+        assert_eq!(
+            lines[..3],
+            [
+                "App engine",
+                "• Native could not start.",
+                "• The previous playback route could not start.",
+            ]
+        );
+        // Without one, today's names and no failed-route line.
+        info.platform_engine = false;
+        let lines = info_panel_lines(&info, None, &panel(), &dot());
+        assert_eq!(
+            lines[..2],
+            [
+                "Direct play",
+                "• The previous playback route could not start."
             ]
         );
     }

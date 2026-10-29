@@ -16,7 +16,7 @@ pub(crate) struct PlaybackPrefs {
     auto_skip: watch::Sender<Vec<String>>,
     quality_resolution: watch::Sender<bool>,
     quality_all: watch::Sender<bool>,
-    /// "Player" (ADR 0025, choice 3). No UI sets it yet (W3); read from the file.
+    /// "Player" (ADR 0025, choice 3).
     player: watch::Sender<PlayerChoice>,
     /// Serializes the settings writes of this file's settings, so the last change is the one saved.
     write: Mutex<()>,
@@ -92,6 +92,28 @@ impl PlaybackPrefs {
         match *self.player.borrow() {
             PlayerChoice::Automatic => EnginePreference::Automatic,
             PlayerChoice::AlwaysAppEngine => EnginePreference::AlwaysAppEngine,
+        }
+    }
+
+    /// The "Player" setting as stored.
+    pub(crate) fn player_choice(&self) -> PlayerChoice {
+        *self.player.borrow()
+    }
+
+    /// Sets "Player" and saves it. Blocking file I/O. It applies from the next item played, also when the save fails (the error says
+    /// so; the setting stands for this run).
+    pub(crate) fn set_player_choice(
+        &self,
+        shared: &Shared,
+        choice: PlayerChoice,
+    ) -> Result<(), StoreError> {
+        let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
+        self.player.send_replace(choice);
+        match &shared.storage {
+            Some(storage) => storage
+                .settings
+                .update(|settings| settings.playback.player = choice),
+            None => Ok(()),
         }
     }
 

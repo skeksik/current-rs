@@ -36,7 +36,8 @@ use current_net::{
     Url,
 };
 use current_store::{
-    DeviceId, KindPage, LibraryChoices, LoadReport, Secrets, SettingsStore, StoreError,
+    DeviceId, KindPage, LibraryChoices, LoadReport, PlayerChoice, Secrets, SettingsStore,
+    StoreError,
 };
 use tokio::sync::watch;
 
@@ -89,6 +90,11 @@ pub use player::{
     SwapChain, TIMELINE_INTERVAL, VideoOutput, bitrate_label, fallback_quality_entries,
     player_engine, quality_label, quality_menu,
 };
+// A platform's own player beside libmpv (ADR 0025), and the facts its UI reports.
+pub use player::{
+    CodecAnswer, CodecKind, CodecQuery, PlatformEngine, PlatformError, PlatformEvents,
+    PlatformFile, PlatformSubtitle, windows_codec_queries,
+};
 // The player's words and its problems (ADR 0019), worded once for every UI.
 pub use player::{
     NO_AUDIO_TRACKS, PanelSizes, PlaybackProblem, PlayerProblem, SUBTITLES_OFF, countdown_text,
@@ -118,9 +124,9 @@ fn quality_target<'a>(
 /// `current-playback`'s values that the player publishes.
 pub mod playback {
     pub use current_playback::{
-        AutoSkip, NextEpisode, PlanNote, PlaybackDetails, PlayerStatus, Quality, QualityOption,
-        QualityPreference, QualityTarget, Track, preferred_quality_options, quality_options,
-        snap_quality,
+        AutoSkip, EndReason, EngineEvent, EngineTrack, NextEpisode, PlanNote, PlaybackDetails,
+        PlayerStatus, Quality, QualityOption, QualityPreference, QualityTarget, StreamUrl, Track,
+        preferred_quality_options, quality_options, snap_quality,
     };
 }
 pub use problems::{
@@ -501,7 +507,37 @@ impl App {
             relay: self.relay.clone(),
             capabilities: self.engine_capabilities.clone(),
         };
-        player::open(context, size, display).await
+        player::open(context, size, display, None).await
+    }
+
+    /// Opens a player with a platform's own player beside this build's engine (ADR 0025): the platform engine plays what its
+    /// capabilities take, this build's engine (libmpv) the rest. `answers` are the UI's answers to
+    /// [`windows_codec_queries`]. Every stream for the platform engine goes through the loopback relay.
+    ///
+    /// # Errors
+    /// As [`App::open_player`], and `EngineFailed` when the platform engine cannot be attached.
+    pub async fn open_player_with_platform_engine(
+        &self,
+        size: CompositionSize,
+        display: DisplayFacts,
+        engine: Arc<dyn player::PlatformEngine>,
+        answers: &[player::CodecAnswer],
+    ) -> Result<Player, PlayerError> {
+        let context = player::Context {
+            shared: self.shared.clone(),
+            images: self.images.clone(),
+            browse: self.browse.clone(),
+            prefs: self.playback.clone(),
+            relay: self.relay.clone(),
+            capabilities: self.engine_capabilities.clone(),
+        };
+        let (profile, rules) = player::windows_engine(answers);
+        let native = player::NativeSetup {
+            engine,
+            profile,
+            rules,
+        };
+        player::open(context, size, display, Some(native)).await
     }
 
     /// What this build's engine plays, without playing anything (ADR 0021): the capabilities the last engine reported at its start,
@@ -551,6 +587,19 @@ impl App {
     /// The settings could not be saved; the setting stands for this run.
     pub fn set_preferred_quality(&self, preferred: playback::Quality) -> Result<(), StoreError> {
         self.playback.set_preferred_quality(&self.shared, preferred)
+    }
+
+    /// Settings → Playback → "Player" (ADR 0025, choice 3): "Automatic" (the default) or "Always app engine".
+    pub fn player_choice(&self) -> PlayerChoice {
+        self.playback.player_choice()
+    }
+
+    /// Sets "Player" and saves it; it applies from the next item played. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved; the setting stands for this run.
+    pub fn set_player_choice(&self, choice: PlayerChoice) -> Result<(), StoreError> {
+        self.playback.set_player_choice(&self.shared, choice)
     }
 
     /// Settings → Playback's "Show resolution in quality menu": whether the quality menu names the resolution each choice gives

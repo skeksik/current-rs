@@ -226,6 +226,50 @@ pub enum RouteKind {
     Transcode,
 }
 
+/// ADR 0025's route labels: what the info panel names with a platform engine beside libmpv. Words: `PlayerWords::route_label_name`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum RouteLabelKind {
+    Native,
+    DeviceRemux,
+    AppEngine,
+    ServerRemux,
+    ServerDirectStream,
+    ServerTranscode,
+}
+
+impl From<RouteLabel> for RouteLabelKind {
+    fn from(label: RouteLabel) -> Self {
+        match label {
+            RouteLabel::Native => Self::Native,
+            RouteLabel::DeviceRemux => Self::DeviceRemux,
+            RouteLabel::AppEngine => Self::AppEngine,
+            RouteLabel::ServerRemux => Self::ServerRemux,
+            RouteLabel::ServerDirectStream => Self::ServerDirectStream,
+            RouteLabel::ServerTranscode => Self::ServerTranscode,
+        }
+    }
+}
+
+impl From<RouteLabelKind> for RouteLabel {
+    fn from(label: RouteLabelKind) -> Self {
+        match label {
+            RouteLabelKind::Native => Self::Native,
+            RouteLabelKind::DeviceRemux => Self::DeviceRemux,
+            RouteLabelKind::AppEngine => Self::AppEngine,
+            RouteLabelKind::ServerRemux => Self::ServerRemux,
+            RouteLabelKind::ServerDirectStream => Self::ServerDirectStream,
+            RouteLabelKind::ServerTranscode => Self::ServerTranscode,
+        }
+    }
+}
+
+/// Which engine plays the route (ADR 0025): the platform's own player or libmpv. The UI shows that engine's surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum EngineKind {
+    Platform,
+    App,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum StreamProtocolKind {
     Hls,
@@ -235,7 +279,12 @@ pub enum StreamProtocolKind {
 /// The route: its label and, for a server stream, the stream's protocol and container and what is copied.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct RouteInfo {
+    /// ADR 0019's name, as today's UI shows it.
     pub kind: RouteKind,
+    /// ADR 0025's name.
+    pub label: RouteLabelKind,
+    /// The engine playing it.
+    pub engine: EngineKind,
     pub protocol: Option<StreamProtocolKind>,
     pub container: Option<String>,
     pub video_copied: bool,
@@ -253,9 +302,16 @@ impl From<&Route> for RouteInfo {
             RouteLabel::ServerDirectStream => RouteKind::DirectStream,
             RouteLabel::ServerTranscode => RouteKind::Transcode,
         };
+        let label = route.label().into();
+        let engine = match route.engine() {
+            current_model::EngineRole::Native => EngineKind::Platform,
+            current_model::EngineRole::App => EngineKind::App,
+        };
         match route {
             Route::Native | Route::DeviceRemux | Route::AppEngine => Self {
                 kind,
+                label,
+                engine,
                 protocol: None,
                 container: None,
                 video_copied: true,
@@ -269,6 +325,8 @@ impl From<&Route> for RouteInfo {
                 ..
             } => Self {
                 kind,
+                label,
+                engine,
                 protocol: Some(match protocol {
                     StreamProtocol::Hls => StreamProtocolKind::Hls,
                     StreamProtocol::Progressive => StreamProtocolKind::Progressive,
@@ -764,6 +822,35 @@ pub struct PlaybackSettingsSnapshot {
     pub shows_quality_resolution: bool,
     /// "Show all quality options": whether the menu lists every step below the original's bitrate (off by default).
     pub shows_all_qualities: bool,
+    /// "Player" (ADR 0025, choice 3): "Automatic" by default.
+    pub player: PlayerChoiceKind,
+}
+
+/// Settings → Playback → "Player" (ADR 0025, choice 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum PlayerChoiceKind {
+    /// The platform's player first, then libmpv, then the server.
+    Automatic,
+    /// libmpv, then the server.
+    AlwaysAppEngine,
+}
+
+impl From<current_store::PlayerChoice> for PlayerChoiceKind {
+    fn from(choice: current_store::PlayerChoice) -> Self {
+        match choice {
+            current_store::PlayerChoice::Automatic => Self::Automatic,
+            current_store::PlayerChoice::AlwaysAppEngine => Self::AlwaysAppEngine,
+        }
+    }
+}
+
+impl From<PlayerChoiceKind> for current_store::PlayerChoice {
+    fn from(choice: PlayerChoiceKind) -> Self {
+        match choice {
+            PlayerChoiceKind::Automatic => Self::Automatic,
+            PlayerChoiceKind::AlwaysAppEngine => Self::AlwaysAppEngine,
+        }
+    }
 }
 
 impl PlaybackSettingsSnapshot {
@@ -772,6 +859,7 @@ impl PlaybackSettingsSnapshot {
         auto_skip: Vec<String>,
         shows_quality_resolution: bool,
         shows_all_qualities: bool,
+        player: PlayerChoiceKind,
     ) -> Self {
         let has = |kind: &str| auto_skip.iter().any(|k| k == kind);
         Self {
@@ -780,6 +868,7 @@ impl PlaybackSettingsSnapshot {
             auto_skip,
             shows_quality_resolution,
             shows_all_qualities,
+            player,
         }
     }
 }

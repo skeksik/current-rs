@@ -749,3 +749,47 @@ fn the_fallbacks_reason_stays_with_the_re_plan_it_caused() {
             .contains(&RouteReason::FALLBACK_AFTER_ENGINE_ERROR)
     );
 }
+
+#[test]
+fn a_stream_for_the_native_engine_always_goes_through_the_relay() {
+    let mut two = Two::playing(movie());
+    assert_eq!(two.server.state().always_relayed, vec![true]);
+    // The relay's URL, with its route token only.
+    let native = two.native_commands();
+    let file = loads(&native)[0].clone();
+    assert!(file.url.expose().starts_with("http://127.0.0.1:"));
+    assert!(!file.url.expose().contains(crate::test_support::SECRETS[0]));
+    // On the app engine, as before: the address decides.
+    block_on(two.player.select_audio(2));
+    assert_eq!(two.server.state().always_relayed, vec![true, false]);
+}
+
+#[test]
+fn a_relay_that_cannot_start_for_the_native_engine_is_a_failed_route() {
+    let mut two = Two::new(movie());
+    two.server.state().relay_problem = Some(current_model::PlaybackProblem::LocalRelay);
+    block_on(two.player.play(item("e1"), MediaKind::MOVIE, secs(4)));
+    let plan = two.plan();
+    assert_eq!(plan.route, Route::AppEngine);
+    assert_eq!(plan.reasons, vec![RouteReason::PREVIOUS_ROUTE_FAILED]);
+    assert_eq!(plan.failed_routes, vec![Route::Native]);
+    assert_eq!(plan.start, secs(4));
+    assert!(loads(&two.native_commands()).is_empty());
+    assert_eq!(loads(&two.app_commands()).len(), 1);
+    assert_eq!(two.player.status().state, PlayerState::Loading);
+}
+
+#[test]
+fn a_failed_play_lets_the_engine_that_has_the_file_go() {
+    let mut two = Two::playing(movie());
+    two.clear();
+    // The native engine cannot play a track; the re-plan's answer is an error, so the play fails.
+    two.server
+        .answer(Err(current_model::PlaybackProblem::NotFound));
+    two.event(EngineEvent::TrackFailed(EngineErrorKind::DECODER_FAILED));
+    assert!(matches!(
+        two.player.status().state,
+        PlayerState::Failed { .. }
+    ));
+    assert!(two.native_commands().contains(&Command::Stop));
+}

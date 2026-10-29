@@ -14,6 +14,7 @@ mod diff;
 mod error;
 mod flows;
 mod formats;
+mod platform_engine;
 mod player;
 mod player_records;
 mod player_words;
@@ -76,13 +77,19 @@ pub use player::{
     NowPlayingListener, Player, PlayerStateListener, SwapChainHandle, SwapChainListener,
     player_engine,
 };
+// A platform's own player beside libmpv (ADR 0025).
+pub use platform_engine::{
+    CodecQueryAnswer, CodecQueryAsk, CodecQueryKind, PlatformEndReason, PlatformEngine,
+    PlatformEngineError, PlatformEngineEvents, PlatformEvent, PlatformFile, PlatformSubtitleFile,
+    PlatformTrack, windows_codec_queries,
+};
 pub use player_records::{
-    CompositionSize, DisplayFacts, EngineOutputInfo, MediaStatusKind, NextEpisodeInfo,
+    CompositionSize, DisplayFacts, EngineKind, EngineOutputInfo, MediaStatusKind, NextEpisodeInfo,
     NowPlayingSnapshot, PlanNoteInfo, PlaybackInfoSnapshot, PlaybackProblem,
-    PlaybackSettingsSnapshot, PlayerEngineKind, PlayerProblem, PlayerStateKind,
+    PlaybackSettingsSnapshot, PlayerChoiceKind, PlayerEngineKind, PlayerProblem, PlayerStateKind,
     PlayerStateSnapshot, QualityChoice, QualityMenuEntry, QualityOptionInfo, RouteInfo, RouteKind,
-    SegmentInfo, SourceInfo, StreamInfo, StreamProtocolKind, SubtitleSelection, TrackInfo,
-    TranscodingInfo, quality_steps,
+    RouteLabelKind, SegmentInfo, SourceInfo, StreamInfo, StreamProtocolKind, SubtitleSelection,
+    TrackInfo, TranscodingInfo, quality_steps,
 };
 // The player's words (ADR 0019), worded by the core.
 pub use player_words::PanelSizes;
@@ -500,6 +507,8 @@ impl Core {
 mod flow_tests;
 #[cfg(test)]
 mod gateway_tests;
+#[cfg(test)]
+mod platform_tests;
 #[cfg(test)]
 mod player_tests;
 #[cfg(test)]

@@ -159,12 +159,15 @@ pub trait MediaServer {
     /// address's credentials and the session token upstream). Replaces the stream given before, whose relay route is removed.
     /// [`PlaybackProblem::LocalRelay`] when the relay cannot start (there is no fallback that hands the engine credentials),
     /// [`PlaybackProblem::Network`] when `url` is not on the address in use any more. `hls`: the plan's route is HLS, so `url` is
-    /// an HLS playlist; a relay route then refuses anything else at that URL (ADR 0020 task 4).
+    /// an HLS playlist; a relay route then refuses anything else at that URL (ADR 0020 task 4). `always_relay`: the stream is for a
+    /// platform engine, which gets every stream through the relay, gateway or not, so its URL holds the route's token only (ADR 0025,
+    /// "URLs across the bridge"; ADR 0020 choice 1 widened).
     fn stream_url(
         &self,
         item: &ItemRef,
         url: &StreamUrl,
         hls: bool,
+        always_relay: bool,
     ) -> Result<EngineStream, PlaybackProblem>;
 
     /// The stream [`MediaServer::stream_url`] gave is no longer played (a stop, another item, a failure, the end): its relay route,

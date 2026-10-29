@@ -237,10 +237,14 @@ pub struct ServerState {
     pub streams: Vec<String>,
     /// Whether each of `streams` was given as HLS.
     pub hls_streams: Vec<bool>,
+    /// Whether each of `streams` was asked to go through the relay whatever the address (a stream for the native engine).
+    pub always_relayed: Vec<bool>,
     /// Whether `stream_url` relays (an address with gateway credentials).
     pub relay: bool,
     /// What `stream_url` fails with; `None` gives a URL.
     pub stream_problem: Option<PlaybackProblem>,
+    /// What `stream_url` fails with when asked to relay whatever the address (a stream for the native engine).
+    pub relay_problem: Option<PlaybackProblem>,
     /// Whether a stream from `stream_url` is live: not yet ended or replaced.
     pub stream_live: bool,
     /// How many times `end_stream` was called.
@@ -285,8 +289,10 @@ impl FakeServer {
                 local: true,
                 streams: Vec::new(),
                 hls_streams: Vec::new(),
+                always_relayed: Vec::new(),
                 relay: false,
                 stream_problem: None,
+                relay_problem: None,
                 stream_live: false,
                 stream_ends: 0,
                 engine_unloaded: None,
@@ -399,16 +405,21 @@ impl MediaServer for FakeServer {
         _item: &ItemRef,
         url: &StreamUrl,
         hls: bool,
+        always_relay: bool,
     ) -> Result<EngineStream, PlaybackProblem> {
         let mut state = self.state();
         state.streams.push(url.expose().to_owned());
         state.hls_streams.push(hls);
+        state.always_relayed.push(always_relay);
         state.stream_live = false;
         if let Some(problem) = state.stream_problem.clone() {
             return Err(problem);
         }
+        if always_relay && let Some(problem) = state.relay_problem.clone() {
+            return Err(problem);
+        }
         state.stream_live = true;
-        Ok(if state.relay {
+        Ok(if state.relay || always_relay {
             EngineStream {
                 url: StreamUrl::new(format!(
                     "http://127.0.0.1:50123/{}/Videos/e1/stream?static=true",

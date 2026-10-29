@@ -1,7 +1,7 @@
 # 0020: A loopback relay for streams behind a gateway
 
 Status: accepted (2026-10-26); open choices decided by the owner 2026-10-26 (see "Decided by the owner"). From the loopback relay
-spike.
+spike. Amended 2026-10-29 (ADR 0025, W3): choice 1 widens to every stream for a platform engine; see "What the relay is".
 Research, quotes and sources: `docs/notes/loopback-relay.md`. No product code was written.
 
 ## Context
@@ -45,6 +45,9 @@ no credential.
 
 It is used for every stream whose address has gateway credentials, on every platform (choice 1). Streams on an address without a
 gateway keep today's direct URL (AirPlay keeps working for them on macOS).
+Amended 2026-10-29 (ADR 0025, task W3, feat/platform-engine-bridge; needs the owner's approval): every stream for a platform engine
+(the platform's own player behind `current-ffi`) goes through the relay as well, gateway or not, so the URL that crosses the bridge
+holds the route's token only (`MediaServer::stream_url`'s `always_relay`). libmpv's streams keep this rule as it is.
 
 ### Routes and who may use it
 - **A route per playback:** 128 random bits (`getrandom`, base64url) as the first path segment, mapped to one server, the path prefixes

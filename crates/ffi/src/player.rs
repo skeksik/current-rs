@@ -15,8 +15,8 @@ use crate::browse::ItemRef;
 use crate::cancel::{self, CancelToken};
 use crate::player_records::{
     CompositionSize, DisplayFacts, NowPlayingSnapshot, PlaybackInfoSnapshot,
-    PlaybackSettingsSnapshot, PlayerEngineKind, PlayerStateSnapshot, QualityChoice,
-    QualityOptionInfo, SubtitleSelection,
+    PlaybackSettingsSnapshot, PlayerChoiceKind, PlayerEngineKind, PlayerStateSnapshot,
+    QualityChoice, QualityOptionInfo, SubtitleSelection,
 };
 use crate::player_words::PanelSizes;
 use crate::subscribe::{self, LiveListeners};
@@ -76,9 +76,21 @@ pub fn player_engine() -> PlayerEngineKind {
     current_app::player_engine().into()
 }
 
-fn player_error(error: &current_app::PlayerError) -> CoreError {
+pub(crate) fn player_error(error: &current_app::PlayerError) -> CoreError {
     CoreError::Player {
         problem: error.into(),
+    }
+}
+
+impl Core {
+    /// The bridge's player for an app player.
+    pub(crate) fn player(&self, player: current_app::Player) -> Arc<Player> {
+        Arc::new(Player::new(
+            player,
+            self.app.clone(),
+            self.runtime.clone(),
+            self.listeners.clone(),
+        ))
     }
 }
 
@@ -215,6 +227,15 @@ impl Player {
         self.quick(PlayerAction::Stop)
     }
 
+    /// "Play with app engine" (ADR 0025, choice 3): the item playing moves to libmpv at the position, then the server if libmpv
+    /// cannot. Only this item. Nothing changes on a player with libmpv alone.
+    ///
+    /// # Errors
+    /// [`CoreError::Cancelled`]; [`CoreError::Player`] with `Closed`.
+    pub async fn play_with_app_engine(&self, token: Arc<CancelToken>) -> Result<(), CoreError> {
+        long!(self, token, |player| player.play_with_app_engine())
+    }
+
     /// Seeks past the segment under the position.
     pub fn skip_segment(&self) -> Result<(), CoreError> {
         self.quick(PlayerAction::SkipSegment)
@@ -346,12 +367,7 @@ impl Core {
                 message: error.to_string(),
             })?
             .map_err(|error| player_error(&error))?;
-        Ok(Arc::new(Player::new(
-            player,
-            self.app.clone(),
-            self.runtime.clone(),
-            self.listeners.clone(),
-        )))
+        Ok(self.player(player))
     }
 
     /// Settings → Playback now.
@@ -361,7 +377,26 @@ impl Core {
             self.app.auto_skip().borrow().clone(),
             self.app.quality_resolution(),
             self.app.quality_all(),
+            self.app.player_choice().into(),
         )
+    }
+
+    /// Settings → Playback → "Player": "Automatic" or "Always app engine". Saved at once on the core's blocking pool; it applies from
+    /// the next item played.
+    ///
+    /// # Errors
+    /// [`CoreError::Store`] if the settings could not be saved: the setting stands for this run.
+    pub async fn set_player_choice(&self, choice: PlayerChoiceKind) -> Result<(), CoreError> {
+        let app = self.app.clone();
+        self.runtime
+            .spawn_blocking(move || app.set_player_choice(choice.into()))
+            .await
+            .map_err(|error| CoreError::Runtime {
+                message: error.to_string(),
+            })?
+            .map_err(|error| CoreError::Store {
+                problem: (&error).into(),
+            })
     }
 
     /// The Settings switch: skip intros and credits (`intro` and `outro` segments) automatically, or not. Saved at once on the core's
