@@ -244,14 +244,17 @@ pub struct RouteInfo {
 
 impl From<&Route> for RouteInfo {
     fn from(route: &Route) -> Self {
+        // One engine until W3 (ADR 0025): every local route is direct play, a server stream is named by what it copies.
         let kind = match route.label() {
-            RouteLabel::DirectPlay => RouteKind::DirectPlay,
-            RouteLabel::Remux => RouteKind::Remux,
-            RouteLabel::DirectStream => RouteKind::DirectStream,
-            RouteLabel::Transcode => RouteKind::Transcode,
+            RouteLabel::Native | RouteLabel::DeviceRemux | RouteLabel::AppEngine => {
+                RouteKind::DirectPlay
+            }
+            RouteLabel::ServerRemux => RouteKind::Remux,
+            RouteLabel::ServerDirectStream => RouteKind::DirectStream,
+            RouteLabel::ServerTranscode => RouteKind::Transcode,
         };
         match route {
-            Route::DirectPlay => Self {
+            Route::Native | Route::DeviceRemux | Route::AppEngine => Self {
                 kind,
                 protocol: None,
                 container: None,
@@ -263,6 +266,7 @@ impl From<&Route> for RouteInfo {
                 container,
                 video,
                 audio,
+                ..
             } => Self {
                 kind,
                 protocol: Some(match protocol {

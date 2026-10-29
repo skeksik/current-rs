@@ -6,6 +6,9 @@ Amended 2026-10-27 (owner, fix/windows-ui-polish): choice 10's quality menu and 
 "Decided by the owner", choice 10.
 Amended 2026-10-27 (owner, feat/quality-names-per-file): choice 10's "Names", the steps named by what the server will send
 for this file.
+Amended 2026-10-28 (ADR 0025, task W2, feat/routes-and-engines; needs the owner's approval): routes, labels and reasons for a native
+engine beside the app engine, two engines per player, the device profile as their union, and choice 9's re-plan widened into a
+fallback chain; see "Routes and engines (ADR 0025)".
 Research, quotes and sources: `docs/notes/playback.md`. No code was written.
 
 ## Context
@@ -70,12 +73,16 @@ What the research found (details and quotes in the notes):
   `SubtitleProfiles` with `Embed` for every format the engine renders and `External` for text formats and PGS files; `CodecProfiles`
   only for the quality limit; `TranscodingProfiles` per choice 2; `MaxStreamingBitrate` always set (never Jellyfin's 8 Mbit/s
   default) from the quality choice (choice 10). The profile is sent in every PlaybackInfo body.
+  Amended 2026-10-28 (ADR 0025): the capabilities the profile is made from are the union of the player's engines (below, "Routes
+  and engines").
 
 ### Route planner
 - Input: the item, the chosen source (the user's version pick, else the server's first), the start position, the chosen tracks, the
   quality limit and flags from the controller (direct play allowed or not after a fallback).
 - One `POST /Items/{id}/PlaybackInfo` per plan with the profile, `MaxStreamingBitrate`, `StartTimeTicks`, `AudioStreamIndex`,
   `SubtitleStreamIndex`, `MediaSourceId`, and `EnableDirectPlay` false only after a fallback.
+- Amended 2026-10-28 (ADR 0025): the server's answer is a `ServerOffer` (direct play or a stream), and the route comes from it as
+  "Routes and engines" says; the items below hold with "direct play" read as a local route and labels as there.
 - **Routes** (`Route`, closed: Current defines them): `DirectPlay` when `SupportsDirectPlay`; otherwise `ServerStream { protocol,
   container, video, audio }` from `TranscodingUrl`, where `video` and `audio` are `Copy` or `Transcode`. They are shown as "Direct
   play", "Remux" (both copied), "Direct stream" (video copied, audio converted) and "Transcode". Before start the planner predicts copy
@@ -119,6 +126,8 @@ fake engine, a fake server and a fake clock):
 - **Fallback** (choice 9): an engine failure on a direct-play route (`END_FILE` with an error before or soon after the first
   frame, or a decoder failure mpv reports) re-plans once with `EnableDirectPlay = false` at the current position and the same tracks,
   with the reason `FallbackAfterEngineError`. A failure on a server stream, or a second failure, ends in `Failed`.
+  Amended 2026-10-28 (ADR 0025): widened into a chain over the routes, below ("Routes and engines"); with the app engine as the only
+  engine the chain is exactly this rule.
 - **Errors** (`PlaybackProblem`, flat, no server text or URL): `NotPlayable { reasons }`, `Engine { kind }`, `Network`,
   `GatewaySignInNeeded`, `SignedOut`, `Server { status }`, `NotFound`. A redirect, a 401, 403 or an HTML answer on a stream runs ADR
   0017's 401 rule through `current-net`'s probe before choosing between `GatewaySignInNeeded` and `SignedOut`.
@@ -137,6 +146,43 @@ fake engine, a fake server and a fake clock):
   The reported position is the one saved before the unload, so the report is unchanged.
 - **Next episode start** (owner, 2026-10-25): autoplay and "Next episode" start the next episode from the beginning, not from its
   resume point.
+
+### Routes and engines (ADR 0025)
+Added 2026-10-28 by task W2 (feat/routes-and-engines), from ADR 0025 "How the core decides"; needs the owner's approval.
+- **Two engines per player.** `current-playback`'s `Engines`: an optional native engine and the app engine (libmpv), each an
+  `EngineProfile` (its `EngineCapabilities` and whether it plays HLS); an optional remux on the device (the containers it reads, for
+  the native engine; none on Windows, ADR 0025 departure 1); and the platform's rules (`PlatformRules`: departures 2 and 8, Windows
+  only). The libmpv engine keeps the one-engine-per-process slot ("`current-mpv`"); the native engine does not use it.
+- **The device profile is the union** (`Engines::device_profile`): the native engine's containers and codecs, the remux's
+  containers, and the app engine's, each codec once with the looser of its limits. Jellyfin's direct-play profiles pair every
+  container with every codec, so the server may offer direct play for a file no single route plays; the per-file check then finds
+  no local route and the plan is asked again with `EnableDirectPlay = false`. With the app engine only, the union is its
+  capabilities as they are, so the profile is unchanged (tested byte for byte).
+- **Routes** (`Route`, closed): `Native`, `DeviceRemux`, `AppEngine`, `ServerStream { engine, protocol, container, video, audio }`.
+  `current-jellyfin` answers a `ServerOffer` (`DirectPlay` or `Stream { protocol, container, video, audio }`) and never picks an engine.
+  Labels (`RouteLabel`): "Native", "Remux on this device", "App engine", "Server remux", "Server direct stream", "Server transcode".
+  Until a platform engine exists (ADR 0025 task W3), the UI shows this record's four labels (`route_name_one_engine`: every local
+  route is "Direct play"). The play method reported to Jellyfin is `DirectPlay` for a local route and `Transcode` for a server stream.
+- **Reasons** (`RouteReason`, open), Current's own, worded in the core: `native_fully_compatible`, `keeps_original_streams`,
+  `native_lacks` (with the plan's `native_lacks`: the container, video, audio or subtitle and its codec or format),
+  `subtitle_needs_rendering`, `dolby_vision_profile_7`, `previous_route_failed`, `user_chose_app_engine`,
+  `setting_always_app_engine`, `dolby_vision_on_app_engine`, `hdr_on_sdr_display`, `speed_not_supported`. The plan also lists the
+  routes that failed before it (`failed_routes`). A local route on a player with the app engine only has no reasons, as before.
+- **The per-file check** (`current_playback::route`), after a direct-play answer: native, then the remux, then the app engine, as
+  ADR 0025 orders them; a route already failed in this play is left out, and the route after it carries `previous_route_failed`.
+  With the app engine only, the server's answer stands (it was made from exactly that engine's capabilities). A subtitle that needs
+  rendering (picture formats, ASS/SSA) is decided from its format: never through the remux, and on the native route only where the
+  platform's rules keep it (`PlatformRules::native_rendered_subtitles`; Windows: PGS, ADR 0025 departure 3), whatever the native
+  engine lists. A codec or container the server does not name is not native, but the app engine plays it (the server offered
+  direct play). `CodecSupport` gains `max_channels` (audio; Windows' player takes Opus in stereo only, W1), sent to the server as an
+  `AudioChannels` condition; libmpv has none, so its profile is unchanged. A server stream goes to the first engine, native first, that takes its protocol
+  and container, decodes what it copies, and decodes every codec of the transcoding profiles the device profile has (the server
+  picks among them); the app engine takes every stream, as before. A server stream goes to the app engine first when the selected
+  subtitle is sent beside the picture and the native route does not show it, and on an SDR display for a PQ source whether copied
+  or transcoded (the server may keep HDR in an HEVC transcode; not verified).
+- **Fallback** (choice 9, widened): today choice 9 holds as written; the chain arrives with W2's second change: a failure moves to the
+  next untried route of the same order, each at most once per play, ending with the server stream, position and tracks kept. The
+  same change brings the track, speed and display re-plans across engines and the "Player" setting's effect.
 
 ### Gateways, tokens and the player
 **Amended 2026-10-26 (ADR 0020):** streams on an address with gateway credentials go through the loopback relay (ADR 0020): the

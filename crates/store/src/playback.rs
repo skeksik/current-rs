@@ -1,9 +1,9 @@
 //! The playback settings in `settings.json` (ADR 0019, choices 8 and 10): the preferred quality, the quality menu's switches, and
-//! the kinds of segment skipped automatically. All open values (ADR 0013): a value this version cannot read reads as the default
+//! the kinds of segment skipped automatically, and the "Player" setting (ADR 0025, choice 3). All open values (ADR 0013): a value this version cannot read reads as the default
 //! and is written back unchanged until the setting is changed here, and fields this version does not know are kept.
 //!
 //! The file keeps them under `playback`: `{"quality_preferred": "maximum" | <bits per second>, "auto_skip": ["intro", "outro", ...],
-//! "quality_resolution": false, "quality_all": true}`, each left out at its default. Older versions remembered the last quality picked,
+//! "quality_resolution": false, "quality_all": true, "player": "automatic" | "always_app_engine"}`, each left out at its default. Older versions remembered the last quality picked,
 //! per kind of address, in `quality_local` and `quality_internet` (same values): still read and written back as they are, so older and
 //! newer versions share the file, but nothing uses them any more (owner, 2026-10-27).
 
@@ -40,12 +40,40 @@ impl StreamQuality {
     }
 }
 
+/// Settings → Playback → "Player" (ADR 0025, choice 3): which engine plays a file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PlayerChoice {
+    /// ADR 0025's route order: the native player, the remux on the device, the app engine, the server.
+    #[default]
+    Automatic,
+    /// The app engine, then the server.
+    AlwaysAppEngine,
+}
+
+impl PlayerChoice {
+    fn read(value: &Value) -> Option<Self> {
+        match value.as_str()? {
+            "automatic" => Some(Self::Automatic),
+            "always_app_engine" => Some(Self::AlwaysAppEngine),
+            _ => None,
+        }
+    }
+
+    fn write(self) -> Value {
+        Value::from(match self {
+            Self::Automatic => "automatic",
+            Self::AlwaysAppEngine => "always_app_engine",
+        })
+    }
+}
+
 const QUALITY_LOCAL: &str = "quality_local";
 const QUALITY_INTERNET: &str = "quality_internet";
 const QUALITY_PREFERRED: &str = "quality_preferred";
 const AUTO_SKIP: &str = "auto_skip";
 const QUALITY_RESOLUTION: &str = "quality_resolution";
 const QUALITY_ALL: &str = "quality_all";
+const PLAYER: &str = "player";
 
 /// The playback settings. "Maximum", no automatic skipping, and the quality menu naming resolutions by default.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,6 +94,8 @@ pub struct PlaybackSettings {
     /// Whether the quality menu lists every step below the original's bitrate, not only the common ones ("Show all quality
     /// options"); off by default (owner, 2026-10-26).
     pub quality_all: bool,
+    /// "Player": "Automatic" by default (owner, 2026-10-28). A value this version cannot read reads as "Automatic".
+    pub player: PlayerChoice,
     /// The stored object as read: fields this version does not know, and known fields whose value it could not read.
     stored: Map<String, Value>,
 }
@@ -79,6 +109,7 @@ impl Default for PlaybackSettings {
             auto_skip: Vec::new(),
             quality_resolution: true,
             quality_all: false,
+            player: PlayerChoice::default(),
             stored: Map::new(),
         }
     }
@@ -114,6 +145,10 @@ impl PlaybackSettings {
             .get(QUALITY_ALL)
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let player = stored
+            .get(PLAYER)
+            .and_then(PlayerChoice::read)
+            .unwrap_or_default();
         (
             Self {
                 quality_local: quality(QUALITY_LOCAL),
@@ -122,6 +157,7 @@ impl PlaybackSettings {
                 auto_skip,
                 quality_resolution,
                 quality_all,
+                player,
                 stored,
             },
             None,
@@ -147,6 +183,9 @@ impl PlaybackSettings {
         }
         if self.quality_all != before.quality_all {
             self.stored.remove(QUALITY_ALL);
+        }
+        if self.player != before.player {
+            self.stored.remove(PLAYER);
         }
     }
 
@@ -205,6 +244,13 @@ impl PlaybackSettings {
             QUALITY_ALL,
             self.stored.get(QUALITY_ALL).is_none_or(Value::is_boolean),
             self.quality_all.then_some(Value::Bool(true)),
+        );
+        set(
+            PLAYER,
+            self.stored
+                .get(PLAYER)
+                .is_none_or(|value| PlayerChoice::read(value).is_some()),
+            (self.player != PlayerChoice::Automatic).then(|| self.player.write()),
         );
         (!object.is_empty()).then_some(Value::Object(object))
     }
@@ -297,6 +343,33 @@ mod tests {
         common.quality_all = false;
         common.changed_from(&all);
         assert_eq!(common.write(), None);
+    }
+
+    #[test]
+    fn the_player_is_automatic_unless_set() {
+        assert_eq!(PlaybackSettings::default().player, PlayerChoice::Automatic);
+        let always = read(r#"{"player": "always_app_engine"}"#);
+        assert_eq!(always.player, PlayerChoice::AlwaysAppEngine);
+        assert_eq!(always.write().unwrap()["player"], "always_app_engine");
+        let mut automatic = always.clone();
+        automatic.player = PlayerChoice::Automatic;
+        automatic.changed_from(&always);
+        // Automatic is the default, left out of the file.
+        assert_eq!(automatic.write(), None);
+        let mut set = PlaybackSettings {
+            player: PlayerChoice::AlwaysAppEngine,
+            ..PlaybackSettings::default()
+        };
+        set.changed_from(&PlaybackSettings::default());
+        assert_eq!(set.write().unwrap()["player"], "always_app_engine");
+        // A value this version cannot read reads as "Automatic" and is kept until changed here.
+        let odd = read(r#"{"player": "always_native"}"#);
+        assert_eq!(odd.player, PlayerChoice::Automatic);
+        assert_eq!(odd.write().unwrap()["player"], "always_native");
+        let mut changed = odd.clone();
+        changed.player = PlayerChoice::AlwaysAppEngine;
+        changed.changed_from(&odd);
+        assert_eq!(changed.write().unwrap()["player"], "always_app_engine");
     }
 
     #[test]

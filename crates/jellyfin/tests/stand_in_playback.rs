@@ -9,8 +9,9 @@ use current_jellyfin::{
     StopReport,
 };
 use current_model::{
-    Codec, CodecSupport, Container, EngineCapabilities, ItemId, Route, RouteLabel, RouteReason,
-    SegmentKind, ServerKey, ServerRef, ServiceType, SubtitleFormat, TrackChoice,
+    Codec, CodecSupport, Container, EngineCapabilities, EngineRole, ItemId, Route, RouteLabel,
+    RouteReason, SegmentKind, ServerKey, ServerOffer, ServerRef, ServiceType, SubtitleFormat,
+    TrackChoice,
 };
 use current_net::{FixedAddress, RequestLog, Url};
 use jellyfin_stand_in::{
@@ -66,7 +67,7 @@ async fn the_stand_in_answers_playback_in_the_shape_the_client_reads() {
     assert_eq!(direct.play_session_id, PLAY_SESSION);
     let (source, stream) = direct.playable(None).unwrap();
     assert_eq!(source.id, MEDIA_SOURCE);
-    assert_eq!(stream.route, Route::DirectPlay);
+    assert_eq!(stream.offer, ServerOffer::DirectPlay);
     assert!(source.has_segments);
 
     let transcode = client
@@ -74,7 +75,10 @@ async fn the_stand_in_answers_playback_in_the_shape_the_client_reads() {
         .await
         .unwrap();
     let (_, stream) = transcode.playable(None).unwrap();
-    assert_eq!(stream.route.label(), RouteLabel::Remux);
+    assert_eq!(
+        Route::server_stream(&stream.offer, EngineRole::App).map(|route| route.label()),
+        Some(RouteLabel::ServerRemux)
+    );
     assert_eq!(stream.reasons, vec![RouteReason::CONTAINER_NOT_SUPPORTED]);
 
     let segments = client
@@ -105,7 +109,7 @@ async fn the_stand_in_answers_playback_in_the_shape_the_client_reads() {
         muted: false,
         volume: None,
         can_seek: true,
-        route: Route::DirectPlay,
+        route: Route::AppEngine,
     };
     client.report_start(&report).await.unwrap();
     client.report_progress(&report).await.unwrap();

@@ -50,4 +50,6 @@ pub use playback::{
 };
 pub use player::{StreamTarget, TranscodePolicy};
 pub use probe::{FoundServer, JellyfinIdentity, MINIMUM_VERSION, ProbeError, Prober, same_server};
-pub use profile::{TranscodeTargets, external_subtitle_formats, transcode_targets};
+pub use profile::{
+    TranscodeTargets, device_profile_json, external_subtitle_formats, transcode_targets,
+};

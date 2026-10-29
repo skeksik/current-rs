@@ -16,8 +16,10 @@ use current_model::{
 
 use crate::clock::Clock;
 use crate::engine::{EndReason, Engine, EngineEvent, EngineFile, EngineTrack, ExternalSubtitle};
-use crate::planner::{self, Planned};
+use crate::engines::Engines;
+use crate::planner::{self, Planned, RouteInputs};
 use crate::quality::{Quality, QualityPreference, snap_quality};
+use crate::route::RouteContext;
 use crate::server::{MediaServer, ProgressReport, StopReport, TranscodePermissions};
 use crate::status::{AutoSkip, NextEpisode, PlaybackDetails, PlayerEvent, PlayerStatus, Track};
 
@@ -78,6 +80,8 @@ struct Session {
     item_stopped: bool,
     last_report: Duration,
     fallback_used: bool,
+    /// The routes that failed in this play, oldest first (ADR 0025): none is tried again.
+    failed_routes: Vec<Route>,
     permissions: TranscodePermissions,
     facts: Option<TranscodingFacts>,
     /// External subtitles added to the file playing, by server index.
@@ -114,6 +118,7 @@ impl Session {
             item_stopped: false,
             last_report: now,
             fallback_used: false,
+            failed_routes: Vec::new(),
             permissions: TranscodePermissions::default(),
             facts: None,
             added_subtitles: Vec::new(),
@@ -134,10 +139,11 @@ impl Session {
             .map_or_else(TrackChoice::default, |planned| planned.plan.tracks)
     }
 
-    fn is_direct_play(&self) -> bool {
+    /// The route plays the file on the device (native, remux or app engine), not a server stream.
+    fn is_local(&self) -> bool {
         self.planned
             .as_ref()
-            .is_some_and(|planned| planned.plan.route.is_direct_play())
+            .is_some_and(|planned| planned.plan.route.is_local())
     }
 
     fn subtitle_stream(&self, choice: SubtitleChoice) -> Option<&MediaStream> {
@@ -150,7 +156,7 @@ impl Session {
     /// Whether the core fetches this subtitle for the engine: an external file under direct play, or whatever the server delivers
     /// as a separate file on a server stream.
     fn fetches(&self, stream: &MediaStream) -> bool {
-        if self.is_direct_play() {
+        if self.is_local() {
             stream.is_external
         } else {
             stream.subtitle_delivery.as_ref() == Some(&SubtitleDelivery::EXTERNAL)
@@ -159,7 +165,7 @@ impl Session {
 
     /// Whether the server burns this subtitle into a server stream's video.
     fn burned_in(&self, choice: SubtitleChoice) -> bool {
-        !self.is_direct_play()
+        !self.is_local()
             && self.subtitle_stream(choice).is_some_and(|stream| {
                 stream.subtitle_delivery.as_ref() == Some(&SubtitleDelivery::ENCODE)
             })
@@ -509,7 +515,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         if planned.plan.tracks.audio == Some(index) || planned.plan.source.stream(index).is_none() {
             return;
         }
-        if planned.plan.route.is_direct_play() {
+        if planned.plan.route.is_local() {
             planned.plan.tracks.audio = Some(index);
             self.engine.select_audio(EngineTrack::Stream(index));
             self.report_progress().await;
@@ -910,7 +916,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         let item = session.item.clone();
         let mut quality = session.quality;
         let local = self.server.is_local_address();
-        let capabilities = self.engine.capabilities();
+        // One engine: the app engine (ADR 0025 with no native engine yet), whose capabilities are the device profile as before.
+        let engines = Engines::app_only(self.engine.capabilities());
+        let capabilities = engines.device_profile();
+        let mut direct_play = direct_play;
         let planned = loop {
             let request =
                 planner::request(media_source.clone(), start, tracks, quality, direct_play);
@@ -931,7 +940,31 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                     return Err(problem);
                 }
             };
-            let planned = planner::plan(&item, &request, answer, &own, &session.permissions, local);
+            let server_reasons = answer.reasons.clone();
+            let inputs = RouteInputs {
+                engines: &engines,
+                context: RouteContext::default(),
+                tried: &session.failed_routes,
+            };
+            let Some(planned) = planner::plan(
+                &item,
+                &request,
+                answer,
+                &own,
+                &session.permissions,
+                local,
+                inputs,
+            ) else {
+                if direct_play {
+                    // Direct play, but no local route plays the file: the server's stream (ADR 0025, step 4).
+                    direct_play = false;
+                    continue;
+                }
+                session.planned = None;
+                return Err(PlaybackProblem::NotPlayable {
+                    reasons: server_reasons,
+                });
+            };
             if !snap {
                 break planned;
             }
@@ -969,7 +1002,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             url: stream.url,
             auth: stream.auth,
             start,
-            audio: if planned.plan.route.is_direct_play() {
+            audio: if planned.plan.route.is_local() {
                 planned
                     .plan
                     .tracks
@@ -1043,11 +1076,14 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             self.fail(PlaybackProblem::Network).await;
             return;
         }
-        if !session.is_direct_play() || session.fallback_used {
+        if !session.is_local() || session.fallback_used {
             self.fail(PlaybackProblem::Engine { kind }).await;
             return;
         }
         session.fallback_used = true;
+        if let Some(planned) = &session.planned {
+            session.failed_routes.push(planned.plan.route.clone());
+        }
         let start = session.position;
         let tracks = session.tracks();
         let media_source = session
@@ -1146,7 +1182,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     }
 
     async fn read_transcoding_facts(&mut self) {
-        if self.session.as_ref().is_none_or(Session::is_direct_play) {
+        if self.session.as_ref().is_none_or(Session::is_local) {
             return;
         }
         let Ok(Some(facts)) = self.server.transcoding_facts().await else {

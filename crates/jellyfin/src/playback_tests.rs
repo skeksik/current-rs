@@ -67,10 +67,10 @@ fn pairs(query: &str) -> Vec<(String, String)> {
     url_query_pairs(query)
 }
 
-fn actions(route: &Route) -> (StreamAction, StreamAction) {
-    match route {
-        Route::ServerStream { video, audio, .. } => (*video, *audio),
-        Route::DirectPlay => panic!("not a server stream"),
+fn actions(offer: &ServerOffer) -> (StreamAction, StreamAction) {
+    match offer {
+        ServerOffer::Stream { video, audio, .. } => (*video, *audio),
+        ServerOffer::DirectPlay => panic!("not a server stream"),
     }
 }
 
@@ -169,4 +169,41 @@ fn the_reference_frame_rate_is_the_average_unless_it_reads_1000_or_more() {
         Some(30.0)
     );
     assert_eq!(video(None, None).video.unwrap().reference_frame_rate, None);
+}
+
+#[test]
+fn the_play_method_is_direct_play_on_every_local_route_and_transcode_on_a_server_stream() {
+    let report = |route| ProgressReport {
+        item: ItemId::new("e1"),
+        media_source: "s1".into(),
+        play_session_id: "ps".into(),
+        position: Duration::ZERO,
+        audio: None,
+        subtitle: None,
+        paused: false,
+        muted: false,
+        volume: None,
+        can_seek: true,
+        route,
+    };
+    for route in [Route::Native, Route::DeviceRemux, Route::AppEngine] {
+        assert_eq!(
+            progress_body(&report(route.clone())).play_method,
+            "DirectPlay",
+            "{route:?}"
+        );
+    }
+    for engine in [
+        current_model::EngineRole::Native,
+        current_model::EngineRole::App,
+    ] {
+        let route = Route::ServerStream {
+            engine,
+            protocol: StreamProtocol::Hls,
+            container: Some("mp4".into()),
+            video: StreamAction::Copy,
+            audio: StreamAction::Copy,
+        };
+        assert_eq!(progress_body(&report(route)).play_method, "Transcode");
+    }
 }

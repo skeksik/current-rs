@@ -5,7 +5,7 @@
 //!
 //! These are the Windows app's words as it wrote them in C# before they moved here; the tests pin them.
 
-use current_model::RouteLabel;
+use current_model::{Codec, GapKind, RouteLabel, SubtitleFormat, TrackGap};
 use current_playback::PlanNote;
 
 use super::labels::bitrate_label;
@@ -81,13 +81,60 @@ pub fn position_label(ms: i64, duration_ms: Option<i64>) -> String {
     }
 }
 
-/// ADR 0019's route labels: a remux and a direct stream are transcode jobs that copy streams.
+/// ADR 0025's route labels, for a player with a native engine and the app engine. A server remux and a server direct stream are
+/// transcode jobs that copy streams. Shown from W3, which brings the native engine; until then the UI shows
+/// [`route_name_one_engine`].
 pub fn route_name(route: RouteLabel) -> &'static str {
     match route {
-        RouteLabel::DirectPlay => "Direct play",
-        RouteLabel::Remux => "Remux",
-        RouteLabel::DirectStream => "Direct stream",
-        RouteLabel::Transcode => "Transcode",
+        RouteLabel::Native => "Native",
+        RouteLabel::DeviceRemux => "Remux on this device",
+        RouteLabel::AppEngine => "App engine",
+        RouteLabel::ServerRemux => "Server remux",
+        RouteLabel::ServerDirectStream => "Server direct stream",
+        RouteLabel::ServerTranscode => "Server transcode",
+    }
+}
+
+/// ADR 0019's route labels, for a player with one engine (today's): every local route is "Direct play"; a remux and a direct
+/// stream are transcode jobs that copy streams.
+pub fn route_name_one_engine(route: RouteLabel) -> &'static str {
+    match route {
+        RouteLabel::Native | RouteLabel::DeviceRemux | RouteLabel::AppEngine => "Direct play",
+        RouteLabel::ServerRemux => "Remux",
+        RouteLabel::ServerDirectStream => "Direct stream",
+        RouteLabel::ServerTranscode => "Transcode",
+    }
+}
+
+/// What the native player lacks for this file ([`current_model::RouteReason::NATIVE_LACKS`]), by the codec's or format's name as
+/// Settings' "Supported formats" writes it.
+pub fn native_lacks_text(gap: &TrackGap) -> String {
+    let name = gap.name.as_deref();
+    match (gap.kind, name) {
+        (GapKind::Container, Some(name)) => {
+            format!(
+                "The native player can't read {} files.",
+                name.to_ascii_uppercase()
+            )
+        }
+        (GapKind::Container, None) => {
+            "The native player can't read this file's container.".to_owned()
+        }
+        (GapKind::Video, Some(name)) => format!(
+            "The native player can't decode this {} video.",
+            crate::formats::video_name(&Codec::new(name)).unwrap_or(name)
+        ),
+        (GapKind::Video, None) => "The native player can't decode this video.".to_owned(),
+        (GapKind::Audio, Some(name)) => format!(
+            "The native player can't decode {} audio.",
+            crate::formats::audio_name(&Codec::new(name)).unwrap_or(name)
+        ),
+        (GapKind::Audio, None) => "The native player can't decode this audio.".to_owned(),
+        (GapKind::Subtitle, Some(name)) => format!(
+            "The native player can't show {} subtitles.",
+            crate::formats::subtitle_name(&SubtitleFormat::new(name))
+        ),
+        (GapKind::Subtitle, None) => "The native player can't show these subtitles.".to_owned(),
     }
 }
 
@@ -128,6 +175,17 @@ pub fn reason_text(reason: &str) -> &str {
         "quality_limit" => "The quality you chose is below the file's.",
         "fallback_after_engine_error" => "The player couldn't play the file directly.",
         "user_chose_transcode" => "You chose a converted stream.",
+        "native_fully_compatible" => "Native playback is fully compatible.",
+        "keeps_original_streams" => "Keeps the original video and audio.",
+        "native_lacks" => "The native player can't play a track of this file.",
+        "subtitle_needs_rendering" => "The subtitles need rendering the native player can't do.",
+        "dolby_vision_profile_7" => "Dolby Vision profile 7 can't be remuxed on this device.",
+        "previous_route_failed" => "The previous playback route could not start.",
+        "user_chose_app_engine" => "You chose to play with the app engine.",
+        "setting_always_app_engine" => "Settings say to always play with the app engine.",
+        "dolby_vision_on_app_engine" => "The app engine shows Dolby Vision best on this device.",
+        "hdr_on_sdr_display" => "The app engine tone-maps HDR video for this SDR display.",
+        "speed_not_supported" => "The native player can't change speed with this audio track.",
         other => other,
     }
 }
@@ -258,6 +316,7 @@ pub fn player_problem_text(problem: &PlayerProblem) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use current_model::RouteReason;
 
     const S: i64 = 1_000;
     const M: i64 = 60 * S;
@@ -319,10 +378,28 @@ mod tests {
 
     #[test]
     fn routes_and_reasons_in_plain_words() {
-        assert_eq!(route_name(RouteLabel::DirectPlay), "Direct play");
-        assert_eq!(route_name(RouteLabel::Remux), "Remux");
-        assert_eq!(route_name(RouteLabel::DirectStream), "Direct stream");
-        assert_eq!(route_name(RouteLabel::Transcode), "Transcode");
+        let one_engine = [
+            (RouteLabel::Native, "Direct play"),
+            (RouteLabel::DeviceRemux, "Direct play"),
+            (RouteLabel::AppEngine, "Direct play"),
+            (RouteLabel::ServerRemux, "Remux"),
+            (RouteLabel::ServerDirectStream, "Direct stream"),
+            (RouteLabel::ServerTranscode, "Transcode"),
+        ];
+        for (label, name) in one_engine {
+            assert_eq!(route_name_one_engine(label), name, "{label:?}");
+        }
+        let two_engines = [
+            (RouteLabel::Native, "Native"),
+            (RouteLabel::DeviceRemux, "Remux on this device"),
+            (RouteLabel::AppEngine, "App engine"),
+            (RouteLabel::ServerRemux, "Server remux"),
+            (RouteLabel::ServerDirectStream, "Server direct stream"),
+            (RouteLabel::ServerTranscode, "Server transcode"),
+        ];
+        for (label, name) in two_engines {
+            assert_eq!(route_name(label), name, "{label:?}");
+        }
         assert_eq!(
             reason_text("video_codec_not_supported"),
             "The player can't decode this video codec."
@@ -335,6 +412,128 @@ mod tests {
             reason_text("a_reason_no_release_knows"),
             "a_reason_no_release_knows"
         );
+    }
+
+    #[test]
+    fn the_local_routes_reasons_in_plain_words() {
+        let words = [
+            (
+                "native_fully_compatible",
+                "Native playback is fully compatible.",
+            ),
+            (
+                "keeps_original_streams",
+                "Keeps the original video and audio.",
+            ),
+            (
+                "native_lacks",
+                "The native player can't play a track of this file.",
+            ),
+            (
+                "subtitle_needs_rendering",
+                "The subtitles need rendering the native player can't do.",
+            ),
+            (
+                "dolby_vision_profile_7",
+                "Dolby Vision profile 7 can't be remuxed on this device.",
+            ),
+            (
+                "previous_route_failed",
+                "The previous playback route could not start.",
+            ),
+            (
+                "user_chose_app_engine",
+                "You chose to play with the app engine.",
+            ),
+            (
+                "setting_always_app_engine",
+                "Settings say to always play with the app engine.",
+            ),
+            (
+                "dolby_vision_on_app_engine",
+                "The app engine shows Dolby Vision best on this device.",
+            ),
+            (
+                "hdr_on_sdr_display",
+                "The app engine tone-maps HDR video for this SDR display.",
+            ),
+            (
+                "speed_not_supported",
+                "The native player can't change speed with this audio track.",
+            ),
+        ];
+        for (reason, text) in words {
+            assert_eq!(reason_text(reason), text);
+        }
+        // Every constant of the model has its words.
+        for reason in [
+            RouteReason::NATIVE_FULLY_COMPATIBLE,
+            RouteReason::KEEPS_ORIGINAL_STREAMS,
+            RouteReason::NATIVE_LACKS,
+            RouteReason::SUBTITLE_NEEDS_RENDERING,
+            RouteReason::DOLBY_VISION_PROFILE_7,
+            RouteReason::PREVIOUS_ROUTE_FAILED,
+            RouteReason::USER_CHOSE_APP_ENGINE,
+            RouteReason::SETTING_ALWAYS_APP_ENGINE,
+            RouteReason::DOLBY_VISION_ON_APP_ENGINE,
+            RouteReason::HDR_ON_SDR_DISPLAY,
+            RouteReason::SPEED_NOT_SUPPORTED,
+        ] {
+            assert_ne!(reason_text(reason.as_str()), reason.as_str());
+        }
+    }
+
+    #[test]
+    fn what_the_native_player_lacks_in_plain_words() {
+        let gap = |kind, name: Option<&str>| TrackGap {
+            kind,
+            name: name.map(str::to_owned),
+        };
+        let cases = [
+            (
+                gap(GapKind::Container, Some("avi")),
+                "The native player can't read AVI files.",
+            ),
+            (
+                gap(GapKind::Container, Some("mp4")),
+                "The native player can't read MP4 files.",
+            ),
+            (
+                gap(GapKind::Container, None),
+                "The native player can't read this file's container.",
+            ),
+            (
+                gap(GapKind::Video, Some("h264")),
+                "The native player can't decode this H.264 (AVC) video.",
+            ),
+            (
+                gap(GapKind::Video, Some("future_codec")),
+                "The native player can't decode this future_codec video.",
+            ),
+            (
+                gap(GapKind::Video, None),
+                "The native player can't decode this video.",
+            ),
+            (
+                gap(GapKind::Audio, Some("truehd")),
+                "The native player can't decode Dolby TrueHD audio.",
+            ),
+            (
+                gap(GapKind::Audio, None),
+                "The native player can't decode this audio.",
+            ),
+            (
+                gap(GapKind::Subtitle, Some("dvdsub")),
+                "The native player can't show VobSub (DVD) subtitles.",
+            ),
+            (
+                gap(GapKind::Subtitle, None),
+                "The native player can't show these subtitles.",
+            ),
+        ];
+        for (gap, text) in cases {
+            assert_eq!(native_lacks_text(&gap), text, "{gap:?}");
+        }
     }
 
     #[test]

@@ -135,6 +135,16 @@ fn transcoding_profiles(capabilities: &EngineCapabilities) -> Vec<TranscodingPro
     .collect()
 }
 
+/// The device profile for `capabilities` as PlaybackInfo's body carries it (`DeviceProfile`), with `max_streaming_bitrate` in bits
+/// per second: for checks that a change to how the capabilities are made leaves the profile the server gets unchanged (ADR 0025).
+pub fn device_profile_json(
+    capabilities: &EngineCapabilities,
+    max_streaming_bitrate: i32,
+) -> String {
+    // The profile is plain data with string keys, so serializing it cannot fail; an empty string would fail any comparison.
+    serde_json::to_string(&device_profile(capabilities, max_streaming_bitrate)).unwrap_or_default()
+}
+
 /// What the server converts a stream to when this device cannot play it as it is (ADR 0021, the "Supported formats" page): the codecs
 /// of the transcoding profiles [`device_profile`] sends for `capabilities`, fMP4 first, each once. Empty when no transcoding profile
 /// is sent (the engine decodes none of the targets).
@@ -192,6 +202,17 @@ fn codec_profile(support: &CodecSupport, kind: Kind) -> Option<CodecProfile> {
     }
     if let Some(profiles) = &support.profiles {
         conditions.push(condition("EqualsAny", profile, profiles.join("|")));
+    }
+    if let Kind::Audio = kind
+        && let Some(channels) = support.max_channels
+    {
+        // `ProfileConditionValue.AudioChannels` (Jellyfin v12.2, commit ca0f16eb, `MediaBrowser.Model/Dlna/ProfileConditionValue.cs`,
+        // read 2026-10-28).
+        conditions.push(condition(
+            "LessThanEqual",
+            "AudioChannels",
+            channels.to_string(),
+        ));
     }
     if let Kind::Video = kind {
         if let Some(level) = support.level {
@@ -444,6 +465,8 @@ mod tests {
             profiles: Some(vec!["main".into(), "main 10".into()]),
             level: Some(153),
             ranges: Some(vec![VideoRangeType::SDR, VideoRangeType::HDR10]),
+            // Channels mean nothing for video and are left out.
+            max_channels: Some(2),
         }];
         capabilities.audio = vec![
             CodecSupport {
@@ -455,6 +478,10 @@ mod tests {
             CodecSupport {
                 level: Some(1),
                 ..CodecSupport::any(Codec::AAC)
+            },
+            CodecSupport {
+                max_channels: Some(2),
+                ..CodecSupport::any(Codec::OPUS)
             },
         ];
         let json = serde_json::to_value(device_profile(&capabilities, i32::MAX)).unwrap();
@@ -476,6 +503,13 @@ mod tests {
                     "Codec": "flac",
                     "Conditions": [
                         {"Condition": "LessThanEqual", "Property": "AudioBitDepth", "Value": "24", "IsRequired": false}
+                    ]
+                },
+                {
+                    "Type": "VideoAudio",
+                    "Codec": "opus",
+                    "Conditions": [
+                        {"Condition": "LessThanEqual", "Property": "AudioChannels", "Value": "2", "IsRequired": false}
                     ]
                 }
             ])

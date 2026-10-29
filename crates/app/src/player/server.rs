@@ -276,7 +276,7 @@ impl MediaServer for JellyfinMedia {
         Ok(ServerAnswer {
             play_session_id: answer.play_session_id.clone(),
             source: source.clone(),
-            route: stream.route.clone(),
+            offer: stream.offer.clone(),
             reasons: stream.reasons.clone(),
             // Moved as it is: the URL is never formatted, logged or shown.
             url: StreamUrl::new(stream.url.expose().to_owned()),
