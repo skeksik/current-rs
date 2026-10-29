@@ -301,6 +301,12 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       when it must (a speed Windows' player ignores, PQ video on an SDR display, ADR 0025); with the setting off for that situation,
       the file stays on libmpv when the cause goes away (the speed back to normal, the window back on an HDR display) instead of
       moving back. **Waits for the owner's look at how switching feels in W7; not started before that** (owner)
+- [ ] A server's addresses on its own Settings page (owner, 2026-10-29; after the native player tasks): each address shown, with
+      its state (in use, unreachable, different server, plain HTTP confirmed, gateway sign-in); add, edit, remove and drag to
+      reorder; "Refresh connection" (a new race now); "Detect local servers" offering this server's LAN addresses (ADR 0016); local
+      and internet addresses shown in groups. Addresses cross the bridge for this page only and stay out of logs, diagnostics,
+      errors and every other state. Starts with a spike: amends `docs/architecture.md` ("no address crosses in a state", M1 bridge)
+      and ADR 0014 (one ordered list today; how the groups map onto it), for the owner
 New features (each starts with a spike and an ADR with the owner's choices):
 - [ ] Generated subtitles for videos without any (owner, 2026-10-25): speech to text on the device, with translation into English
       (for example Japanese audio to English subtitles). The first candidate is Whisper through whisper.cpp: MIT code and weights;
