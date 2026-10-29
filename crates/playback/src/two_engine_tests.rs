@@ -398,7 +398,6 @@ fn an_audio_track_the_native_engine_lacks_moves_the_file_at_the_position() {
     let app = two.app_commands();
     let file = loads(&app)[0].clone();
     assert_eq!(file.audio, EngineTrack::Stream(2));
-    assert!(app.contains(&Command::Volume(100)));
     // Back to AAC: the app engine plays it too, so it stays.
     two.start();
     two.clear();
@@ -565,4 +564,188 @@ fn reports_name_the_play_method_and_the_item() {
     assert_eq!(start.route, Route::Native);
     assert!(start.route.is_local());
     assert_eq!(start.item, item("e1"));
+}
+
+#[test]
+fn the_player_setting_applies_from_the_next_item() {
+    let mut two = Two::playing(movie());
+    two.player
+        .set_engine_preference(EnginePreference::AlwaysAppEngine);
+    // A re-plan of the item playing keeps the setting it started with.
+    block_on(
+        two.player
+            .set_quality(crate::quality::Quality::Bitrate(4_000_000)),
+    );
+    assert_eq!(two.plan().route, Route::Native);
+    block_on(
+        two.player
+            .play(item("e2"), MediaKind::MOVIE, Duration::ZERO),
+    );
+    assert_eq!(two.plan().route, Route::AppEngine);
+    assert_eq!(
+        two.plan().reasons,
+        vec![RouteReason::SETTING_ALWAYS_APP_ENGINE]
+    );
+}
+
+#[test]
+fn speed_reaches_both_engines_and_bad_rates_are_ignored() {
+    let mut two = Two::playing(movie());
+    two.clear();
+    block_on(two.player.set_speed(1.25));
+    assert_eq!(two.native_commands(), vec![Command::Speed(125)]);
+    assert_eq!(two.app_commands(), vec![Command::Speed(125)]);
+    for bad in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+        block_on(two.player.set_speed(bad));
+    }
+    assert!(two.native_commands().is_empty() && two.app_commands().is_empty());
+    // Kept within mpv's range.
+    block_on(two.player.set_speed(500.0));
+    assert_eq!(two.app_commands(), vec![Command::Speed(10_000)]);
+    block_on(two.player.set_speed(0.001));
+    assert_eq!(two.app_commands(), vec![Command::Speed(1)]);
+}
+
+#[test]
+fn a_re_plan_while_paused_stays_paused() {
+    let mut two = Two::playing(movie());
+    block_on(two.player.pause());
+    assert_eq!(two.player.status().state, PlayerState::Paused);
+    two.clear();
+    block_on(two.player.select_audio(2));
+    assert_eq!(two.plan().route, Route::AppEngine);
+    let app = two.app_commands();
+    assert_eq!(loads(&app).len(), 1);
+    assert_eq!(app.last(), Some(&Command::Paused(true)));
+    two.start();
+    assert_eq!(two.player.status().state, PlayerState::Paused);
+    let reports = two.server.take_reports();
+    assert!(reports.iter().any(|(_, report)| matches!(
+        report,
+        crate::test_support::Report::Start(start) if start.paused
+    )));
+}
+
+#[test]
+fn a_native_engine_that_refuses_the_file_at_once_is_a_failed_route() {
+    let mut two = Two::new(movie());
+    two.native.0.lock().expect("fake engine").refuse_loads = true;
+    block_on(two.player.play(item("e1"), MediaKind::MOVIE, secs(7)));
+    let plan = two.plan();
+    assert_eq!(plan.route, Route::AppEngine);
+    assert_eq!(plan.reasons, vec![RouteReason::PREVIOUS_ROUTE_FAILED]);
+    assert_eq!(plan.failed_routes, vec![Route::Native]);
+    assert_eq!(plan.start, secs(7));
+    assert_eq!(two.player.status().state, PlayerState::Loading);
+}
+
+#[test]
+fn a_display_change_after_a_fallback_reloads_nothing() {
+    // On an SDR display the app engine plays HDR10 first; it fails, so the native engine plays it. Display changes then leave it
+    // there: the app engine failed in this play, so the native route stays first.
+    let mut two = Two::new(movie_with("hevc", 10, VideoRangeType::HDR10));
+    block_on(two.player.set_display(DisplayKind::Sdr));
+    block_on(
+        two.player
+            .play(item("e1"), MediaKind::MOVIE, Duration::ZERO),
+    );
+    assert_eq!(two.plan().route, Route::AppEngine);
+    two.start();
+    two.fail();
+    assert_eq!(two.plan().route, Route::Native);
+    two.start();
+    let requests = two.requests().len();
+    block_on(two.player.set_display(DisplayKind::Hdr));
+    block_on(two.player.set_display(DisplayKind::Sdr));
+    assert_eq!(two.requests().len(), requests, "no re-plan");
+    assert_eq!(two.plan().route, Route::Native);
+}
+
+#[test]
+fn a_server_stream_moves_back_to_the_native_engine_when_the_display_turns_hdr() {
+    let source = movie_with("hevc", 10, VideoRangeType::HDR10);
+    let mut two = Two::new(source.clone());
+    let stream = || {
+        let mut answer = answer(
+            hls(StreamAction::Transcode, StreamAction::Transcode),
+            vec![RouteReason::CONTAINER_BITRATE_EXCEEDS_LIMIT],
+        );
+        answer.source = source.clone();
+        Ok(answer)
+    };
+    two.server.answer(stream());
+    two.server.answer(stream());
+    block_on(two.player.set_display(DisplayKind::Sdr));
+    block_on(
+        two.player
+            .play(item("e1"), MediaKind::MOVIE, Duration::ZERO),
+    );
+    assert_eq!(two.role(), EngineRole::App);
+    two.start();
+    block_on(two.player.set_display(DisplayKind::Hdr));
+    assert!(matches!(
+        two.plan().route,
+        Route::ServerStream {
+            engine: EngineRole::Native,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn what_an_engine_said_of_rates_holds_for_a_reload_there_and_not_for_the_other_engine() {
+    // A reload on the native engine keeps "rates ignored" until it reports again.
+    let mut two = Two::playing(movie());
+    two.event(EngineEvent::RatesSupported(false));
+    block_on(
+        two.player
+            .set_quality(crate::quality::Quality::Bitrate(4_000_000)),
+    );
+    assert_eq!(two.plan().route, Route::Native);
+    block_on(two.player.set_speed(1.5));
+    assert_eq!(two.plan().route, Route::AppEngine);
+    assert_eq!(two.plan().reasons, vec![RouteReason::SPEED_NOT_SUPPORTED]);
+
+    // Moved to the other engine and back, the old report no longer holds.
+    let mut two = Two::new(movie_with("hevc", 10, VideoRangeType::HDR10));
+    block_on(two.player.set_display(DisplayKind::Hdr));
+    block_on(
+        two.player
+            .play(item("e1"), MediaKind::MOVIE, Duration::ZERO),
+    );
+    two.start();
+    two.event(EngineEvent::RatesSupported(false));
+    block_on(two.player.set_display(DisplayKind::Sdr));
+    assert_eq!(two.role(), EngineRole::App);
+    two.start();
+    block_on(two.player.set_display(DisplayKind::Hdr));
+    assert_eq!(two.role(), EngineRole::Native);
+    two.start();
+    block_on(two.player.set_speed(1.5));
+    assert_eq!(two.plan().route, Route::Native);
+}
+
+#[test]
+fn the_fallbacks_reason_stays_with_the_re_plan_it_caused() {
+    let mut two = Two::playing(movie());
+    two.fail();
+    assert_eq!(two.plan().route, Route::AppEngine);
+    two.start();
+    // A later re-plan of the same item onto a server stream is the user's, not the failure's.
+    let mut stream = answer(
+        hls(StreamAction::Copy, StreamAction::Transcode),
+        vec![RouteReason::AUDIO_CODEC_NOT_SUPPORTED],
+    );
+    stream.source = movie();
+    two.server.answer(Ok(stream));
+    block_on(
+        two.player
+            .set_quality(crate::quality::Quality::Bitrate(4_000_000)),
+    );
+    assert!(!two.plan().route.is_local());
+    assert!(
+        !two.plan()
+            .reasons
+            .contains(&RouteReason::FALLBACK_AFTER_ENGINE_ERROR)
+    );
 }

@@ -87,7 +87,10 @@ pub trait Engine {
     /// The playback rate, 1 for normal speed. An engine that takes a rate but ignores it with the track playing says so with
     /// [`EngineEvent::RatesSupported`].
     fn set_speed(&mut self, speed: f64);
-    /// Unloads the file and keeps the engine for the next one.
+    /// Unloads the file and keeps the engine for the next one. Once `stop` returns, the engine reports nothing more about that file
+    /// (no late end, error or position): the controller takes every event as the current file's. libmpv's events come on its own
+    /// thread in order after the command; a platform engine behind the bridge must hold to it too, which W3's bridge enforces (for
+    /// example by numbering each load and dropping events of an older one).
     fn stop(&mut self);
 }
 
@@ -112,7 +115,9 @@ pub enum EngineEvent {
     /// or blank). The engine reports the fact; the controller decides, as for an error.
     TrackFailed(EngineErrorKind),
     /// Whether the engine changes speed with the tracks playing (Windows' player: `IsSupportedPlaybackRateRange`; with an E-AC-3
-    /// Atmos track it takes a rate and ignores it, W1). Reported when it changes; the controller decides (ADR 0025, "Track changes").
+    /// Atmos track it takes a rate and ignores it, W1). An engine that can ignore rates reports it after every load and whenever it
+    /// changes (a track change); until the first report after a load the controller keeps what this engine said last, or takes
+    /// rates as supported on an engine new to the item. The controller decides (ADR 0025, "Track changes").
     RatesSupported(bool),
     /// The file ended. With libmpv's `keep-open=yes` the end of the file is `eof-reached`, which the composition root reports as
     /// [`EndReason::Eof`].

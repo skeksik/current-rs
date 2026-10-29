@@ -60,6 +60,15 @@ impl std::fmt::Debug for NativeEngine {
     }
 }
 
+/// Whether `candidate` is the route `current`: for a server stream, the same engine (a new answer may differ in what it copies).
+fn same_route(candidate: &Route, current: &Route) -> bool {
+    if candidate.is_local() || current.is_local() {
+        candidate == current
+    } else {
+        candidate.engine() == current.engine()
+    }
+}
+
 /// The engine of `role`: the native one when there is one, else the app engine.
 fn pick<'a, E: Engine>(
     app: &'a mut E,
@@ -69,6 +78,20 @@ fn pick<'a, E: Engine>(
     match (role, native) {
         (EngineRole::Native, Some(native)) => native.engine.as_mut(),
         _ => app,
+    }
+}
+
+/// Why a plan and load did not leave a file loading.
+#[derive(Debug)]
+enum LoadFailure {
+    Problem(PlaybackProblem),
+    /// With two engines, the engine of the planned route refused the file at once: a failed route.
+    Refused(current_model::EngineErrorKind),
+}
+
+impl From<PlaybackProblem> for LoadFailure {
+    fn from(problem: PlaybackProblem) -> Self {
+        Self::Problem(problem)
     }
 }
 
@@ -119,6 +142,8 @@ struct Session {
     failed_routes: Vec<Route>,
     /// The engine that has the file, once loaded.
     loaded_on: Option<EngineRole>,
+    /// The "Player" setting as the item started: a change applies from the next item (ADR 0025, choice 3).
+    preference: EnginePreference,
     /// "Play with app engine" for this playback (ADR 0025, choice 3).
     app_engine_chosen: bool,
     /// The native engine ignored the speed with these tracks, so the app engine plays this playback (ADR 0025, "Track changes").
@@ -163,6 +188,7 @@ impl Session {
             fallback_used: false,
             failed_routes: Vec::new(),
             loaded_on: None,
+            preference: EnginePreference::Automatic,
             app_engine_chosen: false,
             speed_not_supported: false,
             rates_supported: true,
@@ -317,7 +343,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         self.native.as_mut()
     }
 
-    /// Settings → Playback → "Player" (ADR 0025, choice 3), for the next plan.
+    /// Settings → Playback → "Player" (ADR 0025, choice 3), from the next item played; the item playing keeps the one it started with.
     pub fn set_engine_preference(&mut self, preference: EnginePreference) {
         self.preference = preference;
     }
@@ -354,7 +380,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         let session = self.session.as_ref();
         RouteContext {
             display: self.display,
-            preference: self.preference,
+            preference: session.map_or(self.preference, |session| session.preference),
             app_engine_chosen: session.is_some_and(|session| session.app_engine_chosen),
             speed_not_supported: session.is_some_and(|session| session.speed_not_supported),
         }
@@ -365,23 +391,40 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         if self.native.is_none() {
             return true;
         }
-        let Some(session) = &self.session else {
+        let Some(current) = self.current_route() else {
             return true;
+        };
+        self.candidates(tracks, self.route_context())
+            .iter()
+            .any(|candidate| same_route(candidate, &current))
+    }
+
+    fn current_route(&self) -> Option<Route> {
+        self.session
+            .as_ref()?
+            .planned
+            .as_ref()
+            .map(|planned| planned.plan.route.clone())
+    }
+
+    /// The routes that would play the item playing with `tracks` in `context`, in order, leaving out those that failed: local ones
+    /// for a local route, the engines that take its stream for a server stream.
+    fn candidates(&self, tracks: TrackChoice, context: RouteContext) -> Vec<Route> {
+        let Some(session) = &self.session else {
+            return Vec::new();
         };
         let Some(planned) = &session.planned else {
-            return true;
+            return Vec::new();
         };
         let engines = self.engines();
-        let context = self.route_context();
         let source = &planned.plan.source;
-        let route = &planned.plan.route;
-        match route {
+        match &planned.plan.route {
             Route::ServerStream {
                 protocol,
                 container,
                 video,
                 audio,
-                engine,
+                ..
             } => {
                 let offer = ServerOffer::Stream {
                     protocol: *protocol,
@@ -397,12 +440,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                     context,
                     &session.failed_routes,
                 )
-                .iter()
-                .any(|candidate| candidate.engine() == *engine)
             }
             _ => route::local_routes(source, tracks, &engines, context, &session.failed_routes)
-                .iter()
-                .any(|choice| choice.route == *route),
+                .into_iter()
+                .map(|choice| choice.route)
+                .collect(),
         }
     }
 
@@ -505,12 +547,14 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             self.playing().stop();
             self.end_item(false).await;
         }
-        self.session = Some(Session::new(
+        let mut session = Session::new(
             item.clone(),
             self.quality.preferred,
             start,
             self.clock.now(),
-        ));
+        );
+        session.preference = self.preference;
+        self.session = Some(session);
         let permissions = self.server.permissions().await.unwrap_or_default();
         if let Some(session) = &mut self.session {
             session.permissions = permissions;
@@ -836,9 +880,20 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     /// The playback rate, 1 for normal. When the native engine plays and has said it ignores rates with these tracks (Windows' player
     /// with E-AC-3 Atmos, W1), a rate other than 1 moves the file to the app engine at the position, keeping the tracks (ADR 0025,
     /// "Track changes"; owner, 2026-10-28). No UI offers a speed yet: this is the core's part.
+    ///
+    /// A rate that is not finite or not above 0 is ignored; others are kept within mpv's `<0.01-100>` (`current-mpv`'s
+    /// `speed_value`). Both engines get it, as volume, so neither keeps an old rate into the next file (mpv's `speed` outlives a
+    /// `loadfile`).
     pub async fn set_speed(&mut self, speed: f64) {
+        if !speed.is_finite() || speed <= 0.0 {
+            return;
+        }
+        let speed = speed.clamp(0.01, 100.0);
         self.speed = speed;
-        self.playing().set_speed(speed);
+        self.engine.set_speed(speed);
+        if let Some(native) = &mut self.native {
+            native.engine.set_speed(speed);
+        }
         self.check_speed().await;
     }
 
@@ -876,18 +931,18 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         let source = &planned.plan.source;
         let was = route::hdr_on_sdr(source, &engines, before);
         let now = route::hdr_on_sdr(source, &engines, display);
-        let moves = match (was, now) {
-            // The rule now applies: off the native engine.
-            (false, true) => planned.plan.route.engine() == EngineRole::Native,
-            // It no longer does: back from the app engine where the rule put it there.
-            (true, false) => planned
-                .plan
-                .reasons
-                .contains(&RouteReason::HDR_ON_SDR_DISPLAY),
-            _ => false,
-        };
-        if moves {
-            let tracks = planned.plan.tracks;
+        if was == now {
+            return;
+        }
+        // Only when the route the check now puts first is not the one playing (after a fallback it may be the same); a server
+        // stream moves between engines the same way.
+        let tracks = planned.plan.tracks;
+        let current = planned.plan.route.clone();
+        let first = self
+            .candidates(tracks, self.route_context())
+            .into_iter()
+            .next();
+        if first.is_some_and(|first| !same_route(&first, &current)) {
             self.replan(tracks).await;
         }
     }
@@ -1170,13 +1225,65 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         )
     }
 
-    /// Asks the server for a plan for the session's item at its quality and loads it. On a problem the caller fails.
+    /// Asks the server for a plan for the session's item at its quality and loads it ([`Controller::plan_and_load_once`]). With a
+    /// native engine, an engine that refuses the file at once is a failed route like any other: the next one is tried (ADR 0025,
+    /// "Fallback on a failed start"). On a problem the caller fails.
+    async fn plan_and_load(
+        &mut self,
+        mut media_source: Option<String>,
+        start: Duration,
+        tracks: TrackChoice,
+        mut direct_play: bool,
+        mut own: Vec<RouteReason>,
+        mut snap: bool,
+    ) -> Result<(), PlaybackProblem> {
+        loop {
+            let refused = match self
+                .plan_and_load_once(media_source.clone(), start, tracks, direct_play, own, snap)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(LoadFailure::Problem(problem)) => return Err(problem),
+                Err(LoadFailure::Refused(kind)) => kind,
+            };
+            let Some(next_direct_play) = self.move_on() else {
+                return Err(PlaybackProblem::Engine { kind: refused });
+            };
+            direct_play = next_direct_play;
+            own = vec![RouteReason::FALLBACK_AFTER_ENGINE_ERROR];
+            snap = false;
+            media_source = self
+                .session
+                .as_ref()
+                .and_then(|session| session.planned.as_ref())
+                .map(|planned| planned.plan.source.id.clone());
+        }
+    }
+
+    /// The route playing failed: marks it failed and says whether the next plan may be direct play, or `None` when no route is left
+    /// (ADR 0025's chain). A local route leads on to the next one or the server; a server stream on the native engine to the app
+    /// engine's, which takes every stream; the app engine's server stream is the last.
+    fn move_on(&mut self) -> Option<bool> {
+        let app_only = self.native.is_none();
+        let session = self.session.as_mut()?;
+        let route = session.planned.as_ref()?.plan.route.clone();
+        let next = !session.failed_routes.contains(&route)
+            && (route.is_local() || route.engine() == EngineRole::Native);
+        if !next {
+            return None;
+        }
+        session.fallback_used = true;
+        session.failed_routes.push(route.clone());
+        Some(route.is_local() && !app_only)
+    }
+
+    /// One plan and load.
     ///
     /// `snap`: the session's quality is the preferred one, which becomes the entry of the planned version's quality menu that is not
     /// above it ([`snap_quality`]); the version's bitrate is known only from the server's answer. When that entry has the server send
     /// something else ([`Quality::sends_same`]), the plan is asked for once more, for the same version, at the entry; else the plan
     /// stands. Either way the engine loads once.
-    async fn plan_and_load(
+    async fn plan_and_load_once(
         &mut self,
         mut media_source: Option<String>,
         start: Duration,
@@ -1184,7 +1291,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         direct_play: bool,
         own: Vec<RouteReason>,
         mut snap: bool,
-    ) -> Result<(), PlaybackProblem> {
+    ) -> Result<(), LoadFailure> {
         self.phase = Phase::Preparing;
         self.publish(true);
         let Some(session) = &self.session else {
@@ -1215,7 +1322,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                         session.notes = planner::not_playable_notes(&session.permissions);
                     }
                     session.planned = None;
-                    return Err(problem);
+                    return Err(problem.into());
                 }
             };
             let server_reasons = answer.reasons.clone();
@@ -1241,7 +1348,8 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 session.planned = None;
                 return Err(PlaybackProblem::NotPlayable {
                     reasons: server_reasons,
-                });
+                }
+                .into());
             };
             if !snap {
                 break planned;
@@ -1270,7 +1378,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             Ok(stream) => stream,
             Err(problem) => {
                 session.planned = None;
-                return Err(problem);
+                return Err(problem.into());
             }
         };
         // The relay rewrites HLS playlists only: any other relayed file opens no reference (ADR 0020).
@@ -1298,6 +1406,8 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         session.refusal_pending = false;
         session.started = false;
         session.stop_reported = false;
+        // A re-plan the user did not ask to pause keeps the pause (two engines; with the app engine only, as before ADR 0025).
+        let keep_paused = session.paused && self.native.is_some();
         session.paused = false;
         session.buffering = false;
         session.seeking = false;
@@ -1316,23 +1426,29 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             .as_ref()
             .map_or(EngineRole::App, |planned| planned.plan.route.engine());
         let before = session.loaded_on.replace(role);
-        session.rates_supported = true;
-        let switched = before.is_some_and(|before| before != role);
+        if before.is_some_and(|before| before != role) {
+            // What the other engine said of rates was about its own playback; this engine reports after the load
+            // ([`EngineEvent::RatesSupported`]). A reload on the same engine keeps the last report until the next.
+            session.rates_supported = true;
+        }
+        if keep_paused {
+            session.paused = true;
+        }
         if let Some(before) = before.filter(|before| *before != role) {
             // The file moves to the other engine: the one that had it lets it go.
             pick(&mut self.engine, &mut self.native, before).stop();
         }
-        let (volume, muted, speed) = (self.volume, self.muted, self.speed);
+        let two_engines = self.native.is_some();
         let engine = pick(&mut self.engine, &mut self.native, role);
-        engine
-            .load(EngineFile { subtitle, ..file })
-            .map_err(|kind| PlaybackProblem::Engine { kind })?;
-        if switched {
-            engine.set_volume(volume);
-            engine.set_muted(muted);
+        if let Err(kind) = engine.load(EngineFile { subtitle, ..file }) {
+            return Err(if two_engines {
+                LoadFailure::Refused(kind)
+            } else {
+                LoadFailure::Problem(PlaybackProblem::Engine { kind })
+            });
         }
-        if switched || speed != 1.0 {
-            engine.set_speed(speed);
+        if keep_paused {
+            engine.set_paused(true);
         }
         self.phase = Phase::Loading;
         self.publish(true);
@@ -1351,7 +1467,9 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             .as_ref()
             .map(|planned| planned.plan.source.id.clone());
         self.report_stopped(false).await;
-        let own = if fallback {
+        // The fallback's reason belongs to the re-plan the failure caused; with the app engine only every later one keeps it, as
+        // before ADR 0025 (direct play stays off).
+        let own = if fallback && self.native.is_none() {
             vec![RouteReason::FALLBACK_AFTER_ENGINE_ERROR]
         } else {
             Vec::new()
@@ -1371,7 +1489,6 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     /// route at most once per play, ending with the server stream (ADR 0025, "Fallback on a failed start"; ADR 0019 choice 9
     /// widened). With the app engine only that is choice 9 as written: one re-plan without direct play. Otherwise playback fails.
     async fn engine_failed(&mut self, kind: current_model::EngineErrorKind) {
-        let app_only = self.native.is_none();
         let Some(session) = &mut self.session else {
             return;
         };
@@ -1379,25 +1496,13 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             self.fail(PlaybackProblem::Network).await;
             return;
         }
-        let Some(route) = session
-            .planned
-            .as_ref()
-            .map(|planned| planned.plan.route.clone())
-        else {
+        let Some(direct_play) = self.move_on() else {
             self.fail(PlaybackProblem::Engine { kind }).await;
             return;
         };
-        // A local route leads on to the next one or the server; a server stream on the native engine to the app engine, which takes
-        // every stream; the app engine's server stream is the last.
-        let next = !session.failed_routes.contains(&route)
-            && (route.is_local() || route.engine() == EngineRole::Native);
-        if !next {
-            self.fail(PlaybackProblem::Engine { kind }).await;
+        let Some(session) = &self.session else {
             return;
-        }
-        session.fallback_used = true;
-        session.failed_routes.push(route.clone());
-        let direct_play = route.is_local() && !app_only;
+        };
         let start = session.position;
         let tracks = session.tracks();
         let media_source = session
