@@ -9,6 +9,7 @@ mod add_server;
 mod browse;
 mod discovery;
 mod formats;
+mod formats_routes;
 mod gateway;
 mod gateway_sign_in;
 mod images;
@@ -73,8 +74,8 @@ pub use browse::{
 pub use browse::{HomeRowSetting, NavGroup, PaneEntry, PaneLayout, PaneLibrary};
 pub use discovery::{DiscoveredServer, Discovery, DiscoveryState, PROBES_AT_ONCE};
 pub use formats::{
-    DecoderProfile, FormatRow, FormatSupport, FormatTab, FormatTabKind, HardwareDecoding,
-    SupportedFormats,
+    DecoderProfile, FormatAction, FormatRow, FormatSupport, FormatTab, FormatTabKind,
+    HardwareDecoding, SupportedFormats,
 };
 pub use gateway::{CookieInput, GatewaySubmitError, HeaderInput};
 pub use gateway_sign_in::{GatewaySignIn, GatewaySignInError, GatewaySignInState};
@@ -553,9 +554,20 @@ impl App {
         &self,
         hardware: Option<HardwareDecoding>,
         display: Option<DisplayFacts>,
+        native: Option<Vec<player::CodecAnswer>>,
     ) -> SupportedFormats {
         let engine = self.engine_capabilities().await;
-        formats::supported_formats(&engine, hardware.as_ref(), display.as_ref())
+        let mut page = formats::supported_formats(&engine, hardware.as_ref(), display.as_ref());
+        // With Windows' own player beside the app engine (ADR 0025, W6): which one plays each format. Without its facts, the page as
+        // ADR 0021 has it.
+        if let (Some(answers), player::EngineReport::Ready(app)) = (&native, &engine) {
+            let facts = formats_routes::NativeFacts {
+                answers,
+                always_app_engine: self.player_choice() == PlayerChoice::AlwaysAppEngine,
+            };
+            formats_routes::apply_routes(&mut page, app, facts, display.as_ref());
+        }
+        page
     }
 
     /// The segment kinds skipped automatically (Settings → Playback, ADR 0019 choice 8), by their names (`intro`, `outro`, and kinds

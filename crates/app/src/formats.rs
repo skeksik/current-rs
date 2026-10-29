@@ -97,6 +97,8 @@ pub enum FormatSupport {
     ToneMapped,
     /// Not known: the player could not be started to find out.
     Unknown,
+    /// Plays in Windows' own player (ADR 0025's native route; only with its CodecQuery facts, W6).
+    Native,
 }
 
 impl FormatSupport {
@@ -112,17 +114,27 @@ impl FormatSupport {
             FormatSupport::Hdr => "HDR",
             FormatSupport::ToneMapped => "Tone-mapped",
             FormatSupport::Unknown => "Couldn't check",
+            FormatSupport::Native => "Windows' player",
         }
     }
 }
 
-/// One row: the format's name, the column (its value and its word), and a note (empty when there is nothing to say).
+/// One row: the format's name, the column (its value and its word), a note (empty when there is nothing to say), and an action the
+/// row offers (W6: the Store page of an extension Windows' player lacks).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FormatRow {
     pub name: String,
     pub support: FormatSupport,
     pub support_label: String,
     pub notes: String,
+    pub action: Option<FormatAction>,
+}
+
+/// A link a row offers: its words and the address to open (only `ms-windows-store://pdp/?ProductId=` addresses today).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FormatAction {
+    pub label: String,
+    pub uri: String,
 }
 
 /// One tab: its title, its three column headers and its rows.
@@ -210,7 +222,7 @@ const D3D11_PROFILES: &[(&str, &str, Depth)] = &[
 ];
 
 /// Video rows: the codec, its name, and a note that always applies.
-const VIDEO: &[(Codec, &str, &str)] = &[
+pub(crate) const VIDEO: &[(Codec, &str, &str)] = &[
     (Codec::H264, "H.264 (AVC)", ""),
     (Codec::HEVC, "HEVC (H.265)", ""),
     (Codec::AV1, "AV1", ""),
@@ -223,7 +235,7 @@ const VIDEO: &[(Codec, &str, &str)] = &[
 ];
 
 /// Audio rows. The Dolby Atmos row follows TrueHD (see [`atmos_row`]).
-const AUDIO: &[(Codec, &str)] = &[
+pub(crate) const AUDIO: &[(Codec, &str)] = &[
     (Codec::AAC, "AAC"),
     (Codec::AC3, "Dolby Digital (AC-3)"),
     (Codec::EAC3, "Dolby Digital Plus (E-AC-3)"),
@@ -241,7 +253,7 @@ const AUDIO: &[(Codec, &str)] = &[
 /// Compressed audio a receiver could decode itself if it were passed through.
 const BITSTREAM_AUDIO: &[Codec] = &[Codec::AC3, Codec::EAC3, Codec::TRUEHD, Codec::DTS];
 
-const CONTAINERS: &[(Container, &str)] = &[
+pub(crate) const CONTAINERS: &[(Container, &str)] = &[
     (Container::MKV, "Matroska (MKV)"),
     (Container::WEBM, "WebM"),
     (Container::MP4, "MP4"),
@@ -253,7 +265,7 @@ const CONTAINERS: &[(Container, &str)] = &[
 ];
 
 /// Subtitle rows: one per format, with every spelling the server uses for it (`SubtitleFormat`), and a note.
-const SUBTITLES: &[(&[SubtitleFormat], &str, &str)] = &[
+pub(crate) const SUBTITLES: &[(&[SubtitleFormat], &str, &str)] = &[
     (
         &[SubtitleFormat::ASS, SubtitleFormat::SSA],
         "SubStation Alpha (ASS, SSA)",
@@ -273,7 +285,7 @@ const SUBTITLES: &[(&[SubtitleFormat], &str, &str)] = &[
 
 /// HDR rows: the name and a note that always applies. HDR10+ and Dolby Vision were not checked on a device (docs/notes/windows-video.md,
 /// "ADR 0007 item 5").
-const HDR: &[(&str, &str)] = &[
+pub(crate) const HDR: &[(&str, &str)] = &[
     ("HDR10", ""),
     ("HDR10+", "Not checked on a device yet"),
     ("HLG", ""),
@@ -355,11 +367,12 @@ fn row(name: impl Into<String>, support: FormatSupport, notes: impl Into<String>
         support,
         support_label: support.label().to_owned(),
         notes: notes.into(),
+        action: None,
     }
 }
 
 /// Notes joined into sentences.
-fn notes(parts: &[&str]) -> String {
+pub(crate) fn notes(parts: &[&str]) -> String {
     parts
         .iter()
         .filter(|part| !part.is_empty())

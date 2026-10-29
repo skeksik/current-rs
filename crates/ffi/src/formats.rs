@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use crate::cancel::{self, CancelToken};
+use crate::platform_engine::CodecQueryAnswer;
 use crate::player_records::DisplayFacts;
 use crate::{Core, CoreError};
 
@@ -95,6 +96,8 @@ pub enum FormatSupport {
     ToneMapped,
     /// Not known: the player could not be started to find out.
     Unknown,
+    /// Plays in Windows' own player (ADR 0025, W6).
+    Native,
 }
 
 impl From<current_app::FormatSupport> for FormatSupport {
@@ -110,6 +113,7 @@ impl From<current_app::FormatSupport> for FormatSupport {
             S::Hdr => Self::Hdr,
             S::ToneMapped => Self::ToneMapped,
             S::Unknown => Self::Unknown,
+            S::Native => Self::Native,
         }
     }
 }
@@ -121,6 +125,16 @@ pub struct FormatRow {
     pub support: FormatSupport,
     pub support_label: String,
     pub notes: String,
+    /// A link the row offers (W6: the Store page of an extension Windows' player lacks); the UI opens only
+    /// `ms-windows-store://pdp/?ProductId=` addresses.
+    pub action: Option<FormatAction>,
+}
+
+/// A row's link: its words and its address.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct FormatAction {
+    pub label: String,
+    pub uri: String,
 }
 
 /// One tab: its title and the headers of its three columns ("Codec" or "Format", "On this PC", "Notes"), and its rows. Every word
@@ -165,6 +179,10 @@ impl From<current_app::SupportedFormats> for SupportedFormats {
                             support: row.support.into(),
                             support_label: row.support_label,
                             notes: row.notes,
+                            action: row.action.map(|action| FormatAction {
+                                label: action.label,
+                                uri: action.uri,
+                            }),
                         })
                         .collect(),
                 })
@@ -176,8 +194,10 @@ impl From<current_app::SupportedFormats> for SupportedFormats {
 #[uniffi::export]
 impl Core {
     /// Settings' "Supported formats" page. `hardware` is the UI's test of the graphics card (`None` when it could not run), `display`
-    /// the facts of the display the window is on (`None` when unknown). The first call may start a headless engine for a moment to read
-    /// what it plays (no window, no audio device); later ones answer at once.
+    /// the facts of the display the window is on (`None` when unknown), `native` the answers to [`crate::windows_codec_queries`] when
+    /// Windows' own player plays beside the app engine (`None` elsewhere, or when it cannot be made): each row then says which one
+    /// plays the format (ADR 0025, W6). The first call may start a headless engine for a moment to read what it plays (no window, no
+    /// audio device); later ones answer at once.
     ///
     /// # Errors
     /// [`CoreError::Cancelled`] if `token` is cancelled first.
@@ -185,12 +205,22 @@ impl Core {
         &self,
         hardware: Option<HardwareDecodeFacts>,
         display: Option<DisplayFacts>,
+        native: Option<Vec<CodecQueryAnswer>>,
         token: Arc<CancelToken>,
     ) -> Result<SupportedFormats, CoreError> {
         let app = self.app.clone();
+        let native = native.map(|answers| {
+            answers
+                .into_iter()
+                .map(|answer| current_app::CodecAnswer {
+                    subtype: answer.subtype,
+                    decoders: answer.decoders,
+                })
+                .collect()
+        });
         cancel::run_cancellable(&self.runtime, token, async move {
             let page = app
-                .supported_formats(hardware.map(Into::into), display.map(Into::into))
+                .supported_formats(hardware.map(Into::into), display.map(Into::into), native)
                 .await;
             Ok(page.into())
         })
@@ -220,9 +250,13 @@ mod tests {
             sdr_white_nits: 240.0,
             refresh_hz: 60.0,
         };
-        let page =
-            block_on(core.supported_formats(Some(hardware), Some(display), CancelToken::new()))
-                .unwrap();
+        let page = block_on(core.supported_formats(
+            Some(hardware),
+            Some(display),
+            None,
+            CancelToken::new(),
+        ))
+        .unwrap();
         assert_eq!(page.tabs.len(), 5);
         assert!(page.tabs.iter().all(|tab| !tab.rows.is_empty()));
         assert_eq!(page.hardware_note, "Tested on: Example Graphics");
@@ -245,6 +279,44 @@ mod tests {
                 .rows
                 .iter()
                 .all(|row| row.support == FormatSupport::Hdr)
+        );
+    }
+
+    #[test]
+    fn with_windows_player_the_rows_name_the_route_and_the_store_link_crosses() {
+        let core = Core::new().unwrap();
+        // CodecQuery found H.264 and AAC only: HEVC needs its Store extension.
+        let native = crate::windows_codec_queries()
+            .into_iter()
+            .map(|ask| CodecQueryAnswer {
+                decoders: u32::from(
+                    ask.subtype == "VideoFormatH264" || ask.subtype == "AudioFormatAac",
+                ),
+                subtype: ask.subtype,
+            })
+            .collect();
+        let page =
+            block_on(core.supported_formats(None, None, Some(native), CancelToken::new())).unwrap();
+        let video = &page.tabs[0];
+        let row = |name: &str| {
+            video
+                .rows
+                .iter()
+                .find(|row| row.name == name)
+                .unwrap()
+                .clone()
+        };
+        let h264 = row("H.264 (AVC)");
+        assert_eq!(h264.support, FormatSupport::Native);
+        assert_eq!(h264.support_label, "Windows' player");
+        let hevc = row("HEVC (H.265)");
+        assert_eq!(hevc.support_label, "App engine");
+        assert_eq!(
+            hevc.action,
+            Some(FormatAction {
+                label: "Install HEVC Video Extensions".into(),
+                uri: "ms-windows-store://pdp/?ProductId=9NMZLZ57R3T7".into(),
+            })
         );
     }
 
