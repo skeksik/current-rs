@@ -917,6 +917,50 @@ fn a_server_stream_with_a_subtitle_the_native_route_does_not_show_goes_to_the_ap
 }
 
 #[test]
+fn only_text_subtitle_files_go_to_the_native_engine() {
+    // An external SubRip file: native (the core hands it over as bytes). An external PGS file: the app engine, as
+    // `TimedTextSource` reads text only; embedded PGS stays native (departure 3).
+    let engines = windows();
+    let context = automatic(DisplayKind::Hdr);
+    let (order, ..) = check(&movie(), tracks(1, Some(7)), &engines, context);
+    assert_eq!(order[0], Route::Native);
+    let mut pgs_file = movie();
+    pgs_file.streams[7].codec = Some("pgssub".into());
+    let (order, reasons, lacks) = check(&pgs_file, tracks(1, Some(7)), &engines, context);
+    assert_eq!(order, vec![Route::AppEngine]);
+    assert_eq!(reasons, vec![RouteReason::NATIVE_LACKS]);
+    assert_eq!(lacks.len(), 1);
+    assert_eq!(lacks[0].kind, GapKind::Subtitle);
+    let (order, ..) = check(&movie(), tracks(1, Some(4)), &engines, context);
+    assert_eq!(order[0], Route::Native);
+    // Without the rule (another platform's) the file goes wherever the engine lists its format.
+    let mut elsewhere = windows();
+    elsewhere.rules.native_external_subtitles = &[];
+    elsewhere.rules.native_rendered_subtitles = &["pgssub"];
+    let (order, ..) = check(&pgs_file, tracks(1, Some(7)), &elsewhere, context);
+    assert_eq!(order[0], Route::Native);
+}
+
+#[test]
+fn a_server_stream_with_a_picture_subtitle_as_a_file_goes_to_the_app_engine() {
+    // The server sends PGS beside its stream as a file (`External`): the native engine cannot read it as one. SubRip as a file is
+    // native.
+    let engines = windows();
+    let context = automatic(DisplayKind::Hdr);
+    let offer = hls_offer(StreamAction::Copy, StreamAction::Transcode);
+    let mut source = movie();
+    source.streams[3].subtitle_delivery = Some(SubtitleDelivery::EXTERNAL);
+    source.streams[4].subtitle_delivery = Some(SubtitleDelivery::EXTERNAL);
+    let routes = server_routes(&offer, &source, tracks(1, Some(4)), &engines, context, &[]);
+    assert_eq!(engines_of(&routes), vec![EngineRole::App]);
+    let routes = server_routes(&offer, &source, tracks(1, Some(3)), &engines, context, &[]);
+    assert_eq!(
+        engines_of(&routes),
+        vec![EngineRole::Native, EngineRole::App]
+    );
+}
+
+#[test]
 fn multichannel_opus_goes_to_the_app_engine() {
     let mut source = movie();
     let mut opus = audio(8, "opus");

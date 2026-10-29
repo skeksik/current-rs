@@ -1267,11 +1267,12 @@ fn playback_info(route: String) -> String {
     )
 }
 
-/// [`NATIVE_ITEM`]'s PlaybackInfo: direct play of [`NATIVE_MEDIA`], an MP4 with H.264 Main and no audio, 2 s.
+/// [`NATIVE_ITEM`]'s PlaybackInfo: direct play of [`NATIVE_MEDIA`], an MP4 with H.264 Main and no audio, 2 s, and an external SubRip
+/// file (stream 1, [`SUBTITLE`]: one cue from 1 s to 2 s).
 fn native_playback_info() -> String {
     let size = NATIVE_MEDIA.len();
     format!(
-        r#"{{"MediaSources":[{{"Protocol":"File","Id":"{MEDIA_SOURCE}","Path":"/media/stand-in/native.mp4","Type":"Default","Container":"mp4","Size":{size},"Name":"Stand-in 180p","IsRemote":false,"ETag":"5ad01f","RunTimeTicks":20000000,"SupportsTranscoding":true,"SupportsDirectStream":false,"SupportsDirectPlay":true,"MediaStreams":[{{"Codec":"h264","DisplayTitle":"180p H264 SDR","BitDepth":8,"Height":180,"Width":320,"RealFrameRate":24,"VideoRange":"SDR","VideoRangeType":"SDR","Profile":"Main","Type":"Video","Index":0,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false,"Level":20}}],"Bitrate":40000,"HasSegments":false}}],"PlaySessionId":"{PLAY_SESSION}"}}"#
+        r#"{{"MediaSources":[{{"Protocol":"File","Id":"{MEDIA_SOURCE}","Path":"/media/stand-in/native.mp4","Type":"Default","Container":"mp4","Size":{size},"Name":"Stand-in 180p","IsRemote":false,"ETag":"5ad01f","RunTimeTicks":20000000,"SupportsTranscoding":true,"SupportsDirectStream":false,"SupportsDirectPlay":true,"MediaStreams":[{{"Codec":"h264","DisplayTitle":"180p H264 SDR","BitDepth":8,"Height":180,"Width":320,"RealFrameRate":24,"VideoRange":"SDR","VideoRangeType":"SDR","Profile":"Main","Type":"Video","Index":0,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false,"Level":20}},{{"Codec":"srt","Language":"eng","DisplayTitle":"English - SRT - External","Type":"Subtitle","Index":1,"IsDefault":false,"IsForced":false,"IsHearingImpaired":false,"IsExternal":true,"IsTextSubtitleStream":true,"SupportsExternalStream":true,"DeliveryMethod":"External"}}],"Bitrate":40000,"HasSegments":false}}],"PlaySessionId":"{PLAY_SESSION}"}}"#
     )
 }
 
