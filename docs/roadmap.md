@@ -297,6 +297,10 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
 - [ ] W6 (feat/formats-per-route): the supported formats page per route, with missing Store extensions (found through `CodecQuery`)
       and their link (ADR 0021)
 - [ ] W7: device check on the owner's PC: real files on each route, the route and its reasons in the info panel, the fallback chain
+- [ ] Settings to turn off switching back to Windows' player, per situation (owner, 2026-10-29). A switch to libmpv still happens
+      when it must (a speed Windows' player ignores, PQ video on an SDR display, ADR 0025); with the setting off for that situation,
+      the file stays on libmpv when the cause goes away (the speed back to normal, the window back on an HDR display) instead of
+      moving back. **Waits for the owner's look at how switching feels in W7; not started before that** (owner)
 New features (each starts with a spike and an ADR with the owner's choices):
 - [ ] Generated subtitles for videos without any (owner, 2026-10-25): speech to text on the device, with translation into English
       (for example Japanese audio to English subtitles). The first candidate is Whisper through whisper.cpp: MIT code and weights;
