@@ -283,7 +283,9 @@ impl Engine for TestBackend {
 
     fn set_speed(&mut self, speed: f64) {
         // Rounded to hundredths for the record; a rate is never negative or that large.
-        self.record(TestCommand::Speed((speed * 100.0).round().clamp(0.0, 1e6) as u32));
+        self.record(TestCommand::Speed(
+            (speed * 100.0).round().clamp(0.0, 1e6) as u32
+        ));
     }
 
     fn stop(&mut self) {

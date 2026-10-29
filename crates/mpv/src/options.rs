@@ -127,7 +127,11 @@ const VIDEO_SYNC_MODES: [&str; 9] = [
 /// The value of mpv's `speed` property for a playback rate: mpv takes `<0.01-100>` (mpv v0.41.0 `DOCS/man/options.rst`, `--speed`,
 /// read 2026-10-29), so the rate is clamped to that range; anything not finite is normal speed.
 pub fn speed_value(speed: f64) -> String {
-    let speed = if speed.is_finite() { speed.clamp(0.01, 100.0) } else { 1.0 };
+    let speed = if speed.is_finite() {
+        speed.clamp(0.01, 100.0)
+    } else {
+        1.0
+    };
     format!("{speed:.2}")
 }
 

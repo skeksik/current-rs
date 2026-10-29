@@ -10,9 +10,8 @@ use std::time::Duration;
 
 use current_model::{
     EngineRole, ItemRef, ItemSummary, MediaKind, MediaStream, PlaybackProblem, PlayerState, Route,
-    RouteReason, ServerOffer,
-    Segment, SegmentKind, StreamKind, StreamProtocol, SubtitleChoice, SubtitleDelivery,
-    SubtitleFormat, TrackChoice, TranscodingFacts,
+    RouteReason, Segment, SegmentKind, ServerOffer, StreamKind, StreamProtocol, SubtitleChoice,
+    SubtitleDelivery, SubtitleFormat, TrackChoice, TranscodingFacts,
 };
 
 use crate::clock::Clock;
@@ -384,9 +383,16 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                     video: *video,
                     audio: *audio,
                 };
-                route::server_routes(&offer, source, tracks, &engines, context, &session.failed_routes)
-                    .iter()
-                    .any(|candidate| candidate.engine() == *engine)
+                route::server_routes(
+                    &offer,
+                    source,
+                    tracks,
+                    &engines,
+                    context,
+                    &session.failed_routes,
+                )
+                .iter()
+                .any(|candidate| candidate.engine() == *engine)
             }
             _ => route::local_routes(source, tracks, &engines, context, &session.failed_routes)
                 .iter()
@@ -868,7 +874,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             // The rule now applies: off the native engine.
             (false, true) => planned.plan.route.engine() == EngineRole::Native,
             // It no longer does: back from the app engine where the rule put it there.
-            (true, false) => planned.plan.reasons.contains(&RouteReason::HDR_ON_SDR_DISPLAY),
+            (true, false) => planned
+                .plan
+                .reasons
+                .contains(&RouteReason::HDR_ON_SDR_DISPLAY),
             _ => false,
         };
         if moves {

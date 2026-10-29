@@ -140,7 +140,8 @@ impl Engine for FakeEngine {
     }
 
     fn set_speed(&mut self, speed: f64) {
-        self.commands.push(Command::Speed((speed * 100.0).round() as u32));
+        self.commands
+            .push(Command::Speed((speed * 100.0).round() as u32));
     }
 
     fn stop(&mut self) {
@@ -219,6 +220,8 @@ pub struct ServerState {
     pub requests: Vec<(ItemRef, PlanRequest)>,
     /// The capabilities each request's device profile was made from.
     pub profiles: Vec<EngineCapabilities>,
+    /// The source of the default direct-play answer; `None` for [`source`].
+    pub source: Option<MediaSource>,
     /// Each report with the clock's time.
     pub reports: Vec<(Duration, Report)>,
     pub segments: Vec<Segment>,
@@ -261,6 +264,7 @@ impl FakeServer {
                 answers: VecDeque::new(),
                 requests: Vec::new(),
                 profiles: Vec::new(),
+                source: None,
                 reports: Vec::new(),
                 segments: Vec::new(),
                 segment_calls: 0,
@@ -321,10 +325,14 @@ impl MediaServer for FakeServer {
         state.requests.push((item.clone(), request.clone()));
         state.profiles.push(capabilities.clone());
         let count = state.requests.len();
-        let mut answer = state
-            .answers
-            .pop_front()
-            .unwrap_or_else(|| Ok(answer(ServerOffer::DirectPlay, vec![])))?;
+        let default_source = state.source.clone();
+        let mut answer = state.answers.pop_front().unwrap_or_else(|| {
+            let mut direct = answer(ServerOffer::DirectPlay, vec![]);
+            if let Some(source) = default_source {
+                direct.source = source;
+            }
+            Ok(direct)
+        })?;
         answer.play_session_id = format!("ps-{count}");
         Ok(answer)
     }
