@@ -358,6 +358,21 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     internal bool NativeSurfaceShownForTest => Player.NativeSurfaceShownForTest;
 
+    internal Task SelectSubtitleForTestAsync(uint index) => Player.SelectSubtitleForTestAsync(index);
+
+    internal void SeekForTest(TimeSpan position) => Player.SeekForTest(position);
+
+    internal int SubtitlesShownForTest => Player.SubtitlesShownForTest;
+
+    internal string SubtitleTextForTest => Player.SubtitleTextForTest;
+
+    internal string? SubtitlePathForTest => Player.SubtitlePathForTest;
+
+    internal bool ReopenForSubtitlesForTest
+    {
+        set => Player.ReopenForSubtitlesForTest = value;
+    }
+
     internal Task ClosePlayerForTestAsync() => Player.CloseAndWaitAsync();
 
     /// <summary>

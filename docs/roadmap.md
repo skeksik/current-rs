@@ -294,6 +294,8 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       own deadline for a slow first segment (W1)
 - [ ] W5 (feat/windows-native-subtitles): our own subtitle view for the native route (text cues and PGS image cues), above the control
       bar
+- [ ] libmpv's subtitles kept clear of the control bar, as the native view's are (W5), so both routes behave the same (manager,
+      2026-10-29; for the owner to schedule). Until then the native route's subtitles move up with the bar and libmpv's do not
 - [ ] W6 (feat/formats-per-route): the supported formats page per route, with missing Store extensions (found through `CodecQuery`)
       and their link (ADR 0021)
 - [ ] W7: device check on the owner's PC: real files on each route, the route and its reasons in the info panel, the fallback chain

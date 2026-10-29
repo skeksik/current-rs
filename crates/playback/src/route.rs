@@ -115,6 +115,15 @@ pub fn local_routes(
     }
 
     let mut native_gaps = gaps(&native.capabilities, source, tracks, Unnamed::Lacks);
+    // A subtitle file: the platform's rules decide which formats the native engine takes as one, when they name any.
+    if let Some(stream) = selected_subtitle(source, tracks).filter(|stream| stream.is_external)
+        && !engines.rules.native_external_subtitles.is_empty()
+    {
+        native_gaps.retain(|gap| gap.kind != GapKind::Subtitle);
+        if !takes_as_file(stream, engines) {
+            native_gaps.push(gap(GapKind::Subtitle, stream));
+        }
+    }
     let display_reasons = display_reasons(source, engines, context.display);
     // Choice 1, from the format itself: a subtitle that needs rendering keeps the file off the remux, and off the native route
     // unless the platform's rules keep that format native.
@@ -220,11 +229,16 @@ pub fn server_routes(
                 .contains(&RouteReason::DOLBY_VISION_ON_APP_ENGINE);
         let pq_on_sdr = display_reasons(source, engines, context.display)
             .contains(&RouteReason::HDR_ON_SDR_DISPLAY);
-        // The subtitle rule: one the server sends beside the picture (not burned in) that the native route does not show leaves the
-        // stream to the app engine.
+        // The subtitle rule: on a server stream the native engine shows a subtitle only burned into the picture or as a file the
+        // core fetches (`External`) in a format it takes as one; one inside the stream (`Embed`, `Hls`, or no delivery named) or
+        // any other leaves the stream to the app engine.
         let subtitle_off_native = selected_subtitle(source, tracks)
             .filter(|stream| stream.subtitle_delivery.as_ref() != Some(&SubtitleDelivery::ENCODE))
-            .is_some_and(|stream| !shows_natively(stream, native, engines));
+            .is_some_and(|stream| {
+                let as_file = stream.is_external
+                    || stream.subtitle_delivery.as_ref() == Some(&SubtitleDelivery::EXTERNAL);
+                !(as_file && shows_as_file(stream, native, engines))
+            });
         if !app_first
             && !dolby_vision
             && !pq_on_sdr
@@ -505,6 +519,27 @@ fn shows_natively(stream: &MediaStream, native: &EngineProfile, engines: &Engine
             .any(|format| format.as_str().eq_ignore_ascii_case(codec.as_str()))
     });
     listed && (!needs_rendering(stream) || kept_native(stream, engines))
+}
+
+/// Whether the native route shows this subtitle as a file: a format the platform's rules name, or, when they name none, one its
+/// engine lists.
+fn shows_as_file(stream: &MediaStream, native: &EngineProfile, engines: &Engines) -> bool {
+    if engines.rules.native_external_subtitles.is_empty() {
+        shows_natively(stream, native, engines)
+    } else {
+        takes_as_file(stream, engines)
+    }
+}
+
+/// Whether the native engine takes this subtitle as a file: a format the platform's rules name, or any when they name none.
+fn takes_as_file(stream: &MediaStream, engines: &Engines) -> bool {
+    let names = engines.rules.native_external_subtitles;
+    names.is_empty()
+        || stream.codec.as_ref().is_some_and(|codec| {
+            names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(codec.as_str()))
+        })
 }
 
 fn needs_rendering(stream: &MediaStream) -> bool {

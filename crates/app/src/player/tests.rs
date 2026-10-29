@@ -670,6 +670,7 @@ struct FakePlatform {
     events: StdMutex<Option<PlatformEvents>>,
     loads: StdMutex<Vec<PlatformFile>>,
     commands: StdMutex<Vec<String>>,
+    subtitles: StdMutex<Vec<PlatformSubtitle>>,
     /// Every call throws (a foreign exception).
     throws: bool,
 }
@@ -725,6 +726,7 @@ impl PlatformEngine for FakePlatform {
         self.record("load".into())
     }
     fn add_subtitle(&self, subtitle: PlatformSubtitle) -> Result<(), PlatformError> {
+        self.subtitles.lock().unwrap().push(subtitle.clone());
         self.record(format!("subtitle {}", subtitle.index))
     }
     fn set_paused(&self, paused: bool) -> Result<(), PlatformError> {
@@ -948,6 +950,49 @@ async fn the_stand_ins_native_file_goes_to_the_platform_engine_with_ranges() {
     let status = until(&player.state(), playing).await;
     assert_eq!(
         status.route.as_ref().map(|route| route.label()),
+        Some(RouteLabel::Native)
+    );
+    player.close().await;
+}
+
+#[tokio::test]
+async fn an_external_subrip_file_stays_native_and_reaches_the_platform_engine_as_bytes() {
+    // W5: the stand-in's native item has an external SubRip file; selected while it plays natively, the core fetches it and hands
+    // it over, and the file stays on the native route.
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let platform = Arc::new(FakePlatform::default());
+    let (player, control) = open_with(&app, platform.clone(), false).await;
+    player
+        .play(item(&server, NATIVE_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    platform.start_from_another_thread();
+    until(&player.state(), playing).await;
+    player
+        .select_subtitle(current_model::SubtitleChoice::Stream(1))
+        .await
+        .unwrap();
+    eventually(|| !platform.subtitles.lock().unwrap().is_empty()).await;
+    let subtitle = platform.subtitles.lock().unwrap()[0].clone();
+    assert_eq!(subtitle.index, 1);
+    assert_eq!(subtitle.data, jellyfin_stand_in::SUBTITLE.as_bytes());
+    assert_eq!(
+        subtitle.format.as_ref().map(|format| format.as_str()),
+        Some("srt")
+    );
+    assert!(subtitle.select);
+    assert_eq!(platform.loads.lock().unwrap().len(), 1, "no reload");
+    assert_eq!(loads(&control), 0, "libmpv has nothing");
+    assert_eq!(
+        player
+            .state()
+            .borrow()
+            .route
+            .as_ref()
+            .map(|route| route.label()),
         Some(RouteLabel::Native)
     );
     player.close().await;

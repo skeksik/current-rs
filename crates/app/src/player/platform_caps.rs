@@ -7,7 +7,7 @@
 //! `Windows.Media.Core.CodecSubtypes` property (Microsoft Learn, "CodecSubtypes Class", ms.date 2017-02-08, read 2026-10-29); the UI
 //! reads the property's value.
 
-use current_model::{Codec, CodecSupport, Container, EngineCapabilities};
+use current_model::{Codec, CodecSupport, Container, EngineCapabilities, SubtitleFormat};
 use current_playback::{EngineProfile, PlatformRules};
 
 /// Which list a subtype is looked for in.
@@ -163,13 +163,18 @@ pub fn windows_engine(answers: &[CodecAnswer]) -> (EngineProfile, PlatformRules)
         ],
         video: pick(CodecKind::Video),
         audio: pick(CodecKind::Audio),
-        // None until W5 (ADR 0025, feat/windows-native-subtitles): the Windows engine draws no subtitles yet, so the subtitle rule
-        // sends a file with a subtitle selected to the app engine, PGS too (departure 3 waits for W5). W5 lists what §6 found:
-        // SubRip arrives as timed text cues and PGS as image cues (SUBRIP, SRT, PGSSUB); ASS keeps only its static styling (choice
-        // 1 sends it to the app engine), DVD subtitles showed no cue (not verified). With W5 the core also hands external subtitles
-        // over as bytes (ADR 0025, "Subtitles on the native route"), and `external_subtitles` becomes true.
-        subtitles: Vec::new(),
-        external_subtitles: false,
+        // §6: SubRip arrives as timed text cues and PGS as image cues, which the app's own view draws (W5); ASS keeps only its
+        // static styling (choice 1 sends it to the app engine), DVD subtitles showed no cue (not verified). WebVTT inside a file
+        // was not checked: it plays on the app engine until W7 shows it; as a file it is native (`native_external_subtitles`).
+        subtitles: vec![
+            SubtitleFormat::SUBRIP,
+            SubtitleFormat::SRT,
+            SubtitleFormat::PGSSUB,
+        ],
+        // The core fetches subtitle files and hands them over as bytes (ADR 0025, "Subtitles on the native route"); the engine reads
+        // the text formats through `TimedTextSource`, and the platform's rules keep any other file (PGS) on the app engine
+        // (`PlatformRules::native_external_subtitles`).
+        external_subtitles: true,
     };
     // §7: HLS with fMP4 and TS segments plays through `AdaptiveMediaSource`.
     (
@@ -243,15 +248,26 @@ mod tests {
 
     #[test]
     fn w1s_limits_hold() {
-        let (engine, _) = windows_engine(&answers(&["VideoFormatH264", "AudioFormatOpus"]));
+        let (engine, rules) = windows_engine(&answers(&["VideoFormatH264", "AudioFormatOpus"]));
         assert_eq!(engine.capabilities.video[0].max_bit_depth, Some(8));
         assert_eq!(engine.capabilities.audio[0].max_channels, Some(2));
         // Never natively, whatever the answers: TrueHD, DTS.
         assert!(!engine.capabilities.decodes_audio(&Codec::TRUEHD));
         assert!(!engine.capabilities.decodes_audio(&Codec::DTS));
-        // No subtitle natively until W5: a selected one goes to the app engine.
-        assert!(engine.capabilities.subtitles.is_empty());
-        assert!(!engine.capabilities.external_subtitles);
+        // SubRip and PGS inside a file natively (departure 3), and text subtitle files, WebVTT too.
+        assert_eq!(
+            engine.capabilities.subtitles,
+            [
+                SubtitleFormat::SUBRIP,
+                SubtitleFormat::SRT,
+                SubtitleFormat::PGSSUB
+            ]
+        );
+        assert!(engine.capabilities.external_subtitles);
+        assert_eq!(
+            rules.native_external_subtitles,
+            ["subrip", "srt", "webvtt", "vtt"]
+        );
     }
 
     #[test]

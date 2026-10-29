@@ -43,6 +43,11 @@ pub struct PlatformRules {
     /// names: an exception to choice 1, which sends them to the app engine, made per platform by a departure (Windows: PGS,
     /// departure 3). Empty elsewhere. The native engine must also list the format in its capabilities.
     pub native_rendered_subtitles: &'static [&'static str],
+    /// The subtitle formats the native engine takes as a file (an external subtitle, or one the server delivers beside its stream),
+    /// by the server's names; a subtitle file in any other format plays on the app engine. When set, this list, not the engine's
+    /// capabilities (its formats inside a file), decides for files. Empty: no rule (any format the native engine lists). Windows: the
+    /// text formats `TimedTextSource` reads (W5), not PGS, which only arrives inside the file.
+    pub native_external_subtitles: &'static [&'static str],
 }
 
 impl PlatformRules {
@@ -51,6 +56,7 @@ impl PlatformRules {
         dolby_vision_on_app_engine: true,
         pq_on_sdr_on_app_engine: true,
         native_rendered_subtitles: &["pgssub"],
+        native_external_subtitles: &["subrip", "srt", "webvtt", "vtt"],
     };
 }
 

@@ -882,22 +882,46 @@ fn a_server_stream_with_a_subtitle_the_native_route_does_not_show_goes_to_the_ap
     // Styled ASS sent beside the picture.
     let routes = server_routes(&offer, &movie(), tracks(1, Some(5)), &engines, context, &[]);
     assert_eq!(engines_of(&routes), vec![EngineRole::App]);
-    // PGS on Windows, and a text subtitle: native first.
-    for subtitle in [3, 4] {
-        let routes = server_routes(
-            &offer,
-            &movie(),
-            tracks(1, Some(subtitle)),
-            &engines,
-            context,
-            &[],
-        );
-        assert_eq!(
-            engines_of(&routes),
-            vec![EngineRole::Native, EngineRole::App],
-            "subtitle {subtitle}"
-        );
+    // Inside the stream (`Embed`, `Hls`, or no delivery named), PGS and text alike: the native engine draws only what the core hands
+    // it, so the app engine.
+    for delivery in [
+        None,
+        Some(SubtitleDelivery::EMBED),
+        Some(SubtitleDelivery::HLS),
+    ] {
+        for subtitle in [3, 4] {
+            let mut source = movie();
+            source.streams[subtitle].subtitle_delivery = delivery.clone();
+            let routes = server_routes(
+                &offer,
+                &source,
+                tracks(1, Some(subtitle as u32)),
+                &engines,
+                context,
+                &[],
+            );
+            assert_eq!(
+                engines_of(&routes),
+                vec![EngineRole::App],
+                "subtitle {subtitle}, {delivery:?}"
+            );
+        }
     }
+    // A text subtitle as a file beside the stream: native first.
+    let mut external = movie();
+    external.streams[3].subtitle_delivery = Some(SubtitleDelivery::EXTERNAL);
+    let routes = server_routes(
+        &offer,
+        &external,
+        tracks(1, Some(3)),
+        &engines,
+        context,
+        &[],
+    );
+    assert_eq!(
+        engines_of(&routes),
+        vec![EngineRole::Native, EngineRole::App]
+    );
     // Burned into the picture by the server: no subtitle to show, native first.
     let mut burned = movie();
     burned.streams[5].subtitle_delivery = Some(SubtitleDelivery::ENCODE);
@@ -910,6 +934,59 @@ fn a_server_stream_with_a_subtitle_the_native_route_does_not_show_goes_to_the_ap
         context,
         &[],
     );
+    assert_eq!(
+        engines_of(&routes),
+        vec![EngineRole::Native, EngineRole::App]
+    );
+}
+
+#[test]
+fn only_text_subtitle_files_go_to_the_native_engine() {
+    // An external SubRip file: native (the core hands it over as bytes). An external PGS file: the app engine, as
+    // `TimedTextSource` reads text only; embedded PGS stays native (departure 3).
+    let engines = windows();
+    let context = automatic(DisplayKind::Hdr);
+    let (order, ..) = check(&movie(), tracks(1, Some(7)), &engines, context);
+    assert_eq!(order[0], Route::Native);
+    let mut pgs_file = movie();
+    pgs_file.streams[7].codec = Some("pgssub".into());
+    let (order, reasons, lacks) = check(&pgs_file, tracks(1, Some(7)), &engines, context);
+    assert_eq!(order, vec![Route::AppEngine]);
+    assert_eq!(reasons, vec![RouteReason::NATIVE_LACKS]);
+    assert_eq!(lacks.len(), 1);
+    assert_eq!(lacks[0].kind, GapKind::Subtitle);
+    let (order, ..) = check(&movie(), tracks(1, Some(4)), &engines, context);
+    assert_eq!(order[0], Route::Native);
+    // WebVTT, which this native engine does not list inside a file: as a file it is native, inside the file
+    // not (this app engine lists no WebVTT either).
+    let mut vtt_file = movie();
+    vtt_file.streams[7].codec = Some("webvtt".into());
+    let (order, ..) = check(&vtt_file, tracks(1, Some(7)), &engines, context);
+    assert_eq!(order[0], Route::Native);
+    let mut vtt_inside = movie();
+    vtt_inside.streams[3].codec = Some("webvtt".into());
+    let (order, ..) = check(&vtt_inside, tracks(1, Some(3)), &engines, context);
+    assert!(!order.contains(&Route::Native), "{order:?}");
+    // Without the rule (another platform's) the file goes wherever the engine lists its format.
+    let mut elsewhere = windows();
+    elsewhere.rules.native_external_subtitles = &[];
+    let (order, ..) = check(&pgs_file, tracks(1, Some(7)), &elsewhere, context);
+    assert_eq!(order[0], Route::Native);
+}
+
+#[test]
+fn a_server_stream_with_a_picture_subtitle_as_a_file_goes_to_the_app_engine() {
+    // The server sends PGS beside its stream as a file (`External`): the native engine cannot read it as one. SubRip as a file is
+    // native.
+    let engines = windows();
+    let context = automatic(DisplayKind::Hdr);
+    let offer = hls_offer(StreamAction::Copy, StreamAction::Transcode);
+    let mut source = movie();
+    source.streams[3].subtitle_delivery = Some(SubtitleDelivery::EXTERNAL);
+    source.streams[4].subtitle_delivery = Some(SubtitleDelivery::EXTERNAL);
+    let routes = server_routes(&offer, &source, tracks(1, Some(4)), &engines, context, &[]);
+    assert_eq!(engines_of(&routes), vec![EngineRole::App]);
+    let routes = server_routes(&offer, &source, tracks(1, Some(3)), &engines, context, &[]);
     assert_eq!(
         engines_of(&routes),
         vec![EngineRole::Native, EngineRole::App]
