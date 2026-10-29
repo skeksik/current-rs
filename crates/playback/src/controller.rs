@@ -1411,8 +1411,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         session.refusal_pending = false;
         session.started = false;
         session.stop_reported = false;
-        // A re-plan the user did not ask to pause keeps the pause (two engines; with the app engine only, as before ADR 0025).
-        let keep_paused = session.paused && self.native.is_some();
+        // A re-plan while paused (a track or quality change, a fallback, a move to the other engine) stays paused: the state, the
+        // start report and the engine. libmpv's `pause` outlives a `loadfile` (mpv v0.41.0 `DOCS/man/options.rst`,
+        // `--reset-on-next-file`: "Default: Do not reset anything", read 2026-10-29), so the picture stayed paused while the state said
+        // Playing; the engine is told again for one that does not keep it.
+        let keep_paused = session.paused;
         session.paused = false;
         session.buffering = false;
         session.seeking = false;
