@@ -36,7 +36,8 @@ use current_net::{
     Url,
 };
 use current_store::{
-    DeviceId, KindPage, LibraryChoices, LoadReport, Secrets, SettingsStore, StoreError,
+    DeviceId, KindPage, LibraryChoices, LoadReport, PlayerChoice, Secrets, SettingsStore,
+    StoreError,
 };
 use tokio::sync::watch;
 
@@ -586,6 +587,19 @@ impl App {
     /// The settings could not be saved; the setting stands for this run.
     pub fn set_preferred_quality(&self, preferred: playback::Quality) -> Result<(), StoreError> {
         self.playback.set_preferred_quality(&self.shared, preferred)
+    }
+
+    /// Settings → Playback → "Player" (ADR 0025, choice 3): "Automatic" (the default) or "Always app engine".
+    pub fn player_choice(&self) -> PlayerChoice {
+        self.playback.player_choice()
+    }
+
+    /// Sets "Player" and saves it; it applies from the next item played. Blocking file I/O: call it off the async runtime.
+    ///
+    /// # Errors
+    /// The settings could not be saved; the setting stands for this run.
+    pub fn set_player_choice(&self, choice: PlayerChoice) -> Result<(), StoreError> {
+        self.playback.set_player_choice(&self.shared, choice)
     }
 
     /// Settings → Playback's "Show resolution in quality menu": whether the quality menu names the resolution each choice gives

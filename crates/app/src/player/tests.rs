@@ -651,3 +651,376 @@ async fn playing_an_episode_after_a_series_unmark_keeps_it_unplayed_on_the_serve
         "the sweep's unmark stays on the server"
     );
 }
+
+// ---- A platform engine beside the test engine (ADR 0025, W3) ----
+
+use std::sync::Mutex as StdMutex;
+
+use super::{
+    CodecAnswer, PlatformEngine, PlatformError, PlatformEvents, PlatformFile, PlatformSubtitle,
+};
+use current_model::EngineErrorKind;
+use current_playback::{EndReason, EngineTrack};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// A platform engine that records what it was asked and answers through its events object when the test says so.
+#[derive(Default)]
+struct FakePlatform {
+    events: StdMutex<Option<PlatformEvents>>,
+    loads: StdMutex<Vec<PlatformFile>>,
+    commands: StdMutex<Vec<String>>,
+    /// Every call throws (a foreign exception).
+    throws: bool,
+}
+
+impl FakePlatform {
+    fn last(&self) -> PlatformFile {
+        self.loads.lock().unwrap().last().cloned().expect("a load")
+    }
+
+    fn send(&self, generation: u64, event: EngineEvent) {
+        self.events
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("attached")
+            .send(generation, event);
+    }
+
+    /// Opens and starts the last load, from another thread, as a platform's own threads do.
+    fn start_from_another_thread(&self) {
+        let generation = self.last().generation;
+        let events = self.events.lock().unwrap().clone().expect("attached");
+        std::thread::spawn(move || {
+            for event in [
+                EngineEvent::Loaded,
+                EngineEvent::Duration(DURATION),
+                EngineEvent::Restarted,
+            ] {
+                events.send(generation, event);
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    fn record(&self, command: String) -> Result<(), PlatformError> {
+        self.commands.lock().unwrap().push(command);
+        if self.throws {
+            Err(PlatformError::Unexpected)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl PlatformEngine for FakePlatform {
+    fn attach(&self, events: PlatformEvents) -> Result<(), PlatformError> {
+        *self.events.lock().unwrap() = Some(events);
+        Ok(())
+    }
+    fn load(&self, file: PlatformFile) -> Result<(), PlatformError> {
+        self.loads.lock().unwrap().push(file);
+        self.record("load".into())
+    }
+    fn add_subtitle(&self, subtitle: PlatformSubtitle) -> Result<(), PlatformError> {
+        self.record(format!("subtitle {}", subtitle.index))
+    }
+    fn set_paused(&self, paused: bool) -> Result<(), PlatformError> {
+        self.record(format!("paused {paused}"))
+    }
+    fn seek_to(&self, position: Duration) -> Result<(), PlatformError> {
+        self.record(format!("seek {}", position.as_secs()))
+    }
+    fn select_audio(&self, track: EngineTrack) -> Result<(), PlatformError> {
+        self.record(format!("audio {track:?}"))
+    }
+    fn select_subtitle(&self, track: EngineTrack) -> Result<(), PlatformError> {
+        self.record(format!("subtitles {track:?}"))
+    }
+    fn set_volume(&self, volume: u8) -> Result<(), PlatformError> {
+        self.record(format!("volume {volume}"))
+    }
+    fn set_muted(&self, muted: bool) -> Result<(), PlatformError> {
+        self.record(format!("muted {muted}"))
+    }
+    fn set_speed(&self, speed: f64) -> Result<(), PlatformError> {
+        self.record(format!("speed {speed}"))
+    }
+    fn stop(&self) -> Result<(), PlatformError> {
+        self.record("stop".into())
+    }
+}
+
+/// Windows with the HEVC extension (or without it).
+fn windows_answers(hevc: bool) -> Vec<CodecAnswer> {
+    super::windows_codec_queries()
+        .into_iter()
+        .map(|query| CodecAnswer {
+            decoders: u32::from(
+                ["VideoFormatH264", "AudioFormatAac"].contains(&query.subtype.as_str())
+                    || (hevc && query.subtype == "VideoFormatHevc"),
+            ),
+            subtype: query.subtype,
+        })
+        .collect()
+}
+
+async fn open_with(
+    app: &App,
+    platform: Arc<FakePlatform>,
+    hevc: bool,
+) -> (Player, TestEngineControl) {
+    let player = app
+        .open_player_with_platform_engine(SIZE, display(), platform, &windows_answers(hevc))
+        .await
+        .unwrap();
+    let control = last_control().unwrap();
+    (player, control)
+}
+
+/// The status of a GET for `url` on the relay; 0 when nothing listens there.
+async fn relay_status(url: &str) -> u16 {
+    let rest = url.strip_prefix("http://127.0.0.1:").expect("a relay URL");
+    let (port, path) = rest.split_at(rest.find('/').expect("a path"));
+    let Ok(mut stream) =
+        tokio::net::TcpStream::connect(("127.0.0.1", port.parse::<u16>().unwrap())).await
+    else {
+        return 0;
+    };
+    // The relay takes only its own host and port (ADR 0020).
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nRange: bytes=0-1\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut head = vec![0; 12];
+    stream.read_exact(&mut head).await.unwrap();
+    String::from_utf8_lossy(&head[9..12]).parse().unwrap()
+}
+
+fn loads(control: &TestEngineControl) -> usize {
+    control
+        .commands()
+        .iter()
+        .filter(|command| matches!(command, TestCommand::Load { .. }))
+        .count()
+}
+
+#[tokio::test]
+async fn a_file_the_platform_engine_plays_goes_there_through_the_relay() {
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let platform = Arc::new(FakePlatform::default());
+    let (player, control) = open_with(&app, platform.clone(), true).await;
+
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::from_secs(5))
+        .await
+        .unwrap();
+    // The stand-in's address has no gateway; the platform engine's stream is relayed all the same, with the route's token only.
+    let file = platform.last();
+    let url = file.url.expose().to_owned();
+    assert!(url.starts_with("http://127.0.0.1:"), "a relay URL");
+    let token = stand_in.live_token().expect("signed in");
+    assert!(!url.contains(&token), "no session token across the bridge");
+    assert_eq!(file.start, Duration::from_secs(5));
+    assert_eq!(file.audio, EngineTrack::Stream(1));
+    assert_eq!(relay_status(&url).await, 206);
+    assert_eq!(loads(&control), 0, "libmpv has nothing");
+
+    // Events from the platform's own thread reach the state.
+    platform.start_from_another_thread();
+    let status = until(&player.state(), playing).await;
+    assert_eq!(
+        status.route.as_ref().map(|route| route.label()),
+        Some(RouteLabel::Native)
+    );
+    let info = player.playback_info().await.unwrap();
+    assert!(info.platform_engine);
+    let lines = crate::info_panel_lines(
+        &info,
+        None,
+        &super::PanelSizes::default(),
+        &crate::numbers::NumberFormat::default(),
+    );
+    assert_eq!(
+        lines[..2],
+        ["Native", "• Native playback is fully compatible."]
+    );
+    // Nothing the player publishes holds the relay URL.
+    let shown = format!("{status:?} {info:?}");
+    assert!(
+        !shown.contains(&url) && !shown.contains("127.0.0.1"),
+        "{shown}"
+    );
+
+    // An event of an older load is dropped.
+    platform.send(
+        file.generation - 1,
+        EngineEvent::Ended(EndReason::Error(EngineErrorKind::DECODER_FAILED)),
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(playing(&player.state().borrow()));
+
+    // A track the platform cannot play after all: libmpv takes over at the position.
+    platform.send(
+        file.generation,
+        EngineEvent::Position(Duration::from_secs(9)),
+    );
+    platform.send(
+        file.generation,
+        EngineEvent::TrackFailed(EngineErrorKind::DECODER_FAILED),
+    );
+    eventually(|| loads(&control) == 1).await;
+    assert!(
+        platform
+            .commands
+            .lock()
+            .unwrap()
+            .contains(&"stop".to_owned())
+    );
+    let status = player.state().borrow().clone();
+    assert_eq!(
+        status.route.as_ref().map(|route| route.label()),
+        Some(RouteLabel::AppEngine)
+    );
+    // The platform engine's route is gone with it (refused, or the relay no longer listens), and its old events open nothing.
+    assert!(matches!(relay_status(&url).await, 0 | 404));
+    platform.send(file.generation, EngineEvent::Loaded);
+    platform.send(file.generation, EngineEvent::Restarted);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(platform.loads.lock().unwrap().len(), 1);
+    assert!(matches!(relay_status(&url).await, 0 | 404));
+    player.close().await;
+}
+
+#[tokio::test]
+async fn without_the_codec_the_file_goes_to_libmpv_and_the_setting_and_choice_move_it_there_too() {
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+
+    // No HEVC extension: libmpv, with what the native player lacks.
+    let platform = Arc::new(FakePlatform::default());
+    let (player, control) = open_with(&app, platform.clone(), false).await;
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    eventually(|| loads(&control) == 1).await;
+    assert!(platform.loads.lock().unwrap().is_empty());
+    let info = player.playback_info().await.unwrap();
+    let lines = crate::info_panel_lines(
+        &info,
+        None,
+        &super::PanelSizes::default(),
+        &crate::numbers::NumberFormat::default(),
+    );
+    assert_eq!(
+        lines[..2],
+        [
+            "App engine",
+            "• The native player can't decode this HEVC (H.265) video."
+        ]
+    );
+    player.close().await;
+
+    // "Play with app engine" moves the item playing.
+    let platform = Arc::new(FakePlatform::default());
+    let (player, control) = open_with(&app, platform.clone(), true).await;
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    platform.start_from_another_thread();
+    until(&player.state(), playing).await;
+    player.play_with_app_engine().await.unwrap();
+    eventually(|| loads(&control) == 1).await;
+    player.close().await;
+
+    // "Always app engine" plays the next item there.
+    app.set_player_choice(current_store::PlayerChoice::AlwaysAppEngine)
+        .unwrap();
+    assert_eq!(
+        app.player_choice(),
+        current_store::PlayerChoice::AlwaysAppEngine
+    );
+    let platform = Arc::new(FakePlatform::default());
+    let (player, control) = open_with(&app, platform.clone(), true).await;
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    eventually(|| loads(&control) == 1).await;
+    assert!(platform.loads.lock().unwrap().is_empty());
+    player.close().await;
+}
+
+#[tokio::test]
+async fn a_throwing_platform_engine_never_brings_the_core_down() {
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let platform = Arc::new(FakePlatform {
+        throws: true,
+        ..FakePlatform::default()
+    });
+    let (player, control) = open_with(&app, platform.clone(), true).await;
+    // Its load throws: a failed route, so libmpv plays.
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    eventually(|| loads(&control) == 1).await;
+    // Commands to it throw too (volume goes to both engines) and change nothing.
+    player.send(super::PlayerAction::SetVolume(30)).unwrap();
+    eventually(|| {
+        platform
+            .commands
+            .lock()
+            .unwrap()
+            .contains(&"volume 30".to_owned())
+    })
+    .await;
+    assert!(control.commands().contains(&TestCommand::Volume(30)));
+    player.close().await;
+}
+
+#[tokio::test]
+async fn the_platform_engines_relay_route_closes_when_the_item_stops() {
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let platform = Arc::new(FakePlatform::default());
+    let (player, _control) = open_with(&app, platform.clone(), true).await;
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    platform.start_from_another_thread();
+    until(&player.state(), playing).await;
+    let file = platform.last();
+    let url = file.url.expose().to_owned();
+    assert_eq!(relay_status(&url).await, 206);
+    player.send(super::PlayerAction::Stop).unwrap();
+    eventually(|| {
+        platform
+            .commands
+            .lock()
+            .unwrap()
+            .contains(&"stop".to_owned())
+    })
+    .await;
+    eventually(|| player.state().borrow().state == PlayerState::Idle).await;
+    assert!(matches!(relay_status(&url).await, 0 | 404));
+    // A late event of the stopped load starts nothing.
+    platform.send(file.generation, EngineEvent::Restarted);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(player.state().borrow().state, PlayerState::Idle);
+    player.close().await;
+}

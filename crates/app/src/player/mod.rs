@@ -162,6 +162,8 @@ pub enum PlayerAction {
     SetMuted(bool),
     DisplayFacts(DisplayFacts),
     CompositionSize(CompositionSize),
+    /// "Play with app engine" for the item playing (ADR 0025, choice 3).
+    PlayWithAppEngine,
 }
 
 impl PlayerAction {
@@ -305,6 +307,12 @@ impl Player {
     /// quality ([`crate::App::preferred_quality`]).
     pub async fn set_quality(&self, quality: Quality) -> Result<(), PlayerError> {
         self.act(PlayerAction::SetQuality(quality)).await
+    }
+
+    /// "Play with app engine": the item playing moves to libmpv at the position, then the server if libmpv cannot (ADR 0025, choice
+    /// 3). Only this item; with libmpv alone nothing changes.
+    pub async fn play_with_app_engine(&self) -> Result<(), PlayerError> {
+        self.act(PlayerAction::PlayWithAppEngine).await
     }
 
     /// Seeks past the segment under the position.

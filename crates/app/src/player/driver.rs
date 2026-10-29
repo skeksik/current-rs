@@ -582,6 +582,7 @@ impl<B: Backend> Driver<B> {
                 controller.set_display(display_kind(&facts)).await;
             }
             Action::CompositionSize(size) => controller.engine_mut().set_composition_size(size),
+            Action::PlayWithAppEngine => controller.play_with_app_engine().await,
         }
     }
 
