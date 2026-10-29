@@ -230,26 +230,42 @@ public sealed partial class PlayerView : UserControl
             // Closed while laid out, with no play since.
             return;
         }
-        // Which decoders Windows has, before the core plans with Windows' own player (ADR 0025, W4).
-        var answers = await CodecAnswers.GetAsync();
+        // Which decoders Windows has, then Windows' own player beside libmpv (ADR 0025, W4). Neither may keep the player from opening:
+        // without them (an edition without Media Foundation, a failed query) it opens with libmpv alone, as before W4.
+        NativeEngine? native = null;
+        IReadOnlyList<CodecQueryAnswer> answers = [];
+        try
+        {
+            answers = await CodecAnswers.GetAsync();
+            // The server's indices of the file's own audio streams, for the native engine's tracks (NativeEngine, "Tracks by Id").
+            native = new NativeEngine(DispatcherQueue,
+                () => State.AudioTracks.Where(track => !track.IsExternal).Select(track => track.Index).Order().ToList());
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: Windows' own player is not available, libmpv plays everything: {error.GetType().Name}");
+            native?.Dispose();
+            native = null;
+        }
         if (!_open)
         {
+            native?.Dispose();
             return;
         }
         var display = new DisplayWatcher(_window);
-        // The server's indices of the file's own audio streams, for the native engine's tracks (NativeEngine, "Tracks by Id").
-        var native = new NativeEngine(DispatcherQueue,
-            () => State.AudioTracks.Where(track => !track.IsExternal).Select(track => track.Index).Order().ToList());
         PlayerSession session;
         try
         {
-            session = await PlayerSession.OpenWithPlatformEngineAsync(core, new CompositionSize(size.Width, size.Height), display.Facts,
-                native, answers, new DispatcherQueueUi(DispatcherQueue));
+            var composition = new CompositionSize(size.Width, size.Height);
+            var ui = new DispatcherQueueUi(DispatcherQueue);
+            session = native is null
+                ? await PlayerSession.OpenAsync(core, composition, display.Facts, ui)
+                : await PlayerSession.OpenWithPlatformEngineAsync(core, composition, display.Facts, native, answers, ui);
         }
         catch
         {
             display.Dispose();
-            native.Dispose();
+            native?.Dispose();
             throw;
         }
         if (!_open)
@@ -260,7 +276,10 @@ public sealed partial class PlayerView : UserControl
             return;
         }
         _native = native;
-        NativeVideo.SetMediaPlayer(native.Player);
+        if (native is not null)
+        {
+            NativeVideo.SetMediaPlayer(native.Player);
+        }
         _display = display;
         display.Changed += OnDisplayChanged;
         _compositionSize = size;
@@ -1162,4 +1181,8 @@ public sealed partial class PlayerView : UserControl
     internal PlayerState StateForTest => State;
 
     internal string? NativeFailureForTest => _native?.LastFailure;
+
+    internal int? NativeFailureCodeForTest => _native?.LastFailureCode;
+
+    internal bool NativeSurfaceShownForTest => NativeVideo.Visibility == Visibility.Visible;
 }

@@ -222,18 +222,24 @@ internal static class SmokeRun
         }
     }
 
-    /// <summary>The stand-in's item whose direct-play stream is a real H.264 and AAC MP4 (NATIVE_ITEM, tools/jellyfin-stand-in).</summary>
+    /// <summary>The stand-in's item whose direct-play stream is a real H.264 MP4 without audio (NATIVE_ITEM, tools/jellyfin-stand-in).</summary>
     private const string NativeItemId = "57a2d1e0000000000000000000000014";
 
     /// <summary>
     /// A playback in Windows' own player (ADR 0025, W4) against the Jellyfin stand-in, when <c>CURRENT_STAND_IN</c> names it: signed in,
-    /// the player page opens with both engines, the core sends the stand-in's MP4 (H.264 and AAC, built into Windows) to the native
-    /// route through its relay, and it plays: the route is Native on Windows' player and the position moves. Skipped, visibly, without
-    /// the stand-in, and when this machine cannot play it through Media Foundation (CodecQuery finds no H.264 or AAC decoder, or the
-    /// engine reports a failure: its kind and HRESULT are printed); the libmpv checks stay either way.
+    /// the player page opens with both engines, the core sends the stand-in's MP4 (H.264, built into Windows; no audio, since CI's
+    /// runner has no audio device) to the native route through its relay, and it plays: the route is Native on Windows' player, its
+    /// surface shows and the position moves. Skipped, visibly, without the stand-in, and when this machine cannot play it through Media
+    /// Foundation: CodecQuery finds no H.264 decoder, or the engine fails with one of the HRESULTs below. Any other
+    /// failure fails the run, so a broken engine cannot pass. The libmpv checks stay either way.
     /// </summary>
     private static async Task NativePlaybackChecksAsync(MainWindow window, Action<bool, string> check)
     {
+        // The HRESULTs that say this machine cannot play the file through Media Foundation, not that the engine is wrong (NativeEngine.Codes:
+        // mferror.h, Windows SDK 10.0.26100.0 as W1 read it, and mingw-w64's, read 2026-10-29): no audio device (CI's runner; a file with
+        // no audio should not meet it), no byte stream handler for MP4, no decoder.
+        int[] machineCannotPlay = [NativeEngine.Codes.NoAudioPlaybackDevice, NativeEngine.Codes.UnsupportedByteStreamType,
+            NativeEngine.Codes.TopoCodecNotFound];
         var path = Environment.GetEnvironmentVariable("CURRENT_STAND_IN");
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
         {
@@ -242,11 +248,11 @@ internal static class SmokeRun
         }
         var answers = await CodecAnswers.GetAsync();
         uint Decoders(string subtype) => answers.FirstOrDefault(answer => answer.Subtype == subtype)?.Decoders ?? 0;
-        var (h264, aac) = (Decoders("VideoFormatH264"), Decoders("AudioFormatAac"));
+        var h264 = Decoders("VideoFormatH264");
         Console.WriteLine($"     CodecQuery: {answers.Count(answer => answer.Decoders > 0)} of {answers.Count} asked for have a decoder");
-        if (h264 == 0 || aac == 0)
+        if (h264 == 0)
         {
-            Console.WriteLine($"skip native playback: CodecQuery finds no H.264 or AAC decoder on this machine (H.264 {h264}, AAC {aac})");
+            Console.WriteLine("skip native playback: CodecQuery finds no H.264 decoder on this machine");
             return;
         }
         using var standIn = Process.Start(new ProcessStartInfo(path)
@@ -281,7 +287,7 @@ internal static class SmokeRun
             {
                 var state = window.PlayerStateForTest;
                 if (state is { State: PlayerStateKind.Playing, Route: { Engine: RouteEngine.Platform, Label: RouteLabel.Native } }
-                    && state.Position > TimeSpan.Zero)
+                    && state.Position > TimeSpan.Zero && window.NativeSurfaceShownForTest)
                 {
                     native = true;
                 }
@@ -290,12 +296,18 @@ internal static class SmokeRun
             }, Timeout * 3);
             if (native)
             {
-                check(true, "the stand-in's MP4 plays in Windows' own player through the relay (route Native, the position moves)");
+                check(true, "the stand-in's MP4 plays in Windows' own player through the relay (route Native, its surface shown, the "
+                    + "position moves)");
             }
-            else if (window.NativeFailureForTest is { } failure)
+            else if (window.NativeFailureForTest is { } failure
+                && window.NativeFailureCodeForTest is { } code && machineCannotPlay.Contains(code))
             {
-                Console.WriteLine($"skip native playback: Windows' player could not play the stand-in's MP4 on this machine ({failure}); "
+                Console.WriteLine($"skip native playback: Windows' player cannot play the stand-in's MP4 on this machine ({failure}); "
                     + "the libmpv checks stay");
+            }
+            else if (window.NativeFailureForTest is { } other)
+            {
+                check(false, $"the stand-in's MP4 plays in Windows' own player (it failed: {other})");
             }
             else
             {

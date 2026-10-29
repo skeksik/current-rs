@@ -18,28 +18,43 @@ internal static class CodecAnswers
     private static readonly object Gate = new();
     private static Task<IReadOnlyList<CodecQueryAnswer>>? _answers;
 
-    /// <summary>The answers, asked on the first call.</summary>
+    /// <summary>The answers, asked on the first call; never throws. A run that failed is asked again next time, never kept.</summary>
     public static Task<IReadOnlyList<CodecQueryAnswer>> GetAsync()
     {
         lock (Gate)
         {
+            if (_answers is { IsFaulted: true } or { IsCanceled: true })
+            {
+                _answers = null;
+            }
             return _answers ??= Task.Run(AskAsync);
         }
     }
 
+    /// <summary>Every answer; none when the questions or CodecQuery cannot be had, and the native route then decodes nothing.</summary>
     private static async Task<IReadOnlyList<CodecQueryAnswer>> AskAsync()
     {
-        var asks = PlatformEngineHost.WindowsCodecQueries();
-        var query = new CodecQuery();
+        IReadOnlyList<CodecQueryAsk> asks;
+        CodecQuery query;
+        try
+        {
+            asks = PlatformEngineHost.WindowsCodecQueries();
+            query = new CodecQuery();
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: CodecQuery is not available: {error.GetType().Name}");
+            return [];
+        }
         var answers = await Task.WhenAll(asks.Select(async ask =>
         {
-            if (Subtype(ask.Subtype) is not { } subtype)
-            {
-                Trace.TraceWarning($"Current: no CodecSubtypes property for {ask.Subtype}");
-                return new CodecQueryAnswer(ask.Subtype, 0);
-            }
             try
             {
+                if (Subtype(ask.Subtype) is not { } subtype)
+                {
+                    Trace.TraceWarning($"Current: no CodecSubtypes property for {ask.Subtype}");
+                    return new CodecQueryAnswer(ask.Subtype, 0);
+                }
                 var kind = ask.Kind == CodecQueryKind.Audio ? CodecKind.Audio : CodecKind.Video;
                 var found = await query.FindAllAsync(kind, CodecCategory.Decoder, subtype);
                 return new CodecQueryAnswer(ask.Subtype, (uint)found.Count);
