@@ -56,6 +56,8 @@ pub enum TestCommand {
     Subtitle(EngineTrack),
     Volume(u8),
     Muted(bool),
+    /// The rate in hundredths (150 for 1.5).
+    Speed(u32),
     Stop,
     DisplayFacts,
     CompositionSize {
@@ -277,6 +279,11 @@ impl Engine for TestBackend {
 
     fn set_muted(&mut self, muted: bool) {
         self.record(TestCommand::Muted(muted));
+    }
+
+    fn set_speed(&mut self, speed: f64) {
+        // Rounded to hundredths for the record; a rate is never negative or that large.
+        self.record(TestCommand::Speed((speed * 100.0).round().clamp(0.0, 1e6) as u32));
     }
 
     fn stop(&mut self) {

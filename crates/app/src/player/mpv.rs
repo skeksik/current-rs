@@ -487,6 +487,12 @@ mod real {
             }
         }
 
+        fn set_speed(&mut self, speed: f64) {
+            if let Some(mpv) = &self.mpv {
+                let _ = mpv.set_speed(speed);
+            }
+        }
+
         fn stop(&mut self) {
             if let Some(mpv) = &self.mpv {
                 let _ = mpv.stop();

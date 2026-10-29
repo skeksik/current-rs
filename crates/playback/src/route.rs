@@ -41,6 +41,24 @@ pub struct RouteContext {
     pub preference: EnginePreference,
     /// "Play with app engine" for this playback.
     pub app_engine_chosen: bool,
+    /// The native engine ignores the speed chosen with this playback's tracks (ADR 0025, "Track changes"): the app engine plays it.
+    pub speed_not_supported: bool,
+}
+
+impl RouteContext {
+    /// Why the app engine plays whatever the native engine could: the user's choice, the setting, or the speed; `None` for ADR
+    /// 0025's order.
+    fn app_engine_reason(self) -> Option<RouteReason> {
+        if self.app_engine_chosen {
+            Some(RouteReason::USER_CHOSE_APP_ENGINE)
+        } else if self.preference == EnginePreference::AlwaysAppEngine {
+            Some(RouteReason::SETTING_ALWAYS_APP_ENGINE)
+        } else if self.speed_not_supported {
+            Some(RouteReason::SPEED_NOT_SUPPORTED)
+        } else {
+            None
+        }
+    }
 }
 
 /// A route the check allows, with why it was chosen.
@@ -69,7 +87,8 @@ impl RouteChoice {
 /// With a native engine: native when it plays the container and every selected track, and the subtitle rule and the platform's
 /// display rules allow it; else the remux, when only the container is missing, the remux reads it, and neither Dolby Vision profile 7
 /// nor a subtitle that needs rendering is in the way; else the app engine. A display rule (departures 2 and 8) puts the app engine
-/// before the native route instead of removing it. With "Always app engine" or "Play with app engine", the app engine only. A route
+/// before the native route instead of removing it. With "Always app engine", "Play with app engine" or a speed the native engine
+/// ignores, the app engine only. A route
 /// chosen because one before it failed says so ([`RouteReason::PREVIOUS_ROUTE_FAILED`]).
 pub fn local_routes(
     source: &MediaSource,
@@ -86,14 +105,7 @@ pub fn local_routes(
     // The server offered direct play from a profile the app engine is part of: a codec or container it does not name, the app
     // engine plays as before ADR 0025, the native engine is not trusted with.
     let app_plays = gaps(&engines.app.capabilities, source, tracks, Unnamed::Plays).is_empty();
-    let chosen = if context.app_engine_chosen {
-        Some(RouteReason::USER_CHOSE_APP_ENGINE)
-    } else if context.preference == EnginePreference::AlwaysAppEngine {
-        Some(RouteReason::SETTING_ALWAYS_APP_ENGINE)
-    } else {
-        None
-    };
-    if let Some(reason) = chosen {
+    if let Some(reason) = context.app_engine_reason() {
         let routes = if app_plays {
             vec![RouteChoice::new(Route::AppEngine, vec![reason], Vec::new())]
         } else {
@@ -179,7 +191,7 @@ pub fn local_routes(
     untried(routes, tried)
 }
 
-/// The engines that play the server's stream in `offer`, native first, leaving out `tried` (ADR 0025: "A server stream is played by
+/// The engines that play the server's stream in `offer`, native first, leaving out an engine whose server stream is in `tried` (ADR 0025: "A server stream is played by
 /// the first engine, native first, whose capabilities include the stream's protocol, container and codecs"). The app engine takes
 /// every stream the device profile asks for, as today; with no native engine it is the only one.
 pub fn server_routes(
@@ -192,8 +204,7 @@ pub fn server_routes(
 ) -> Vec<Route> {
     let mut routes = Vec::new();
     if let Some(native) = &engines.native {
-        let app_first =
-            context.app_engine_chosen || context.preference == EnginePreference::AlwaysAppEngine;
+        let app_first = context.app_engine_reason().is_some();
         let copies_video = matches!(
             offer,
             ServerOffer::Stream {
@@ -227,7 +238,12 @@ pub fn server_routes(
         }
     }
     routes.extend(Route::server_stream(offer, current_model::EngineRole::App));
-    routes.retain(|route| !tried.contains(route));
+    // An engine that failed on a server stream in this play is not given another one (the new answer may differ in what it copies).
+    routes.retain(|route| {
+        !tried
+            .iter()
+            .any(|failed| !failed.is_local() && failed.engine() == route.engine())
+    });
     routes
 }
 
@@ -296,6 +312,12 @@ fn takes_stream(
             .all(|codec| capabilities.decodes_audio(codec)),
     };
     container_ok && video_ok && audio_ok
+}
+
+/// Whether departure 8 sends this source to the app engine on `display` (a PQ source on an SDR display, on a platform with the rule):
+/// the controller re-plans when a display change turns it (ADR 0025, "Track changes").
+pub fn hdr_on_sdr(source: &MediaSource, engines: &Engines, display: DisplayKind) -> bool {
+    display_reasons(source, engines, display).contains(&RouteReason::HDR_ON_SDR_DISPLAY)
 }
 
 /// What the platform's display rules say against the native route for this source, as reasons for the app engine.

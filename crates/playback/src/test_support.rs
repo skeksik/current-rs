@@ -70,12 +70,16 @@ pub enum Command {
     Subtitle(EngineTrack),
     Volume(u8),
     Muted(bool),
+    /// The rate in hundredths (150 for 1.5).
+    Speed(u32),
     Stop,
 }
 
 #[derive(Debug, Default)]
 pub struct FakeEngine {
     pub commands: Vec<Command>,
+    /// What it plays; `None` for the default (MKV and MP4, H.264, AAC).
+    pub caps: Option<EngineCapabilities>,
     pub refuse_loads: bool,
     /// Set by `stop`, cleared by `load`: whether nothing is loaded (shared with [`ServerState::engine_unloaded`]).
     pub unloaded: Arc<AtomicBool>,
@@ -89,13 +93,13 @@ impl FakeEngine {
 
 impl Engine for FakeEngine {
     fn capabilities(&self) -> EngineCapabilities {
-        EngineCapabilities {
+        self.caps.clone().unwrap_or_else(|| EngineCapabilities {
             containers: vec![Container::MKV, Container::MP4],
             video: vec![CodecSupport::any(Codec::H264)],
             audio: vec![CodecSupport::any(Codec::AAC)],
             subtitles: vec![],
             external_subtitles: true,
-        }
+        })
     }
 
     fn load(&mut self, file: EngineFile) -> Result<(), EngineErrorKind> {
@@ -135,9 +139,69 @@ impl Engine for FakeEngine {
         self.commands.push(Command::Muted(muted));
     }
 
+    fn set_speed(&mut self, speed: f64) {
+        self.commands.push(Command::Speed((speed * 100.0).round() as u32));
+    }
+
     fn stop(&mut self) {
         self.commands.push(Command::Stop);
         self.unloaded.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A fake engine the test keeps a handle on after handing it to the controller (as the native engine, which the controller boxes).
+#[derive(Clone, Debug, Default)]
+pub struct SharedEngine(pub Arc<Mutex<FakeEngine>>);
+
+impl SharedEngine {
+    pub fn take(&self) -> Vec<Command> {
+        lock(&self.0).take()
+    }
+}
+
+impl Engine for SharedEngine {
+    fn capabilities(&self) -> EngineCapabilities {
+        lock(&self.0).capabilities()
+    }
+
+    fn load(&mut self, file: EngineFile) -> Result<(), EngineErrorKind> {
+        lock(&self.0).load(file)
+    }
+
+    fn add_subtitle(&mut self, subtitle: ExternalSubtitle) {
+        lock(&self.0).add_subtitle(subtitle);
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        lock(&self.0).set_paused(paused);
+    }
+
+    fn seek_to(&mut self, position: Duration) {
+        lock(&self.0).seek_to(position);
+    }
+
+    fn select_audio(&mut self, track: EngineTrack) {
+        lock(&self.0).select_audio(track);
+    }
+
+    fn select_subtitle(&mut self, track: EngineTrack) {
+        lock(&self.0).select_subtitle(track);
+    }
+
+    fn set_volume(&mut self, volume: u8) {
+        lock(&self.0).set_volume(volume);
+    }
+
+    fn set_muted(&mut self, muted: bool) {
+        lock(&self.0).set_muted(muted);
+    }
+
+    fn set_speed(&mut self, speed: f64) {
+        lock(&self.0).set_speed(speed);
+    }
+
+    fn stop(&mut self) {
+        lock(&self.0).stop();
     }
 }
 

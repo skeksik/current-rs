@@ -124,6 +124,13 @@ const VIDEO_SYNC_MODES: [&str; 9] = [
     "desync",
 ];
 
+/// The value of mpv's `speed` property for a playback rate: mpv takes `<0.01-100>` (mpv v0.41.0 `DOCS/man/options.rst`, `--speed`,
+/// read 2026-10-29), so the rate is clamped to that range; anything not finite is normal speed.
+pub fn speed_value(speed: f64) -> String {
+    let speed = if speed.is_finite() { speed.clamp(0.01, 100.0) } else { 1.0 };
+    format!("{speed:.2}")
+}
+
 /// `name` as one of mpv's `video-sync` modes, or `None` for anything else, so no other text reaches mpv's options.
 pub fn video_sync_mode(name: &str) -> Option<&'static str> {
     VIDEO_SYNC_MODES
@@ -594,6 +601,17 @@ fn ffmpeg_headers(headers: &[(String, String)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speed_is_written_within_mpvs_range() {
+        assert_eq!(speed_value(1.0), "1.00");
+        assert_eq!(speed_value(1.5), "1.50");
+        assert_eq!(speed_value(0.25), "0.25");
+        assert_eq!(speed_value(0.0), "0.01");
+        assert_eq!(speed_value(250.0), "100.00");
+        assert_eq!(speed_value(f64::NAN), "1.00");
+        assert_eq!(speed_value(f64::INFINITY), "1.00");
+    }
 
     fn names(opts: &[StartOption]) -> Vec<&str> {
         opts.iter().map(|o| o.name).collect()

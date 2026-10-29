@@ -56,6 +56,7 @@ enum Request {
     Subtitle,
     Volume,
     Mute,
+    Speed,
     Display,
     CompositionSize,
     SubAdd,
@@ -63,7 +64,7 @@ enum Request {
 }
 
 impl Request {
-    const ALL: [Request; 12] = [
+    const ALL: [Request; 13] = [
         Request::Load,
         Request::Stop,
         Request::Pause,
@@ -72,6 +73,7 @@ impl Request {
         Request::Subtitle,
         Request::Volume,
         Request::Mute,
+        Request::Speed,
         Request::Display,
         Request::CompositionSize,
         Request::SubAdd,
@@ -88,6 +90,7 @@ impl Request {
             Request::Subtitle => "sid",
             Request::Volume => "volume",
             Request::Mute => "mute",
+            Request::Speed => "speed",
             Request::Display => "display facts",
             Request::CompositionSize => "d3d11-composition-size",
             Request::SubAdd => "sub-add",
@@ -389,6 +392,11 @@ impl Engine {
 
     pub fn set_muted(&self, muted: bool) -> Result<(), EngineError> {
         self.set(Request::Mute, "mute", if muted { "yes" } else { "no" })
+    }
+
+    /// The playback rate (1 is normal), as mpv's `speed` property ([`options::speed_value`]).
+    pub fn set_speed(&self, speed: f64) -> Result<(), EngineError> {
+        self.set(Request::Speed, "speed", &options::speed_value(speed))
     }
 
     /// Applies new display facts (ADR 0007's mapping); on a monitor change or `AdvancedColorInfoChanged`.

@@ -2,24 +2,27 @@
 //! and a clock.
 //!
 //! The composition root owns it and calls it from one task: actions as the user acts, [`Controller::on_engine_event`] for each
-//! engine event, and [`Controller::tick`] at [`Controller::next_deadline`]. It reports to the server, drives the engine and queues
+//! event of the app engine and [`Controller::on_native_engine_event`] for each of the native engine (ADR 0025), and [`Controller::tick`] at [`Controller::next_deadline`]. It reports to the server, drives the engine and queues
 //! [`PlayerEvent`]s, which the root drains with [`Controller::take_events`] and delivers to listeners. A future dropped part way (a
 //! cancelled action) leaves the controller in a state the next action can leave.
 
 use std::time::Duration;
 
 use current_model::{
-    ItemRef, ItemSummary, MediaKind, MediaStream, PlaybackProblem, PlayerState, Route, RouteReason,
+    EngineRole, ItemRef, ItemSummary, MediaKind, MediaStream, PlaybackProblem, PlayerState, Route,
+    RouteReason, ServerOffer,
     Segment, SegmentKind, StreamKind, StreamProtocol, SubtitleChoice, SubtitleDelivery,
     SubtitleFormat, TrackChoice, TranscodingFacts,
 };
 
 use crate::clock::Clock;
 use crate::engine::{EndReason, Engine, EngineEvent, EngineFile, EngineTrack, ExternalSubtitle};
-use crate::engines::Engines;
+use crate::engines::{
+    DeviceRemux, DisplayKind, EnginePreference, EngineProfile, Engines, PlatformRules,
+};
 use crate::planner::{self, Planned, RouteInputs};
 use crate::quality::{Quality, QualityPreference, snap_quality};
-use crate::route::RouteContext;
+use crate::route::{self, RouteContext};
 use crate::server::{MediaServer, ProgressReport, StopReport, TranscodePermissions};
 use crate::status::{AutoSkip, NextEpisode, PlaybackDetails, PlayerEvent, PlayerStatus, Track};
 
@@ -37,6 +40,38 @@ pub const AUTOPLAY_COUNTDOWN: Duration = Duration::from_secs(10);
 /// error the engine does report takes the engine-failure path and its fallback; the other 30 s, `current-net`'s request timeout,
 /// covers a server that is slow to make the first segment of a transcode.
 pub const STALL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A player's native engine (ADR 0025): the platform's own player beside the app engine, with what the platform adds to it. Boxed: on
+/// Windows and Apple it is a platform object behind the bridge (ADR 0025, "How a platform engine plugs into the core").
+pub struct NativeEngine {
+    pub engine: Box<dyn Engine + Send>,
+    /// Whether it plays HLS.
+    pub hls: bool,
+    pub remux: Option<DeviceRemux>,
+    pub rules: PlatformRules,
+}
+
+impl std::fmt::Debug for NativeEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeEngine")
+            .field("hls", &self.hls)
+            .field("remux", &self.remux)
+            .field("rules", &self.rules)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The engine of `role`: the native one when there is one, else the app engine.
+fn pick<'a, E: Engine>(
+    app: &'a mut E,
+    native: &'a mut Option<NativeEngine>,
+    role: EngineRole,
+) -> &'a mut dyn Engine {
+    match (role, native) {
+        (EngineRole::Native, Some(native)) => native.engine.as_mut(),
+        _ => app,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 enum Phase {
@@ -79,9 +114,18 @@ struct Session {
     /// Whether the rest of the app was told the item stopped.
     item_stopped: bool,
     last_report: Duration,
+    /// An engine failed in this play and the plan moved on (ADR 0019 choice 9, ADR 0025's chain).
     fallback_used: bool,
     /// The routes that failed in this play, oldest first (ADR 0025): none is tried again.
     failed_routes: Vec<Route>,
+    /// The engine that has the file, once loaded.
+    loaded_on: Option<EngineRole>,
+    /// "Play with app engine" for this playback (ADR 0025, choice 3).
+    app_engine_chosen: bool,
+    /// The native engine ignored the speed with these tracks, so the app engine plays this playback (ADR 0025, "Track changes").
+    speed_not_supported: bool,
+    /// What the engine playing last said of rates other than 1 ([`EngineEvent::RatesSupported`]).
+    rates_supported: bool,
     permissions: TranscodePermissions,
     facts: Option<TranscodingFacts>,
     /// External subtitles added to the file playing, by server index.
@@ -119,6 +163,10 @@ impl Session {
             last_report: now,
             fallback_used: false,
             failed_routes: Vec::new(),
+            loaded_on: None,
+            app_engine_chosen: false,
+            speed_not_supported: false,
+            rates_supported: true,
             permissions: TranscodePermissions::default(),
             facts: None,
             added_subtitles: Vec::new(),
@@ -190,9 +238,15 @@ impl Session {
     }
 }
 
-/// The playback controller. `E` is the player's one engine, kept for every file it plays.
+/// The playback controller. `E` is the player's app engine, kept for every file it plays; a native engine may join it
+/// ([`Controller::with_native_engine`]).
 pub struct Controller<E, S, C> {
     engine: E,
+    native: Option<NativeEngine>,
+    display: DisplayKind,
+    preference: EnginePreference,
+    /// The playback rate, 1 for normal.
+    speed: f64,
     server: S,
     clock: C,
     quality: QualityPreference,
@@ -218,6 +272,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     ) -> Self {
         Self {
             engine,
+            native: None,
+            display: DisplayKind::Unknown,
+            preference: EnginePreference::Automatic,
+            speed: 1.0,
             server,
             clock,
             quality,
@@ -239,6 +297,101 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
 
     pub fn engine_mut(&mut self) -> &mut E {
         &mut self.engine
+    }
+
+    /// The controller with a native engine beside the app engine (ADR 0025), as the player opens; volume and mute are the app
+    /// engine's.
+    pub fn with_native_engine(mut self, mut native: NativeEngine) -> Self {
+        native.engine.set_volume(self.volume);
+        native.engine.set_muted(self.muted);
+        self.native = Some(native);
+        self
+    }
+
+    pub fn native_engine_mut(&mut self) -> Option<&mut NativeEngine> {
+        self.native.as_mut()
+    }
+
+    /// Settings → Playback → "Player" (ADR 0025, choice 3), for the next plan.
+    pub fn set_engine_preference(&mut self, preference: EnginePreference) {
+        self.preference = preference;
+    }
+
+    /// The engine that has the file: the app engine when nothing is loaded.
+    fn role(&self) -> EngineRole {
+        self.session
+            .as_ref()
+            .and_then(|session| session.loaded_on)
+            .unwrap_or(EngineRole::App)
+    }
+
+    /// The engine that has the file.
+    fn playing(&mut self) -> &mut dyn Engine {
+        let role = self.role();
+        pick(&mut self.engine, &mut self.native, role)
+    }
+
+    /// The player's engines, for a plan.
+    fn engines(&self) -> Engines {
+        let app = self.engine.capabilities();
+        match &self.native {
+            None => Engines::app_only(app),
+            Some(native) => Engines {
+                native: Some(EngineProfile::new(native.engine.capabilities(), native.hls)),
+                app: EngineProfile::new(app, true),
+                remux: native.remux.clone(),
+                rules: native.rules,
+            },
+        }
+    }
+
+    fn route_context(&self) -> RouteContext {
+        let session = self.session.as_ref();
+        RouteContext {
+            display: self.display,
+            preference: self.preference,
+            app_engine_chosen: session.is_some_and(|session| session.app_engine_chosen),
+            speed_not_supported: session.is_some_and(|session| session.speed_not_supported),
+        }
+    }
+
+    /// Whether the route playing still plays the item with `tracks` (ADR 0025, "Track changes"). Always with the app engine only.
+    fn route_fits(&self, tracks: TrackChoice) -> bool {
+        if self.native.is_none() {
+            return true;
+        }
+        let Some(session) = &self.session else {
+            return true;
+        };
+        let Some(planned) = &session.planned else {
+            return true;
+        };
+        let engines = self.engines();
+        let context = self.route_context();
+        let source = &planned.plan.source;
+        let route = &planned.plan.route;
+        match route {
+            Route::ServerStream {
+                protocol,
+                container,
+                video,
+                audio,
+                engine,
+            } => {
+                let offer = ServerOffer::Stream {
+                    protocol: *protocol,
+                    container: container.clone(),
+                    video: *video,
+                    audio: *audio,
+                };
+                route::server_routes(&offer, source, tracks, &engines, context, &session.failed_routes)
+                    .iter()
+                    .any(|candidate| candidate.engine() == *engine)
+            }
+            _ => route::local_routes(source, tracks, &engines, context, &session.failed_routes)
+                .iter()
+                .any(|choice| choice.route == *route),
+        }
     }
 
     pub fn server(&self) -> &S {
@@ -337,7 +490,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     pub async fn play(&mut self, item: ItemRef, kind: MediaKind, start: Duration) {
         if self.session.is_some() {
             // Unloaded now, as a stop does: an end the old file reports while the new one is planned would read as the new one's.
-            self.engine.stop();
+            self.playing().stop();
             self.end_item(false).await;
         }
         self.session = Some(Session::new(
@@ -440,7 +593,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         }
         session.paused = paused;
         session.last_progress = self.clock.now();
-        self.engine.set_paused(paused);
+        self.playing().set_paused(paused);
         self.report_progress().await;
         self.publish(true);
     }
@@ -488,7 +641,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         session.position = target;
         session.seeking = true;
         session.last_progress = self.clock.now();
-        self.engine.seek_to(target);
+        self.playing().seek_to(target);
         self.update_position();
         self.publish(true);
     }
@@ -498,7 +651,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             return;
         }
         // Silent at once: the stop report's answer can take seconds (seen through a gateway on a remux, 2026-10-26).
-        self.engine.stop();
+        self.playing().stop();
         self.end_item(false).await;
         self.session = None;
         self.phase = Phase::Idle;
@@ -515,17 +668,21 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         if planned.plan.tracks.audio == Some(index) || planned.plan.source.stream(index).is_none() {
             return;
         }
-        if planned.plan.route.is_local() {
-            planned.plan.tracks.audio = Some(index);
-            self.engine.select_audio(EngineTrack::Stream(index));
+        let local = planned.plan.route.is_local();
+        let tracks = TrackChoice {
+            audio: Some(index),
+            ..planned.plan.tracks
+        };
+        if local && self.route_fits(tracks) {
+            if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut()) {
+                planned.plan.tracks.audio = Some(index);
+            }
+            self.playing().select_audio(EngineTrack::Stream(index));
             self.report_progress().await;
             self.publish(true);
         } else {
-            // A server stream carries one audio stream: the server makes a new one at the position.
-            let tracks = TrackChoice {
-                audio: Some(index),
-                ..planned.plan.tracks
-            };
+            // A server stream carries one audio stream: the server makes a new one at the position. A track the engine playing
+            // cannot play moves the file to the next route that can, at the position (ADR 0025, "Track changes").
             self.replan(tracks).await;
         }
     }
@@ -551,11 +708,11 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         {
             return;
         }
-        if session.burned_in(choice) || session.burned_in(current) {
-            let tracks = TrackChoice {
-                subtitle: choice,
-                ..planned.plan.tracks
-            };
+        let tracks = TrackChoice {
+            subtitle: choice,
+            ..planned.plan.tracks
+        };
+        if session.burned_in(choice) || session.burned_in(current) || !self.route_fits(tracks) {
             self.replan(tracks).await;
             return;
         }
@@ -567,7 +724,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 return;
             }
         } else {
-            self.engine.select_subtitle(engine_subtitle(choice));
+            self.playing().select_subtitle(engine_subtitle(choice));
         }
         if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut()) {
             planned.plan.tracks.subtitle = choice;
@@ -585,7 +742,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             return false;
         };
         if session.added_subtitles.contains(&index) {
-            self.engine.select_subtitle(EngineTrack::Stream(index));
+            self.playing().select_subtitle(EngineTrack::Stream(index));
             return true;
         }
         let Some(planned) = &session.planned else {
@@ -601,7 +758,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         else {
             return false;
         };
-        self.engine.add_subtitle(ExternalSubtitle {
+        let subtitle = ExternalSubtitle {
             index,
             format: stream
                 .codec
@@ -614,7 +771,8 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 .or_else(|| stream.title.clone()),
             language: stream.language.clone(),
             select: true,
-        });
+        };
+        self.playing().add_subtitle(subtitle);
         if let Some(session) = &mut self.session {
             session.added_subtitles.push(index);
         }
@@ -643,24 +801,128 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         }
     }
 
+    /// On both engines, so a switch keeps it.
     pub fn set_volume(&mut self, volume: u8) {
         self.volume = volume.min(100);
         self.engine.set_volume(self.volume);
+        if let Some(native) = &mut self.native {
+            native.engine.set_volume(self.volume);
+        }
         self.publish(true);
     }
 
+    /// On both engines, so a switch keeps it.
     pub fn set_muted(&mut self, muted: bool) {
         self.muted = muted;
         self.engine.set_muted(muted);
+        if let Some(native) = &mut self.native {
+            native.engine.set_muted(muted);
+        }
         self.publish(true);
     }
 
+    /// The playback rate, 1 for normal. When the native engine plays and has said it ignores rates with these tracks (Windows' player
+    /// with E-AC-3 Atmos, W1), a rate other than 1 moves the file to the app engine at the position, keeping the tracks (ADR 0025,
+    /// "Track changes"; owner, 2026-10-28). No UI offers a speed yet: this is the core's part.
+    pub async fn set_speed(&mut self, speed: f64) {
+        self.speed = speed;
+        self.playing().set_speed(speed);
+        self.check_speed().await;
+    }
+
+    async fn check_speed(&mut self) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        if self.speed == 1.0
+            || session.rates_supported
+            || session.loaded_on != Some(EngineRole::Native)
+            || !matches!(self.phase, Phase::Active | Phase::Loading)
+        {
+            return;
+        }
+        session.speed_not_supported = true;
+        let tracks = session.tracks();
+        self.replan(tracks).await;
+    }
+
+    /// The display the player's window is on (departure 8, from the UI's display facts). A change that turns departure 8 for the
+    /// item playing re-plans at the position (ADR 0025, "Track changes"); with the app engine only it changes nothing.
+    pub async fn set_display(&mut self, display: DisplayKind) {
+        let before = self.display;
+        self.display = display;
+        if self.native.is_none() || before == display {
+            return;
+        }
+        if !matches!(self.phase, Phase::Active | Phase::Loading) {
+            return;
+        }
+        let Some(planned) = self.session.as_ref().and_then(|s| s.planned.as_ref()) else {
+            return;
+        };
+        let engines = self.engines();
+        let source = &planned.plan.source;
+        let was = route::hdr_on_sdr(source, &engines, before);
+        let now = route::hdr_on_sdr(source, &engines, display);
+        let moves = match (was, now) {
+            // The rule now applies: off the native engine.
+            (false, true) => planned.plan.route.engine() == EngineRole::Native,
+            // It no longer does: back from the app engine where the rule put it there.
+            (true, false) => planned.plan.reasons.contains(&RouteReason::HDR_ON_SDR_DISPLAY),
+            _ => false,
+        };
+        if moves {
+            let tracks = planned.plan.tracks;
+            self.replan(tracks).await;
+        }
+    }
+
+    /// "Play with app engine" for this playback (ADR 0025, choice 3): the app engine, then the server, at the position.
+    pub async fn play_with_app_engine(&mut self) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        if session.app_engine_chosen {
+            return;
+        }
+        session.app_engine_chosen = true;
+        let on_app = session.loaded_on.unwrap_or(EngineRole::App) == EngineRole::App;
+        if !on_app && matches!(self.phase, Phase::Active | Phase::Loading) {
+            let tracks = session.tracks();
+            self.replan(tracks).await;
+        }
+    }
+
+    /// An event of the app engine.
     pub async fn on_engine_event(&mut self, event: EngineEvent) {
+        self.on_event(EngineRole::App, event).await;
+    }
+
+    /// An event of the native engine.
+    pub async fn on_native_engine_event(&mut self, event: EngineEvent) {
+        self.on_event(EngineRole::Native, event).await;
+    }
+
+    async fn on_event(&mut self, role: EngineRole, event: EngineEvent) {
+        // Only the engine that has the file speaks for it; the other one's ends and errors are of a file it no longer plays.
+        if role != self.role() {
+            return;
+        }
         let now = self.clock.now();
         let Some(session) = &mut self.session else {
             return;
         };
         match event {
+            EngineEvent::TrackFailed(_) if session.refusal_pending => {}
+            EngineEvent::TrackFailed(kind) => {
+                if matches!(self.phase, Phase::Active | Phase::Loading) {
+                    self.engine_failed(kind).await;
+                }
+            }
+            EngineEvent::RatesSupported(supported) => {
+                session.rates_supported = supported;
+                self.check_speed().await;
+            }
             EngineEvent::Loaded => {
                 session.last_progress = now;
                 if self.phase == Phase::Loading {
@@ -746,7 +1008,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 if matches!(self.phase, Phase::Active | Phase::Loading) {
                     if session.stream_lost && !session.at_end() {
                         // The connection's failure, not the end of the file: not marked played, no autoplay.
-                        self.engine.stop();
+                        self.playing().stop();
                         self.fail(PlaybackProblem::Network).await;
                     } else {
                         self.end_of_file().await;
@@ -798,7 +1060,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             session.stream_lost = true;
             return;
         }
-        self.engine.stop();
+        self.playing().stop();
         self.fail(problem).await;
     }
 
@@ -873,7 +1135,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
     /// The engine made no progress for [`STALL_TIMEOUT`]: it is stopped and playback fails, reported stopped with `Failed = true`.
     /// Nothing is retried by itself; playing the item again resumes at the reported position.
     async fn stall(&mut self) {
-        self.engine.stop();
+        self.playing().stop();
         self.fail(PlaybackProblem::Network).await;
     }
 
@@ -916,8 +1178,9 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         let item = session.item.clone();
         let mut quality = session.quality;
         let local = self.server.is_local_address();
-        // One engine: the app engine (ADR 0025 with no native engine yet), whose capabilities are the device profile as before.
-        let engines = Engines::app_only(self.engine.capabilities());
+        // With the app engine only, its capabilities are the device profile as before ADR 0025; with a native engine, the union.
+        let engines = self.engines();
+        let context = self.route_context();
         let capabilities = engines.device_profile();
         let mut direct_play = direct_play;
         let planned = loop {
@@ -943,7 +1206,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             let server_reasons = answer.reasons.clone();
             let inputs = RouteInputs {
                 engines: &engines,
-                context: RouteContext::default(),
+                context,
                 tried: &session.failed_routes,
             };
             let Some(planned) = planner::plan(
@@ -1033,9 +1296,29 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             }
             _ => engine_subtitle(subtitle),
         };
-        self.engine
+        let role = session
+            .planned
+            .as_ref()
+            .map_or(EngineRole::App, |planned| planned.plan.route.engine());
+        let before = session.loaded_on.replace(role);
+        session.rates_supported = true;
+        let switched = before.is_some_and(|before| before != role);
+        if let Some(before) = before.filter(|before| *before != role) {
+            // The file moves to the other engine: the one that had it lets it go.
+            pick(&mut self.engine, &mut self.native, before).stop();
+        }
+        let (volume, muted, speed) = (self.volume, self.muted, self.speed);
+        let engine = pick(&mut self.engine, &mut self.native, role);
+        engine
             .load(EngineFile { subtitle, ..file })
             .map_err(|kind| PlaybackProblem::Engine { kind })?;
+        if switched {
+            engine.set_volume(volume);
+            engine.set_muted(muted);
+        }
+        if switched || speed != 1.0 {
+            engine.set_speed(speed);
+        }
         self.phase = Phase::Loading;
         self.publish(true);
         Ok(())
@@ -1058,17 +1341,22 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         } else {
             Vec::new()
         };
+        // With a native engine the routes that failed are left out by the check; with the app engine only, direct play stays off
+        // after a fallback (ADR 0019 choice 9).
+        let direct_play = !fallback || self.native.is_some();
         if let Err(problem) = self
-            .plan_and_load(media_source, start, tracks, !fallback, own, false)
+            .plan_and_load(media_source, start, tracks, direct_play, own, false)
             .await
         {
             self.fail(problem).await;
         }
     }
 
-    /// An engine failure: on direct play, once per item, the plan is made again without direct play at the position with the same
-    /// tracks (ADR 0019, choice 9); otherwise playback fails.
+    /// An engine failure (an error, or a selected track it cannot play): the next route at the position with the same tracks, each
+    /// route at most once per play, ending with the server stream (ADR 0025, "Fallback on a failed start"; ADR 0019 choice 9
+    /// widened). With the app engine only that is choice 9 as written: one re-plan without direct play. Otherwise playback fails.
     async fn engine_failed(&mut self, kind: current_model::EngineErrorKind) {
+        let app_only = self.native.is_none();
         let Some(session) = &mut self.session else {
             return;
         };
@@ -1076,14 +1364,25 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             self.fail(PlaybackProblem::Network).await;
             return;
         }
-        if !session.is_local() || session.fallback_used {
+        let Some(route) = session
+            .planned
+            .as_ref()
+            .map(|planned| planned.plan.route.clone())
+        else {
+            self.fail(PlaybackProblem::Engine { kind }).await;
+            return;
+        };
+        // A local route leads on to the next one or the server; a server stream on the native engine to the app engine, which takes
+        // every stream; the app engine's server stream is the last.
+        let next = !session.failed_routes.contains(&route)
+            && (route.is_local() || route.engine() == EngineRole::Native);
+        if !next {
             self.fail(PlaybackProblem::Engine { kind }).await;
             return;
         }
         session.fallback_used = true;
-        if let Some(planned) = &session.planned {
-            session.failed_routes.push(planned.plan.route.clone());
-        }
+        session.failed_routes.push(route.clone());
+        let direct_play = route.is_local() && !app_only;
         let start = session.position;
         let tracks = session.tracks();
         let media_source = session
@@ -1096,7 +1395,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
                 media_source,
                 start,
                 tracks,
-                false,
+                direct_play,
                 vec![RouteReason::FALLBACK_AFTER_ENGINE_ERROR],
                 false,
             )

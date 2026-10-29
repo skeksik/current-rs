@@ -551,6 +551,7 @@ fn with_the_app_engine_only_the_servers_answer_stands() {
             preference: EnginePreference::AlwaysAppEngine,
             app_engine_chosen: true,
             display: DisplayKind::Unknown,
+            speed_not_supported: true,
         },
     ] {
         let choices = local_routes(
