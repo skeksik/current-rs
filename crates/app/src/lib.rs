@@ -89,6 +89,11 @@ pub use player::{
     SwapChain, TIMELINE_INTERVAL, VideoOutput, bitrate_label, fallback_quality_entries,
     player_engine, quality_label, quality_menu,
 };
+// A platform's own player beside libmpv (ADR 0025), and the facts its UI reports.
+pub use player::{
+    CodecAnswer, CodecKind, CodecQuery, PlatformEngine, PlatformError, PlatformEvents,
+    PlatformFile, PlatformSubtitle, windows_codec_queries,
+};
 // The player's words and its problems (ADR 0019), worded once for every UI.
 pub use player::{
     NO_AUDIO_TRACKS, PanelSizes, PlaybackProblem, PlayerProblem, SUBTITLES_OFF, countdown_text,
@@ -501,7 +506,37 @@ impl App {
             relay: self.relay.clone(),
             capabilities: self.engine_capabilities.clone(),
         };
-        player::open(context, size, display).await
+        player::open(context, size, display, None).await
+    }
+
+    /// Opens a player with a platform's own player beside this build's engine (ADR 0025): the platform engine plays what its
+    /// capabilities take, this build's engine (libmpv) the rest. `answers` are the UI's answers to
+    /// [`windows_codec_queries`]. Every stream for the platform engine goes through the loopback relay.
+    ///
+    /// # Errors
+    /// As [`App::open_player`], and `EngineFailed` when the platform engine cannot be attached.
+    pub async fn open_player_with_platform_engine(
+        &self,
+        size: CompositionSize,
+        display: DisplayFacts,
+        engine: Arc<dyn player::PlatformEngine>,
+        answers: &[player::CodecAnswer],
+    ) -> Result<Player, PlayerError> {
+        let context = player::Context {
+            shared: self.shared.clone(),
+            images: self.images.clone(),
+            browse: self.browse.clone(),
+            prefs: self.playback.clone(),
+            relay: self.relay.clone(),
+            capabilities: self.engine_capabilities.clone(),
+        };
+        let (profile, rules) = player::windows_engine(answers);
+        let native = player::NativeSetup {
+            engine,
+            profile,
+            rules,
+        };
+        player::open(context, size, display, Some(native)).await
     }
 
     /// What this build's engine plays, without playing anything (ADR 0021): the capabilities the last engine reported at its start,

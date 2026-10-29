@@ -32,6 +32,8 @@ mod labels;
 mod live_tests;
 mod mpv;
 mod now_playing;
+mod platform;
+mod platform_caps;
 mod prefs;
 mod problem;
 mod relay;
@@ -68,8 +70,12 @@ pub use words::{
     track_name,
 };
 
-pub(crate) use driver::{Context, open};
+pub(crate) use driver::{Context, NativeSetup, open};
 pub(crate) use known_caps::KnownCapabilities;
+pub use platform::{PlatformEngine, PlatformError, PlatformEvents, PlatformFile, PlatformSubtitle};
+pub use platform_caps::{
+    CodecAnswer, CodecKind, CodecQuery, windows_codec_queries, windows_engine,
+};
 pub(crate) use prefs::PlaybackPrefs;
 pub(crate) use relay::RelaySlot;
 
@@ -126,7 +132,10 @@ pub enum PlayerError {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlaybackInfo {
     pub details: Option<PlaybackDetails>,
+    /// libmpv's output; empty while the platform engine plays.
     pub engine: EngineOutput,
+    /// The player has a platform engine beside libmpv (ADR 0025): the panel then names ADR 0025's routes.
+    pub platform_engine: bool,
 }
 
 /// The automatic skipping the playback settings name (ADR 0019, choice 8).

@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use current_model::{EngineErrorKind, ImageType, ItemRef, ItemSummary, MediaKind, PlayerState};
 use current_playback::{
-    Clock, Controller, DisplayKind, EndReason, EngineEvent, PlayerEvent, PlayerStatus,
+    Clock, Controller, DisplayKind, EndReason, EngineEvent, EngineProfile, NativeEngine,
+    PlatformRules, PlayerEvent, PlayerStatus,
 };
 use current_relay::RelayEvent;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -18,6 +19,7 @@ use tokio::time::Instant;
 use super::KnownCapabilities;
 use super::backend::{Backend, CompositionSize, DisplayFacts, Signal, SwapChain};
 use super::now_playing::{NowPlaying, TIMELINE_INTERVAL, now_playing};
+use super::platform::{LoadGate, PlatformBackend, PlatformEngine, PlatformEvents};
 use super::prefs::PlaybackPrefs;
 use super::relay::RelaySlot;
 use super::server::{JellyfinMedia, refusal_problem, relay_problem};
@@ -53,16 +55,58 @@ impl Clock for TokioClock {
     }
 }
 
-/// Opens a player on this build's engine (see [`super::player_engine`]).
+/// A platform's own player to open beside this build's engine (ADR 0025), with the capabilities made from its UI's facts.
+pub(crate) struct NativeSetup {
+    pub(crate) engine: Arc<dyn PlatformEngine>,
+    pub(crate) profile: EngineProfile,
+    pub(crate) rules: PlatformRules,
+}
+
+/// The native engine as the driver holds it: the controller's engine, the channel of its events and the gate that admits only
+/// the load playing.
+struct Native {
+    engine: NativeEngine,
+    events: mpsc::UnboundedReceiver<(u64, EngineEvent)>,
+    gate: Arc<LoadGate>,
+}
+
+impl NativeSetup {
+    /// Hands the platform engine its events object and makes it the controller's native engine.
+    fn attach(self) -> Result<Native, PlayerError> {
+        let (events, receiver) = PlatformEvents::new();
+        self.engine
+            .attach(events)
+            .map_err(|_| PlayerError::EngineFailed {
+                kind: EngineErrorKind::LOADING_FAILED,
+            })?;
+        let gate = Arc::new(LoadGate::default());
+        let backend = PlatformBackend::new(self.engine, self.profile.capabilities, gate.clone());
+        Ok(Native {
+            engine: NativeEngine {
+                engine: Box::new(backend),
+                hls: self.profile.hls,
+                // None on Windows (ADR 0025, departure 1).
+                remux: None,
+                rules: self.rules,
+            },
+            events: receiver,
+            gate,
+        })
+    }
+}
+
+/// Opens a player on this build's engine (see [`super::player_engine`]), with a platform engine beside it when `native` is given.
 pub(crate) async fn open(
     context: Context,
     size: CompositionSize,
     display: DisplayFacts,
+    native: Option<NativeSetup>,
 ) -> Result<Player, PlayerError> {
     if tokio::runtime::Handle::try_current().is_err() {
         return Err(PlayerError::NoRuntime);
     }
-    start(context, size, display).await
+    let native = native.map(NativeSetup::attach).transpose()?;
+    start(context, size, display, native).await
 }
 
 #[cfg(feature = "libmpv")]
@@ -70,6 +114,7 @@ async fn start(
     context: Context,
     size: CompositionSize,
     display: DisplayFacts,
+    native: Option<Native>,
 ) -> Result<Player, PlayerError> {
     use super::mpv::MpvBackend;
     let kind = display_kind(&display);
@@ -93,7 +138,7 @@ async fn start(
     context
         .capabilities
         .remember(current_playback::Engine::capabilities(&backend));
-    Ok(spawn(context, backend, raw, kind))
+    Ok(spawn(context, backend, raw, kind, native))
 }
 
 #[cfg(all(not(feature = "libmpv"), any(test, feature = "test-engine")))]
@@ -101,6 +146,7 @@ async fn start(
     context: Context,
     size: CompositionSize,
     display: DisplayFacts,
+    native: Option<Native>,
 ) -> Result<Player, PlayerError> {
     use super::test_engine::TestBackend;
     let kind = display_kind(&display);
@@ -118,7 +164,7 @@ async fn start(
     context
         .capabilities
         .remember(current_playback::Engine::capabilities(&backend));
-    Ok(spawn(context, backend, raw, kind))
+    Ok(spawn(context, backend, raw, kind, native))
 }
 
 #[cfg(not(any(feature = "libmpv", test, feature = "test-engine")))]
@@ -126,6 +172,7 @@ async fn start(
     _context: Context,
     _size: CompositionSize,
     _display: DisplayFacts,
+    _native: Option<Native>,
 ) -> Result<Player, PlayerError> {
     Err(PlayerError::EngineUnavailable)
 }
@@ -144,6 +191,7 @@ fn spawn<B: Backend>(
     backend: B,
     raw: mpsc::UnboundedReceiver<B::Raw>,
     display: DisplayKind,
+    native: Option<Native>,
 ) -> Player {
     let (commands, receiver) = mpsc::unbounded_channel();
     let (state, state_rx) = watch::channel(PlayerStatus::default());
@@ -155,7 +203,7 @@ fn spawn<B: Backend>(
     let auto_skip_rx = context.prefs.auto_skip();
     let initial_skip = auto_skip(&auto_skip_rx.borrow());
     let (relay_events, relay_rx) = mpsc::unbounded_channel();
-    let controller = Controller::new(
+    let mut controller = Controller::new(
         backend,
         JellyfinMedia::new(
             context.shared.clone(),
@@ -168,11 +216,20 @@ fn spawn<B: Backend>(
         initial_skip,
     )
     .with_display(display);
+    let (native_events, gate) = match native {
+        Some(native) => {
+            controller = controller.with_native_engine(native.engine);
+            (Some(native.events), Some(native.gate))
+        }
+        None => (None, None),
+    };
     let driver = Driver {
         controller,
         context,
         clock,
         raw: Some(raw),
+        native_events,
+        gate,
         relay: Some(relay_rx),
         state,
         now_playing: now,
@@ -201,6 +258,10 @@ struct Driver<B: Backend> {
     clock: TokioClock,
     /// `None` once the engine's thread ended.
     raw: Option<mpsc::UnboundedReceiver<B::Raw>>,
+    /// The platform engine's events with their load's generation; `None` without one, or once its sender is gone.
+    native_events: Option<mpsc::UnboundedReceiver<(u64, EngineEvent)>>,
+    /// Which of the platform engine's loads its events are taken for.
+    gate: Option<Arc<LoadGate>>,
     /// The relay routes' events, by route number.
     relay: Option<mpsc::UnboundedReceiver<(u64, RelayEvent)>>,
     state: watch::Sender<PlayerStatus>,
@@ -224,6 +285,8 @@ enum Wake<R> {
     HandleGone,
     Raw(R),
     EngineThreadEnded,
+    Native(u64, EngineEvent),
+    NativeGone,
     Relay(u64, RelayEvent),
     RelayGone,
     AutoSkip,
@@ -288,6 +351,17 @@ impl<B: Backend> Driver<B> {
                 Wake::Command(command) => self.command(command, &mut commands, &mut deferred).await,
                 Wake::Raw(raw) => self.engine(raw).await,
                 Wake::EngineThreadEnded => self.raw = None,
+                Wake::Native(generation, event) => {
+                    // Only the load playing speaks; an event of an older or stopped load is dropped (ADR 0025, W3).
+                    if self
+                        .gate
+                        .as_ref()
+                        .is_some_and(|gate| gate.admits(generation))
+                    {
+                        self.controller.on_native_engine_event(event).await;
+                    }
+                }
+                Wake::NativeGone => self.native_events = None,
                 Wake::Relay(route, event) => self.relay_event(route, event).await,
                 Wake::RelayGone => self.relay = None,
                 Wake::AutoSkip => {
@@ -312,6 +386,7 @@ impl<B: Backend> Driver<B> {
     async fn wait(&mut self, commands: &mut mpsc::UnboundedReceiver<Command>) -> Wake<B::Raw> {
         let deadline = self.deadline();
         let raw = &mut self.raw;
+        let native = &mut self.native_events;
         let relay = &mut self.relay;
         let skip = &mut self.auto_skip;
         // In this order: a relay refusal reaches the controller before the engine's error about the same refused request.
@@ -323,6 +398,9 @@ impl<B: Backend> Driver<B> {
             }
             raw = async { raw.as_mut()?.recv().await }, if raw.is_some() => {
                 raw.map_or(Wake::EngineThreadEnded, Wake::Raw)
+            }
+            event = async { native.as_mut()?.recv().await }, if native.is_some() => {
+                event.map_or(Wake::NativeGone, |(generation, event)| Wake::Native(generation, event))
             }
             changed = async { skip.as_mut()?.changed().await.ok() }, if skip.is_some() => {
                 changed.map_or(Wake::AutoSkipGone, |()| Wake::AutoSkip)
@@ -418,6 +496,7 @@ impl<B: Backend> Driver<B> {
                 let _ = done.send(PlaybackInfo {
                     details: self.controller.details(),
                     engine: self.controller.engine().output(),
+                    platform_engine: self.gate.is_some(),
                 });
             }
             Command::Summary(summary) => {
