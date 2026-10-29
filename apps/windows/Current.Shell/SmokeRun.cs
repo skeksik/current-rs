@@ -349,9 +349,15 @@ internal static class SmokeRun
             window.ReopenForSubtitlesForTest = reopen;
             if (reopen)
             {
+                // A new play of the item: seen leaving Playing (loading again), then playing natively again.
                 window.PlayForTest(core, new ItemRef(core.Servers[0].Server, NativeItemId));
-                var playing = await WaitUntilAsync(() => window.PlayerStateForTest is
-                    { State: PlayerStateKind.Playing, Route.Engine: RouteEngine.Platform }, Timeout * 3);
+                var left = false;
+                var playing = await WaitUntilAsync(() =>
+                {
+                    var state = window.PlayerStateForTest;
+                    left |= state.State is not PlayerStateKind.Playing;
+                    return left && state is { State: PlayerStateKind.Playing, Route.Engine: RouteEngine.Platform };
+                }, Timeout * 3);
                 if (!playing)
                 {
                     check(false, "the stand-in's MP4 plays natively again for the subtitle check");
@@ -363,9 +369,12 @@ internal static class SmokeRun
             var added = await WaitUntilAsync(() => window.SubtitlePathForTest is not null, Timeout);
             var path = window.SubtitlePathForTest ?? "none";
             Console.WriteLine($"     native subtitle file: {path}");
+            // Either way is right as it comes (which one a Windows build takes is what the line above records); opened again on
+            // purpose, it must be that one.
+            var expected = reopen ? path == "reopened with the file" : path is "added while playing" or "reopened with the file";
+            check(added && expected, $"the native engine shows the subtitle file ({(reopen ? "opened again on purpose" : "as it comes")}: {path})");
             if (!added)
             {
-                check(false, $"the native engine shows the subtitle file ({(reopen ? "opened again" : "as it comes")}; {path})");
                 return;
             }
             window.SeekForTest(TimeSpan.Zero);

@@ -89,6 +89,8 @@ public sealed partial class PlayerView : UserControl
         _subtitles = new SubtitleOverlay(SubtitleLayer, NativeVideo);
         // The subtitles keep clear of the control panel while it shows (SubtitleOverlay, "Above the bar").
         ControlPanel.SizeChanged += (_, _) => TellPanelTop();
+        Root.SizeChanged += (_, _) => TellPanelTop();
+        NativeVideo.SizeChanged += (_, _) => TellPanelTop();
         _hideTimer = DispatcherQueue.CreateTimer();
         _hideTimer.Interval = HideAfter;
         _hideTimer.IsRepeating = false;
@@ -408,7 +410,11 @@ public sealed partial class PlayerView : UserControl
         {
             // The surface of the engine the route plays on (ADR 0025): Windows' own player over libmpv's panel, or the panel.
             NativeVideo.Visibility = state.Route?.Engine == RouteEngine.Platform ? Visibility.Visible : Visibility.Collapsed;
-            SubtitleLayer.Visibility = NativeVideo.Visibility;
+            if (SubtitleLayer.Visibility != NativeVideo.Visibility)
+            {
+                SubtitleLayer.Visibility = NativeVideo.Visibility;
+                TellPanelTop();
+            }
             BusyRing.IsActive = state.State is PlayerStateKind.Preparing or PlayerStateKind.Loading or PlayerStateKind.Buffering
                 or PlayerStateKind.Seeking;
             var playing = state.State is PlayerStateKind.Playing or PlayerStateKind.Buffering or PlayerStateKind.Seeking;
@@ -693,7 +699,8 @@ public sealed partial class PlayerView : UserControl
         }
         try
         {
-            var top = ControlPanel.TransformToVisual(SubtitleLayer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+            // Against the MediaPlayerElement, not the subtitle layer: the layer's own lift would be part of the measure.
+            var top = ControlPanel.TransformToVisual(_subtitles.Frame).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
             _subtitles.PanelTop(top);
         }
         catch (Exception error)
@@ -824,6 +831,8 @@ public sealed partial class PlayerView : UserControl
     internal void FullScreenChanged(bool on)
     {
         FullScreenSymbol.Symbol = on ? Symbol.BackToWindow : Symbol.FullScreen;
+        // The panel moves with the window's new layout; measured again once it is laid out.
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, TellPanelTop);
         SetName(FullScreenButton, on ? "Exit full screen" : "Full screen");
         ShowControls();
     }

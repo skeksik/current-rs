@@ -10,10 +10,10 @@ namespace Current.Shell.Player;
 /// through the system's closed captioning settings page" (ClosedCaptionProperties Class, learn.microsoft.com, ms.date 2017-02-08,
 /// read 2026-10-29; Windows 10 10240). The app has no subtitle settings of its own (2026-10-29), so these are the native default.
 /// Used: the computed font and background colours (<c>ComputedFontColor</c>, <c>ComputedBackgroundColor</c>), their opacities, the
-/// size and the font style. Not used: the font effect (outline, shadow) and the region colour. Read when a file opens; a change
-/// while one plays shows from the next file.
+/// size and the font style (small capitals as Segoe UI's small caps). Not used: the font effect (outline, shadow) and the region
+/// colour. Read when a file opens; a change while one plays shows from the next file.
 /// </summary>
-internal sealed record SubtitleAppearance(Brush Foreground, Brush Background, FontFamily Font, double SizeFactor)
+internal sealed record SubtitleAppearance(Brush Foreground, Brush Background, FontFamily Font, double SizeFactor, bool SmallCaps)
 {
     public static SubtitleAppearance Read()
     {
@@ -23,13 +23,14 @@ internal sealed record SubtitleAppearance(Brush Foreground, Brush Background, Fo
             // "Default" background opacity: 75 %, ours, so the text reads on a bright picture without hiding much of it.
             var background = Opaque(ClosedCaptionProperties.ComputedBackgroundColor, ClosedCaptionProperties.BackgroundOpacity, 0.75);
             return new SubtitleAppearance(new SolidColorBrush(font), new SolidColorBrush(background),
-                new FontFamily(FontFor(ClosedCaptionProperties.FontStyle)), SizeFor(ClosedCaptionProperties.FontSize));
+                new FontFamily(FontFor(ClosedCaptionProperties.FontStyle)), SizeFor(ClosedCaptionProperties.FontSize),
+                ClosedCaptionProperties.FontStyle == ClosedCaptionStyle.SmallCapitals);
         }
         catch (Exception error)
         {
             System.Diagnostics.Trace.TraceError($"Current: the caption settings could not be read: {error.GetType().Name}");
             return new SubtitleAppearance(new SolidColorBrush(Color.FromArgb(255, 255, 255, 255)),
-                new SolidColorBrush(Color.FromArgb(191, 0, 0, 0)), new FontFamily("Segoe UI"), 1);
+                new SolidColorBrush(Color.FromArgb(191, 0, 0, 0)), new FontFamily("Segoe UI"), 1, false);
         }
     }
 
