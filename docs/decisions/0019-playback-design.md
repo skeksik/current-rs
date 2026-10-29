@@ -180,9 +180,20 @@ Added 2026-10-28 by task W2 (feat/routes-and-engines), from ADR 0025 "How the co
   picks among them); the app engine takes every stream, as before. A server stream goes to the app engine first when the selected
   subtitle is sent beside the picture and the native route does not show it, and on an SDR display for a PQ source whether copied
   or transcoded (the server may keep HDR in an HEVC transcode; not verified).
-- **Fallback** (choice 9, widened): today choice 9 holds as written; the chain arrives with W2's second change: a failure moves to the
-  next untried route of the same order, each at most once per play, ending with the server stream, position and tracks kept. The
-  same change brings the track, speed and display re-plans across engines and the "Player" setting's effect.
+- **Fallback** (choice 9, widened; W2's second change, feat/engine-fallback-chain): an engine error, or a selected track the
+  engine reports it cannot play after opening (`EngineEvent::TrackFailed`), moves to the next untried route of the same order, each
+  at most once per play, ending with the server stream, position and tracks kept. A server stream on the native engine that fails
+  goes to the app engine's; the app engine's is the last. The route after a failed one carries `previous_route_failed`, a server
+  stream reached so `fallback_after_engine_error`. With the app engine only this is choice 9 as written.
+- **Two engines in the controller** (same change): the controller holds the app engine and, when the platform has one, the native
+  engine (`Controller::with_native_engine`); each command goes to the engine that has the file, and only that engine's events
+  count. Volume and mute go to both. A file that moves to the other engine is stopped on the first.
+- **Re-plans at the position** (same change, ADR 0025 "Track changes"): an audio or subtitle track the route playing cannot play
+  moves the file to the first route that can; a rate other than 1 while the native engine reports it ignores rates with these tracks
+  (`EngineEvent::RatesSupported(false)`) moves it to the app engine (`speed_not_supported`); a display change that turns departure
+  8 moves it off the native engine or back. "Play with app engine" moves this playback to the app engine, and the "Player" setting
+  (`playback.player` in `settings.json`) applies from the next item. The app engine (libmpv) takes a rate as mpv's `speed` property.
+  No UI offers a speed yet.
 
 ### Gateways, tokens and the player
 **Amended 2026-10-26 (ADR 0020):** streams on an address with gateway credentials go through the loopback relay (ADR 0020): the

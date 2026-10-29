@@ -307,6 +307,12 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         self
     }
 
+    /// The controller with the display the player's window opens on (departure 8).
+    pub fn with_display(mut self, display: DisplayKind) -> Self {
+        self.display = display;
+        self
+    }
+
     pub fn native_engine_mut(&mut self) -> Option<&mut NativeEngine> {
         self.native.as_mut()
     }

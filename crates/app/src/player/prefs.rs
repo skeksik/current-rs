@@ -5,8 +5,8 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use current_playback::{Quality, QualityPreference, listed_quality};
-use current_store::{SettingsStore, StoreError, StreamQuality};
+use current_playback::{EnginePreference, Quality, QualityPreference, listed_quality};
+use current_store::{PlayerChoice, SettingsStore, StoreError, StreamQuality};
 use tokio::sync::watch;
 
 use crate::session::Shared;
@@ -16,6 +16,8 @@ pub(crate) struct PlaybackPrefs {
     auto_skip: watch::Sender<Vec<String>>,
     quality_resolution: watch::Sender<bool>,
     quality_all: watch::Sender<bool>,
+    /// "Player" (ADR 0025, choice 3). No UI sets it yet (W3); read from the file.
+    player: watch::Sender<PlayerChoice>,
     /// Serializes the settings writes of this file's settings, so the last change is the one saved.
     write: Mutex<()>,
 }
@@ -48,6 +50,7 @@ impl PlaybackPrefs {
             auto_skip: watch::Sender::new(playback.auto_skip),
             quality_resolution: watch::Sender::new(playback.quality_resolution),
             quality_all: watch::Sender::new(playback.quality_all),
+            player: watch::Sender::new(playback.player),
             write: Mutex::new(()),
         }
     }
@@ -81,6 +84,14 @@ impl PlaybackPrefs {
         QualityPreference {
             preferred: self.preferred_quality(),
             all: self.quality_all(),
+        }
+    }
+
+    /// Which engine plays a file, for the next item played (ADR 0025, choice 3); "Automatic" by default.
+    pub(crate) fn engine_preference(&self) -> EnginePreference {
+        match *self.player.borrow() {
+            PlayerChoice::Automatic => EnginePreference::Automatic,
+            PlayerChoice::AlwaysAppEngine => EnginePreference::AlwaysAppEngine,
         }
     }
 
@@ -154,5 +165,31 @@ impl PlaybackPrefs {
                 .update(|settings| settings.playback.auto_skip = kinds),
             None => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_player_setting_becomes_the_engine_preference() {
+        assert_eq!(
+            PlaybackPrefs::load(None).engine_preference(),
+            EnginePreference::Automatic
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = SettingsStore::open(dir.path()).unwrap();
+        assert_eq!(
+            PlaybackPrefs::load(Some(&store)).engine_preference(),
+            EnginePreference::Automatic
+        );
+        store
+            .update(|settings| settings.playback.player = PlayerChoice::AlwaysAppEngine)
+            .unwrap();
+        assert_eq!(
+            PlaybackPrefs::load(Some(&store)).engine_preference(),
+            EnginePreference::AlwaysAppEngine
+        );
     }
 }
