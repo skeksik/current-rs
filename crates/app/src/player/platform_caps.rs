@@ -7,7 +7,7 @@
 //! `Windows.Media.Core.CodecSubtypes` property (Microsoft Learn, "CodecSubtypes Class", ms.date 2017-02-08, read 2026-10-29); the UI
 //! reads the property's value.
 
-use current_model::{Codec, CodecSupport, Container, EngineCapabilities, SubtitleFormat};
+use current_model::{Codec, CodecSupport, Container, EngineCapabilities};
 use current_playback::{EngineProfile, PlatformRules};
 
 /// Which list a subtype is looked for in.
@@ -163,15 +163,13 @@ pub fn windows_engine(answers: &[CodecAnswer]) -> (EngineProfile, PlatformRules)
         ],
         video: pick(CodecKind::Video),
         audio: pick(CodecKind::Audio),
-        // §6: SubRip arrives as timed text cues and PGS as image cues; ASS keeps only its static styling (choice 1 sends it to the
-        // app engine), DVD subtitles showed no cue (not verified).
-        subtitles: vec![
-            SubtitleFormat::SUBRIP,
-            SubtitleFormat::SRT,
-            SubtitleFormat::PGSSUB,
-        ],
-        // The core fetches external subtitles and hands them over as bytes (ADR 0025, "Subtitles on the native route").
-        external_subtitles: true,
+        // None until W5 (ADR 0025, feat/windows-native-subtitles): the Windows engine draws no subtitles yet, so the subtitle rule
+        // sends a file with a subtitle selected to the app engine, PGS too (departure 3 waits for W5). W5 lists what §6 found:
+        // SubRip arrives as timed text cues and PGS as image cues (SUBRIP, SRT, PGSSUB); ASS keeps only its static styling (choice
+        // 1 sends it to the app engine), DVD subtitles showed no cue (not verified). With W5 the core also hands external subtitles
+        // over as bytes (ADR 0025, "Subtitles on the native route"), and `external_subtitles` becomes true.
+        subtitles: Vec::new(),
+        external_subtitles: false,
     };
     // §7: HLS with fMP4 and TS segments plays through `AdaptiveMediaSource`.
     (
@@ -251,14 +249,9 @@ mod tests {
         // Never natively, whatever the answers: TrueHD, DTS.
         assert!(!engine.capabilities.decodes_audio(&Codec::TRUEHD));
         assert!(!engine.capabilities.decodes_audio(&Codec::DTS));
-        assert_eq!(
-            engine.capabilities.subtitles,
-            [
-                SubtitleFormat::SUBRIP,
-                SubtitleFormat::SRT,
-                SubtitleFormat::PGSSUB
-            ]
-        );
+        // No subtitle natively until W5: a selected one goes to the app engine.
+        assert!(engine.capabilities.subtitles.is_empty());
+        assert!(!engine.capabilities.external_subtitles);
     }
 
     #[test]
