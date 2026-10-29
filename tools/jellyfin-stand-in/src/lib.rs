@@ -64,7 +64,14 @@ pub const TRANSCODE_ITEM: &str = "57a2d1e0000000000000000000000011";
 /// [`TRANSCODE_ITEM`] as its HLS paths spell it: a GUID with dashes, as a real Jellyfin 12.3.0 server wrote the item id in a
 /// `TranscodingUrl` (seen on the Windows relay check, 2026-10-26).
 pub const TRANSCODE_ITEM_PATH_ID: &str = "57a2d1e0-0000-0000-0000-000000000011";
-/// The one media source of either item.
+/// An item PlaybackInfo answers with direct play of a real file, [`NATIVE_MEDIA`]: an MP4 with H.264 Main and AAC-LC, which Windows'
+/// own player decodes without a Store extension (the Windows app's smoke run, ADR 0025 W4).
+pub const NATIVE_ITEM: &str = "57a2d1e0000000000000000000000014";
+/// The name of [`NATIVE_ITEM`] in its details.
+pub const NATIVE_NAME: &str = "Stand-in Native";
+/// [`NATIVE_ITEM`]'s direct-play stream: our own synthetic 2 s clip (`media/README.md` says how it was made).
+pub const NATIVE_MEDIA: &[u8] = include_bytes!("../media/native.mp4");
+/// The one media source of each item.
 pub const MEDIA_SOURCE: &str = "57a2d1e0000000000000000000000012";
 /// The play session id PlaybackInfo hands out.
 pub const PLAY_SESSION: &str = "57a2d1e0000000000000000000000013";
@@ -975,6 +982,9 @@ fn stream(path: &str) -> Option<Vec<u8>> {
     if direct {
         return Some((0..STREAM_LENGTH).map(stream_byte).collect());
     }
+    if lower == format!("/videos/{NATIVE_ITEM}/stream") {
+        return Some(NATIVE_MEDIA.to_vec());
+    }
     let segment = lower
         .strip_prefix(&format!("/videos/{TRANSCODE_ITEM_PATH_ID}/hls1/main/"))
         .is_some_and(|name| name.ends_with(".mp4") && !name.contains('/'));
@@ -1157,7 +1167,7 @@ fn is_playback_path(path: &str) -> bool {
         || path.starts_with("/MediaSegments/")
         || path == "/Sessions"
         || path.starts_with("/Sessions/Playing")
-        || [DIRECT_PLAY_ITEM, TRANSCODE_ITEM]
+        || [DIRECT_PLAY_ITEM, TRANSCODE_ITEM, NATIVE_ITEM]
             .iter()
             .any(|item| path == format!("/Items/{item}") || subtitle_item(path) == Some(*item))
 }
@@ -1224,6 +1234,7 @@ fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
         {
             (200, playback_info(r#""SupportsDirectPlay":true"#.into()))
         }
+        _ if path == format!("/Items/{NATIVE_ITEM}/PlaybackInfo") => (200, native_playback_info()),
         _ if path == format!("/Items/{TRANSCODE_ITEM}/PlaybackInfo") => {
             let token = token(received).unwrap_or_default();
             let path = lock(&state.transcoding_path)
@@ -1243,6 +1254,7 @@ fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
         _ if path == format!("/Items/{TRANSCODE_ITEM}") => {
             (200, film(TRANSCODE_ITEM, TRANSCODE_NAME))
         }
+        _ if path == format!("/Items/{NATIVE_ITEM}") => (200, film(NATIVE_ITEM, NATIVE_NAME)),
         _ if subtitle_item(path).is_some() => (200, SUBTITLE.to_owned()),
         _ => (404, String::new()),
     }
@@ -1252,6 +1264,14 @@ fn playback(state: &State, received: &Received, path: &str) -> (u16, String) {
 fn playback_info(route: String) -> String {
     format!(
         r#"{{"MediaSources":[{{"Protocol":"File","Id":"{MEDIA_SOURCE}","Path":"/media/stand-in/file.mkv","Type":"Default","Container":"mkv","Size":104857600,"Name":"Stand-in 1080p","IsRemote":false,"ETag":"5ad01e","RunTimeTicks":6000000000,"SupportsTranscoding":true,"SupportsDirectStream":false,{route},"MediaStreams":[{{"Codec":"hevc","DisplayTitle":"1080p HEVC SDR","BitDepth":8,"Height":1080,"Width":1920,"RealFrameRate":24,"VideoRange":"SDR","VideoRangeType":"SDR","Profile":"Main","Type":"Video","Index":0,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false,"Level":120}},{{"Codec":"aac","Language":"eng","DisplayTitle":"English - AAC - Stereo - Default","ChannelLayout":"stereo","Channels":2,"SampleRate":48000,"Type":"Audio","Index":1,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false}}],"Bitrate":1398101,"DefaultAudioStreamIndex":1,"HasSegments":true}}],"PlaySessionId":"{PLAY_SESSION}"}}"#
+    )
+}
+
+/// [`NATIVE_ITEM`]'s PlaybackInfo: direct play of [`NATIVE_MEDIA`], an MP4 with H.264 Main and AAC-LC, 2 s.
+fn native_playback_info() -> String {
+    let size = NATIVE_MEDIA.len();
+    format!(
+        r#"{{"MediaSources":[{{"Protocol":"File","Id":"{MEDIA_SOURCE}","Path":"/media/stand-in/native.mp4","Type":"Default","Container":"mp4","Size":{size},"Name":"Stand-in 180p","IsRemote":false,"ETag":"5ad01f","RunTimeTicks":20000000,"SupportsTranscoding":true,"SupportsDirectStream":false,"SupportsDirectPlay":true,"MediaStreams":[{{"Codec":"h264","DisplayTitle":"180p H264 SDR","BitDepth":8,"Height":180,"Width":320,"RealFrameRate":24,"VideoRange":"SDR","VideoRangeType":"SDR","Profile":"Main","Type":"Video","Index":0,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false,"Level":20}},{{"Codec":"aac","Language":"eng","DisplayTitle":"English - AAC - Stereo - Default","ChannelLayout":"stereo","Channels":2,"SampleRate":48000,"Profile":"LC","Type":"Audio","Index":1,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false}}],"Bitrate":110000,"DefaultAudioStreamIndex":1,"HasSegments":false}}],"PlaySessionId":"{PLAY_SESSION}"}}"#
     )
 }
 

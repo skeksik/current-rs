@@ -11,7 +11,8 @@ use current_playback::{EngineEvent, PlayerStatus, Quality};
 use current_store::{MemorySecrets, Secrets, StreamQuality};
 use jellyfin_stand_in::library::EPISODE_IDS;
 use jellyfin_stand_in::{
-    DIRECT_PLAY_ITEM, DIRECT_PLAY_NAME, IMAGE, PASSWORD, StandIn, TRANSCODE_ITEM, USER_NAME,
+    DIRECT_PLAY_ITEM, DIRECT_PLAY_NAME, IMAGE, NATIVE_ITEM, NATIVE_MEDIA, PASSWORD, StandIn,
+    TRANSCODE_ITEM, USER_NAME,
 };
 use tokio::sync::watch;
 
@@ -798,6 +799,29 @@ async fn relay_status(url: &str) -> u16 {
     String::from_utf8_lossy(&head[9..12]).parse().unwrap()
 }
 
+/// A GET for `url` on the relay with `range`: the status and the body.
+async fn relay_get(url: &str, range: &str) -> (u16, Vec<u8>) {
+    let rest = url.strip_prefix("http://127.0.0.1:").expect("a relay URL");
+    let (port, path) = rest.split_at(rest.find('/').expect("a path"));
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port.parse::<u16>().unwrap()))
+        .await
+        .unwrap();
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nRange: {range}\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).await.unwrap();
+    let end = answer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("a head");
+    let head = String::from_utf8_lossy(&answer[..end]).into_owned();
+    // A chunked answer is not expected for a file with a length.
+    assert!(!head.to_ascii_lowercase().contains("chunked"), "{head}");
+    (head[9..12].parse().unwrap(), answer[end + 4..].to_vec())
+}
+
 fn loads(control: &TestEngineControl) -> usize {
     control
         .commands()
@@ -893,6 +917,39 @@ async fn a_file_the_platform_engine_plays_goes_there_through_the_relay() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(platform.loads.lock().unwrap().len(), 1);
     assert!(matches!(relay_status(&url).await, 0 | 404));
+    player.close().await;
+}
+
+#[tokio::test]
+async fn the_stand_ins_native_file_goes_to_the_platform_engine_with_ranges() {
+    // What the Windows smoke run opens in Windows' own player (ADR 0025, W4): H.264 and AAC in MP4, native without any Store
+    // extension, and the relay answers Media Foundation's range requests with the file's own bytes.
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let platform = Arc::new(FakePlatform::default());
+    let (player, control) = open_with(&app, platform.clone(), false).await;
+    player
+        .play(item(&server, NATIVE_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    let file = platform.last();
+    let url = file.url.expose().to_owned();
+    assert!(!file.hls);
+    assert_eq!(loads(&control), 0, "libmpv has nothing");
+    let (status, body) = relay_get(&url, "bytes=0-").await;
+    assert_eq!(status, 206);
+    assert_eq!(body, NATIVE_MEDIA);
+    let (status, body) = relay_get(&url, "bytes=100-199").await;
+    assert_eq!(status, 206);
+    assert_eq!(body, &NATIVE_MEDIA[100..200]);
+    platform.start_from_another_thread();
+    let status = until(&player.state(), playing).await;
+    assert_eq!(
+        status.route.as_ref().map(|route| route.label()),
+        Some(RouteLabel::Native)
+    );
     player.close().await;
 }
 
