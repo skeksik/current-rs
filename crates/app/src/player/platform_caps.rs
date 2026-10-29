@@ -164,14 +164,12 @@ pub fn windows_engine(answers: &[CodecAnswer]) -> (EngineProfile, PlatformRules)
         video: pick(CodecKind::Video),
         audio: pick(CodecKind::Audio),
         // §6: SubRip arrives as timed text cues and PGS as image cues, which the app's own view draws (W5); ASS keeps only its
-        // static styling (choice 1 sends it to the app engine), DVD subtitles showed no cue (not verified). WebVTT only as a file
-        // (below; in MKV not verified).
+        // static styling (choice 1 sends it to the app engine), DVD subtitles showed no cue (not verified). WebVTT inside a file
+        // was not checked: it plays on the app engine until W7 shows it; as a file it is native (`native_external_subtitles`).
         subtitles: vec![
             SubtitleFormat::SUBRIP,
             SubtitleFormat::SRT,
             SubtitleFormat::PGSSUB,
-            SubtitleFormat::WEBVTT,
-            SubtitleFormat::VTT,
         ],
         // The core fetches subtitle files and hands them over as bytes (ADR 0025, "Subtitles on the native route"); the engine reads
         // the text formats through `TimedTextSource`, and the platform's rules keep any other file (PGS) on the app engine
@@ -256,15 +254,13 @@ mod tests {
         // Never natively, whatever the answers: TrueHD, DTS.
         assert!(!engine.capabilities.decodes_audio(&Codec::TRUEHD));
         assert!(!engine.capabilities.decodes_audio(&Codec::DTS));
-        // Text subtitles and PGS natively (departure 3), and text subtitle files.
+        // SubRip and PGS inside a file natively (departure 3), and text subtitle files, WebVTT too.
         assert_eq!(
             engine.capabilities.subtitles,
             [
                 SubtitleFormat::SUBRIP,
                 SubtitleFormat::SRT,
-                SubtitleFormat::PGSSUB,
-                SubtitleFormat::WEBVTT,
-                SubtitleFormat::VTT
+                SubtitleFormat::PGSSUB
             ]
         );
         assert!(engine.capabilities.external_subtitles);

@@ -69,7 +69,7 @@ pub const TRANSCODE_ITEM_PATH_ID: &str = "57a2d1e0-0000-0000-0000-000000000011";
 pub const NATIVE_ITEM: &str = "57a2d1e0000000000000000000000014";
 /// The name of [`NATIVE_ITEM`] in its details.
 pub const NATIVE_NAME: &str = "Stand-in Native";
-/// [`NATIVE_ITEM`]'s direct-play stream: our own synthetic 2 s clip (`media/README.md` says how it was made).
+/// [`NATIVE_ITEM`]'s direct-play stream: our own synthetic 8 s clip (`media/README.md` says how it was made).
 pub const NATIVE_MEDIA: &[u8] = include_bytes!("../media/native.mp4");
 /// The one media source of each item.
 pub const MEDIA_SOURCE: &str = "57a2d1e0000000000000000000000012";
