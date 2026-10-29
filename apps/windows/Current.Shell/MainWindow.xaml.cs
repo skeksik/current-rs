@@ -341,6 +341,23 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         UpdateBackButton();
     }
 
+    /// <summary>For the smoke run: plays <paramref name="item"/> from its start with <paramref name="core"/>, as <see cref="Play"/>
+    /// does.</summary>
+    internal void PlayForTest(CoreHost core, ItemRef item)
+    {
+        NavView.Visibility = Visibility.Collapsed;
+        AppTitleBar.IsPaneToggleButtonVisible = false;
+        ShowPageCommands(false);
+        _ = Player.PlayAsync(core, item, TimeSpan.Zero);
+        UpdateBackButton();
+    }
+
+    internal PlayerState PlayerStateForTest => Player.StateForTest;
+
+    internal string? NativeFailureForTest => Player.NativeFailureForTest;
+
+    internal Task ClosePlayerForTestAsync() => Player.CloseAndWaitAsync();
+
     /// <summary>
     /// The title bar's search and Refresh belong to the pages, so they go while the player is open and come back with the page
     /// (owner, 2026-10-28; ADR 0022 items 3 and 4). Hidden, not removed: the search keeps its text and Refresh its state.

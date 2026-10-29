@@ -121,6 +121,7 @@ internal static class SmokeRun
             await SupportedFormatsChecksAsync(window, core, Check);
             // While the main window is open: closing the sign-in window must not be the last window closing.
             await BrowseChecksAsync(window, ui, Check);
+            await NativePlaybackChecksAsync(window, Check);
             await SignInWindowChecksAsync(Check);
             window.Close();
             Check(true, "main window built");
@@ -217,6 +218,104 @@ internal static class SmokeRun
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
+            }
+        }
+    }
+
+    /// <summary>The stand-in's item whose direct-play stream is a real H.264 and AAC MP4 (NATIVE_ITEM, tools/jellyfin-stand-in).</summary>
+    private const string NativeItemId = "57a2d1e0000000000000000000000014";
+
+    /// <summary>
+    /// A playback in Windows' own player (ADR 0025, W4) against the Jellyfin stand-in, when <c>CURRENT_STAND_IN</c> names it: signed in,
+    /// the player page opens with both engines, the core sends the stand-in's MP4 (H.264 and AAC, built into Windows) to the native
+    /// route through its relay, and it plays: the route is Native on Windows' player and the position moves. Skipped, visibly, without
+    /// the stand-in, and when this machine cannot play it through Media Foundation (CodecQuery finds no H.264 or AAC decoder, or the
+    /// engine reports a failure: its kind and HRESULT are printed); the libmpv checks stay either way.
+    /// </summary>
+    private static async Task NativePlaybackChecksAsync(MainWindow window, Action<bool, string> check)
+    {
+        var path = Environment.GetEnvironmentVariable("CURRENT_STAND_IN");
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+        {
+            Console.WriteLine("skip native playback against the stand-in: CURRENT_STAND_IN does not name the stand-in");
+            return;
+        }
+        var answers = await CodecAnswers.GetAsync();
+        uint Decoders(string subtype) => answers.FirstOrDefault(answer => answer.Subtype == subtype)?.Decoders ?? 0;
+        var (h264, aac) = (Decoders("VideoFormatH264"), Decoders("AudioFormatAac"));
+        Console.WriteLine($"     CodecQuery: {answers.Count(answer => answer.Decoders > 0)} of {answers.Count} asked for have a decoder");
+        if (h264 == 0 || aac == 0)
+        {
+            Console.WriteLine($"skip native playback: CodecQuery finds no H.264 or AAC decoder on this machine (H.264 {h264}, AAC {aac})");
+            return;
+        }
+        using var standIn = Process.Start(new ProcessStartInfo(path)
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        }) ?? throw new InvalidOperationException("the stand-in did not start");
+        var core = CoreHost.Create();
+        try
+        {
+            var line = await standIn.StandardOutput.ReadLineAsync().WaitAsync(Timeout);
+            var address = line is { } listening && listening.StartsWith("listening ", StringComparison.Ordinal)
+                ? listening["listening ".Length..]
+                : throw new InvalidOperationException("the stand-in did not report its address");
+            using (var add = core.AddServer())
+            {
+                await add.ProbeAsync(address);
+                using var signIn = add.SignIn();
+                await signIn.WithPasswordAsync("stand-in-user", "not-a-real-password");
+                if (signIn.State is not SignInState.SignedIn)
+                {
+                    check(false, $"signed in to the stand-in for native playback ({signIn.State.GetType().Name})");
+                    return;
+                }
+            }
+            window.PlayForTest(core, new ItemRef(core.Servers[0].Server, NativeItemId));
+            // The clip is 2 s long, and the player closes at its end: seen once is enough.
+            var native = false;
+            var settled = await WaitUntilAsync(() =>
+            {
+                var state = window.PlayerStateForTest;
+                if (state is { State: PlayerStateKind.Playing, Route: { Engine: RouteEngine.Platform, Label: RouteLabel.Native } }
+                    && state.Position > TimeSpan.Zero)
+                {
+                    native = true;
+                }
+                return native || window.NativeFailureForTest is not null
+                    || state.State is PlayerStateKind.Failed || state.Route?.Engine == RouteEngine.App;
+            }, Timeout * 3);
+            if (native)
+            {
+                check(true, "the stand-in's MP4 plays in Windows' own player through the relay (route Native, the position moves)");
+            }
+            else if (window.NativeFailureForTest is { } failure)
+            {
+                Console.WriteLine($"skip native playback: Windows' player could not play the stand-in's MP4 on this machine ({failure}); "
+                    + "the libmpv checks stay");
+            }
+            else
+            {
+                var state = window.PlayerStateForTest;
+                check(false, $"the stand-in's MP4 plays in Windows' own player ({(settled ? "" : "timed out, ")}{state.State}, "
+                    + $"{state.Route?.Label.ToString() ?? "no route"})");
+            }
+        }
+        catch (Exception error)
+        {
+            check(false, $"the native playback check failed: {error.GetType().Name}");
+        }
+        finally
+        {
+            await window.ClosePlayerForTestAsync();
+            core.Dispose();
+            standIn.StandardInput.Close();
+            if (!standIn.WaitForExit(5000))
+            {
+                standIn.Kill();
             }
         }
     }
