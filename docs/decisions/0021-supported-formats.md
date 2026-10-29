@@ -136,6 +136,31 @@ the facts of the display the window is on (`DisplayWatcher.ReadOnce`) and shows 
 display; without them, "Plays" and "depending on the display". HDR10+ and Dolby Vision profiles 5, 7 and 8 say "Not checked on a device
 yet": no such files were played on the owner's PC (docs/notes/windows-video.md, "ADR 0007 item 5"). HLG and HDR10 were.
 
+## Per route (ADR 0025, W6; proposed, for the owner's look before the merge)
+With Windows' own player beside the app engine (ADR 0025), the page says which one plays each format on this PC.
+- **Input:** the UI passes the answers to the core's CodecQuery questions (the same `CodecAnswers` the player opens with). Without
+  them (macOS, Linux, a Windows without Media Foundation) the page is exactly the one above.
+- **The rule:** each row's route is the core's own route check (`current_playback::route::local_routes`) on a typical file for that
+  row, with the native engine built as the player builds it (`windows_engine`) and the app engine's reported capabilities. The typical
+  files are stated in `formats_routes.rs`: an MKV, H.264 8-bit SDR 1080p and AAC stereo, differing only in the row's format (six
+  channels for AC-3, E-AC-3, TrueHD and DTS; HEVC 10-bit for the HDR rows; the subtitle inside the file, and for text formats also as
+  a separate file). So departures 2 and 8 and W5's subtitle rules apply as when playing, and the page cannot drift from the player.
+- **The column:** "Windows' player" (on an HDR display, "Windows' player, HDR"), "App engine (hardware)", "App engine (software)",
+  "App engine", "App engine, HDR", "App engine, tone-mapped"; the server's values stay. The notes say why a format leaves Windows'
+  player: "Dolby Vision plays in the app engine first", "On this SDR display it plays in the app engine, which tone-maps it",
+  "Windows' player can't draw it", "Windows' player has no Dolby decoder on this PC: it comes with the PC maker's software",
+  "Windows' player can't play it". With the "Player" setting at "Always use the app engine", every row says the app engine, and the
+  description says why.
+- **Store links:** when CodecQuery found no decoder for a codec that a Store extension brings, the row links its Store page
+  (`ms-windows-store://pdp/?ProductId=<id>`), and the UI opens only such an address. The products, by their Store pages'
+  titles (`https://apps.microsoft.com/detail/<id>`, read 2026-10-29): HEVC Video Extensions 9NMZLZ57R3T7 (W1: the device maker's
+  9N4WGH0Z6VHQ cannot be installed by a user), AV1 Video Extension 9MVZQVXJBQ9V, VP9 Video Extensions 9N4D0MSMP0PT (VP9 and VP8; W1 §3
+  saw it list `VP80` and `VP90`), MPEG-2 Video Extension 9N95Q1ZZPMH4. MPEG-2 is not verified: Microsoft's Supported codecs page says
+  MPEG-1/2 come "with install of the optional Windows DVD Player app" (ms.date 2026-05-12, read 2026-10-29), and its note says so.
+  AC-3 and E-AC-3 get no link: their decoder is the PC maker's (W1 §3).
+- **Honest rows:** a row that the check sends to Windows' player but that W1 did not play there (VP8, MPEG-2, MP3, ALAC, PCM, MOV,
+  WebVTT, HDR10+, Dolby Vision profile 7) says "Not verified on a device".
+
 ## Limits
 - **The test asks the driver, not a decode.** A listed profile can still fail on a given file (level, resolution, a driver bug), and
   mpv then falls back to software. The page does not claim more than "the card has a decoder for it".

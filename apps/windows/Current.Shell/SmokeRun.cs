@@ -562,6 +562,16 @@ internal static class SmokeRun
             var video = formats.Tabs.FirstOrDefault(tab => tab.Kind == FormatTabKind.Video)?.Rows ?? Array.Empty<FormatRow>();
             check(video.Any(row => row.Support == FormatSupport.Plays),
                 $"a headless libmpv reports the codecs it decodes ({video.Count(row => row.Support == FormatSupport.Plays)} play)");
+            // With Windows' own player beside it (ADR 0025, W6): this runner's CodecQuery finds H.264 (W4's smoke line), so its row
+            // names Windows' player, and every link is a Store product page.
+            var native = await core.SupportedFormatsAsync(null, null, await CodecAnswers.GetAsync()).WaitAsync(Timeout * 3);
+            var nativeVideo = native.Tabs.FirstOrDefault(tab => tab.Kind == FormatTabKind.Video)?.Rows ?? Array.Empty<FormatRow>();
+            var h264 = nativeVideo.FirstOrDefault(row => row.Name == "H.264 (AVC)");
+            check(h264 is { Support: FormatSupport.Native }, $"with CodecQuery's answers, H.264 plays in Windows' player ({h264?.SupportLabel})");
+            var links = native.Tabs.SelectMany(tab => tab.Rows).Select(row => row.Action).OfType<FormatAction>().ToList();
+            Console.WriteLine($"     the formats page offers {links.Count} Store link(s) on this machine");
+            check(links.All(link => link.Uri.StartsWith("ms-windows-store://pdp/?ProductId=", StringComparison.Ordinal)),
+                "every link on the formats page is a Store product page");
             var hardware = await DecoderTest.GetAsync().WaitAsync(Timeout);
             Console.WriteLine(hardware is null
                 ? "     the graphics card test did not run"

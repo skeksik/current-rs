@@ -47,10 +47,16 @@ public enum FormatSupport
     ToneMapped,
     /// <summary>Not known: the player could not be started to find out.</summary>
     Unknown,
+    /// <summary>Plays in Windows' own player (ADR 0025, W6).</summary>
+    Native,
 }
 
+/// <summary>A link a row offers: its words and its address (the Store page of an extension Windows' player lacks). The UI opens only
+/// <c>ms-windows-store://pdp/?ProductId=</c> addresses.</summary>
+public sealed record FormatAction(string Label, string Uri);
+
 /// <summary>One row: the format's name, the column (its value and the word to show), and a note (empty when there is nothing to say).</summary>
-public sealed record FormatRow(string Name, FormatSupport Support, string SupportLabel, string Notes);
+public sealed record FormatRow(string Name, FormatSupport Support, string SupportLabel, string Notes, FormatAction? Action = null);
 
 /// <summary>One tab: its title, its three column headers and its rows. Every word the page shows comes from the core.</summary>
 public sealed record FormatTab(
@@ -68,13 +74,23 @@ public static class FormatsExtensions
     /// for a moment (no window, no audio device), so call it off the UI thread's hot path; it never blocks the UI thread.
     /// </summary>
     /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled first.</exception>
+    public static Task<SupportedFormats> SupportedFormatsAsync(
+        this CoreHost core, HardwareDecodeFacts? hardware, DisplayFacts? display, CancellationToken ct = default) =>
+        SupportedFormatsAsync(core, hardware, display, null, ct);
+
+    /// <summary>
+    /// As above, with <paramref name="native"/>, the answers to <see cref="PlatformEngineHost.WindowsCodecQueries"/>, when Windows' own
+    /// player plays beside the app engine (null otherwise): each row then names the route that plays the format (ADR 0025, W6).
+    /// </summary>
     public static async Task<SupportedFormats> SupportedFormatsAsync(
-        this CoreHost core, HardwareDecodeFacts? hardware, DisplayFacts? display, CancellationToken ct = default)
+        this CoreHost core, HardwareDecodeFacts? hardware, DisplayFacts? display, IReadOnlyList<CodecQueryAnswer>? native,
+        CancellationToken ct = default)
     {
         var page = await CoreCall.RunAsync(
             token => core.Core.SupportedFormats(
                 hardware is null ? null : FormatsMap.ToFfi(hardware),
                 display is null ? null : PlayerMap.ToFfi(display),
+                native?.Select(answer => PlatformEngineMap.ToFfi(answer)).ToArray(),
                 token),
             ct).ConfigureAwait(false);
         return FormatsMap.From(page);
@@ -96,7 +112,8 @@ internal static class FormatsMap
             tab.NameHeader,
             tab.SupportHeader,
             tab.NotesHeader,
-            Array.ConvertAll(tab.Rows, row => new FormatRow(row.Name, From(row.Support), row.SupportLabel, row.Notes)))));
+            Array.ConvertAll(tab.Rows, row => new FormatRow(row.Name, From(row.Support), row.SupportLabel, row.Notes,
+                row.Action is { } action ? new FormatAction(action.Label, action.Uri) : null)))));
 
     private static FormatTabKind From(Ffi.FormatTabKind kind) => kind switch
     {
@@ -117,6 +134,7 @@ internal static class FormatsMap
         Ffi.FormatSupport.Hdr => FormatSupport.Hdr,
         Ffi.FormatSupport.ToneMapped => FormatSupport.ToneMapped,
         Ffi.FormatSupport.Unknown => FormatSupport.Unknown,
+        Ffi.FormatSupport.Native => FormatSupport.Native,
         _ => FormatSupport.NotSupported,
     };
 }
