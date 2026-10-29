@@ -1586,3 +1586,44 @@ fn with_no_native_engine_routes_reasons_profile_and_fallback_are_todays() {
     assert!(matches!(player.state(), PlayerState::Failed { .. }));
     assert_eq!(player.requests().len(), 2);
 }
+
+/// With the app engine only (today's player): a re-plan while paused stays paused, in the state, the start report and the engine.
+#[test]
+fn a_re_plan_while_paused_stays_paused() {
+    for fallback in [false, true] {
+        let mut player = Harness::playing(AutoSkip::off());
+        player.server.answer(Ok(answer(
+            hls(StreamAction::Copy, StreamAction::Transcode),
+            vec![],
+        )));
+        block_on(player.player.pause());
+        assert_eq!(player.state(), PlayerState::Paused);
+        player.at(120);
+        player.commands();
+        player.reports();
+        if fallback {
+            player.event(EngineEvent::Ended(EndReason::Error(
+                EngineErrorKind::DECODER_FAILED,
+            )));
+        } else {
+            block_on(player.player.set_quality(Quality::Bitrate(4_000_000)));
+        }
+        let commands = player.commands();
+        let [Command::Load(file), Command::Paused(true)] = commands.as_slice() else {
+            panic!("a load, then paused: {commands:?}");
+        };
+        assert_eq!(file.start, secs(120));
+        player.reports();
+        player.start();
+        assert_eq!(player.state(), PlayerState::Paused, "fallback {fallback}");
+        let reports = player.reports();
+        let Report::Start(start) = &reports[0].1 else {
+            panic!("a start report: {reports:?}");
+        };
+        assert!(start.paused);
+        // Resuming plays on.
+        block_on(player.player.resume());
+        assert_eq!(player.commands(), vec![Command::Paused(false)]);
+        assert_eq!(player.state(), PlayerState::Playing);
+    }
+}
