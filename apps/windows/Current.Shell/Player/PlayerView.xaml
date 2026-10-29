@@ -46,6 +46,8 @@
             Stretch="Uniform"
             Visibility="Collapsed"
             AutomationProperties.AccessibilityView="Raw" />
+        <!-- Our subtitle view over Windows' player (ADR 0025, W5: SubtitleOverlay), shown with it; libmpv draws its own. -->
+        <Grid x:Name="SubtitleLayer" Visibility="Collapsed" AutomationProperties.AccessibilityView="Raw" />
 
         <ProgressRing
             x:Name="BusyRing"

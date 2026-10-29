@@ -60,6 +60,8 @@ public sealed partial class PlayerView : UserControl
     private MediaControls? _media;
     /// <summary>Windows' own player, beside libmpv in the same session; disposed after the session closes.</summary>
     private NativeEngine? _native;
+    /// <summary>The native route's subtitles (W5).</summary>
+    private readonly SubtitleOverlay _subtitles;
     private CancellationTokenSource? _play;
     /// <summary>The engine's open, which belongs to the player rather than to one play: a play that replaces another while the engine
     /// opens waits for the same open and plays on its session.</summary>
@@ -84,6 +86,9 @@ public sealed partial class PlayerView : UserControl
     {
         InitializeComponent();
         Visibility = Visibility.Collapsed;
+        _subtitles = new SubtitleOverlay(SubtitleLayer, NativeVideo);
+        // The subtitles keep clear of the control panel while it shows (SubtitleOverlay, "Above the bar").
+        ControlPanel.SizeChanged += (_, _) => TellPanelTop();
         _hideTimer = DispatcherQueue.CreateTimer();
         _hideTimer.Interval = HideAfter;
         _hideTimer.IsRepeating = false;
@@ -239,7 +244,9 @@ public sealed partial class PlayerView : UserControl
             answers = await CodecAnswers.GetAsync();
             // The server's indices of the file's own audio streams, for the native engine's tracks (NativeEngine, "Tracks by Id").
             native = new NativeEngine(DispatcherQueue,
-                () => State.AudioTracks.Where(track => !track.IsExternal).Select(track => track.Index).Order().ToList());
+                () => State.AudioTracks.Where(track => !track.IsExternal).Select(track => track.Index).Order().ToList(),
+                () => State.SubtitleTracks.Where(track => !track.IsExternal).Select(track => track.Index).Order().ToList(),
+                _subtitles);
         }
         catch (Exception error)
         {
@@ -401,6 +408,7 @@ public sealed partial class PlayerView : UserControl
         {
             // The surface of the engine the route plays on (ADR 0025): Windows' own player over libmpv's panel, or the panel.
             NativeVideo.Visibility = state.Route?.Engine == RouteEngine.Platform ? Visibility.Visible : Visibility.Collapsed;
+            SubtitleLayer.Visibility = NativeVideo.Visibility;
             BusyRing.IsActive = state.State is PlayerStateKind.Preparing or PlayerStateKind.Loading or PlayerStateKind.Buffering
                 or PlayerStateKind.Seeking;
             var playing = state.State is PlayerStateKind.Playing or PlayerStateKind.Buffering or PlayerStateKind.Seeking;
@@ -643,6 +651,7 @@ public sealed partial class PlayerView : UserControl
             ControlPanel.IsHitTestVisible = true;
             FadeOut.Stop();
             FadeIn.Begin();
+            TellPanelTop();
         }
         _hideTimer.Stop();
         _hideTimer.Start();
@@ -671,6 +680,26 @@ public sealed partial class PlayerView : UserControl
         ControlPanel.IsHitTestVisible = false;
         FadeIn.Stop();
         FadeOut.Begin();
+        TellPanelTop();
+    }
+
+    /// <summary>Where the control panel's top is in the subtitle layer, or NaN while it is hidden.</summary>
+    private void TellPanelTop()
+    {
+        if (!_controlsShown || ControlPanel.ActualHeight <= 0)
+        {
+            _subtitles.PanelTop(double.NaN);
+            return;
+        }
+        try
+        {
+            var top = ControlPanel.TransformToVisual(SubtitleLayer).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+            _subtitles.PanelTop(top);
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: placing the subtitles above the controls failed: {error.GetType().Name}");
+        }
     }
 
     private static bool IsInside(DependencyObject element, DependencyObject parent)
@@ -1090,6 +1119,8 @@ public sealed partial class PlayerView : UserControl
         _attached = IntPtr.Zero;
         Try("detaching Windows' player", () => NativeVideo.SetMediaPlayer(null));
         NativeVideo.Visibility = Visibility.Collapsed;
+        SubtitleLayer.Visibility = Visibility.Collapsed;
+        Try("clearing the subtitles", _subtitles.Clear);
         var native = _native;
         _native = null;
         var session = _session;
@@ -1185,4 +1216,29 @@ public sealed partial class PlayerView : UserControl
     internal int? NativeFailureCodeForTest => _native?.LastFailureCode;
 
     internal bool NativeSurfaceShownForTest => NativeVideo.Visibility == Visibility.Visible;
+
+    /// <summary>For the smoke run: seeks the item playing.</summary>
+    internal void SeekForTest(TimeSpan position) => Quick(() => _session?.SeekTo(position));
+
+    /// <summary>For the smoke run: selects the subtitle stream with this server index.</summary>
+    internal Task SelectSubtitleForTestAsync(uint index) =>
+        _session?.SelectSubtitleAsync(new SubtitleSelection.Stream(index)) ?? Task.CompletedTask;
+
+    internal int SubtitlesShownForTest => _subtitles.ShownForTest;
+
+    internal string SubtitleTextForTest => _subtitles.TextForTest;
+
+    internal string? SubtitlePathForTest => _native?.SubtitlePath;
+
+    /// <summary>For the smoke run: the native engine opens the file again for every subtitle file (that path, tested).</summary>
+    internal bool ReopenForSubtitlesForTest
+    {
+        set
+        {
+            if (_native is { } native)
+            {
+                native.ReopenForSubtitlesForTest = value;
+            }
+        }
+    }
 }

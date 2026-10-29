@@ -281,7 +281,7 @@ internal static class SmokeRun
                 }
             }
             window.PlayForTest(core, new ItemRef(core.Servers[0].Server, NativeItemId));
-            // The clip is 2 s long, and the player closes at its end: seen once is enough.
+            // The player closes at the clip's end: seen once is enough.
             var native = false;
             var settled = await WaitUntilAsync(() =>
             {
@@ -298,6 +298,7 @@ internal static class SmokeRun
             {
                 check(true, "the stand-in's MP4 plays in Windows' own player through the relay (route Native, its surface shown, the "
                     + "position moves)");
+                await NativeSubtitleChecksAsync(window, core, check);
             }
             else if (window.NativeFailureForTest is { } failure
                 && window.NativeFailureCodeForTest is { } code && machineCannotPlay.Contains(code))
@@ -329,6 +330,54 @@ internal static class SmokeRun
             {
                 standIn.Kill();
             }
+        }
+    }
+
+    /// <summary>
+    /// The native route's subtitles (ADR 0025, W5), right after native playback started: the item's external SubRip file selected,
+    /// the core hands it over, the engine shows it either by adding it while the file plays or by opening the file again with it
+    /// (printed: which one ran), and after a seek back to the start its one cue reaches our subtitle view with its text (compared,
+    /// never printed); the route stays Native. Then the same with the file opened again on purpose, so that path is tested on every
+    /// run. A cue that never comes fails the run.
+    /// </summary>
+    private static async Task NativeSubtitleChecksAsync(MainWindow window, CoreHost core, Action<bool, string> check)
+    {
+        const string cueText = "Stand-in subtitle";
+        foreach (var reopen in new[] { false, true })
+        {
+            // Before the play: the core may hand the file over as soon as the item opens.
+            window.ReopenForSubtitlesForTest = reopen;
+            if (reopen)
+            {
+                window.PlayForTest(core, new ItemRef(core.Servers[0].Server, NativeItemId));
+                var playing = await WaitUntilAsync(() => window.PlayerStateForTest is
+                    { State: PlayerStateKind.Playing, Route.Engine: RouteEngine.Platform }, Timeout * 3);
+                if (!playing)
+                {
+                    check(false, "the stand-in's MP4 plays natively again for the subtitle check");
+                    return;
+                }
+            }
+            var shownBefore = window.SubtitlesShownForTest;
+            await window.SelectSubtitleForTestAsync(1);
+            var added = await WaitUntilAsync(() => window.SubtitlePathForTest is not null, Timeout);
+            var path = window.SubtitlePathForTest ?? "none";
+            Console.WriteLine($"     native subtitle file: {path}");
+            if (!added)
+            {
+                check(false, $"the native engine shows the subtitle file ({(reopen ? "opened again" : "as it comes")}; {path})");
+                return;
+            }
+            window.SeekForTest(TimeSpan.Zero);
+            var seen = false;
+            var cue = await WaitUntilAsync(() =>
+            {
+                seen |= window.SubtitlesShownForTest > shownBefore && window.SubtitleTextForTest == cueText;
+                return seen || window.PlayerStateForTest.Route?.Engine != RouteEngine.Platform;
+            }, Timeout);
+            check(cue && seen && window.PlayerStateForTest.Route?.Engine == RouteEngine.Platform,
+                $"its cue reaches our subtitle view on the native route ({path}{(reopen ? ", opened again on purpose" : "")})");
+            window.ReopenForSubtitlesForTest = false;
         }
     }
 

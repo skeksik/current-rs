@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using Current.Bindings;
 using Microsoft.UI.Dispatching;
+using Windows.Graphics.Imaging;
 using Windows.Media.Core;
 using Windows.Media.Playback;
 using Windows.Media.Streaming.Adaptive;
+using Windows.Storage.Streams;
 
 namespace Current.Shell.Player;
 
@@ -27,8 +29,13 @@ namespace Current.Shell.Player;
 /// <item>HLS through <c>AdaptiveMediaSource</c> (W1 §7), with a deadline of its own for the first segment (<see
 /// cref="HlsFirstSegmentDeadline"/>).</item>
 /// <item>The system media controls stay ours (MediaControls): <c>CommandManager.IsEnabled = false</c>, as W1 §8 checked.</item>
-/// <item>No subtitles yet (W5): the core lists none for this engine (platform_caps.rs), so a selected subtitle goes to libmpv; a
-/// subtitle command other than off is refused.</item>
+/// <item>Subtitles (W5): the selected timed metadata track is <c>ApplicationPresented</c>, every other one <c>Disabled</c>, and its
+/// cues go to our view (<see cref="ISubtitleSink"/>, SubtitleOverlay): text cues and PGS image cues (W1 §6). Switching tracks or
+/// turning them off changes presentation modes only, with no reload. The n-th of the file's own subtitle streams by the server's index
+/// is the n-th subtitle track sorted by <c>Id</c>, numerically when every <c>Id</c> is a number (W1 §6: the tracks' order changed
+/// between opens, each <c>Id</c> stayed; what the Ids look like was not recorded, so this rule is not verified: the engine logs each
+/// track's Id, kind and language for the owner's device check, W7; when the Ids are not all numbers, the list's order is used).
+/// Subtitle files the core fetched arrive as bytes and are read by <c>TimedTextSource</c> (<see cref="AddSubtitle"/>).</item>
 /// </list>
 /// Threads (PlatformEngineHost): the core's calls hand their work to the UI thread and return at once. Media Foundation's events come
 /// on its own threads with the source they are about, and are handed to the UI thread, where an event whose source is not the open
@@ -49,8 +56,8 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         /// <summary>An HLS stream's first segment after a load or a far seek did not come within <see
         /// cref="HlsFirstSegmentDeadline"/>.</summary>
         public const string StreamTimeout = "stream_timeout";
-        /// <summary>A subtitle command before W5 (the core sends none: it lists no native subtitles).</summary>
-        public const string SubtitlesNotYet = "subtitles_not_yet";
+        /// <summary>A subtitle file <c>TimedTextSource</c> could not read.</summary>
+        public const string SubtitleFailed = "subtitle_failed";
     }
 
     /// <summary>
@@ -91,8 +98,18 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         public const int NoAudioPlaybackDevice = unchecked((int)0xC00D4E84);
     }
 
+    /// <summary>
+    /// After a subtitle file is added to a file that is already open, this long for its track to appear in the item; otherwise the
+    /// file is opened again at the position with the subtitle added first. Microsoft's example adds external timed text before the
+    /// item plays ("Media items, playlists, and tracks", learn.microsoft.com, ms.date 2026-08-23, read 2026-10-29); adding it later
+    /// is not documented there. 1.5 s is ours.
+    /// </summary>
+    internal static readonly TimeSpan LateSubtitleWait = TimeSpan.FromSeconds(1.5);
+
     private readonly DispatcherQueue _ui;
     private readonly Func<IReadOnlyList<uint>> _audioStreams;
+    private readonly Func<IReadOnlyList<uint>> _subtitleStreams;
+    private readonly ISubtitleSink _subtitles;
     private readonly DispatcherQueueTimer _positionTimer;
     private readonly DispatcherQueueTimer _windowTimer;
     private readonly DispatcherQueueTimer _deadlineTimer;
@@ -107,11 +124,16 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     /// <param name="ui">The UI thread's queue: the player is made and used there.</param>
     /// <param name="audioStreams">The server's indices of the file's own audio streams, in order (the player state's tracks that are
     /// not external); read on the UI thread when a file opens.</param>
+    /// <param name="subtitleStreams">The same for its own subtitle streams.</param>
+    /// <param name="subtitles">Where the cues are shown.</param>
     /// <exception cref="Exception">Windows' player cannot be made (an edition without Media Foundation): open without it.</exception>
-    public NativeEngine(DispatcherQueue ui, Func<IReadOnlyList<uint>> audioStreams)
+    public NativeEngine(DispatcherQueue ui, Func<IReadOnlyList<uint>> audioStreams, Func<IReadOnlyList<uint>> subtitleStreams,
+        ISubtitleSink subtitles)
     {
         _ui = ui;
         _audioStreams = audioStreams;
+        _subtitleStreams = subtitleStreams;
+        _subtitles = subtitles;
         Player = new MediaPlayer { AutoPlay = false };
         Player.CommandManager.IsEnabled = false;
         Player.MediaOpened += (sender, _) => FromPlayer(sender.Source, Opened);
@@ -130,6 +152,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         Player.PlaybackSession.PlaybackStateChanged += (_, _) => FromPlayer(Player.Source, StateChanged);
         Player.PlaybackSession.SeekCompleted += (_, _) => FromPlayer(Player.Source, SeekCompleted);
         Player.PlaybackSession.NaturalDurationChanged += (_, _) => FromPlayer(Player.Source, ReportDuration);
+        Player.PlaybackSession.NaturalVideoSizeChanged += (_, _) => FromPlayer(Player.Source, _ => ReportVideoSize());
 
         _positionTimer = ui.CreateTimer();
         _positionTimer.Interval = PositionEvery;
@@ -171,12 +194,31 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     /// <summary>The HRESULT of the last failure, if Media Foundation gave one (the smoke run's skip rule).</summary>
     internal int? LastFailureCode { get; private set; }
 
+    /// <summary>How the last subtitle file was shown: added while the file played, or with the file opened again (the smoke run
+    /// prints it).</summary>
+    internal string? SubtitlePath { get; private set; }
+
+    /// <summary>For the smoke run: open the file again for every subtitle file, so that path is tested too.</summary>
+    internal bool ReopenForSubtitlesForTest { get; set; }
+
     /// <summary>One load: its source, its item and what is known about it. UI thread only, but <see cref="Hooked"/> (its lock).</summary>
     private sealed class NativeFile(PlatformLoad load)
     {
+        public PlatformLoad Load { get; } = load;
         public ulong Generation { get; } = load.Generation;
         public bool Hls { get; } = load.Hls;
         public PlatformTrack Audio { get; set; } = load.Audio;
+        public PlatformTrack Subtitle { get; set; } = load.Subtitle;
+        /// <summary>Opened again for a subtitle file: the core is not told Loaded again.</summary>
+        public bool Reopened { get; set; }
+        /// <summary>The subtitle files the core handed over, kept for an open again.</summary>
+        public List<PlatformSubtitle> Externals { get; } = [];
+        /// <summary>The track each subtitle file became, by its server index.</summary>
+        public Dictionary<uint, TimedMetadataTrack> ExternalTracks { get; } = [];
+        /// <summary>The tracks whose cues are hooked; a cue's key starts with the track's place here.</summary>
+        public List<TimedMetadataTrack> CueTracks { get; } = [];
+        /// <summary>The track shown now, if any.</summary>
+        public TimedMetadataTrack? Shown { get; set; }
         public TimeSpan? PendingSeek { get; set; }
         public MediaSource? Source { get; set; }
         public MediaPlaybackItem? Item { get; set; }
@@ -203,13 +245,33 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     protected override void Load(PlatformLoad file)
     {
         var generation = file.Generation;
-        if (!_ui.TryEnqueue(() => _ = OpenAsync(file)))
+        if (!_ui.TryEnqueue(() => _ = OpenAsync(file, null)))
         {
             Report(generation, new PlatformEngineEvent.Failed(Kinds.LoadingFailed));
         }
     }
 
-    protected override void AddSubtitle(PlatformSubtitle subtitle) => throw new PlatformEngineFailure(Kinds.SubtitlesNotYet);
+    /// <summary>A subtitle file the core fetched (ADR 0025, "Subtitles on the native route"): read by <c>TimedTextSource</c> and added
+    /// to the open file, or, when that does not show within <see cref="LateSubtitleWait"/>, added to the file opened again at the
+    /// position.</summary>
+    protected override void AddSubtitle(PlatformSubtitle subtitle) => Post(() =>
+    {
+        if (_file is not { } file)
+        {
+            return;
+        }
+        file.Externals.Add(subtitle);
+        if (subtitle.Select)
+        {
+            file.Subtitle = new PlatformTrack.Stream(subtitle.Index);
+        }
+        if (!file.Opened || ReopenForSubtitlesForTest)
+        {
+            Reopen(file);
+            return;
+        }
+        _ = AddLateAsync(file, subtitle);
+    });
 
     protected override void SetPaused(bool paused) => Post(() =>
     {
@@ -238,6 +300,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
             file.PendingSeek = position;
             return;
         }
+        _subtitles.Clear();
         Seek(file, position);
     });
 
@@ -254,13 +317,18 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         }
     });
 
-    protected override void SelectSubtitle(PlatformTrack track)
+    protected override void SelectSubtitle(PlatformTrack track) => Post(() =>
     {
-        if (track is PlatformTrack.Stream)
+        if (_file is not { } file)
         {
-            throw new PlatformEngineFailure(Kinds.SubtitlesNotYet);
+            return;
         }
-    }
+        file.Subtitle = track;
+        if (file.Opened)
+        {
+            ApplySubtitle(file);
+        }
+    });
 
     protected override void SetVolume(byte volume) => Post(() =>
     {
@@ -347,17 +415,28 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
 
     // Opening and closing (UI thread) ---------------------------------------------------------------------------------------------
 
-    private async Task OpenAsync(PlatformLoad load)
+    /// <param name="again">The file this opens again for its subtitle files (<see cref="Reopen"/>), or null for the core's load.</param>
+    private async Task OpenAsync(PlatformLoad load, NativeFile? again)
     {
         if (_disposed)
         {
             return;
         }
         Unload();
-        var file = new NativeFile(load);
+        var file = new NativeFile(load) { Reopened = again is not null };
+        if (again is not null)
+        {
+            file.Audio = again.Audio;
+            file.Subtitle = again.Subtitle;
+            file.Externals.AddRange(again.Externals);
+        }
+        else
+        {
+            // A load starts playing; the core sends the session's pause after it. Opened again, the file keeps it.
+            _paused = false;
+            SubtitlePath = null;
+        }
         _file = file;
-        // A load starts playing; the core sends the session's pause after it.
-        _paused = false;
         try
         {
             var uri = new Uri(load.Url);
@@ -384,6 +463,16 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
                 source = MediaSource.CreateFromUri(uri);
             }
             file.Source = source;
+            // Subtitle files before the item, as Microsoft's example adds them.
+            foreach (var subtitle in file.Externals)
+            {
+                var text = await TimedTextAsync(file, subtitle);
+                if (_file != file)
+                {
+                    return;
+                }
+                source.ExternalTimedTextSources.Add(text);
+            }
             var item = new MediaPlaybackItem(source, load.Start);
             file.Item = item;
             Hook(file, item);
@@ -412,7 +501,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         Windows.Foundation.TypedEventHandler<MediaPlaybackItem, Windows.Foundation.Collections.IVectorChangedEventArgs> tracks =
             (_, _) => HookTracks(file, item);
         Windows.Foundation.TypedEventHandler<MediaPlaybackItem, Windows.Foundation.Collections.IVectorChangedEventArgs> metadata =
-            (_, _) => FromItem(file, () => HideTimedMetadata(item));
+            (_, _) => FromItem(file, () => ApplySubtitle(file));
         Windows.Foundation.TypedEventHandler<ISingleSelectMediaTrackList, object> selected =
             (_, _) => FromItem(file, () => AudioChanged(file));
         item.AudioTracksChanged += tracks;
@@ -475,6 +564,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
             return;
         }
         _file = null;
+        _subtitles.Clear();
         try
         {
             Player.Source = null;
@@ -508,9 +598,15 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
             return;
         }
         file.Opened = true;
-        Report(file.Generation, new PlatformEngineEvent.Loaded());
+        if (!file.Reopened)
+        {
+            Report(file.Generation, new PlatformEngineEvent.Loaded());
+        }
         ReportDuration(file);
-        HideTimedMetadata(item);
+        ReportVideoSize();
+        _subtitles.RefreshAppearance();
+        LogSubtitleTracks(item);
+        ApplySubtitle(file);
         HookTracks(file, item);
         // The n-th of the file's own audio streams is the n-th audio track, from now on by its Id. A server stream (HLS) carries the
         // one audio track the server was asked for.
@@ -770,13 +866,264 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         _ => otherwise,
     };
 
-    /// <summary>Timed metadata tracks (subtitles, chapters) stay hidden until W5 draws them.</summary>
-    private static void HideTimedMetadata(MediaPlaybackItem item)
+    private void ReportVideoSize()
+    {
+        var session = Player.PlaybackSession;
+        _subtitles.VideoSize(session.NaturalVideoWidth, session.NaturalVideoHeight);
+    }
+
+    // Subtitles (UI thread, but the cue hooks) ------------------------------------------------------------------------------------
+
+    private static bool IsSubtitle(TimedMetadataTrack track) =>
+        track.TimedMetadataKind is TimedMetadataKind.Subtitle or TimedMetadataKind.Caption or TimedMetadataKind.ImageSubtitle;
+
+    /// <summary>Each subtitle track's Id, kind and language, for the owner's device check (W7); never its label, which can carry a
+    /// title.</summary>
+    private static void LogSubtitleTracks(MediaPlaybackItem item)
     {
         for (var i = 0; i < item.TimedMetadataTracks.Count; i++)
         {
-            item.TimedMetadataTracks.SetPresentationMode((uint)i, TimedMetadataTrackPresentationMode.Disabled);
+            var track = item.TimedMetadataTracks[i];
+            if (IsSubtitle(track))
+            {
+                Trace.TraceInformation(
+                    $"Current: native subtitle track {i}: id '{track.Id}', kind {track.TimedMetadataKind}, language '{track.Language}'");
+            }
         }
+    }
+
+    /// <summary>The track for a server subtitle index: a subtitle file's own track, or the n-th of the file's subtitle tracks by Id
+    /// for the n-th of its own subtitle streams (the class summary).</summary>
+    private TimedMetadataTrack? TrackFor(NativeFile file, uint index)
+    {
+        if (file.ExternalTracks.TryGetValue(index, out var external))
+        {
+            return external;
+        }
+        if (file.Hls || file.Item is not { } item)
+        {
+            return null;
+        }
+        var embedded = Enumerable.Range(0, item.TimedMetadataTracks.Count)
+            .Select(i => item.TimedMetadataTracks[i])
+            .Where(track => IsSubtitle(track) && !file.ExternalTracks.Values.Any(added => ReferenceEquals(added, track)))
+            .ToList();
+        if (embedded.All(track => long.TryParse(track.Id, out _)))
+        {
+            embedded = [.. embedded.OrderBy(track => long.Parse(track.Id, System.Globalization.CultureInfo.InvariantCulture))];
+        }
+        var streams = _subtitleStreams();
+        var place = streams.ToList().IndexOf(index);
+        return place >= 0 && place < embedded.Count ? embedded[place] : null;
+    }
+
+    /// <summary>The selected track ApplicationPresented and its cues hooked, every other one Disabled: no reload.</summary>
+    private void ApplySubtitle(NativeFile file)
+    {
+        if (file.Item is not { } item)
+        {
+            return;
+        }
+        var target = file.Subtitle is PlatformTrack.Stream stream ? TrackFor(file, stream.Index) : null;
+        for (var i = 0; i < item.TimedMetadataTracks.Count; i++)
+        {
+            var mode = ReferenceEquals(item.TimedMetadataTracks[i], target)
+                ? TimedMetadataTrackPresentationMode.ApplicationPresented
+                : TimedMetadataTrackPresentationMode.Disabled;
+            if (item.TimedMetadataTracks.GetPresentationMode((uint)i) != mode)
+            {
+                item.TimedMetadataTracks.SetPresentationMode((uint)i, mode);
+            }
+        }
+        if (!ReferenceEquals(file.Shown, target))
+        {
+            file.Shown = target;
+            _subtitles.Clear();
+        }
+        if (target is not null)
+        {
+            HookCues(file, target);
+        }
+    }
+
+    /// <summary>A track's CueEntered and CueExited, once per track: the cue is read on Media Foundation's thread and shown on the UI
+    /// thread while its track is still the one shown. No cue text is ever logged.</summary>
+    private void HookCues(NativeFile file, TimedMetadataTrack track)
+    {
+        if (file.CueTracks.Any(hooked => ReferenceEquals(hooked, track)))
+        {
+            return;
+        }
+        file.CueTracks.Add(track);
+        var prefix = file.CueTracks.Count;
+        Windows.Foundation.TypedEventHandler<TimedMetadataTrack, MediaCueEventArgs> entered = (_, args) =>
+        {
+            var key = $"{prefix}:{args.Cue.StartTime.Ticks}:{args.Cue.Id}";
+            switch (args.Cue)
+            {
+                case TimedTextCue text:
+                    var lines = text.Lines.Select(ToLine).ToList();
+                    FromItem(file, () => Show(file, track, () => _subtitles.ShowText(key, lines)));
+                    break;
+                case ImageCue image when image.SoftwareBitmap is { } bitmap:
+                    var copy = SoftwareBitmap.Convert(bitmap, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+                    var placement = new SubtitlePlacement(image.Position.X, image.Position.Y,
+                        image.Position.Unit == TimedTextUnit.Percentage, image.Extent.Width, image.Extent.Height,
+                        image.Extent.Unit == TimedTextUnit.Percentage);
+                    FromItem(file, () => Show(file, track, () => _subtitles.ShowImage(key, copy, placement)));
+                    break;
+            }
+        };
+        Windows.Foundation.TypedEventHandler<TimedMetadataTrack, MediaCueEventArgs> exited = (_, args) =>
+        {
+            var key = $"{prefix}:{args.Cue.StartTime.Ticks}:{args.Cue.Id}";
+            FromItem(file, () => _subtitles.Hide(key));
+        };
+        track.CueEntered += entered;
+        track.CueExited += exited;
+        lock (file.Hooked)
+        {
+            file.Detach.Add(() =>
+            {
+                track.CueEntered -= entered;
+                track.CueExited -= exited;
+            });
+        }
+    }
+
+    private static void Show(NativeFile file, TimedMetadataTrack track, Action show)
+    {
+        if (ReferenceEquals(file.Shown, track))
+        {
+            show();
+        }
+    }
+
+    /// <summary>A text line as runs: italic and bold from its subformats (W1 §6), the rest left to the caption settings.</summary>
+    private static SubtitleLine ToLine(TimedTextLine line)
+    {
+        var text = line.Text ?? "";
+        var italic = new bool[text.Length];
+        var bold = new bool[text.Length];
+        foreach (var format in line.Subformats)
+        {
+            var style = format.SubformatStyle;
+            var isItalic = style?.FontStyle is TimedTextFontStyle.Italic or TimedTextFontStyle.Oblique;
+            var isBold = style?.FontWeight == TimedTextWeight.Bold;
+            for (var i = Math.Max(0, format.StartIndex); i < Math.Min(text.Length, format.StartIndex + format.Length); i++)
+            {
+                italic[i] |= isItalic;
+                bold[i] |= isBold;
+            }
+        }
+        var spans = new List<SubtitleSpan>();
+        var start = 0;
+        for (var i = 1; i <= text.Length; i++)
+        {
+            if (i == text.Length || italic[i] != italic[start] || bold[i] != bold[start])
+            {
+                spans.Add(new SubtitleSpan(text[start..i], italic[start], bold[start]));
+                start = i;
+            }
+        }
+        return new SubtitleLine(spans);
+    }
+
+    /// <summary>A subtitle file's bytes as a <c>TimedTextSource</c>, its Resolved hooked: the track it becomes is the file's, by
+    /// its server index; one it cannot read fails the track (the core moves the file on).</summary>
+    private async Task<TimedTextSource> TimedTextAsync(NativeFile file, PlatformSubtitle subtitle)
+    {
+        var stream = new InMemoryRandomAccessStream();
+        using (var writer = new DataWriter(stream))
+        {
+            writer.WriteBytes(subtitle.Data);
+            await writer.StoreAsync();
+            writer.DetachStream();
+        }
+        stream.Seek(0);
+        var text = string.IsNullOrEmpty(subtitle.Language)
+            ? TimedTextSource.CreateFromStream(stream)
+            : TimedTextSource.CreateFromStream(stream, subtitle.Language);
+        var index = subtitle.Index;
+        Windows.Foundation.TypedEventHandler<TimedTextSource, TimedTextSourceResolveResultEventArgs> resolved = (_, args) =>
+        {
+            var failure = args.Error?.ExtendedError?.HResult;
+            var failed = args.Error is not null;
+            var track = args.Tracks.FirstOrDefault();
+            FromItem(file, () =>
+            {
+                if (failed || track is null)
+                {
+                    Fail(file, new PlatformEngineEvent.TrackFailed(Kinds.SubtitleFailed), failure);
+                    return;
+                }
+                file.ExternalTracks[index] = track;
+                ApplySubtitle(file);
+            });
+        };
+        text.Resolved += resolved;
+        lock (file.Hooked)
+        {
+            file.Detach.Add(() => text.Resolved -= resolved);
+        }
+        return text;
+    }
+
+    /// <summary>Adds a subtitle file to the open file; when its track is not shown within <see cref="LateSubtitleWait"/>, the file
+    /// is opened again with it.</summary>
+    private async Task AddLateAsync(NativeFile file, PlatformSubtitle subtitle)
+    {
+        try
+        {
+            var text = await TimedTextAsync(file, subtitle);
+            if (_file != file || file.Source is not { } source)
+            {
+                return;
+            }
+            source.ExternalTimedTextSources.Add(text);
+        }
+        catch (Exception error)
+        {
+            Trace.TraceWarning($"Current: a subtitle file could not be added while playing: {error.GetType().Name}");
+            Reopen(file);
+            return;
+        }
+        var check = _ui.CreateTimer();
+        check.Interval = LateSubtitleWait;
+        check.IsRepeating = false;
+        check.Tick += (_, _) =>
+        {
+            if (_file != file || file.Failed || file.Item is not { } item)
+            {
+                return;
+            }
+            var shown = file.ExternalTracks.TryGetValue(subtitle.Index, out var track)
+                && Enumerable.Range(0, item.TimedMetadataTracks.Count).Any(i => ReferenceEquals(item.TimedMetadataTracks[i], track));
+            if (shown)
+            {
+                SubtitlePath = "added while playing";
+                Trace.TraceInformation("Current: the native engine added a subtitle file while playing");
+            }
+            else
+            {
+                Reopen(file);
+            }
+        };
+        check.Start();
+    }
+
+    /// <summary>Opens the file again at the position, its subtitle files added before the item (Microsoft's order): the core is told
+    /// Restarted only, as after a seek.</summary>
+    private void Reopen(NativeFile file)
+    {
+        if (_file != file || file.Failed)
+        {
+            return;
+        }
+        SubtitlePath = "reopened with the file";
+        Trace.TraceInformation("Current: the native engine opens the file again for a subtitle file");
+        var position = file.Opened ? Player.PlaybackSession.Position : file.Load.Start;
+        _ = OpenAsync(file.Load with { Start = position }, file);
     }
 
     /// <summary>The file cannot go on: reported once; the core stops this engine and moves the file on.</summary>
