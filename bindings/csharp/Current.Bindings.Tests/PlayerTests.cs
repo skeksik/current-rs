@@ -373,6 +373,27 @@ internal static class PlayerTests
         Check(unknown.Tabs[0].Rows.Single(row => row.Name == "H.264 (AVC)").Support == FormatSupport.Plays, "no test: Plays");
     }
 
+    public static async Task SupportedFormatsNameTheRouteWithWindowsPlayer()
+    {
+        using var core = CoreHost.Create();
+        // CodecQuery found H.264 and AAC only (ADR 0025, W6): H.264 plays in Windows' player; HEVC, which the test engine decodes, in
+        // the app engine, with the Store link for the extension Windows' player lacks.
+        var answers = PlatformEngineHost.WindowsCodecQueries()
+            .Select(ask => new CodecQueryAnswer(ask.Subtype, ask.Subtype is "VideoFormatH264" or "AudioFormatAac" ? 1u : 0u))
+            .ToList();
+        var page = await core.SupportedFormatsAsync(null, null, answers);
+        var video = page.Tabs[0].Rows;
+        var h264 = video.Single(row => row.Name == "H.264 (AVC)");
+        Check(h264.Support == FormatSupport.Native && h264.SupportLabel == "Windows' player" && h264.Action is null, "H.264 natively");
+        var hevc = video.Single(row => row.Name == "HEVC (H.265)");
+        Check(hevc.SupportLabel == "App engine", $"HEVC in the app engine ({hevc.SupportLabel})");
+        Check(hevc.Action == new FormatAction("Install HEVC Video Extensions", "ms-windows-store://pdp/?ProductId=9NMZLZ57R3T7"),
+            $"HEVC's Store link ({hevc.Action})");
+        var without = await core.SupportedFormatsAsync(null, null);
+        Check(without.Tabs.SelectMany(tab => tab.Rows).All(row => row.Support != FormatSupport.Native && row.Action is null),
+            "without the answers, no route is named");
+    }
+
     private static async Task<PlayerException> ThrowsPlayer(Func<Task> call)
     {
         try

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Current.Bindings;
 using Current.Shell.Player;
 using Microsoft.UI.Xaml;
@@ -7,11 +8,38 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace Current.Shell.Pages;
 
-/// <summary>One row as the list shows it: the core's name, the core's word for the support, and the core's notes.</summary>
-public sealed record FormatRowView(string Name, string Support, string Notes)
+/// <summary>One row as the list shows it: the core's name, the core's word for the support, the core's notes, and the core's link,
+/// if any (the Store page of an extension Windows' player lacks, ADR 0025 W6).</summary>
+public sealed record FormatRowView(string Name, string Support, string Notes, string ActionLabel, string ActionUri)
 {
     /// <summary>What Narrator reads for the row: name, support, notes.</summary>
     public string Spoken => Notes.Length > 0 ? $"{Name}, {Support}, {Notes}" : $"{Name}, {Support}";
+
+    public Visibility ActionVisibility => ActionLabel.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility NotesVisibility => Notes.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>A Store product page and nothing else: the scheme, the path and a 12-character product id, as the core builds them
+    /// (<c>ms-windows-store://pdp/?ProductId=</c>; W1 opened such links from the unpackaged app, docs/notes/windows-native-player.md §3).</summary>
+    private static readonly Regex StoreLink = new("^ms-windows-store://pdp/\\?ProductId=[0-9A-Z]{12}$", RegexOptions.CultureInvariant);
+
+    /// <summary>Opens the row's Store page; any other address is not opened, and only that is logged.</summary>
+    public async void OpenAction()
+    {
+        if (!StoreLink.IsMatch(ActionUri))
+        {
+            Trace.TraceWarning("Current: a supported formats link that is not a Store product page was not opened");
+            return;
+        }
+        try
+        {
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(ActionUri));
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: opening the Store failed: {error.GetType().Name}");
+        }
+    }
 }
 
 /// <summary>
@@ -74,7 +102,10 @@ public sealed partial class SupportedFormatsPage : Page
         {
             var hardware = await DecoderTest.GetAsync();
             var display = XamlRoot?.ContentIslandEnvironment is { } island ? DisplayWatcher.ReadOnce(island.AppWindowId) : null;
-            var formats = await core.SupportedFormatsAsync(hardware, display, load.Token);
+            // What Windows' own player decodes, as the player asks it (CodecAnswers, ADR 0025 W6): the page then names each format's
+            // route. Never throws; with no answers at all the native route decodes nothing.
+            var answers = await CodecAnswers.GetAsync();
+            var formats = await core.SupportedFormatsAsync(hardware, display, answers, load.Token);
             if (!load.IsCancellationRequested)
             {
                 Show(formats);
@@ -136,7 +167,9 @@ public sealed partial class SupportedFormatsPage : Page
         NameHeader.Text = tab?.NameHeader ?? "";
         SupportHeader.Text = tab?.SupportHeader ?? "";
         NotesHeader.Text = tab?.NotesHeader ?? "";
-        RowsList.ItemsSource = tab?.Rows.Select(row => new FormatRowView(row.Name, row.SupportLabel, row.Notes)).ToList()
+        RowsList.ItemsSource = tab?.Rows
+            .Select(row => new FormatRowView(row.Name, row.SupportLabel, row.Notes, row.Action?.Label ?? "", row.Action?.Uri ?? ""))
+            .ToList()
             ?? new List<FormatRowView>();
     }
 

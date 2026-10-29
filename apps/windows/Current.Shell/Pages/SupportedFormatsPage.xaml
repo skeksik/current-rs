@@ -113,11 +113,20 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="{x:Bind Name}" TextWrapping="Wrap" />
                             <TextBlock Grid.Column="1" Text="{x:Bind Support}" TextWrapping="Wrap" />
-                            <TextBlock
-                                Grid.Column="2"
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="{x:Bind Notes}"
-                                TextWrapping="Wrap" />
+                            <!-- The notes, and the core's link under them when the row has one (W6: "Install HEVC Video Extensions",
+                                 opening its Store page). -->
+                            <StackPanel Grid.Column="2">
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="{x:Bind Notes}"
+                                    TextWrapping="Wrap"
+                                    Visibility="{x:Bind NotesVisibility}" />
+                                <HyperlinkButton
+                                    Padding="0"
+                                    Content="{x:Bind ActionLabel}"
+                                    Click="{x:Bind OpenAction}"
+                                    Visibility="{x:Bind ActionVisibility}" />
+                            </StackPanel>
                         </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>

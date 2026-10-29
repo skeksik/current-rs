@@ -283,20 +283,20 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
 - [x] W1 spike (spike/windows-native-player, #105): a prototype on the owner's PC, as D2 was (`docs/notes/windows-native-player.md`).
       Departures 1 to 3 kept, departure 4 dropped (fMP4 HLS plays natively), departure 8 added (PQ video on an SDR display on
       libmpv) and a speed the native player ignores re-plans to libmpv (owner, 2026-10-28)
-- [ ] W2 (feat/routes-and-engines): the core's routes and reasons, two engines per player, the per-file route check with the display
+- [x] W2 (feat/routes-and-engines, #107, #108): the core's routes and reasons, two engines per player, the per-file route check with the display
       rule (departures 2 and 8), the device profile as the union of both engines, the fallback chain, track, speed and display changes
       across engines, Settings → Playback → "Player" (Automatic, Always app engine) and "Play with app engine" (owner, 2026-10-28); fake
       engines in tests
-- [ ] W3 (feat/platform-engine-bridge): the platform engine as a UniFFI foreign trait with its events, capability facts from the UI,
+- [x] W3 (feat/platform-engine-bridge, #110, #112): the platform engine as a UniFFI foreign trait with its events, capability facts from the UI,
       every platform-engine stream through the relay; C# adapters and bindings tests against the stand-in
-- [ ] W4 (feat/windows-native-engine): the C# Media Foundation engine, the player page with both surfaces, the decodability check
+- [x] W4 (feat/windows-native-engine, #114): the C# Media Foundation engine, the player page with both surfaces, the decodability check
       (`DecoderStatus`, a track's `OpenFailed`, `MediaFailed` after opening), tracks by `Id`, HLS through `AdaptiveMediaSource` with its
       own deadline for a slow first segment (W1)
-- [ ] W5 (feat/windows-native-subtitles): our own subtitle view for the native route (text cues and PGS image cues), above the control
+- [x] W5 (feat/windows-native-subtitles, #115): our own subtitle view for the native route (text cues and PGS image cues), above the control
       bar
 - [ ] libmpv's subtitles kept clear of the control bar, as the native view's are (W5), so both routes behave the same (manager,
       2026-10-29; for the owner to schedule). Until then the native route's subtitles move up with the bar and libmpv's do not
-- [ ] W6 (feat/formats-per-route): the supported formats page per route, with missing Store extensions (found through `CodecQuery`)
+- [x] W6 (feat/formats-per-route, #116): the supported formats page per route, with missing Store extensions (found through `CodecQuery`)
       and their link (ADR 0021)
 - [ ] W7: device check on the owner's PC: real files on each route, the route and its reasons in the info panel, the fallback chain
 - [ ] Settings to turn off switching back to Windows' player, per situation (owner, 2026-10-29). A switch to libmpv still happens
