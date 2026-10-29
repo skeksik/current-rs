@@ -190,7 +190,8 @@ Added 2026-10-28 by task W2 (feat/routes-and-engines), from ADR 0025 "How the co
 - **Two engines in the controller** (same change): the controller holds the app engine and, when the platform has one, the native
   engine (`Controller::with_native_engine`); each command goes to the engine that has the file, and only that engine's events
   count. Volume, mute and speed go to both. A file that moves to the other engine is stopped on the first. A re-plan while paused
-  stays paused. An engine reports nothing for a file after `stop` returns (W3's bridge enforces it for platform engines), and one
+  stays paused (amended 2026-10-29, owner, fix/replan-keeps-pause: with the app engine only too, where a quality change or the
+  fallback reported Playing while libmpv, whose `pause` outlives a `loadfile`, stayed paused). An engine reports nothing for a file after `stop` returns (W3's bridge enforces it for platform engines), and one
   that can ignore rates reports `RatesSupported` after every load.
 - **Re-plans at the position** (same change, ADR 0025 "Track changes"): an audio or subtitle track the route playing cannot play
   moves the file to the first route that can; a rate other than 1 while the native engine reports it ignores rates with these tracks
