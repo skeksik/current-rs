@@ -922,7 +922,7 @@ async fn a_file_the_platform_engine_plays_goes_there_through_the_relay() {
 
 #[tokio::test]
 async fn the_stand_ins_native_file_goes_to_the_platform_engine_with_ranges() {
-    // What the Windows smoke run opens in Windows' own player (ADR 0025, W4): H.264 and AAC in MP4, native without any Store
+    // What the Windows smoke run opens in Windows' own player (ADR 0025, W4): H.264 alone in MP4, native without any Store
     // extension, and the relay answers Media Foundation's range requests with the file's own bytes.
     let _engine = ENGINE.lock().await;
     let stand_in = StandIn::start().await.unwrap();

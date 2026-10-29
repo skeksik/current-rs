@@ -64,8 +64,8 @@ pub const TRANSCODE_ITEM: &str = "57a2d1e0000000000000000000000011";
 /// [`TRANSCODE_ITEM`] as its HLS paths spell it: a GUID with dashes, as a real Jellyfin 12.3.0 server wrote the item id in a
 /// `TranscodingUrl` (seen on the Windows relay check, 2026-10-26).
 pub const TRANSCODE_ITEM_PATH_ID: &str = "57a2d1e0-0000-0000-0000-000000000011";
-/// An item PlaybackInfo answers with direct play of a real file, [`NATIVE_MEDIA`]: an MP4 with H.264 Main and AAC-LC, which Windows'
-/// own player decodes without a Store extension (the Windows app's smoke run, ADR 0025 W4).
+/// An item PlaybackInfo answers with direct play of a real file, [`NATIVE_MEDIA`]: an MP4 with H.264 Main and no audio, which Windows'
+/// own player decodes without a Store extension and on a machine without an audio device (the Windows app's smoke run, ADR 0025 W4).
 pub const NATIVE_ITEM: &str = "57a2d1e0000000000000000000000014";
 /// The name of [`NATIVE_ITEM`] in its details.
 pub const NATIVE_NAME: &str = "Stand-in Native";
@@ -1267,11 +1267,11 @@ fn playback_info(route: String) -> String {
     )
 }
 
-/// [`NATIVE_ITEM`]'s PlaybackInfo: direct play of [`NATIVE_MEDIA`], an MP4 with H.264 Main and AAC-LC, 2 s.
+/// [`NATIVE_ITEM`]'s PlaybackInfo: direct play of [`NATIVE_MEDIA`], an MP4 with H.264 Main and no audio, 2 s.
 fn native_playback_info() -> String {
     let size = NATIVE_MEDIA.len();
     format!(
-        r#"{{"MediaSources":[{{"Protocol":"File","Id":"{MEDIA_SOURCE}","Path":"/media/stand-in/native.mp4","Type":"Default","Container":"mp4","Size":{size},"Name":"Stand-in 180p","IsRemote":false,"ETag":"5ad01f","RunTimeTicks":20000000,"SupportsTranscoding":true,"SupportsDirectStream":false,"SupportsDirectPlay":true,"MediaStreams":[{{"Codec":"h264","DisplayTitle":"180p H264 SDR","BitDepth":8,"Height":180,"Width":320,"RealFrameRate":24,"VideoRange":"SDR","VideoRangeType":"SDR","Profile":"Main","Type":"Video","Index":0,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false,"Level":20}},{{"Codec":"aac","Language":"eng","DisplayTitle":"English - AAC - Stereo - Default","ChannelLayout":"stereo","Channels":2,"SampleRate":48000,"Profile":"LC","Type":"Audio","Index":1,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false}}],"Bitrate":110000,"DefaultAudioStreamIndex":1,"HasSegments":false}}],"PlaySessionId":"{PLAY_SESSION}"}}"#
+        r#"{{"MediaSources":[{{"Protocol":"File","Id":"{MEDIA_SOURCE}","Path":"/media/stand-in/native.mp4","Type":"Default","Container":"mp4","Size":{size},"Name":"Stand-in 180p","IsRemote":false,"ETag":"5ad01f","RunTimeTicks":20000000,"SupportsTranscoding":true,"SupportsDirectStream":false,"SupportsDirectPlay":true,"MediaStreams":[{{"Codec":"h264","DisplayTitle":"180p H264 SDR","BitDepth":8,"Height":180,"Width":320,"RealFrameRate":24,"VideoRange":"SDR","VideoRangeType":"SDR","Profile":"Main","Type":"Video","Index":0,"IsDefault":true,"IsForced":false,"IsHearingImpaired":false,"IsExternal":false,"Level":20}}],"Bitrate":40000,"HasSegments":false}}],"PlaySessionId":"{PLAY_SESSION}"}}"#
     )
 }
 
