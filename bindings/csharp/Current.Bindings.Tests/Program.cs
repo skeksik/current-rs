@@ -83,6 +83,12 @@ var tests = new (string Name, Func<Task> Run)[]
     ("an HLS stream behind a header gateway is relayed, and no URL crosses", PlayerTests.HlsBehindAHeaderGatewayIsRelayed),
     ("the skip switch is saved", PlayerTests.SkipSwitchIsSaved),
     ("the supported formats page crosses with the facts passed in", PlayerTests.SupportedFormatsCrossWithTheFactsPassedIn),
+    // A platform's own player beside libmpv (ADR 0025).
+    ("the core asks Windows for its decoders", PlatformEngineTests.CoreAsksForWindowsDecoders),
+    ("a platform engine plays through the relay and hands over on a failed track", PlatformEngineTests.PlaysNativelyThroughTheRelayAndHandsOver),
+    ("Play with app engine moves the item", PlatformEngineTests.PlayWithAppEngineMovesTheItem),
+    ("exceptions in a platform engine never bring the core down", PlatformEngineTests.EngineExceptionsNeverBringTheCoreDown),
+    ("Always app engine plays the next item there", PlatformEngineTests.AlwaysAppEnginePlaysTheNextItemThere),
 };
 
 var failed = 0;

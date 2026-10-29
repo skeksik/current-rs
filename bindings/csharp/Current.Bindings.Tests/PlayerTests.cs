@@ -8,14 +8,14 @@ using Current.Bindings;
 /// </summary>
 internal static class PlayerTests
 {
-    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan Wait = TimeSpan.FromSeconds(10);
     private static readonly ServerRef FirstServer = new("jellyfin", "1");
-    private static readonly CompositionSize Size = new(1280, 720);
-    private static readonly DisplayFacts Display = new(Hdr: false, PeakNits: 300, SdrWhiteNits: 200, RefreshHz: 60);
+    internal static readonly CompositionSize Size = new(1280, 720);
+    internal static readonly DisplayFacts Display = new(Hdr: false, PeakNits: 300, SdrWhiteNits: 200, RefreshHz: 60);
     /// <summary>The test engine's fake swap chain (crates/app/src/player/test_engine.rs).</summary>
     private const ulong TestSwapChain = 0x5157_0001;
 
-    private static void Check(bool condition, string what)
+    internal static void Check(bool condition, string what)
     {
         if (!condition)
         {
@@ -23,7 +23,7 @@ internal static class PlayerTests
         }
     }
 
-    private static async Task Eventually(string what, ManualDispatcher ui, Func<bool> done)
+    internal static async Task Eventually(string what, ManualDispatcher ui, Func<bool> done)
     {
         var start = DateTime.UtcNow;
         while (true)
@@ -38,7 +38,7 @@ internal static class PlayerTests
         }
     }
 
-    private static async Task SignIn(CoreHost core, StandIn standIn, bool gateHeader = false)
+    internal static async Task SignIn(CoreHost core, StandIn standIn, bool gateHeader = false)
     {
         using var add = core.AddServer();
         await add.ProbeAsync(standIn.Address);
@@ -54,7 +54,7 @@ internal static class PlayerTests
         await Eventually("an address", ui, () => capabilities.Value.Servers.Count == 1 && capabilities.Value.Servers[0].AddressPosition is not null);
     }
 
-    private static ItemRef Item(string id) => new(FirstServer, id);
+    internal static ItemRef Item(string id) => new(FirstServer, id);
 
     public static Task EngineIsTheTestEngine()
     {
