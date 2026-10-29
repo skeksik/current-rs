@@ -136,7 +136,7 @@ the facts of the display the window is on (`DisplayWatcher.ReadOnce`) and shows 
 display; without them, "Plays" and "depending on the display". HDR10+ and Dolby Vision profiles 5, 7 and 8 say "Not checked on a device
 yet": no such files were played on the owner's PC (docs/notes/windows-video.md, "ADR 0007 item 5"). HLG and HDR10 were.
 
-## Per route (ADR 0025, W6; proposed, for the owner's look before the merge)
+## Per route (ADR 0025, W6; approved by the owner, 2026-10-29)
 With Windows' own player beside the app engine (ADR 0025), the page says which one plays each format on this PC.
 - **Input:** the UI passes the answers to the core's CodecQuery questions (the same `CodecAnswers` the player opens with). Without
   them (macOS, Linux, a Windows without Media Foundation) the page is exactly the one above.
