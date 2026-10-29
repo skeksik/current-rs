@@ -93,7 +93,38 @@ public enum StreamProtocolKind
     Progressive,
 }
 
-public sealed record RouteInfo(RouteKind Kind, StreamProtocolKind? Protocol, string? Container, bool VideoCopied, bool AudioCopied);
+/// <summary>ADR 0025's route labels, for a player with a platform engine; words: <see cref="PlayerWordsExtensions.RouteLabelName"/>.</summary>
+public enum RouteLabel
+{
+    Native,
+    DeviceRemux,
+    AppEngine,
+    ServerRemux,
+    ServerDirectStream,
+    ServerTranscode,
+}
+
+/// <summary>Which engine plays the route (ADR 0025): the page shows that engine's surface.</summary>
+public enum RouteEngine
+{
+    Platform,
+    App,
+}
+
+/// <summary>The route: today's name (<see cref="Kind"/>), ADR 0025's (<see cref="Label"/>) and the engine playing it, and for a
+/// server stream its protocol, container and what is copied.</summary>
+public sealed record RouteInfo(
+    RouteKind Kind, StreamProtocolKind? Protocol, string? Container, bool VideoCopied, bool AudioCopied,
+    RouteLabel Label = RouteLabel.AppEngine, RouteEngine Engine = RouteEngine.App);
+
+/// <summary>Settings → Playback → "Player" (ADR 0025).</summary>
+public enum PlayerChoice
+{
+    /// <summary>The platform's player first, then libmpv, then the server.</summary>
+    Automatic,
+    /// <summary>libmpv, then the server.</summary>
+    AlwaysAppEngine,
+}
 
 /// <summary>An audio or subtitle track for the menus, by the server's index.</summary>
 public sealed record TrackInfo(
@@ -230,7 +261,8 @@ public sealed record PlaybackSettings(
     bool SkipsIntrosAndCredits,
     QualityChoice PreferredQuality,
     bool ShowsQualityResolution = true,
-    bool ShowsAllQualities = false);
+    bool ShowsAllQualities = false,
+    PlayerChoice Player = PlayerChoice.Automatic);
 
 /// <summary>
 /// One entry of the quality menu as the core names it: the choice, the resolution the server would send it at ("4K", "1080p"...;
@@ -313,7 +345,32 @@ internal static class PlayerMap
         },
         route.Container,
         route.VideoCopied,
-        route.AudioCopied);
+        route.AudioCopied,
+        From(route.Label),
+        route.Engine == Ffi.EngineKind.Platform ? RouteEngine.Platform : RouteEngine.App);
+
+    public static RouteLabel From(Ffi.RouteLabelKind label) => label switch
+    {
+        Ffi.RouteLabelKind.Native => RouteLabel.Native,
+        Ffi.RouteLabelKind.DeviceRemux => RouteLabel.DeviceRemux,
+        Ffi.RouteLabelKind.ServerRemux => RouteLabel.ServerRemux,
+        Ffi.RouteLabelKind.ServerDirectStream => RouteLabel.ServerDirectStream,
+        Ffi.RouteLabelKind.ServerTranscode => RouteLabel.ServerTranscode,
+        _ => RouteLabel.AppEngine,
+    };
+
+    public static Ffi.RouteLabelKind ToFfi(RouteLabel label) => label switch
+    {
+        RouteLabel.Native => Ffi.RouteLabelKind.Native,
+        RouteLabel.DeviceRemux => Ffi.RouteLabelKind.DeviceRemux,
+        RouteLabel.ServerRemux => Ffi.RouteLabelKind.ServerRemux,
+        RouteLabel.ServerDirectStream => Ffi.RouteLabelKind.ServerDirectStream,
+        RouteLabel.ServerTranscode => Ffi.RouteLabelKind.ServerTranscode,
+        _ => Ffi.RouteLabelKind.AppEngine,
+    };
+
+    public static Ffi.PlayerChoiceKind ToFfi(PlayerChoice choice) =>
+        choice == PlayerChoice.AlwaysAppEngine ? Ffi.PlayerChoiceKind.AlwaysAppEngine : Ffi.PlayerChoiceKind.Automatic;
 
     private static TrackInfo From(Ffi.TrackInfo track) => new(
         track.Index, track.Label, track.Language, track.Codec, track.IsDefault, track.IsForced, track.IsHearingImpaired,
@@ -423,7 +480,8 @@ internal static class PlayerMap
     public static PlaybackSettings From(Ffi.PlaybackSettingsSnapshot settings) =>
         new(
             settings.AutoSkip, settings.SkipsIntrosAndCredits, From(settings.PreferredQuality), settings.ShowsQualityResolution,
-            settings.ShowsAllQualities);
+            settings.ShowsAllQualities,
+            settings.Player == Ffi.PlayerChoiceKind.AlwaysAppEngine ? PlayerChoice.AlwaysAppEngine : PlayerChoice.Automatic);
 
     public static QualityOption From(Ffi.QualityOptionInfo option) => new(From(option.Quality), option.Resolution, option.Bitrate);
 

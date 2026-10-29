@@ -44,6 +44,10 @@ public static class PlayerWordsExtensions
     /// <summary>The route's label: "Direct play", "Remux", "Direct stream", "Transcode".</summary>
     public static string RouteName(this CoreHost core, RouteKind route) => core.Core.RouteName(PlayerWordsMap.ToFfi(route));
 
+    /// <summary>ADR 0025's route label, for a player with a platform engine: "Native", "Remux on this device", "App engine", "Server
+    /// remux", "Server direct stream", "Server transcode".</summary>
+    public static string RouteLabelName(this CoreHost core, RouteLabel label) => core.Core.RouteLabelName(PlayerMap.ToFfi(label));
+
     /// <summary>Why the server streams rather than plays the file directly; a reason no release knows is its own name.</summary>
     public static string ReasonText(this CoreHost core, string reason)
     {

@@ -100,6 +100,27 @@ public sealed class PlayerSession : IAsyncDisposable
         return new PlayerSession(player, ui);
     }
 
+    /// <summary>
+    /// Opens a player with the platform's own player (<paramref name="engine"/>, ADR 0025) beside libmpv: the core plays a file on
+    /// <paramref name="engine"/> when Windows decodes it (<paramref name="answers"/> are the UI's answers to
+    /// <see cref="PlatformEngineHost.WindowsCodecQueries"/>), on libmpv otherwise, and moves it between them. The routes and the
+    /// info panel's words are then ADR 0025's. <see cref="OpenAsync"/> stays the player with libmpv alone.
+    /// </summary>
+    /// <exception cref="PlayerException">As <see cref="OpenAsync"/>, and <c>EngineFailed</c> when the engine could not be
+    /// attached.</exception>
+    public static async Task<PlayerSession> OpenWithPlatformEngineAsync(
+        CoreHost core, CompositionSize size, DisplayFacts display, PlatformEngineHost engine, IReadOnlyList<CodecQueryAnswer> answers,
+        IUiDispatcher ui)
+    {
+        ArgumentNullException.ThrowIfNull(engine);
+        ArgumentNullException.ThrowIfNull(answers);
+        var native = answers.Select(answer => PlatformEngineMap.ToFfi(answer)).ToArray();
+        var player = await CoreCall.RunUncancellableAsync(
+            () => core.Core.OpenPlayerWithPlatformEngine(PlayerMap.ToFfi(size), PlayerMap.ToFfi(display), engine, native))
+            .ConfigureAwait(false);
+        return new PlayerSession(player, ui);
+    }
+
     public ValueSubscription<PlayerState> State { get; }
 
     /// <summary>What the system media controls show.</summary>
@@ -128,6 +149,11 @@ public sealed class PlayerSession : IAsyncDisposable
     /// </summary>
     public Task SetQualityAsync(QualityChoice quality, CancellationToken ct = default) =>
         CoreCall.RunVoidAsync(token => Open.SetQuality(PlayerMap.ToFfi(quality), token), ct);
+
+    /// <summary>"Play with app engine": the item playing moves to libmpv at the position, then the server if libmpv cannot (ADR 0025).
+    /// Only this item; nothing changes on a player with libmpv alone.</summary>
+    public Task PlayWithAppEngineAsync(CancellationToken ct = default) =>
+        CoreCall.RunVoidAsync(token => Open.PlayWithAppEngine(token), ct);
 
     /// <summary>Plays the next episode now, from its start.</summary>
     public Task PlayNextAsync(CancellationToken ct = default) => CoreCall.RunVoidAsync(token => Open.PlayNext(token), ct);
@@ -256,6 +282,16 @@ public static class PlaybackExtensions
         CoreCall.RunUncancellableAsync(async () =>
         {
             await core.Core.SetPreferredQuality(PlayerMap.ToFfi(quality)).ConfigureAwait(false);
+            return true;
+        });
+
+    /// <summary>Settings → Playback → "Player" (ADR 0025): Automatic or Always app engine. Saved at once; it applies from the next
+    /// item played.</summary>
+    /// <exception cref="CoreStoreException">The settings could not be saved: the setting stands for this run.</exception>
+    public static Task SetPlayerChoiceAsync(this CoreHost core, PlayerChoice choice) =>
+        CoreCall.RunUncancellableAsync(async () =>
+        {
+            await core.Core.SetPlayerChoice(PlayerMap.ToFfi(choice)).ConfigureAwait(false);
             return true;
         });
 
