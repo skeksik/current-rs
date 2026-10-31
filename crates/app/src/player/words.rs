@@ -108,6 +108,14 @@ pub fn how_to_play_name(how: HowToPlay) -> &'static str {
     }
 }
 
+/// The player's "How to play" button: its label, and the name that also says the choice in use, for its tooltip and screen readers
+/// ("How to play: Auto").
+pub const HOW_TO_PLAY: &str = "How to play";
+
+pub fn how_to_play_button_name(how: HowToPlay) -> String {
+    format!("{HOW_TO_PLAY}: {}", how_to_play_name(how))
+}
+
 /// ADR 0019's route labels, for a player with one engine (today's): every local route is "Direct play"; a remux and a direct
 /// stream are transcode jobs that copy streams.
 pub fn route_name_one_engine(route: RouteLabel) -> &'static str {
@@ -726,6 +734,11 @@ mod tests {
                 "Server remux",
                 "Server transcode"
             ]
+        );
+        assert_eq!(HOW_TO_PLAY, "How to play");
+        assert_eq!(
+            how_to_play_button_name(HowToPlay::AppEngine),
+            "How to play: App engine"
         );
     }
 }

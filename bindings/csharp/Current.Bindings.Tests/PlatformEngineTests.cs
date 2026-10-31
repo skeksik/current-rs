@@ -224,6 +224,8 @@ internal static class PlatformEngineTests
         Check(core.PlaybackSettings().HowToPlay == HowToPlay.Auto, "Auto by default");
         Check(!core.SettingsHowToPlayChoices(false).Contains(HowToPlay.DeviceRemux), "no remux on the device in Windows' Settings");
         Check(core.HowToPlayName(HowToPlay.ServerTranscode) == "Server transcode", "the choice's name");
+        Check(core.HowToPlayLabel() == "How to play" && core.HowToPlayButtonName(HowToPlay.Auto) == "How to play: Auto",
+            "the button's words");
         await core.SetHowToPlayAsync(HowToPlay.AppEngine);
         Check(core.PlaybackSettings().HowToPlay == HowToPlay.AppEngine, "the setting read back");
         var ui = new ManualDispatcher();

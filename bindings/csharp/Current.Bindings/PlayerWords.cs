@@ -52,6 +52,13 @@ public static class PlayerWordsExtensions
     /// engine", "Server remux", "Server transcode".</summary>
     public static string HowToPlayName(this CoreHost core, HowToPlay how) => core.Core.HowToPlayName(PlayerMap.ToFfi(how));
 
+    /// <summary>The player's "How to play" button label: "How to play".</summary>
+    public static string HowToPlayLabel(this CoreHost core) => core.Core.HowToPlayLabel();
+
+    /// <summary>The "How to play" button's tooltip and Narrator name, with the choice in use: "How to play: Auto".</summary>
+    public static string HowToPlayButtonName(this CoreHost core, HowToPlay how) =>
+        core.Core.HowToPlayButtonName(PlayerMap.ToFfi(how));
+
     /// <summary>Settings → Playback → "How to play"'s choices: every step but the remux on the device where the platform has none
     /// (Windows: ADR 0025, departure 1).</summary>
     public static IReadOnlyList<HowToPlay> SettingsHowToPlayChoices(this CoreHost core, bool hasDeviceRemux)
