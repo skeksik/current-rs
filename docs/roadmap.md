@@ -314,8 +314,11 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       a cue placed high in the canvas is outside the window; centre the canvas on the picture (W7 §11)
 - [ ] Native subtitle cues outlive a track or presentation change: an external WebVTT cue stuck on screen for 25 s, and a cue from
       the previous play shown after Off → German (W7 §10, §13)
-- [ ] Settings → Playback "Player" (Automatic, Always app engine) and "Play with app engine" in the player's menu, in the Windows UI:
-      the core and the C# adapters have them, the app does not (W7 §9)
+- [ ] "How to play" (owner, 2026-10-31; W7 §9, proposal 2): Auto, Native, Remux, App engine, Transcode, set globally in Settings →
+      Playback and for the current playback in the player; a route the file cannot use falls to the next supported one below it
+      (native → remux → app engine → server), and a chosen value does not switch back automatically. Replaces "Player" (Automatic,
+      Always app engine) and "Play with app engine", which the core and the C# adapters have and the Windows app never showed.
+      Amends ADR 0025 choice 3 with the owner's words; open points in the W7 notes
 - [ ] CodecQuery: Windows' "Dolby AC-3 and E-AC-3 IEC-61937 converter MFT" is counted as an AC-3/E-AC-3 decoder, so a PC without
       the PC maker's Dolby decoder would send AC-3 natively (W7 §4)
 - [ ] Info panel words on Windows: "Player · software decoder" on every native route, a reason kept after the track it named is no
@@ -329,8 +332,8 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       the file stays on libmpv when the cause goes away (the speed back to normal, the window back on an HDR display) instead of
       moving back. The owner's answer after W7 (2026-10-31): "Setting to lock the supported player for current playback (native,
       remux, app engine or transcoding) it should show only supported players if that's possible and should not automatically
-      switch if it's chosen." Then: "it should be a dropdown with auto and player alternatives" (owner, 2026-10-31). Proposal 2
-      in the W7 notes; whether it replaces the "Player" setting is open; the task amends ADR 0025 choice 3
+      switch if it's chosen." Then: "it should be a dropdown with auto and player alternatives" (owner, 2026-10-31). Answered by
+      "How to play" above: with any value but Auto nothing switches back automatically
 - [ ] A server's addresses on its own Settings page (owner, 2026-10-29; after the native player tasks): each address shown, with
       its state (in use, unreachable, different server, plain HTTP confirmed, gateway sign-in); add, edit, remove and drag to
       reorder; "Refresh connection" (a new race now); "Detect local servers" offering this server's LAN addresses (ADR 0016); local

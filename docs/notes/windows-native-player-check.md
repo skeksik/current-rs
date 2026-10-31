@@ -259,9 +259,22 @@ mapping misses it is not known.
    automatically switch if it's chosen." This widens choice 3 (today "Play with app engine" for this playback only) to a choice among
    the routes the core finds possible for the file, and turns off automatic re-plans (display, speed, track) for that playback.
    It also answers the roadmap's "Settings to turn off switching back to Windows' player", which waited for this check. The owner's
-   answer (2026-10-31): "it should be a dropdown with auto and player alternatives". Still open: whether the dropdown also replaces
-   Settings → Playback "Player" (Automatic, Always app engine) or sits beside it. ADR 0025 choice 3 is amended by the task that builds
-   it, with the owner's wording.
+   answer (2026-10-31): "it should be a dropdown with auto and player alternatives", and then: "Replace Always play with app engine
+   setting with a setting that allow you to choose how to play (auto, native, remux, app engine, transcode) if chosen way is
+   unsupported by playback, it should fallback to the supported that is below chosen, user should be able to set this setting
+   globally in settings and for the current playback in player". **Decided.** As read here:
+   - One choice, "how to play": Auto, Native, Remux, App engine, Transcode. It is set globally in Settings → Playback (the default
+     for every playback, replacing "Player": Automatic / Always app engine) and for the current playback in the player (replacing
+     "Play with app engine").
+   - Auto is ADR 0025's order with its automatic re-plans. Any other value starts at that route; if the file cannot play there, it
+     falls to the next supported route below it in the order native → remux → app engine → server, never above.
+   - With a value other than Auto, no automatic switch back up the order (the owner's earlier words: "should not automatically switch
+     if it's chosen"). Whether a forced move down still happens when the chosen route stops working mid-playback (a display change,
+     a speed, a track) is for the task to state and the owner to confirm.
+   - Open for the task: whether the player's list shows only the routes possible for the file ("show only supported players if
+     that's possible", the earlier answer) and how Remux shows on Windows, where there is none (departure 1); and whether "Transcode"
+     means the server's stream as the server decides (remux or transcode, ADR 0025 step 4) or always a transcode.
+   ADR 0025 choice 3 is amended by the task that builds it, quoting the owner.
 
 ## Not verified
 - The move back to Windows' player after Windows HDR is switched on again (item 7).
