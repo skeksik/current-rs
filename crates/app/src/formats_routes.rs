@@ -81,7 +81,6 @@ const NOT_CHECKED_NATIVELY: &[&str] = &[
     "VP8",
     "MPEG-2",
     "MP3",
-    "ALAC",
     "PCM, 16-bit",
     "PCM, 24-bit",
     "QuickTime (MOV)",
@@ -636,6 +635,17 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn alac_plays_in_the_app_engine_even_with_windows_decoder_listed() {
+        // W7 ("ALAC in MP4"): natively silent, so the native table leaves it out whatever CodecQuery answers.
+        let mut found = FULL.to_vec();
+        found.push("AudioFormatAlac");
+        let page = page(&found, Some(true), false);
+        let alac = row(&page, FormatTabKind::Audio, "ALAC");
+        assert_eq!(alac.support_label, "App engine");
+        assert_eq!(alac.notes, "Windows' player can't play it");
     }
 
     #[test]
