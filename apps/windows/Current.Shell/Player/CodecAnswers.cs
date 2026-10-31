@@ -86,7 +86,6 @@ internal static class CodecAnswers
         nameof(CodecSubtypes.AudioFormatFlac) => CodecSubtypes.AudioFormatFlac,
         nameof(CodecSubtypes.AudioFormatOpus) => CodecSubtypes.AudioFormatOpus,
         nameof(CodecSubtypes.AudioFormatMP3) => CodecSubtypes.AudioFormatMP3,
-        nameof(CodecSubtypes.AudioFormatAlac) => CodecSubtypes.AudioFormatAlac,
         _ => null,
     };
 }
