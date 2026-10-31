@@ -22,8 +22,10 @@ pub struct PlanRequest {
     pub tracks: TrackChoice,
     /// The implementation sends its server's ceiling for [`Quality::Maximum`], never leaving the bitrate to the server's default.
     pub quality: Quality,
-    /// False only after a fallback (ADR 0019, choice 9).
+    /// False after a fallback (ADR 0019, choice 9), or with "How to play" at a server step.
     pub direct_play: bool,
+    /// "How to play" is the server's transcode: the server converts the video, never copies it.
+    pub force_video_transcode: bool,
 }
 
 /// The server's answer for the chosen source: the source, the route it offers and why, and the stream's URL on the server.

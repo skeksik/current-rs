@@ -835,20 +835,22 @@ pub enum PlayerChoiceKind {
     AlwaysAppEngine,
 }
 
-impl From<current_store::PlayerChoice> for PlayerChoiceKind {
-    fn from(choice: current_store::PlayerChoice) -> Self {
-        match choice {
-            current_store::PlayerChoice::Automatic => Self::Automatic,
-            current_store::PlayerChoice::AlwaysAppEngine => Self::AlwaysAppEngine,
+/// The core's "How to play" as the "Player" setting the UIs still show: the app engine is "Always app engine", every other choice
+/// "Automatic" (the next PR replaces this with "How to play" itself).
+impl From<current_model::HowToPlay> for PlayerChoiceKind {
+    fn from(how: current_model::HowToPlay) -> Self {
+        match how {
+            current_model::HowToPlay::AppEngine => Self::AlwaysAppEngine,
+            _ => Self::Automatic,
         }
     }
 }
 
-impl From<PlayerChoiceKind> for current_store::PlayerChoice {
+impl From<PlayerChoiceKind> for current_model::HowToPlay {
     fn from(choice: PlayerChoiceKind) -> Self {
         match choice {
-            PlayerChoiceKind::Automatic => Self::Automatic,
-            PlayerChoiceKind::AlwaysAppEngine => Self::AlwaysAppEngine,
+            PlayerChoiceKind::Automatic => Self::Auto,
+            PlayerChoiceKind::AlwaysAppEngine => Self::AppEngine,
         }
     }
 }

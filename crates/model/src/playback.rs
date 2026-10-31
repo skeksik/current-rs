@@ -275,7 +275,67 @@ pub enum RouteLabel {
     ServerTranscode,
 }
 
+/// "How to play" (ADR 0025, choice 3, as the owner widened it on 2026-10-31: "a setting that allow you to choose how to play (auto,
+/// native, remux, app engine, transcode) if chosen way is unsupported by playback, it should fallback to the supported that is below
+/// chosen"): Auto, or the step of ADR 0025's order a playback starts at. A step the file cannot use falls to the next one below it,
+/// never above. The server's direct stream (video copied, audio converted) is a step of the order but not a choice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum HowToPlay {
+    /// ADR 0025's order, with its automatic re-plans.
+    #[default]
+    Auto,
+    Native,
+    DeviceRemux,
+    AppEngine,
+    /// The server's stream with the original video and audio copied; it falls to a direct stream or a transcode when it must convert.
+    ServerRemux,
+    /// The server converts the video.
+    ServerTranscode,
+}
+
+impl HowToPlay {
+    /// Every choice, in the order's order.
+    pub const ALL: [Self; 6] = [
+        Self::Auto,
+        Self::Native,
+        Self::DeviceRemux,
+        Self::AppEngine,
+        Self::ServerRemux,
+        Self::ServerTranscode,
+    ];
+
+    /// The step of the order this starts at ([`Route::step`]); `None` for Auto.
+    pub fn step(self) -> Option<u8> {
+        match self {
+            Self::Auto => None,
+            Self::Native => Some(0),
+            Self::DeviceRemux => Some(1),
+            Self::AppEngine => Some(2),
+            Self::ServerRemux => Some(3),
+            Self::ServerTranscode => Some(5),
+        }
+    }
+
+    /// A choice that starts at one of the server's streams.
+    pub fn is_server(self) -> bool {
+        matches!(self, Self::ServerRemux | Self::ServerTranscode)
+    }
+}
+
 impl Route {
+    /// The route's step in ADR 0025's order: native 0, the remux on the device 1, the app engine 2, the server's remux 3, its direct
+    /// stream 4, its transcode 5 (whichever engine plays a server stream).
+    pub fn step(&self) -> u8 {
+        match self.label() {
+            RouteLabel::Native => 0,
+            RouteLabel::DeviceRemux => 1,
+            RouteLabel::AppEngine => 2,
+            RouteLabel::ServerRemux => 3,
+            RouteLabel::ServerDirectStream => 4,
+            RouteLabel::ServerTranscode => 5,
+        }
+    }
+
     pub fn label(&self) -> RouteLabel {
         match self {
             Self::Native => RouteLabel::Native,
@@ -391,10 +451,12 @@ open_value! {
         DOLBY_VISION_PROFILE_7 = "dolby_vision_profile_7",
         /// Current's (ADR 0025): the previous local route could not start.
         PREVIOUS_ROUTE_FAILED = "previous_route_failed",
-        /// Current's (ADR 0025): the user chose "Play with app engine" for this playback.
-        USER_CHOSE_APP_ENGINE = "user_chose_app_engine",
-        /// Current's (ADR 0025): the "Player" setting is "Always app engine".
-        SETTING_ALWAYS_APP_ENGINE = "setting_always_app_engine",
+        /// Current's (ADR 0025, choice 3 as amended): the user chose "How to play" for this playback, and the route is that step.
+        USER_CHOSE_ROUTE = "user_chose_route",
+        /// Current's (ADR 0025, choice 3 as amended): Settings' "How to play" names this route's step.
+        SETTING_CHOSE_ROUTE = "setting_chose_route",
+        /// Current's (ADR 0025, choice 3 as amended): the step "How to play" names cannot play this, so a step below it does.
+        CHOSEN_ROUTE_UNAVAILABLE = "chosen_route_unavailable",
         /// Current's (ADR 0025, departure 2): Dolby Vision plays on the app engine first.
         DOLBY_VISION_ON_APP_ENGINE = "dolby_vision_on_app_engine",
         /// Current's (ADR 0025, departure 8): PQ video on an SDR display plays on the app engine, which tone-maps it.

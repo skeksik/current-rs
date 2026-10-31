@@ -46,8 +46,14 @@ pub struct PlaybackRequest {
     /// Bits per second; always sent ([`MAXIMUM_STREAMING_BITRATE`] for "Maximum"). Never left to the server, whose default is 8
     /// Mbit/s.
     pub max_streaming_bitrate: u32,
-    /// False only after a fallback (ADR 0019, choice 9).
+    /// False after a fallback (ADR 0019, choice 9), or with "How to play" at a server step.
     pub direct_play: bool,
+    /// "How to play" is the server's transcode: `AllowVideoStreamCopy` false, so the server converts the video. In Jellyfin v10.11.3
+    /// that turns direct stream off (`MediaInfoHelper.SetDeviceSpecificData`: "if (!enableDirectStream || !allowVideoStreamCopy)
+    /// mediaSource.SupportsDirectStream = false"), adds `&allowVideoStreamCopy=false` to the transcoding URL, and `StreamBuilder` copies
+    /// video only "&& options.AllowVideoStreamCopy" (github.com/jellyfin/jellyfin, tag v10.11.3, Jellyfin.Api/Helpers/MediaInfoHelper.cs
+    /// and MediaBrowser.Model/Dlna/StreamBuilder.cs, read 2026-10-31).
+    pub force_video_transcode: bool,
 }
 
 /// The server's answer to a PlaybackInfo request.
@@ -189,7 +195,7 @@ impl JellyfinClient {
             device_profile: &profile,
             enable_direct_play: request.direct_play,
             enable_transcoding: true,
-            allow_video_stream_copy: true,
+            allow_video_stream_copy: !request.force_video_transcode,
             allow_audio_stream_copy: true,
         };
         let path = format!("/Items/{}/PlaybackInfo", item.as_str());

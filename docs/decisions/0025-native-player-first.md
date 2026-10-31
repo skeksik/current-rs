@@ -3,7 +3,8 @@
 Status: accepted (2026-10-28, owner), from the native-player-first spike. The route order, choices 1 to 3 and departures 1 to 7
 are the owner's (2026-10-28). Revised by task W1 (2026-10-28): departures 1 to 3 checked on the owner's PC and kept, departure 4
 dropped, departure 8 and the speed rule added (owner, 2026-10-28). Research, quotes and sources: `docs/notes/native-player-first.md`;
-the device check: `docs/notes/windows-native-player.md`. No product code was written.
+the device check: `docs/notes/windows-native-player.md`. No product code was written. Choice 3 amended after W7 (owner, 2026-10-31;
+"How to play"), pending the owner's approval of the amended text.
 
 ## Context
 The owner's decision (2026-10-28): "Add a native player route for all the targets as it should've been from the very beginning, remux if
@@ -136,6 +137,24 @@ The existing client's behaviour is the default on every platform; where ours dif
 3. **Both a setting and a per-playback choice:** Settings → Playback → "Player": "Automatic" (default) or "Always app engine", stored
    in `settings.json` as an open value (ADR 0013); and "Play with app engine" in the player's menu for this playback only (re-plans at
    the position). With either, the order is app engine, then the server; the reason says why.
+   **Amended (owner, 2026-10-31, after W7; for the owner's approval of this text):** "Replace Always play with app engine setting with
+   a setting that allow you to choose how to play (auto, native, remux, app engine, transcode) if chosen way is unsupported by playback,
+   it should fallback to the supported that is below chosen, user should be able to set this setting globally in settings and for the
+   current playback in player", and earlier: "should not automatically switch if it's chosen" (W7 notes, proposal 2). As decided with
+   the manager the same day:
+   - **"How to play"**: Auto, Native, Device remux, App engine, Server remux, Server transcode. Auto is the order above with its
+     automatic re-plans. Any other choice starts at that step and falls only down the order native → device remux → app engine →
+     server remux → server direct stream (video copied, audio converted; a step, not a choice) → server transcode, never above it.
+   - With a choice other than Auto nothing moves back up: a display change that would let native play again re-plans nothing. When
+     the route playing stops working (PQ on an SDR display, a track it cannot play, a speed, a failed start) it moves down to the next
+     step that plays, and the reasons say the chosen step could not play this ("chosen_route_unavailable") before why.
+   - Server remux asks the server for its stream without direct play and takes what it sends (a remux, else a direct stream or a
+     transcode, which then reads as fallen); server transcode also refuses video stream copy (`AllowVideoStreamCopy` false, Jellyfin
+     v10.11.3), so the server converts the video.
+   - Set globally in Settings → Playback, where it replaces "Player" and keeps its stored values ("automatic", "always_app_engine"),
+     and in the player for the current item only; the next item uses Settings' again. Choosing in the player re-plans at once at the
+     position, Auto included. The player offers Auto and the steps possible for the file (a local step whose route the check puts
+     first, the server's by its permissions); Device remux only where the platform has one (not on Windows, departure 1).
 
 ### Departures (approved by the owner, 2026-10-28)
 1. **Windows has no device remux.** What differs: the existing client remuxes MKV for its native player; Media Foundation reads MKV

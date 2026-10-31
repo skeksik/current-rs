@@ -9,16 +9,14 @@
 use std::time::Duration;
 
 use current_model::{
-    EngineRole, ItemRef, ItemSummary, MediaKind, MediaStream, PlaybackProblem, PlayerState, Route,
-    RouteReason, Segment, SegmentKind, ServerOffer, StreamKind, StreamProtocol, SubtitleChoice,
-    SubtitleDelivery, SubtitleFormat, TrackChoice, TranscodingFacts,
+    EngineRole, HowToPlay, ItemRef, ItemSummary, MediaKind, MediaStream, PlaybackProblem,
+    PlayerState, Route, RouteReason, Segment, SegmentKind, ServerOffer, StreamKind, StreamProtocol,
+    SubtitleChoice, SubtitleDelivery, SubtitleFormat, TrackChoice, TranscodingFacts,
 };
 
 use crate::clock::Clock;
 use crate::engine::{EndReason, Engine, EngineEvent, EngineFile, EngineTrack, ExternalSubtitle};
-use crate::engines::{
-    DeviceRemux, DisplayKind, EnginePreference, EngineProfile, Engines, PlatformRules,
-};
+use crate::engines::{DeviceRemux, DisplayKind, EngineProfile, Engines, PlatformRules};
 use crate::planner::{self, Planned, RouteInputs};
 use crate::quality::{Quality, QualityPreference, snap_quality};
 use crate::route::{self, RouteContext};
@@ -142,10 +140,11 @@ struct Session {
     failed_routes: Vec<Route>,
     /// The engine that has the file, once loaded.
     loaded_on: Option<EngineRole>,
-    /// The "Player" setting as the item started: a change applies from the next item (ADR 0025, choice 3).
-    preference: EnginePreference,
-    /// "Play with app engine" for this playback (ADR 0025, choice 3).
-    app_engine_chosen: bool,
+    /// "How to play" for this playback: Settings' as the item started (a change there applies from the next item), or the one
+    /// chosen in the player for this item (ADR 0025, choice 3 as amended; owner, 2026-10-31: "for the current playback").
+    how: HowToPlay,
+    /// `how` was chosen in the player.
+    chosen_here: bool,
     /// The native engine ignored the speed with these tracks, so the app engine plays this playback (ADR 0025, "Track changes").
     speed_not_supported: bool,
     /// What the engine playing last said of rates other than 1 ([`EngineEvent::RatesSupported`]).
@@ -188,8 +187,8 @@ impl Session {
             fallback_used: false,
             failed_routes: Vec::new(),
             loaded_on: None,
-            preference: EnginePreference::Automatic,
-            app_engine_chosen: false,
+            how: HowToPlay::Auto,
+            chosen_here: false,
             speed_not_supported: false,
             rates_supported: true,
             permissions: TranscodePermissions::default(),
@@ -269,7 +268,8 @@ pub struct Controller<E, S, C> {
     engine: E,
     native: Option<NativeEngine>,
     display: DisplayKind,
-    preference: EnginePreference,
+    /// Settings' "How to play".
+    how: HowToPlay,
     /// The playback rate, 1 for normal.
     speed: f64,
     server: S,
@@ -299,7 +299,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             engine,
             native: None,
             display: DisplayKind::Unknown,
-            preference: EnginePreference::Automatic,
+            how: HowToPlay::Auto,
             speed: 1.0,
             server,
             clock,
@@ -343,9 +343,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         self.native.as_mut()
     }
 
-    /// Settings → Playback → "Player" (ADR 0025, choice 3), from the next item played; the item playing keeps the one it started with.
-    pub fn set_engine_preference(&mut self, preference: EnginePreference) {
-        self.preference = preference;
+    /// Settings → Playback → "How to play" (ADR 0025, choice 3 as amended), from the next item played; the item playing keeps the
+    /// one it started with.
+    pub fn set_how_to_play(&mut self, how: HowToPlay) {
+        self.how = how;
     }
 
     /// The engine that has the file: the app engine when nothing is loaded.
@@ -380,8 +381,8 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         let session = self.session.as_ref();
         RouteContext {
             display: self.display,
-            preference: session.map_or(self.preference, |session| session.preference),
-            app_engine_chosen: session.is_some_and(|session| session.app_engine_chosen),
+            how: session.map_or(self.how, |session| session.how),
+            chosen_here: session.is_some_and(|session| session.chosen_here),
             speed_not_supported: session.is_some_and(|session| session.speed_not_supported),
         }
     }
@@ -523,6 +524,8 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             status.tracks = planned.plan.tracks;
             status.route = Some(planned.plan.route.clone());
         }
+        status.how_to_play = session.how;
+        status.how_to_play_choices = self.how_to_play_choices();
         status
     }
 
@@ -553,7 +556,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             start,
             self.clock.now(),
         );
-        session.preference = self.preference;
+        session.how = self.how;
         self.session = Some(session);
         let permissions = self.server.permissions().await.unwrap_or_default();
         if let Some(session) = &mut self.session {
@@ -934,10 +937,17 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         if was == now {
             return;
         }
-        // Only when the route the check now puts first is not the one playing (after a fallback it may be the same); a server
-        // stream moves between engines the same way.
         let tracks = planned.plan.tracks;
         let current = planned.plan.route.clone();
+        // "How to play" other than Auto: never back up the order, only down when the route playing no longer plays here.
+        if self.route_context().how != HowToPlay::Auto {
+            if !self.route_fits(tracks) {
+                self.replan(tracks).await;
+            }
+            return;
+        }
+        // Only when the route the check now puts first is not the one playing (after a fallback it may be the same); a server
+        // stream moves between engines the same way.
         let first = self
             .candidates(tracks, self.route_context())
             .into_iter()
@@ -947,20 +957,97 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         }
     }
 
-    /// "Play with app engine" for this playback (ADR 0025, choice 3): the app engine, then the server, at the position.
+    /// "Play with app engine" for this playback: "How to play" set to the app engine in the player.
     pub async fn play_with_app_engine(&mut self) {
+        self.choose_how_to_play(HowToPlay::AppEngine).await;
+    }
+
+    /// "How to play" chosen in the player for this playback only (owner, 2026-10-31); the next item uses Settings' again. A new
+    /// choice re-plans at the position at once, Auto included (manager, 2026-10-31), unless the route playing is already the one the
+    /// check puts first.
+    pub async fn choose_how_to_play(&mut self, how: HowToPlay) {
         let Some(session) = &mut self.session else {
             return;
         };
-        if session.app_engine_chosen {
+        if session.chosen_here && session.how == how {
             return;
         }
-        session.app_engine_chosen = true;
-        let on_app = session.loaded_on.unwrap_or(EngineRole::App) == EngineRole::App;
-        if !on_app && matches!(self.phase, Phase::Active | Phase::Loading) {
-            let tracks = session.tracks();
-            self.replan(tracks).await;
+        session.how = how;
+        session.chosen_here = true;
+        if !matches!(self.phase, Phase::Active | Phase::Loading) {
+            return;
         }
+        let tracks = session.tracks();
+        let current = session
+            .planned
+            .as_ref()
+            .map(|planned| planned.plan.route.clone());
+        let stays = !how.is_server()
+            && current.as_ref().is_some_and(|current| {
+                self.candidates(tracks, self.route_context())
+                    .first()
+                    .is_some_and(|first| same_route(first, current))
+            });
+        if stays {
+            // The reasons now say the route was chosen.
+            let reason = self.route_context().chosen_reason();
+            if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut())
+                && let Some(reason) = reason
+            {
+                planned.plan.reasons.retain(|known| {
+                    *known != RouteReason::SETTING_CHOSE_ROUTE
+                        && *known != RouteReason::USER_CHOSE_ROUTE
+                });
+                planned.plan.reasons.insert(0, reason);
+            }
+            self.publish(true);
+            return;
+        }
+        self.replan(tracks).await;
+    }
+
+    /// The choices "How to play" offers in the player for the item playing: Auto, each local step whose route the check puts first
+    /// for this file with its tracks (so a step that would fall below itself is not offered; the remux only where the platform has
+    /// one), and the server's steps the server's permissions allow. Empty while nothing plays.
+    pub fn how_to_play_choices(&self) -> Vec<HowToPlay> {
+        let Some(session) = &self.session else {
+            return Vec::new();
+        };
+        let Some(planned) = &session.planned else {
+            return Vec::new();
+        };
+        let engines = self.engines();
+        let tracks = planned.plan.tracks;
+        let base = self.route_context();
+        let mut choices = vec![HowToPlay::Auto];
+        for how in [
+            HowToPlay::Native,
+            HowToPlay::DeviceRemux,
+            HowToPlay::AppEngine,
+        ] {
+            let local = engines.native.is_some() || how == HowToPlay::AppEngine;
+            if !local || (how == HowToPlay::DeviceRemux && engines.remux.is_none()) {
+                continue;
+            }
+            let context = RouteContext {
+                how,
+                speed_not_supported: false,
+                ..base
+            };
+            let first = route::local_routes(&planned.plan.source, tracks, &engines, context, &[])
+                .into_iter()
+                .next();
+            if first.is_some_and(|first| Some(first.route.step()) == how.step()) {
+                choices.push(how);
+            }
+        }
+        if session.permissions.remuxing {
+            choices.push(HowToPlay::ServerRemux);
+        }
+        if session.permissions.video_transcoding {
+            choices.push(HowToPlay::ServerTranscode);
+        }
+        choices
     }
 
     /// An event of the app engine.
@@ -1304,10 +1391,12 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         let engines = self.engines();
         let context = self.route_context();
         let capabilities = engines.device_profile();
-        let mut direct_play = direct_play;
+        // "How to play" at a server step asks for the server's stream from the start, and its transcode for the video.
+        let mut direct_play = direct_play && !context.how.is_server();
         let planned = loop {
-            let request =
+            let mut request =
                 planner::request(media_source.clone(), start, tracks, quality, direct_play);
+            request.force_video_transcode = context.how == HowToPlay::ServerTranscode;
             let answer = self
                 .server
                 .playback_info(&item, &request, &capabilities)

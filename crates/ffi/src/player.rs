@@ -377,7 +377,7 @@ impl Core {
             self.app.auto_skip().borrow().clone(),
             self.app.quality_resolution(),
             self.app.quality_all(),
-            self.app.player_choice().into(),
+            self.app.how_to_play().into(),
         )
     }
 
@@ -389,7 +389,7 @@ impl Core {
     pub async fn set_player_choice(&self, choice: PlayerChoiceKind) -> Result<(), CoreError> {
         let app = self.app.clone();
         self.runtime
-            .spawn_blocking(move || app.set_player_choice(choice.into()))
+            .spawn_blocking(move || app.set_how_to_play(choice.into()))
             .await
             .map_err(|error| CoreError::Runtime {
                 message: error.to_string(),

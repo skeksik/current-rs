@@ -5,8 +5,9 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use current_playback::{EnginePreference, Quality, QualityPreference, listed_quality};
-use current_store::{PlayerChoice, SettingsStore, StoreError, StreamQuality};
+use current_model::HowToPlay;
+use current_playback::{Quality, QualityPreference, listed_quality};
+use current_store::{SettingsStore, StoreError, StreamQuality};
 use tokio::sync::watch;
 
 use crate::session::Shared;
@@ -16,8 +17,8 @@ pub(crate) struct PlaybackPrefs {
     auto_skip: watch::Sender<Vec<String>>,
     quality_resolution: watch::Sender<bool>,
     quality_all: watch::Sender<bool>,
-    /// "Player" (ADR 0025, choice 3).
-    player: watch::Sender<PlayerChoice>,
+    /// "How to play" (ADR 0025, choice 3 as amended).
+    player: watch::Sender<HowToPlay>,
     /// Serializes the settings writes of this file's settings, so the last change is the one saved.
     write: Mutex<()>,
 }
@@ -87,25 +88,17 @@ impl PlaybackPrefs {
         }
     }
 
-    /// Which engine plays a file, for the next item played (ADR 0025, choice 3); "Automatic" by default.
-    pub(crate) fn engine_preference(&self) -> EnginePreference {
-        match *self.player.borrow() {
-            PlayerChoice::Automatic => EnginePreference::Automatic,
-            PlayerChoice::AlwaysAppEngine => EnginePreference::AlwaysAppEngine,
-        }
-    }
-
-    /// The "Player" setting as stored.
-    pub(crate) fn player_choice(&self) -> PlayerChoice {
+    /// "How to play" as stored: how the next item played starts (ADR 0025, choice 3 as amended); Auto by default.
+    pub(crate) fn how_to_play(&self) -> HowToPlay {
         *self.player.borrow()
     }
 
-    /// Sets "Player" and saves it. Blocking file I/O. It applies from the next item played, also when the save fails (the error says
-    /// so; the setting stands for this run).
-    pub(crate) fn set_player_choice(
+    /// Sets "How to play" and saves it. Blocking file I/O. It applies from the next item played, also when the save fails (the error
+    /// says so; the setting stands for this run).
+    pub(crate) fn set_how_to_play(
         &self,
         shared: &Shared,
-        choice: PlayerChoice,
+        choice: HowToPlay,
     ) -> Result<(), StoreError> {
         let _guard = self.write.lock().unwrap_or_else(PoisonError::into_inner);
         self.player.send_replace(choice);
@@ -195,23 +188,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_player_setting_becomes_the_engine_preference() {
-        assert_eq!(
-            PlaybackPrefs::load(None).engine_preference(),
-            EnginePreference::Automatic
-        );
+    fn how_to_play_is_read_from_the_store() {
+        assert_eq!(PlaybackPrefs::load(None).how_to_play(), HowToPlay::Auto);
         let dir = tempfile::tempdir().unwrap();
         let (store, _) = SettingsStore::open(dir.path()).unwrap();
         assert_eq!(
-            PlaybackPrefs::load(Some(&store)).engine_preference(),
-            EnginePreference::Automatic
+            PlaybackPrefs::load(Some(&store)).how_to_play(),
+            HowToPlay::Auto
         );
         store
-            .update(|settings| settings.playback.player = PlayerChoice::AlwaysAppEngine)
+            .update(|settings| settings.playback.player = HowToPlay::ServerTranscode)
             .unwrap();
         assert_eq!(
-            PlaybackPrefs::load(Some(&store)).engine_preference(),
-            EnginePreference::AlwaysAppEngine
+            PlaybackPrefs::load(Some(&store)).how_to_play(),
+            HowToPlay::ServerTranscode
         );
     }
 }

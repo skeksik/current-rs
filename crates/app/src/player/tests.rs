@@ -1044,12 +1044,9 @@ async fn without_the_codec_the_file_goes_to_libmpv_and_the_setting_and_choice_mo
     player.close().await;
 
     // "Always app engine" plays the next item there.
-    app.set_player_choice(current_store::PlayerChoice::AlwaysAppEngine)
+    app.set_how_to_play(current_model::HowToPlay::AppEngine)
         .unwrap();
-    assert_eq!(
-        app.player_choice(),
-        current_store::PlayerChoice::AlwaysAppEngine
-    );
+    assert_eq!(app.how_to_play(), current_model::HowToPlay::AppEngine);
     let platform = Arc::new(FakePlatform::default());
     let (player, control) = open_with(&app, platform.clone(), true).await;
     player

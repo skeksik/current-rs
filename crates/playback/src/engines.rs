@@ -165,16 +165,6 @@ pub enum DisplayKind {
     Hdr,
 }
 
-/// Settings → Playback → "Player" (ADR 0025, choice 3).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum EnginePreference {
-    /// The route order of ADR 0025.
-    #[default]
-    Automatic,
-    /// The app engine, then the server.
-    AlwaysAppEngine,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

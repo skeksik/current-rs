@@ -345,7 +345,7 @@ impl<B: Backend> Driver<B> {
             self.controller
                 .set_quality_preference(self.context.prefs.quality_preference());
             self.controller
-                .set_engine_preference(self.context.prefs.engine_preference());
+                .set_how_to_play(self.context.prefs.how_to_play());
             match wake {
                 Wake::Command(Command::Close(done)) => {
                     self.close().await;
@@ -591,6 +591,7 @@ impl<B: Backend> Driver<B> {
             }
             Action::CompositionSize(size) => controller.engine_mut().set_composition_size(size),
             Action::PlayWithAppEngine => controller.play_with_app_engine().await,
+            Action::ChooseHowToPlay(how) => controller.choose_how_to_play(how).await,
         }
     }
 
