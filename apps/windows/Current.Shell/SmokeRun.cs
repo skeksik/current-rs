@@ -360,7 +360,12 @@ internal static class SmokeRun
                 }, Timeout * 3);
                 if (!playing)
                 {
-                    check(false, "the stand-in's MP4 plays natively again for the subtitle check");
+                    // What the player reached, so a failure names its cause (no address or text in it).
+                    var state = window.PlayerStateForTest;
+                    check(false, "the stand-in's MP4 plays natively again for the subtitle check ("
+                        + $"{(left ? "left Playing" : "never left Playing")}, now {state.State}, "
+                        + $"{state.Route?.Engine.ToString() ?? "no engine"} {state.Route?.Label.ToString() ?? "no route"}, "
+                        + $"native failure {window.NativeFailureForTest ?? "none"}, subtitle path {window.SubtitlePathForTest ?? "none"})");
                     return;
                 }
             }
