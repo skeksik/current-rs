@@ -328,7 +328,8 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       the file stays on libmpv when the cause goes away (the speed back to normal, the window back on an HDR display) instead of
       moving back. The owner's answer after W7 (2026-10-31): "Setting to lock the supported player for current playback (native,
       remux, app engine or transcoding) it should show only supported players if that's possible and should not automatically
-      switch if it's chosen." Proposal 2 in the W7 notes; ADR 0025 choice 3 needs the owner's wording first
+      switch if it's chosen." Then: "it should be a dropdown with auto and player alternatives" (owner, 2026-10-31). Proposal 2
+      in the W7 notes; whether it replaces the "Player" setting is open; the task amends ADR 0025 choice 3
 - [ ] A server's addresses on its own Settings page (owner, 2026-10-29; after the native player tasks): each address shown, with
       its state (in use, unreachable, different server, plain HTTP confirmed, gateway sign-in); add, edit, remove and drag to
       reorder; "Refresh connection" (a new race now); "Detect local servers" offering this server's LAN addresses (ADR 0016); local

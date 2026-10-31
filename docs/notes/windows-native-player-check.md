@@ -254,8 +254,10 @@ mapping misses it is not known.
    current playback (native, remux, app engine or transcoding) it should show only supported players if that's possible and should not
    automatically switch if it's chosen." This widens choice 3 (today "Play with app engine" for this playback only) to a choice among
    the routes the core finds possible for the file, and turns off automatic re-plans (display, speed, track) for that playback.
-   It also answers the roadmap's "Settings to turn off switching back to Windows' player", which waited for this check. It needs the
-   owner's wording in ADR 0025 (choice 3) before a task starts.
+   It also answers the roadmap's "Settings to turn off switching back to Windows' player", which waited for this check. The owner's
+   answer (2026-10-31): "it should be a dropdown with auto and player alternatives". Still open: whether the dropdown also replaces
+   Settings → Playback "Player" (Automatic, Always app engine) or sits beside it. ADR 0025 choice 3 is amended by the task that builds
+   it, with the owner's wording.
 
 ## Not verified
 - The move back to Windows' player after Windows HDR is switched on again (item 7).
