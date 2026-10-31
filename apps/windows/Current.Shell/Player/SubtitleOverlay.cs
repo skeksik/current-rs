@@ -24,14 +24,20 @@ internal readonly record struct SubtitlePlacement(double X, double Y, bool XyInP
 /// <summary>What the native engine shows of its subtitles; every call on the UI thread.</summary>
 internal interface ISubtitleSink
 {
-    /// <summary>A text cue; lines of cues shown together are kept in the order their cues start.</summary>
-    void ShowText(string key, TimeSpan start, IReadOnlyList<SubtitleLine> lines);
+    /// <summary>A text cue shown from <paramref name="start"/> until <paramref name="end"/>; lines of cues shown together are kept
+    /// in the order their cues start. A cue with the same times and text as one shown is the same cue read again (after a track
+    /// change or a seek) and is not shown twice.</summary>
+    void ShowText(string key, TimeSpan start, TimeSpan end, IReadOnlyList<SubtitleLine> lines);
 
     /// <summary>An image cue. It replaces every image shown, as a PGS cue ends where the next begins (W1 §6: its Duration is the
     /// maximum). The overlay owns <paramref name="bitmap"/> and disposes it.</summary>
-    void ShowImage(string key, SoftwareBitmap bitmap, SubtitlePlacement placement);
+    void ShowImage(string key, TimeSpan start, TimeSpan end, SoftwareBitmap bitmap, SubtitlePlacement placement);
 
     void Hide(string key);
+
+    /// <summary>Hides every cue whose time does not hold <paramref name="position"/>, whether or not its exit came (W7 §10: a cue
+    /// stayed 25 s past its end).</summary>
+    void Expire(TimeSpan position);
 
     void Clear();
 
@@ -83,7 +89,7 @@ internal sealed class SubtitleOverlay : ISubtitleSink
         IsHitTestVisible = false,
     };
     private readonly TranslateTransform _lift = new();
-    private readonly Dictionary<string, (TimeSpan Start, long Order, IReadOnlyList<SubtitleLine> Lines)> _lines = [];
+    private readonly Dictionary<string, (TimeSpan Start, TimeSpan End, long Order, IReadOnlyList<SubtitleLine> Lines)> _lines = [];
     private readonly Dictionary<string, Picture> _pictures = [];
     private SubtitleAppearance _appearance = SubtitleAppearance.Read();
     private (uint Width, uint Height) _videoSize;
@@ -96,6 +102,8 @@ internal sealed class SubtitleOverlay : ISubtitleSink
     private sealed class Picture(Image image, SubtitlePlacement placement, double canvasWidth, double canvasHeight)
     {
         public Image Image { get; } = image;
+        public TimeSpan Start { get; init; }
+        public TimeSpan End { get; init; }
         public SubtitlePlacement Placement { get; } = placement;
         public double CanvasWidth { get; } = canvasWidth;
         public double CanvasHeight { get; } = canvasHeight;
@@ -126,21 +134,27 @@ internal sealed class SubtitleOverlay : ISubtitleSink
     internal string TextForTest => string.Join("\n",
         OrderedLines().Select(line => string.Concat(line.Spans.Select(span => span.Text))));
 
-    public void ShowText(string key, TimeSpan start, IReadOnlyList<SubtitleLine> lines)
+    public void ShowText(string key, TimeSpan start, TimeSpan end, IReadOnlyList<SubtitleLine> lines)
     {
-        _lines[key] = (start, _order++, lines);
+        var text = Text(lines);
+        if (_lines.Any(shown => shown.Key != key && shown.Value.Start == start && shown.Value.End == end
+            && Text(shown.Value.Lines) == text))
+        {
+            return;
+        }
+        _lines[key] = (start, end, _order++, lines);
         ShownForTest++;
         DrawText();
     }
 
-    public void ShowImage(string key, SoftwareBitmap bitmap, SubtitlePlacement placement)
+    public void ShowImage(string key, TimeSpan start, TimeSpan end, SoftwareBitmap bitmap, SubtitlePlacement placement)
     {
         foreach (var other in _pictures.Keys.ToList())
         {
             Hide(other);
         }
         var image = new Image { Stretch = Stretch.Fill, IsHitTestVisible = false };
-        var picture = new Picture(image, placement, bitmap.PixelWidth, bitmap.PixelHeight);
+        var picture = new Picture(image, placement, bitmap.PixelWidth, bitmap.PixelHeight) { Start = start, End = end };
         _pictures[key] = picture;
         _images.Children.Add(image);
         ShownForTest++;
@@ -185,6 +199,29 @@ internal sealed class SubtitleOverlay : ISubtitleSink
             Drop(picture);
         }
     }
+
+    public void Expire(TimeSpan position)
+    {
+        foreach (var key in _lines.Where(cue => !Holds(cue.Value.Start, cue.Value.End, position)).Select(cue => cue.Key).ToList())
+        {
+            Hide(key);
+        }
+        foreach (var key in _pictures.Where(cue => !Holds(cue.Value.Start, cue.Value.End, position)).Select(cue => cue.Key).ToList())
+        {
+            Hide(key);
+        }
+    }
+
+    /// <summary>Whether a cue's time holds <paramref name="position"/>, allowing <see cref="EarlySlack"/> before its start: the
+    /// position is read every 250 ms (NativeEngine) and may lag a cue that has just entered.</summary>
+    internal static bool Holds(TimeSpan start, TimeSpan end, TimeSpan position) =>
+        position < end && position >= start - EarlySlack;
+
+    /// <summary>Ours, not measured: a little more than the position's reporting interval.</summary>
+    internal static readonly TimeSpan EarlySlack = TimeSpan.FromSeconds(0.5);
+
+    private static string Text(IReadOnlyList<SubtitleLine> lines) =>
+        string.Join("\n", lines.Select(line => string.Concat(line.Spans.Select(span => span.Text))));
 
     private void Drop(Picture picture)
     {
