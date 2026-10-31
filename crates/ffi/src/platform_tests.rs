@@ -95,10 +95,13 @@ fn answers() -> Vec<CodecQueryAnswer> {
     windows_codec_queries()
         .into_iter()
         .map(|ask| CodecQueryAnswer {
-            decoders: u32::from(
-                ["VideoFormatH264", "VideoFormatHevc", "AudioFormatAac"]
-                    .contains(&ask.subtype.as_str()),
-            ),
+            decoders: if ["VideoFormatH264", "VideoFormatHevc", "AudioFormatAac"]
+                .contains(&ask.subtype.as_str())
+            {
+                vec!["A decoder".to_owned()]
+            } else {
+                Vec::new()
+            },
             subtype: ask.subtype,
         })
         .collect()

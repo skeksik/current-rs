@@ -320,11 +320,12 @@ pub struct CodecQueryAsk {
     pub subtype: String,
 }
 
-/// The UI's answer: how many decoders `CodecQuery` returned for `subtype` (0 when the Store extension is missing).
+/// The UI's answer: the `DisplayName` of each entry `CodecQuery` returned for `subtype` (none when the Store extension is missing).
+/// The core decides which of them decode (Windows' IEC 61937 converters do not; `current_app::CodecAnswer::has_decoder`).
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct CodecQueryAnswer {
     pub subtype: String,
-    pub decoders: u32,
+    pub decoders: Vec<String>,
 }
 
 /// What the core asks the Windows UI to look for before it opens a player with Windows' own player (ADR 0025; the table is the

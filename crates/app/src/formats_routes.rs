@@ -262,7 +262,7 @@ fn missing_extension(
         STORE_EXTENSIONS.iter().find(|(known, ..)| known == codec)?;
     let found = answers
         .iter()
-        .any(|answer| answer.subtype == *subtype && answer.decoders > 0);
+        .any(|answer| answer.subtype == *subtype && answer.has_decoder());
     (!found).then_some((*name, *id, *verified))
 }
 
@@ -475,7 +475,11 @@ mod tests {
         windows_codec_queries()
             .into_iter()
             .map(|query| CodecAnswer {
-                decoders: u32::from(found.contains(&query.subtype.as_str())),
+                decoders: if found.contains(&query.subtype.as_str()) {
+                    vec!["A decoder".to_owned()]
+                } else {
+                    Vec::new()
+                },
                 subtype: query.subtype,
             })
             .collect()
@@ -505,16 +509,19 @@ mod tests {
     }
 
     fn page(found: &[&str], hdr: Option<bool>, always: bool) -> SupportedFormats {
+        apply(&answers(found), hdr, always)
+    }
+
+    fn apply(answers: &[CodecAnswer], hdr: Option<bool>, always: bool) -> SupportedFormats {
         let caps = app();
         let display = hdr.map(display);
         let mut page =
             supported_formats(&EngineReport::Ready(caps.clone()), None, display.as_ref());
-        let answers = answers(found);
         apply_routes(
             &mut page,
             &caps,
             NativeFacts {
-                answers: &answers,
+                answers,
                 always_app_engine: always,
             },
             display.as_ref(),
@@ -627,6 +634,16 @@ mod tests {
             ac3.notes
         );
         assert_eq!(ac3.action, None);
+        // Windows' own IEC 61937 converter alone is no decoder (W7 §4).
+        let mut converter_only = answers(&["VideoFormatH264", "AudioFormatAac"]);
+        for answer in &mut converter_only {
+            if answer.subtype == "AudioFormatDolbyAC3" {
+                answer.decoders = vec!["Dolby AC-3 and E-AC-3 IEC-61937 converter MFT".into()];
+            }
+        }
+        let converted = apply(&converter_only, Some(true), false);
+        let ac3 = row(&converted, FormatTabKind::Audio, "Dolby Digital (AC-3)");
+        assert_eq!(ac3.support_label, "App engine");
         // TrueHD and DTS never natively (W1 §5).
         for name in ["Dolby TrueHD", "DTS"] {
             assert_eq!(
