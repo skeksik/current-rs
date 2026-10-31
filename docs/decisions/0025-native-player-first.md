@@ -154,8 +154,12 @@ The existing client's behaviour is the default on every platform; where ours dif
      video; `MediaInfoHelper.cs` and `StreamBuilder.cs`, read 2026-10-31), so the server converts the video.
    - Set globally in Settings → Playback, where it replaces "Player" and keeps its stored values ("automatic", "always_app_engine"),
      and in the player for the current item only; the next item uses Settings' again. Choosing in the player re-plans at once at the
-     position, Auto included. The player offers Auto and the steps possible for the file (a local step whose route the check puts
-     first, the server's by its permissions); Device remux only where the platform has one (not on Windows, departure 1).
+     position, Auto included.
+   - Which choices each place lists (owner, 2026-10-31): "Settings shows all available for the current platform, player shows all
+     available for the current playback." Settings lists every choice the platform has (on Windows: Auto, Native, App engine, Server
+     remux, Server transcode; no Device remux, departure 1). The player lists Auto and the choices that can play the item playing: a
+     local step whose route the check puts first for the file with its tracks, and the server's steps its permissions allow.
+   - In the player, "How to play" is its own button on the player bar, next to Quality (owner, 2026-10-31), not a submenu.
 
 ### Departures (approved by the owner, 2026-10-28)
 1. **Windows has no device remux.** What differs: the existing client remuxes MKV for its native player; Media Foundation reads MKV
