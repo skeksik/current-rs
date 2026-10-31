@@ -302,7 +302,8 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       failures, one task each:
 - [ ] Native HLS: no server transcode started on Windows' player in W7 (`stream_timeout` after 8 s, three tries out of three; then
       libmpv played it), and a server stream loaded natively while paused hangs on play and ends in "The server can't be reached"
-      with no fallback to libmpv (W7 §8; proposal 1 in the notes: server streams on libmpv until this works, for the owner)
+      with no fallback to libmpv (W7 §8). Owner, 2026-10-31: "Fix, then investigate": end the paused hang first, then find why
+      Windows' player does not start the transcode; the route for server streams is decided with the cause known
 - [ ] Crash in `Microsoft.Graphics.Display.dll` (0xc0000005) when a playing window moved to the SDR monitor and back (W7 §7);
       the display watcher recreates its `DisplayInformation` on each monitor change (cause not verified)
 - [ ] Windows' player stutters on 4K HDR10 at 60 fps (about 40 Mbit/s) with Windows HDR on, and for the first seconds after a start

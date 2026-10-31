@@ -249,7 +249,11 @@ mapping misses it is not known.
 1. **Server streams on the native engine.** Departure 4 was dropped because W1 played Jellyfin's fMP4 HLS natively. In this check no
    server transcode started natively (item 8), and a paused one hung. Proposed: until a fix shows native server streams starting
    reliably, server streams go to the app engine first (departure 4 back, for now), or the transcoding profile offered to the native
-   engine is limited to what W1 played (H.264). The ADR is unchanged here; the owner decides.
+   engine is limited to what W1 played (H.264). The ADR is unchanged here; the owner decides. **Decided (owner, 2026-10-31): "Fix,
+   then investigate".** ADR 0025 stays as it is: the fix task first ends the paused hang (the deadline must cover a play after a
+   paused load, and the failure must fall back to the app engine), then finds why Windows' player does not start Jellyfin's
+   transcode. The choice between keeping Windows' player first, libmpv first or an H.264-only transcode for the native engine is
+   made with that cause known.
 2. **A per-playback player choice** (the owner, 2026-10-31, on how switching feels): "Setting to lock the supported player for
    current playback (native, remux, app engine or transcoding) it should show only supported players if that's possible and should not
    automatically switch if it's chosen." This widens choice 3 (today "Play with app engine" for this playback only) to a choice among
