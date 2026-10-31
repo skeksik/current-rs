@@ -69,7 +69,8 @@ struct Row {
 }
 
 /// Windows' decoders Current takes natively, with what W1 found (each row cites `docs/notes/windows-native-player.md`). TrueHD, DTS,
-/// multichannel PCM and Opus beyond stereo are left out on purpose: W1 §5 found them failing natively even where a subtype exists.
+/// multichannel PCM and Opus beyond stereo are left out on purpose: W1 §5 found them failing natively even where a subtype exists; ALAC
+/// too (W7, below).
 const WINDOWS: &[Row] = &[
     // §2: H.264 plays; H.264 High 10 reports `FullySupported` and then fails with `DecodingError`: 8 bit only.
     Row {
@@ -142,17 +143,15 @@ const WINDOWS: &[Row] = &[
             ..CodecSupport::any(Codec::OPUS)
         },
     },
-    // §3: MP3 and ALAC are among the built-in decoders seen; their playback was not checked (not verified).
+    // §3: MP3 is among the built-in decoders seen; W7 played MP3 in MKV natively with sound
+    // (docs/notes/windows-native-player-check.md §1).
     Row {
         kind: CodecKind::Audio,
         subtype: "AudioFormatMP3",
         support: || CodecSupport::any(Codec::MP3),
     },
-    Row {
-        kind: CodecKind::Audio,
-        subtype: "AudioFormatAlac",
-        support: || CodecSupport::any(Codec::ALAC),
-    },
+    // ALAC is left out although CodecQuery lists a built-in decoder (W1 §3): W7 played ALAC in MP4 natively with the picture moving
+    // and no sound, and Media Foundation exposed no audio track for it ("ALAC in MP4"). It plays on the app engine.
 ];
 
 /// What the UI on Windows is asked to look for, in the table's order.
@@ -284,9 +283,10 @@ mod tests {
         let (engine, rules) = windows_engine(&answers(&["VideoFormatH264", "AudioFormatOpus"]));
         assert_eq!(engine.capabilities.video[0].max_bit_depth, Some(8));
         assert_eq!(engine.capabilities.audio[0].max_channels, Some(2));
-        // Never natively, whatever the answers: TrueHD, DTS.
+        // Never natively, whatever the answers: TrueHD, DTS, and ALAC (W7: silent).
         assert!(!engine.capabilities.decodes_audio(&Codec::TRUEHD));
         assert!(!engine.capabilities.decodes_audio(&Codec::DTS));
+        assert!(!engine.capabilities.decodes_audio(&Codec::ALAC));
         // SubRip and PGS inside a file natively (departure 3), and text subtitle files, WebVTT too.
         assert_eq!(
             engine.capabilities.subtitles,
