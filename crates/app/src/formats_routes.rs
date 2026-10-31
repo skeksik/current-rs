@@ -9,8 +9,8 @@
 //! engine plays keep what the server does with them (ADR 0021).
 
 use current_model::{
-    AudioFacts, Codec, HowToPlay, MediaSource, MediaStream, Route, RouteReason, StreamKind,
-    SubtitleChoice, SubtitleFormat, TrackChoice, VideoFacts, VideoRangeType,
+    AudioFacts, Codec, Container, HowToPlay, MediaSource, MediaStream, Route, RouteReason,
+    StreamKind, SubtitleChoice, SubtitleFormat, TrackChoice, VideoFacts, VideoRangeType,
 };
 use current_playback::route::local_routes;
 use current_playback::{DisplayKind, EngineProfile, Engines, RouteContext};
@@ -75,12 +75,11 @@ const STORE_EXTENSIONS: &[(Codec, &str, &str, &str, bool)] = &[
     ),
 ];
 
-/// What W1 did not play in Windows' player (docs/notes/windows-native-player.md §2, §5, §6, §4): a row the route check sends there
-/// says "Not verified on a device".
+/// What neither W1 nor W7 played in Windows' player (docs/notes/windows-native-player.md §2, §5, §6, §4;
+/// docs/notes/windows-native-player-check.md §1: MPEG-2 and MP3 played natively): a row the route check sends there says "Not
+/// verified on a device".
 const NOT_CHECKED_NATIVELY: &[&str] = &[
     "VP8",
-    "MPEG-2",
-    "MP3",
     "PCM, 16-bit",
     "PCM, 24-bit",
     "QuickTime (MOV)",
@@ -263,7 +262,7 @@ fn missing_extension(
         STORE_EXTENSIONS.iter().find(|(known, ..)| known == codec)?;
     let found = answers
         .iter()
-        .any(|answer| answer.subtype == *subtype && answer.decoders > 0);
+        .any(|answer| answer.subtype == *subtype && answer.has_decoder());
     (!found).then_some((*name, *id, *verified))
 }
 
@@ -354,6 +353,19 @@ const PLAIN: TrackChoice = TrackChoice {
     subtitle: SubtitleChoice::Off,
 };
 
+/// The container as the server names a file of it: FFmpeg's demuxer for MP4 and QuickTime files is one, named
+/// `mov,mp4,m4a,3gp,3g2,mj2` (libavformat/mov.c, FFmpeg at 502046a, read 2026-10-31), and Jellyfin keeps that name
+/// (`ProbeResultNormalizer.NormalizeFormat` renames only `mpegvideo`, `mpegts`, `matroska` and WebM; jellyfin master, read
+/// 2026-10-31). So a MOV file reaches the route check as an MP4 file does, and the row says what the player does with it (W7 §20:
+/// the row said the app engine while MP4 files, named alike, played natively).
+fn server_container(container: &Container) -> &str {
+    if *container == Container::MOV || *container == Container::MP4 {
+        "mov,mp4,m4a,3gp,3g2,mj2"
+    } else {
+        container.as_str()
+    }
+}
+
 /// The file a row is checked with. Per tab, a typical file that differs from an everyday one only in the row's format:
 /// - Video: MKV, the codec at 8 bit, SDR, 1080p, with AAC stereo.
 /// - Audio: MKV, H.264 8-bit SDR, with the codec; six channels for AC-3, E-AC-3, TrueHD and DTS (and Dolby Atmos, as E-AC-3, the way
@@ -401,7 +413,10 @@ fn typical_file(kind: FormatTabKind, name: &str) -> Option<TypicalFile> {
         }
         FormatTabKind::Containers => {
             let (container, _) = CONTAINERS.iter().find(|(_, known)| *known == name)?;
-            Some(file(source(container.as_str(), vec![h264(), aac()])))
+            Some(file(source(
+                server_container(container),
+                vec![h264(), aac()],
+            )))
         }
         FormatTabKind::Subtitles => {
             let (spellings, ..) = SUBTITLES.iter().find(|(_, known, _)| *known == name)?;
@@ -476,7 +491,11 @@ mod tests {
         windows_codec_queries()
             .into_iter()
             .map(|query| CodecAnswer {
-                decoders: u32::from(found.contains(&query.subtype.as_str())),
+                decoders: if found.contains(&query.subtype.as_str()) {
+                    vec!["A decoder".to_owned()]
+                } else {
+                    Vec::new()
+                },
                 subtype: query.subtype,
             })
             .collect()
@@ -506,16 +525,19 @@ mod tests {
     }
 
     fn page(found: &[&str], hdr: Option<bool>, always: bool) -> SupportedFormats {
+        apply(&answers(found), hdr, always)
+    }
+
+    fn apply(answers: &[CodecAnswer], hdr: Option<bool>, always: bool) -> SupportedFormats {
         let caps = app();
         let display = hdr.map(display);
         let mut page =
             supported_formats(&EngineReport::Ready(caps.clone()), None, display.as_ref());
-        let answers = answers(found);
         apply_routes(
             &mut page,
             &caps,
             NativeFacts {
-                answers: &answers,
+                answers,
                 how: if always {
                     HowToPlay::AppEngine
                 } else {
@@ -598,6 +620,11 @@ mod tests {
         // MPEG-2's link is not known to be the one: its note says so.
         let mpeg2 = row(&page, FormatTabKind::Video, "MPEG-2");
         assert!(mpeg2.notes.contains("not verified"), "{}", mpeg2.notes);
+        assert!(
+            !mpeg2.notes.contains("Not verified on a device"),
+            "{}",
+            mpeg2.notes
+        );
         assert!(mpeg2.action.is_some());
         // Every link is a Store product page.
         for row in page.tabs.iter().flat_map(|tab| &tab.rows) {
@@ -632,6 +659,16 @@ mod tests {
             ac3.notes
         );
         assert_eq!(ac3.action, None);
+        // Windows' own IEC 61937 converter alone is no decoder (W7 §4).
+        let mut converter_only = answers(&["VideoFormatH264", "AudioFormatAac"]);
+        for answer in &mut converter_only {
+            if answer.subtype == "AudioFormatDolbyAC3" {
+                answer.decoders = vec!["Dolby AC-3 and E-AC-3 IEC-61937 converter MFT".into()];
+            }
+        }
+        let converted = apply(&converter_only, Some(true), false);
+        let ac3 = row(&converted, FormatTabKind::Audio, "Dolby Digital (AC-3)");
+        assert_eq!(ac3.support_label, "App engine");
         // TrueHD and DTS never natively (W1 §5).
         for name in ["Dolby TrueHD", "DTS"] {
             assert_eq!(
@@ -640,6 +677,26 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn what_w7_played_natively_is_no_longer_unverified_and_mov_follows_mp4() {
+        let mut found = FULL.to_vec();
+        found.extend(["VideoFormatMpeg2", "AudioFormatMP3"]);
+        let page = page(&found, Some(true), false);
+        let mpeg2 = row(&page, FormatTabKind::Video, "MPEG-2");
+        assert_eq!(mpeg2.support_label, "Windows' player");
+        assert_eq!(mpeg2.notes, "");
+        let mp3 = row(&page, FormatTabKind::Audio, "MP3");
+        assert_eq!(mp3.support_label, "Windows' player");
+        assert_eq!(mp3.notes, "");
+        // W7 §20: MP4 and MOV files have the same server name, so the MOV row says what the player does: Windows' player, with a
+        // MOV file itself never played there.
+        let mp4 = row(&page, FormatTabKind::Containers, "MP4");
+        assert_eq!(mp4.support_label, "Windows' player");
+        let mov = row(&page, FormatTabKind::Containers, "QuickTime (MOV)");
+        assert_eq!(mov.support_label, "Windows' player");
+        assert_eq!(mov.notes, "Not verified on a device");
     }
 
     #[test]

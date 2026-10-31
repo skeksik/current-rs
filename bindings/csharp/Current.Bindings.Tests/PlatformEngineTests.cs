@@ -17,7 +17,9 @@ internal static class PlatformEngineTests
         PlatformEngineHost.WindowsCodecQueries()
             .Select(ask => new CodecQueryAnswer(
                 ask.Subtype,
-                ask.Subtype is "VideoFormatH264" or "VideoFormatHevc" or "AudioFormatAac" ? 1u : 0u))
+                ask.Subtype is "VideoFormatH264" or "VideoFormatHevc" or "AudioFormatAac"
+                    ? new[] { "A decoder" }
+                    : Array.Empty<string>()))
             .ToArray();
 
     /// <summary>Records what the core asks, and reports when the test says so. Throws from every call when asked to.</summary>
@@ -139,7 +141,7 @@ internal static class PlatformEngineTests
             Check(session.State.Value.Route!.Engine == RouteEngine.App, "libmpv's (the test engine's) surface");
             Check(engine.Calls.Contains("stop"), "the platform engine let the file go");
             lines = await session.PlaybackInfoLinesAsync(null, Panel);
-            Check(lines[0] == "App engine" && lines[1] == "• Native could not start.", $"the failed route named, not {string.Join(" | ", lines)}");
+            Check(lines[0] == "App engine" && lines[1] == "• The native player could not start the file.", $"the failed route named, not {string.Join(" | ", lines)}");
         }
         finally
         {

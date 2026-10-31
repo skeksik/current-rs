@@ -11,7 +11,8 @@ use current_model::{
     VideoRangeType,
 };
 
-use crate::controller::{Controller, NativeEngine};
+use crate::clock::Clock;
+use crate::controller::{Controller, NativeEngine, STALL_TIMEOUT};
 use crate::engine::{EndReason, EngineEvent, EngineTrack};
 use crate::engines::{DisplayKind, PlatformRules};
 use crate::quality::QualityPreference;
@@ -137,6 +138,7 @@ struct Two {
     player: Controller<FakeEngine, FakeServer, FakeClock>,
     server: FakeServer,
     native: SharedEngine,
+    clock: FakeClock,
 }
 
 impl Two {
@@ -154,7 +156,7 @@ impl Two {
         let player = Controller::new(
             app,
             server.clone(),
-            clock,
+            clock.clone(),
             QualityPreference::default(),
             AutoSkip::off(),
         )
@@ -169,6 +171,7 @@ impl Two {
             player,
             server,
             native,
+            clock,
         }
     }
 
@@ -208,6 +211,18 @@ impl Two {
         self.event(EngineEvent::Ended(EndReason::Error(
             EngineErrorKind::DECODER_FAILED,
         )));
+    }
+
+    /// Moves the clock on by `by`, running every tick that falls due on the way, at its time.
+    fn wait(&mut self, by: Duration) {
+        let target = self.clock.now() + by;
+        while let Some(deadline) = self.player.next_deadline().filter(|due| *due <= target) {
+            let now = self.clock.now();
+            self.clock.advance(deadline.saturating_sub(now));
+            block_on(self.player.tick());
+        }
+        let now = self.clock.now();
+        self.clock.advance(target.saturating_sub(now));
     }
 
     fn plan(&self) -> PlaybackPlan {
@@ -407,6 +422,10 @@ fn an_audio_track_the_native_engine_lacks_moves_the_file_at_the_position() {
         vec![Command::Audio(EngineTrack::Stream(1))]
     );
     assert_eq!(two.plan().route, Route::AppEngine);
+    // W7 §19: no reason about TrueHD is left; it says the file stayed although the native engine would play it now.
+    assert_eq!(two.plan().reasons, vec![RouteReason::ROUTE_KEPT]);
+    assert!(two.plan().native_lacks.is_empty());
+    assert_eq!(two.plan().tracks.audio, Some(1));
 }
 
 #[test]
@@ -934,4 +953,115 @@ fn native_chosen_never_moves_back_up_on_a_display_change_and_moves_down_when_it_
     block_on(two.player.set_display(DisplayKind::Hdr));
     assert_eq!(two.plan().route, Route::AppEngine);
     assert_eq!(two.requests().len(), asked);
+}
+
+#[test]
+fn a_native_engine_that_never_plays_a_stream_loaded_while_paused_is_a_failed_route() {
+    // W7 §8: paused natively, a lower quality loads the server's stream on Windows' player, still paused; on resume the engine
+    // buffers and never plays. After the stall timeout the file moves on to the app engine's stream at the position, as after the
+    // engine's own error, instead of failing as a network problem.
+    let mut two = Two::playing(movie());
+    let stream = || {
+        let mut answer = answer(
+            hls(StreamAction::Transcode, StreamAction::Transcode),
+            vec![RouteReason::CONTAINER_BITRATE_EXCEEDS_LIMIT],
+        );
+        answer.source = movie();
+        Ok(answer)
+    };
+    two.server.answer(stream());
+    two.server.answer(stream());
+    two.at(4);
+    block_on(two.player.pause());
+    block_on(
+        two.player
+            .set_quality(crate::quality::Quality::Bitrate(4_000_000)),
+    );
+    let native_stream = two.plan().route;
+    assert!(matches!(
+        native_stream,
+        Route::ServerStream {
+            engine: EngineRole::Native,
+            ..
+        }
+    ));
+    two.start();
+    assert_eq!(two.player.status().state, PlayerState::Paused);
+    // Paused, nothing is expected to move: no stall however long.
+    two.wait(secs(600));
+    assert_eq!(two.player.status().state, PlayerState::Paused);
+    two.clear();
+
+    block_on(two.player.resume());
+    assert_eq!(two.native_commands(), vec![Command::Paused(false)]);
+    two.event(EngineEvent::Buffering(true));
+    two.wait(STALL_TIMEOUT - secs(1));
+    assert_eq!(two.player.status().state, PlayerState::Buffering);
+    two.wait(secs(1));
+
+    let plan = two.plan();
+    assert!(matches!(
+        plan.route,
+        Route::ServerStream {
+            engine: EngineRole::App,
+            ..
+        }
+    ));
+    assert_eq!(plan.failed_routes, vec![native_stream]);
+    assert!(
+        plan.reasons
+            .contains(&RouteReason::FALLBACK_AFTER_ENGINE_ERROR)
+    );
+    assert_eq!(plan.start, secs(4));
+    assert!(two.native_commands().contains(&Command::Stop));
+    let app = two.app_commands();
+    assert_eq!(loads(&app).len(), 1);
+    assert_eq!(
+        app.last(),
+        Some(&Command::Paused(false)),
+        "playing, as the user asked"
+    );
+    assert_eq!(two.player.status().state, PlayerState::Loading);
+    let stops: Vec<_> = two
+        .server
+        .take_reports()
+        .into_iter()
+        .filter_map(|(_, report)| match report {
+            crate::test_support::Report::Stopped(stop) => Some(stop),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        stops.iter().all(|stop| !stop.failed),
+        "a moved file is not a failed play: {stops:?}"
+    );
+
+    // The app engine's stream is the last route: its stall fails as before.
+    two.start();
+    two.event(EngineEvent::Buffering(true));
+    two.wait(STALL_TIMEOUT);
+    assert_eq!(
+        two.player.status().state,
+        PlayerState::Failed {
+            problem: current_model::PlaybackProblem::Network
+        }
+    );
+}
+
+#[test]
+fn a_track_change_under_a_choice_keeps_saying_it_was_chosen() {
+    let mut two = Two::playing(movie());
+    two.at(10);
+    block_on(two.player.choose_how_to_play(HowToPlay::Native));
+    assert_eq!(two.plan().reasons[0], RouteReason::USER_CHOSE_ROUTE);
+    // E-AC-3: native plays it too, so the route stays and is re-checked for the new track.
+    block_on(two.player.select_audio(3));
+    assert_eq!(two.plan().route, Route::Native);
+    assert_eq!(
+        two.plan().reasons,
+        vec![
+            RouteReason::USER_CHOSE_ROUTE,
+            RouteReason::NATIVE_FULLY_COMPATIBLE
+        ]
+    );
 }
