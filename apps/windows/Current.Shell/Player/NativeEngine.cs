@@ -61,6 +61,9 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         /// <summary>The selected subtitle stream of the file has no track in Media Foundation (W1 §6: MP4's in-band <c>tx3g</c>
         /// gave none).</summary>
         public const string SubtitleMissing = "subtitle_missing";
+        /// <summary>The selected audio stream of the file has no track in Media Foundation once a frame shows (W7, "ALAC in MP4": the
+        /// picture moved and no sound came).</summary>
+        public const string AudioMissing = "audio_missing";
     }
 
     /// <summary>
@@ -629,16 +632,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         LogSubtitleTracks(item);
         ApplySubtitle(file);
         HookTracks(file, item);
-        // The n-th of the file's own audio streams is the n-th audio track, from now on by its Id. A server stream (HLS) carries the
-        // one audio track the server was asked for.
-        if (!file.Hls)
-        {
-            var indices = _audioStreams();
-            for (var i = 0; i < indices.Count && i < item.AudioTracks.Count; i++)
-            {
-                file.AudioIds[indices[i]] = item.AudioTracks[i].Id;
-            }
-        }
+        MapAudio(file);
         ApplyAudio(file);
         CheckTracks(file);
         if (file.Failed)
@@ -712,6 +706,13 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         }
         file.Started = true;
         Report(file.Generation, new PlatformEngineEvent.Restarted());
+        // The tracks have settled once a frame shows: an audio stream asked for with no track now fails it.
+        MapAudio(file);
+        ApplyAudio(file);
+        if (file.Failed)
+        {
+            return;
+        }
         _windowTimer.Stop();
         _windowTimer.Start();
     }
@@ -792,17 +793,46 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
 
     // Tracks (UI thread) ----------------------------------------------------------------------------------------------------------
 
-    /// <summary>The core's audio choice: a server index found by its track's Id; Auto keeps Windows' own choice. Off is not offered by
-    /// Media Foundation's track list (not verified) and keeps the track playing.</summary>
-    private static void ApplyAudio(NativeFile file)
+    /// <summary>The n-th of the file's own audio streams is the n-th audio track, from then on by its Id; a stream already mapped
+    /// keeps its track. A server stream (HLS) carries the one audio track the server was asked for. When Media Foundation leaves out a
+    /// stream it cannot read, the streams after it would map to the wrong tracks: the counts are logged so the device check sees
+    /// it (not handled: the engine is not told each stream's codec).</summary>
+    private void MapAudio(NativeFile file)
     {
-        if (file.Item is not { } item || file.Audio is not PlatformTrack.Stream stream || file.Hls)
+        if (file.Hls || file.Item is not { } item)
+        {
+            return;
+        }
+        var indices = _audioStreams();
+        for (var i = 0; i < indices.Count && i < item.AudioTracks.Count; i++)
+        {
+            file.AudioIds.TryAdd(indices[i], item.AudioTracks[i].Id);
+        }
+        if (file.Started && indices.Count != item.AudioTracks.Count)
+        {
+            Trace.TraceWarning(
+                $"Current: the native engine has {item.AudioTracks.Count} audio tracks for {indices.Count} audio streams");
+        }
+    }
+
+    /// <summary>The core's audio choice: a server index found by its track's Id; Auto keeps Windows' own choice. Off is not offered by
+    /// Media Foundation's track list (not verified) and keeps the track playing. A stream with no track fails the track once a frame
+    /// has shown (the tracks have settled; before that it waits), so the core moves the file to libmpv instead of playing it silently
+    /// (W7, "ALAC in MP4"), as a subtitle stream with no track does (<see cref="CheckSubtitle"/>).</summary>
+    private void ApplyAudio(NativeFile file)
+    {
+        if (file.Failed || file.Item is not { } item || file.Audio is not PlatformTrack.Stream stream || file.Hls)
         {
             return;
         }
         if (!file.AudioIds.TryGetValue(stream.Index, out var id))
         {
-            Trace.TraceWarning("Current: the native engine has no track for the audio stream asked for");
+            Trace.TraceWarning(
+                $"Current: the native engine has no track for the audio stream asked for ({item.AudioTracks.Count} audio tracks, {_audioStreams().Count} streams)");
+            if (file.Started)
+            {
+                Fail(file, new PlatformEngineEvent.TrackFailed(Kinds.AudioMissing), null);
+            }
             return;
         }
         for (var i = 0; i < item.AudioTracks.Count; i++)
