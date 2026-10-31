@@ -503,6 +503,11 @@ pub struct PlayerStateSnapshot {
     pub quality: QualityChoice,
     pub volume: u8,
     pub muted: bool,
+    /// "How to play" for the item playing: Settings', or the one chosen in the player.
+    pub how_to_play: HowToPlayKind,
+    /// What the player's "How to play" menu offers for the item playing: Auto and the steps possible for it; empty while nothing
+    /// plays.
+    pub how_to_play_choices: Vec<HowToPlayKind>,
 }
 
 impl From<&PlayerStatus> for PlayerStateSnapshot {
@@ -539,6 +544,13 @@ impl From<&PlayerStatus> for PlayerStateSnapshot {
             quality: status.quality.into(),
             volume: status.volume,
             muted: status.muted,
+            how_to_play: status.how_to_play.into(),
+            how_to_play_choices: status
+                .how_to_play_choices
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
         }
     }
 }
@@ -822,37 +834,59 @@ pub struct PlaybackSettingsSnapshot {
     pub shows_quality_resolution: bool,
     /// "Show all quality options": whether the menu lists every step below the original's bitrate (off by default).
     pub shows_all_qualities: bool,
-    /// "Player" (ADR 0025, choice 3): "Automatic" by default.
-    pub player: PlayerChoiceKind,
+    /// "How to play" (ADR 0025, choice 3 as amended): Auto by default.
+    pub how_to_play: HowToPlayKind,
 }
 
-/// Settings → Playback → "Player" (ADR 0025, choice 3).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
-pub enum PlayerChoiceKind {
-    /// The platform's player first, then libmpv, then the server.
-    Automatic,
-    /// libmpv, then the server.
-    AlwaysAppEngine,
+/// "How to play" (ADR 0025, choice 3 as amended, owner 2026-10-31): Auto, or the step of the order a playback starts at; a step the
+/// file cannot use falls to the next one below. Settings shows every step the platform has ([`settings_how_to_play_choices`]), the
+/// player only those possible for the item playing (`PlayerStateSnapshot::how_to_play_choices`). The core names them
+/// (`Core::how_to_play_name`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum HowToPlayKind {
+    Auto,
+    Native,
+    DeviceRemux,
+    AppEngine,
+    ServerRemux,
+    ServerTranscode,
 }
 
-/// The core's "How to play" as the "Player" setting the UIs still show: the app engine is "Always app engine", every other choice
-/// "Automatic" (the next PR replaces this with "How to play" itself).
-impl From<current_model::HowToPlay> for PlayerChoiceKind {
+impl From<current_model::HowToPlay> for HowToPlayKind {
     fn from(how: current_model::HowToPlay) -> Self {
         match how {
-            current_model::HowToPlay::AppEngine => Self::AlwaysAppEngine,
-            _ => Self::Automatic,
+            current_model::HowToPlay::Auto => Self::Auto,
+            current_model::HowToPlay::Native => Self::Native,
+            current_model::HowToPlay::DeviceRemux => Self::DeviceRemux,
+            current_model::HowToPlay::AppEngine => Self::AppEngine,
+            current_model::HowToPlay::ServerRemux => Self::ServerRemux,
+            current_model::HowToPlay::ServerTranscode => Self::ServerTranscode,
         }
     }
 }
 
-impl From<PlayerChoiceKind> for current_model::HowToPlay {
-    fn from(choice: PlayerChoiceKind) -> Self {
-        match choice {
-            PlayerChoiceKind::Automatic => Self::Auto,
-            PlayerChoiceKind::AlwaysAppEngine => Self::AppEngine,
+impl From<HowToPlayKind> for current_model::HowToPlay {
+    fn from(how: HowToPlayKind) -> Self {
+        match how {
+            HowToPlayKind::Auto => Self::Auto,
+            HowToPlayKind::Native => Self::Native,
+            HowToPlayKind::DeviceRemux => Self::DeviceRemux,
+            HowToPlayKind::AppEngine => Self::AppEngine,
+            HowToPlayKind::ServerRemux => Self::ServerRemux,
+            HowToPlayKind::ServerTranscode => Self::ServerTranscode,
         }
     }
+}
+
+/// Settings → Playback → "How to play"'s choices on a platform: every step but the remux on the device where the platform has none
+/// (Windows: ADR 0025, departure 1).
+#[uniffi::export]
+pub fn settings_how_to_play_choices(has_device_remux: bool) -> Vec<HowToPlayKind> {
+    current_model::HowToPlay::ALL
+        .into_iter()
+        .filter(|how| has_device_remux || *how != current_model::HowToPlay::DeviceRemux)
+        .map(Into::into)
+        .collect()
 }
 
 impl PlaybackSettingsSnapshot {
@@ -861,7 +895,7 @@ impl PlaybackSettingsSnapshot {
         auto_skip: Vec<String>,
         shows_quality_resolution: bool,
         shows_all_qualities: bool,
-        player: PlayerChoiceKind,
+        how_to_play: HowToPlayKind,
     ) -> Self {
         let has = |kind: &str| auto_skip.iter().any(|k| k == kind);
         Self {
@@ -870,7 +904,7 @@ impl PlaybackSettingsSnapshot {
             auto_skip,
             shows_quality_resolution,
             shows_all_qualities,
-            player,
+            how_to_play,
         }
     }
 }

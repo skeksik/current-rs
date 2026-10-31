@@ -149,7 +149,7 @@ internal static class PlatformEngineTests
         }
     }
 
-    public static async Task PlayWithAppEngineMovesTheItem()
+    public static async Task ChooseHowToPlayMovesTheItem()
     {
         using var standIn = StandIn.Start();
         using var core = CoreHost.Create();
@@ -163,8 +163,14 @@ internal static class PlatformEngineTests
             await engine.StartFromAnotherThread();
             await Eventually("playing natively", ui, () => session.State.Value.Route?.Label == RouteLabel.Native
                 && session.State.Value.State == PlayerStateKind.Playing);
-            await session.PlayWithAppEngineAsync();
+            var choices = session.State.Value.HowToPlayChoices;
+            Check(choices.Contains(HowToPlay.Auto) && choices.Contains(HowToPlay.AppEngine) && !choices.Contains(HowToPlay.DeviceRemux),
+                $"the player's choices: {string.Join(", ", choices)}");
+            await session.ChooseHowToPlayAsync(HowToPlay.AppEngine);
             await Eventually("on the app engine", ui, () => session.State.Value.Route?.Label == RouteLabel.AppEngine);
+            Check(session.State.Value.HowToPlay == HowToPlay.AppEngine, "the choice in the state");
+            await session.ChooseHowToPlayAsync(HowToPlay.Auto);
+            await Eventually("native again with Auto", ui, () => session.State.Value.Route?.Label == RouteLabel.Native);
         }
         finally
         {
@@ -217,9 +223,13 @@ internal static class PlatformEngineTests
         using var standIn = StandIn.Start();
         using var core = CoreHost.Create();
         await SignIn(core, standIn);
-        Check(core.PlaybackSettings().Player == PlayerChoice.Automatic, "Automatic by default");
-        await core.SetPlayerChoiceAsync(PlayerChoice.AlwaysAppEngine);
-        Check(core.PlaybackSettings().Player == PlayerChoice.AlwaysAppEngine, "the setting read back");
+        Check(core.PlaybackSettings().HowToPlay == HowToPlay.Auto, "Auto by default");
+        Check(!core.SettingsHowToPlayChoices(false).Contains(HowToPlay.DeviceRemux), "no remux on the device in Windows' Settings");
+        Check(core.HowToPlayName(HowToPlay.ServerTranscode) == "Server transcode", "the choice's name");
+        Check(core.HowToPlayLabel() == "How to play" && core.HowToPlayButtonName(HowToPlay.Auto) == "How to play: Auto",
+            "the button's words");
+        await core.SetHowToPlayAsync(HowToPlay.AppEngine);
+        Check(core.PlaybackSettings().HowToPlay == HowToPlay.AppEngine, "the setting read back");
         var ui = new ManualDispatcher();
         var engine = new FakeEngine();
         var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), ui);
@@ -232,7 +242,7 @@ internal static class PlatformEngineTests
         finally
         {
             await session.CloseAsync();
-            await core.SetPlayerChoiceAsync(PlayerChoice.Automatic);
+            await core.SetHowToPlayAsync(HowToPlay.Auto);
         }
     }
 }

@@ -87,7 +87,7 @@ var tests = new (string Name, Func<Task> Run)[]
     // A platform's own player beside libmpv (ADR 0025).
     ("the core asks Windows for its decoders", PlatformEngineTests.CoreAsksForWindowsDecoders),
     ("a platform engine plays through the relay and hands over on a failed track", PlatformEngineTests.PlaysNativelyThroughTheRelayAndHandsOver),
-    ("Play with app engine moves the item", PlatformEngineTests.PlayWithAppEngineMovesTheItem),
+    ("How to play in the player moves the item, and Auto back", PlatformEngineTests.ChooseHowToPlayMovesTheItem),
     ("exceptions in a platform engine never bring the core down", PlatformEngineTests.EngineExceptionsNeverBringTheCoreDown),
     ("Always app engine plays the next item there", PlatformEngineTests.AlwaysAppEnginePlaysTheNextItemThere),
 };
