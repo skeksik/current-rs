@@ -407,6 +407,10 @@ fn an_audio_track_the_native_engine_lacks_moves_the_file_at_the_position() {
         vec![Command::Audio(EngineTrack::Stream(1))]
     );
     assert_eq!(two.plan().route, Route::AppEngine);
+    // W7 §19: no reason about TrueHD is left; it says the file stayed although the native engine would play it now.
+    assert_eq!(two.plan().reasons, vec![RouteReason::ROUTE_KEPT]);
+    assert!(two.plan().native_lacks.is_empty());
+    assert_eq!(two.plan().tracks.audio, Some(1));
 }
 
 #[test]

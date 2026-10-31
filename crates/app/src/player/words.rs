@@ -5,7 +5,7 @@
 //!
 //! These are the Windows app's words as it wrote them in C# before they moved here; the tests pin them.
 
-use current_model::{Codec, GapKind, RouteLabel, SubtitleFormat, TrackGap};
+use current_model::{Codec, EngineRole, GapKind, Route, RouteLabel, SubtitleFormat, TrackGap};
 use current_playback::PlanNote;
 
 use super::labels::bitrate_label;
@@ -92,6 +92,36 @@ pub fn route_name(route: RouteLabel) -> &'static str {
         RouteLabel::ServerRemux => "Server remux",
         RouteLabel::ServerDirectStream => "Server direct stream",
         RouteLabel::ServerTranscode => "Server transcode",
+    }
+}
+
+/// The engine that plays a route, for a player with a native engine and the app engine.
+pub fn engine_name(engine: EngineRole) -> &'static str {
+    match engine {
+        EngineRole::Native => "native player",
+        EngineRole::App => "app engine",
+    }
+}
+
+/// A route tried before the one playing that could not start (ADR 0025, "Fallback on a failed start"), naming the engine that
+/// tried it: a server stream that failed on the native player reads as that, not as if the server's stream had failed (W7 §8).
+pub fn failed_route_text(route: &Route) -> String {
+    match route.label() {
+        RouteLabel::Native => "The native player could not start the file.".to_owned(),
+        RouteLabel::DeviceRemux => "The remux on this device could not start.".to_owned(),
+        RouteLabel::AppEngine => "The app engine could not start the file.".to_owned(),
+        server => {
+            let stream = match server {
+                RouteLabel::ServerRemux => "remux",
+                RouteLabel::ServerDirectStream => "direct stream",
+                _ => "transcode",
+            };
+            let engine = match route.engine() {
+                EngineRole::Native => "The native player",
+                EngineRole::App => "The app engine",
+            };
+            format!("{engine} could not start the server's {stream}.")
+        }
     }
 }
 
@@ -186,6 +216,9 @@ pub fn reason_text(reason: &str) -> &str {
         "dolby_vision_on_app_engine" => "The app engine shows Dolby Vision best on this device.",
         "hdr_on_sdr_display" => "The app engine tone-maps HDR video for this SDR display.",
         "speed_not_supported" => "The native player can't change speed with this audio track.",
+        "route_kept" => {
+            "Kept here after the track change, though the native player could play it now."
+        }
         other => other,
     }
 }
@@ -461,6 +494,10 @@ mod tests {
                 "speed_not_supported",
                 "The native player can't change speed with this audio track.",
             ),
+            (
+                "route_kept",
+                "Kept here after the track change, though the native player could play it now.",
+            ),
         ];
         for (reason, text) in words {
             assert_eq!(reason_text(reason), text);
@@ -478,6 +515,7 @@ mod tests {
             RouteReason::DOLBY_VISION_ON_APP_ENGINE,
             RouteReason::HDR_ON_SDR_DISPLAY,
             RouteReason::SPEED_NOT_SUPPORTED,
+            RouteReason::ROUTE_KEPT,
         ] {
             assert_ne!(reason_text(reason.as_str()), reason.as_str());
         }
