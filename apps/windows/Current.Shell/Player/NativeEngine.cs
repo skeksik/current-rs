@@ -491,7 +491,11 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
                 }
                 source.ExternalTimedTextSources.Add(text);
             }
-            var item = new MediaPlaybackItem(source, load.Start);
+            // Not MediaPlaybackItem(source, startTime): on the owner's PC that item counts Position and NaturalDuration from the
+            // start time (a 57 s file started at 25 s read 0:08 of 0:34 eight seconds in), so the core got positions, a duration and
+            // a fallback position that were not the file's, and an HLS stream started past the deadline never passed its start
+            // (docs/notes/windows-native-hls.md). The start is a seek once the file opens (Opened).
+            var item = new MediaPlaybackItem(source);
             file.Item = item;
             Hook(file, item);
             Player.Volume = _volume;
@@ -647,6 +651,11 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         }
         ReportRates(file);
         Player.PlaybackSession.PlaybackRate = _speed;
+        if (file.PendingSeek is null && file.Load.Start > TimeSpan.Zero)
+        {
+            // The load's start; an HLS load already waits for its first segment from there (OpenAsync).
+            Player.PlaybackSession.Position = file.Load.Start;
+        }
         if (file.PendingSeek is { } seek)
         {
             file.PendingSeek = null;
