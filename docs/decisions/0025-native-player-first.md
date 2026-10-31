@@ -4,7 +4,7 @@ Status: accepted (2026-10-28, owner), from the native-player-first spike. The ro
 are the owner's (2026-10-28). Revised by task W1 (2026-10-28): departures 1 to 3 checked on the owner's PC and kept, departure 4
 dropped, departure 8 and the speed rule added (owner, 2026-10-28). Research, quotes and sources: `docs/notes/native-player-first.md`;
 the device check: `docs/notes/windows-native-player.md`. No product code was written. Choice 3 amended after W7 (owner, 2026-10-31;
-"How to play"), pending the owner's approval of the amended text.
+"How to play"), the amended text approved by the owner (2026-10-31).
 
 ## Context
 The owner's decision (2026-10-28): "Add a native player route for all the targets as it should've been from the very beginning, remux if
@@ -137,7 +137,7 @@ The existing client's behaviour is the default on every platform; where ours dif
 3. **Both a setting and a per-playback choice:** Settings → Playback → "Player": "Automatic" (default) or "Always app engine", stored
    in `settings.json` as an open value (ADR 0013); and "Play with app engine" in the player's menu for this playback only (re-plans at
    the position). With either, the order is app engine, then the server; the reason says why.
-   **Amended (owner, 2026-10-31, after W7; for the owner's approval of this text):** "Replace Always play with app engine setting with
+   **Amended (owner, 2026-10-31, after W7; this text approved by the owner, 2026-10-31):** "Replace Always play with app engine setting with
    a setting that allow you to choose how to play (auto, native, remux, app engine, transcode) if chosen way is unsupported by playback,
    it should fallback to the supported that is below chosen, user should be able to set this setting globally in settings and for the
    current playback in player", and earlier: "should not automatically switch if it's chosen" (W7 notes, proposal 2). As decided with
