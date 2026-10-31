@@ -298,7 +298,7 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       2026-10-29; for the owner to schedule). Until then the native route's subtitles move up with the bar and libmpv's do not
 - [x] W6 (feat/formats-per-route, #116): the supported formats page per route, with missing Store extensions (found through `CodecQuery`)
       and their link (ADR 0021)
-- [x] W7 (test/windows-native-player-check, #PR): device check on the owner's PC (`docs/notes/windows-native-player-check.md`). The
+- [x] W7 (test/windows-native-player-check, #117): device check on the owner's PC (`docs/notes/windows-native-player-check.md`). The
       failures, one task each:
 - [ ] Native HLS: no server transcode started on Windows' player in W7 (`stream_timeout` after 8 s, three tries out of three; then
       libmpv played it), and a server stream loaded natively while paused hangs on play and ends in "The server can't be reached"
