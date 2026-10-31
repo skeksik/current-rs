@@ -197,6 +197,7 @@ fn request() -> PlaybackRequest {
         },
         max_streaming_bitrate: MAXIMUM_STREAMING_BITRATE,
         direct_play: true,
+        force_video_transcode: false,
     }
 }
 
@@ -330,6 +331,7 @@ async fn direct_play_builds_the_static_url_and_sends_the_profile() {
     assert_eq!(body["SubtitleStreamIndex"], -1);
     assert_eq!(body["MediaSourceId"], SOURCE);
     assert_eq!(body["EnableDirectPlay"], true);
+    assert_eq!(body["AllowVideoStreamCopy"], true);
     assert_eq!(
         body["DeviceProfile"]["TranscodingProfiles"][0]["Container"],
         "mp4"
@@ -654,4 +656,27 @@ async fn a_playstate_report_that_gets_a_401_answers_within_its_timeout() {
     assert_eq!(stopped, Err(AuthError::Unconfirmed));
     assert!(started.elapsed() < current_jellyfin::STOP_REPORT_TIMEOUT);
     assert!(client.has_token());
+}
+
+#[tokio::test]
+async fn how_to_play_at_the_servers_transcode_refuses_video_stream_copy() {
+    let server = StandIn::start(handler(answer(&media_source(
+        r#","SupportsDirectPlay":true,"TranscodingSubProtocol":"http""#,
+    ))))
+    .await;
+    let log = Arc::new(RequestLog::default());
+    let client = client(&server, &log);
+    let forced = PlaybackRequest {
+        direct_play: false,
+        force_video_transcode: true,
+        ..request()
+    };
+    client
+        .playback_info(&ItemId::new(ITEM), &forced, &capabilities())
+        .await
+        .unwrap();
+    let body = server.body(&format!("/Items/{ITEM}/PlaybackInfo"));
+    assert_eq!(body["EnableDirectPlay"], false);
+    assert_eq!(body["AllowVideoStreamCopy"], false);
+    assert_eq!(body["AllowAudioStreamCopy"], true);
 }

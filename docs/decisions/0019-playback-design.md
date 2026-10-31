@@ -165,8 +165,9 @@ Added 2026-10-28 by task W2 (feat/routes-and-engines), from ADR 0025 "How the co
   route is "Direct play"). The play method reported to Jellyfin is `DirectPlay` for a local route and `Transcode` for a server stream.
 - **Reasons** (`RouteReason`, open), Current's own, worded in the core: `native_fully_compatible`, `keeps_original_streams`,
   `native_lacks` (with the plan's `native_lacks`: the container, video, audio or subtitle and its codec or format),
-  `subtitle_needs_rendering`, `dolby_vision_profile_7`, `previous_route_failed`, `user_chose_app_engine`,
-  `setting_always_app_engine`, `dolby_vision_on_app_engine`, `hdr_on_sdr_display`, `speed_not_supported`. The plan also lists the
+  `subtitle_needs_rendering`, `dolby_vision_profile_7`, `previous_route_failed`, `user_chose_route`,
+  `setting_chose_route`, `chosen_route_unavailable` (ADR 0025 choice 3 as amended, "How to play"; they replace
+  `user_chose_app_engine` and `setting_always_app_engine`), `dolby_vision_on_app_engine`, `hdr_on_sdr_display`, `speed_not_supported`. The plan also lists the
   routes that failed before it (`failed_routes`). A local route on a player with the app engine only has no reasons, as before.
 - **The per-file check** (`current_playback::route`), after a direct-play answer: native, then the remux, then the app engine, as
   ADR 0025 orders them; a route already failed in this play is left out, and the route after it carries `previous_route_failed`.

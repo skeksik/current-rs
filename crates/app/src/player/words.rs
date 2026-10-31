@@ -5,7 +5,9 @@
 //!
 //! These are the Windows app's words as it wrote them in C# before they moved here; the tests pin them.
 
-use current_model::{Codec, EngineRole, GapKind, Route, RouteLabel, SubtitleFormat, TrackGap};
+use current_model::{
+    Codec, EngineRole, GapKind, HowToPlay, Route, RouteLabel, SubtitleFormat, TrackGap,
+};
 use current_playback::PlanNote;
 
 use super::labels::bitrate_label;
@@ -93,6 +95,27 @@ pub fn route_name(route: RouteLabel) -> &'static str {
         RouteLabel::ServerDirectStream => "Server direct stream",
         RouteLabel::ServerTranscode => "Server transcode",
     }
+}
+
+/// "How to play"'s choices as Settings and the player's menu name them (ADR 0025, choice 3 as amended; the owner's words: "auto,
+/// native, remux, app engine, transcode", with the server's remux and transcode apart).
+pub fn how_to_play_name(how: HowToPlay) -> &'static str {
+    match how {
+        HowToPlay::Auto => "Auto",
+        HowToPlay::Native => "Native",
+        HowToPlay::DeviceRemux => "Remux on this device",
+        HowToPlay::AppEngine => "App engine",
+        HowToPlay::ServerRemux => "Server remux",
+        HowToPlay::ServerTranscode => "Server transcode",
+    }
+}
+
+/// The player's "How to play" button: its label, and the name that also says the choice in use, for its tooltip and screen readers
+/// ("How to play: Auto").
+pub const HOW_TO_PLAY: &str = "How to play";
+
+pub fn how_to_play_button_name(how: HowToPlay) -> String {
+    format!("{HOW_TO_PLAY}: {}", how_to_play_name(how))
 }
 
 /// The engine that plays a route, for a player with a native engine and the app engine.
@@ -211,8 +234,11 @@ pub fn reason_text(reason: &str) -> &str {
         "subtitle_needs_rendering" => "The subtitles need rendering the native player can't do.",
         "dolby_vision_profile_7" => "Dolby Vision profile 7 can't be remuxed on this device.",
         "previous_route_failed" => "The previous playback route could not start.",
-        "user_chose_app_engine" => "You chose to play with the app engine.",
-        "setting_always_app_engine" => "Settings say to always play with the app engine.",
+        "user_chose_route" => "You chose how to play this.",
+        "setting_chose_route" => "Settings say how to play.",
+        "chosen_route_unavailable" => {
+            "The way chosen can't play this, so the next one below it does."
+        }
         "dolby_vision_on_app_engine" => "The app engine shows Dolby Vision best on this device.",
         "hdr_on_sdr_display" => "The app engine tone-maps HDR video for this SDR display.",
         "speed_not_supported" => "The native player can't change speed with this audio track.",
@@ -474,13 +500,11 @@ mod tests {
                 "previous_route_failed",
                 "The previous playback route could not start.",
             ),
+            ("user_chose_route", "You chose how to play this."),
+            ("setting_chose_route", "Settings say how to play."),
             (
-                "user_chose_app_engine",
-                "You chose to play with the app engine.",
-            ),
-            (
-                "setting_always_app_engine",
-                "Settings say to always play with the app engine.",
+                "chosen_route_unavailable",
+                "The way chosen can't play this, so the next one below it does.",
             ),
             (
                 "dolby_vision_on_app_engine",
@@ -510,8 +534,9 @@ mod tests {
             RouteReason::SUBTITLE_NEEDS_RENDERING,
             RouteReason::DOLBY_VISION_PROFILE_7,
             RouteReason::PREVIOUS_ROUTE_FAILED,
-            RouteReason::USER_CHOSE_APP_ENGINE,
-            RouteReason::SETTING_ALWAYS_APP_ENGINE,
+            RouteReason::USER_CHOSE_ROUTE,
+            RouteReason::SETTING_CHOSE_ROUTE,
+            RouteReason::CHOSEN_ROUTE_UNAVAILABLE,
             RouteReason::DOLBY_VISION_ON_APP_ENGINE,
             RouteReason::HDR_ON_SDR_DISPLAY,
             RouteReason::SPEED_NOT_SUPPORTED,
@@ -734,5 +759,26 @@ mod tests {
     #[test]
     fn the_fallback_is_the_windows_apps_unexpected_text() {
         assert_eq!(UNEXPECTED, "Something went wrong in Current. Try again.");
+    }
+
+    #[test]
+    fn how_to_play_names_its_choices() {
+        let names: Vec<&str> = HowToPlay::ALL.into_iter().map(how_to_play_name).collect();
+        assert_eq!(
+            names,
+            [
+                "Auto",
+                "Native",
+                "Remux on this device",
+                "App engine",
+                "Server remux",
+                "Server transcode"
+            ]
+        );
+        assert_eq!(HOW_TO_PLAY, "How to play");
+        assert_eq!(
+            how_to_play_button_name(HowToPlay::AppEngine),
+            "How to play: App engine"
+        );
     }
 }

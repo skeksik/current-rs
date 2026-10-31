@@ -1,12 +1,13 @@
 //! The playback settings in `settings.json` (ADR 0019, choices 8 and 10): the preferred quality, the quality menu's switches, and
-//! the kinds of segment skipped automatically, and the "Player" setting (ADR 0025, choice 3). All open values (ADR 0013): a value this version cannot read reads as the default
+//! the kinds of segment skipped automatically, and "How to play" (ADR 0025, choice 3 as amended). All open values (ADR 0013): a value this version cannot read reads as the default
 //! and is written back unchanged until the setting is changed here, and fields this version does not know are kept.
 //!
 //! The file keeps them under `playback`: `{"quality_preferred": "maximum" | <bits per second>, "auto_skip": ["intro", "outro", ...],
-//! "quality_resolution": false, "quality_all": true, "player": "automatic" | "always_app_engine"}`, each left out at its default. Older versions remembered the last quality picked,
+//! "quality_resolution": false, "quality_all": true, "player": "automatic" | "native" | "device_remux" | "always_app_engine" | "server_remux" | "server_transcode"}`, each left out at its default. Older versions remembered the last quality picked,
 //! per kind of address, in `quality_local` and `quality_internet` (same values): still read and written back as they are, so older and
 //! newer versions share the file, but nothing uses them any more (owner, 2026-10-27).
 
+use current_model::HowToPlay;
 use serde_json::{Map, Value};
 
 /// The most a stream may carry.
@@ -40,31 +41,30 @@ impl StreamQuality {
     }
 }
 
-/// Settings → Playback → "Player" (ADR 0025, choice 3): which engine plays a file.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum PlayerChoice {
-    /// ADR 0025's route order: the native player, the remux on the device, the app engine, the server.
-    #[default]
-    Automatic,
-    /// The app engine, then the server.
-    AlwaysAppEngine,
+/// Settings → Playback → "How to play" (ADR 0025, choice 3 as amended), stored under the key the "Player" setting had. Its two
+/// values keep their spelling, so a file written before reads the same ("Automatic" is Auto, "Always app engine" the app engine) and
+/// an older version reads the app engine as it did; the steps it does not know it reads as "Automatic".
+fn read_how(value: &Value) -> Option<HowToPlay> {
+    match value.as_str()? {
+        "automatic" => Some(HowToPlay::Auto),
+        "native" => Some(HowToPlay::Native),
+        "device_remux" => Some(HowToPlay::DeviceRemux),
+        "always_app_engine" => Some(HowToPlay::AppEngine),
+        "server_remux" => Some(HowToPlay::ServerRemux),
+        "server_transcode" => Some(HowToPlay::ServerTranscode),
+        _ => None,
+    }
 }
 
-impl PlayerChoice {
-    fn read(value: &Value) -> Option<Self> {
-        match value.as_str()? {
-            "automatic" => Some(Self::Automatic),
-            "always_app_engine" => Some(Self::AlwaysAppEngine),
-            _ => None,
-        }
-    }
-
-    fn write(self) -> Value {
-        Value::from(match self {
-            Self::Automatic => "automatic",
-            Self::AlwaysAppEngine => "always_app_engine",
-        })
-    }
+fn write_how(how: HowToPlay) -> Value {
+    Value::from(match how {
+        HowToPlay::Auto => "automatic",
+        HowToPlay::Native => "native",
+        HowToPlay::DeviceRemux => "device_remux",
+        HowToPlay::AppEngine => "always_app_engine",
+        HowToPlay::ServerRemux => "server_remux",
+        HowToPlay::ServerTranscode => "server_transcode",
+    })
 }
 
 const QUALITY_LOCAL: &str = "quality_local";
@@ -94,8 +94,9 @@ pub struct PlaybackSettings {
     /// Whether the quality menu lists every step below the original's bitrate, not only the common ones ("Show all quality
     /// options"); off by default (owner, 2026-10-26).
     pub quality_all: bool,
-    /// "Player": "Automatic" by default (owner, 2026-10-28). A value this version cannot read reads as "Automatic".
-    pub player: PlayerChoice,
+    /// "How to play" (the "Player" setting before it): Auto by default (owner, 2026-10-28). A value this version cannot read reads as
+    /// Auto.
+    pub player: HowToPlay,
     /// The stored object as read: fields this version does not know, and known fields whose value it could not read.
     stored: Map<String, Value>,
 }
@@ -109,7 +110,7 @@ impl Default for PlaybackSettings {
             auto_skip: Vec::new(),
             quality_resolution: true,
             quality_all: false,
-            player: PlayerChoice::default(),
+            player: HowToPlay::default(),
             stored: Map::new(),
         }
     }
@@ -145,10 +146,7 @@ impl PlaybackSettings {
             .get(QUALITY_ALL)
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let player = stored
-            .get(PLAYER)
-            .and_then(PlayerChoice::read)
-            .unwrap_or_default();
+        let player = stored.get(PLAYER).and_then(read_how).unwrap_or_default();
         (
             Self {
                 quality_local: quality(QUALITY_LOCAL),
@@ -249,8 +247,8 @@ impl PlaybackSettings {
             PLAYER,
             self.stored
                 .get(PLAYER)
-                .is_none_or(|value| PlayerChoice::read(value).is_some()),
-            (self.player != PlayerChoice::Automatic).then(|| self.player.write()),
+                .is_none_or(|value| read_how(value).is_some()),
+            (self.player != HowToPlay::Auto).then(|| write_how(self.player)),
         );
         (!object.is_empty()).then_some(Value::Object(object))
     }
@@ -347,29 +345,42 @@ mod tests {
 
     #[test]
     fn the_player_is_automatic_unless_set() {
-        assert_eq!(PlaybackSettings::default().player, PlayerChoice::Automatic);
+        assert_eq!(PlaybackSettings::default().player, HowToPlay::Auto);
         let always = read(r#"{"player": "always_app_engine"}"#);
-        assert_eq!(always.player, PlayerChoice::AlwaysAppEngine);
+        assert_eq!(always.player, HowToPlay::AppEngine);
         assert_eq!(always.write().unwrap()["player"], "always_app_engine");
         let mut automatic = always.clone();
-        automatic.player = PlayerChoice::Automatic;
+        automatic.player = HowToPlay::Auto;
         automatic.changed_from(&always);
         // Automatic is the default, left out of the file.
         assert_eq!(automatic.write(), None);
         let mut set = PlaybackSettings {
-            player: PlayerChoice::AlwaysAppEngine,
+            player: HowToPlay::AppEngine,
             ..PlaybackSettings::default()
         };
         set.changed_from(&PlaybackSettings::default());
         assert_eq!(set.write().unwrap()["player"], "always_app_engine");
         // A value this version cannot read reads as "Automatic" and is kept until changed here.
         let odd = read(r#"{"player": "always_native"}"#);
-        assert_eq!(odd.player, PlayerChoice::Automatic);
+        assert_eq!(odd.player, HowToPlay::Auto);
         assert_eq!(odd.write().unwrap()["player"], "always_native");
         let mut changed = odd.clone();
-        changed.player = PlayerChoice::AlwaysAppEngine;
+        changed.player = HowToPlay::AppEngine;
         changed.changed_from(&odd);
         assert_eq!(changed.write().unwrap()["player"], "always_app_engine");
+        // Every "How to play" value reads back as written.
+        for how in HowToPlay::ALL {
+            let mut set = PlaybackSettings {
+                player: how,
+                ..PlaybackSettings::default()
+            };
+            set.changed_from(&PlaybackSettings::default());
+            let written = set
+                .write()
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "{}".into());
+            assert_eq!(read(&written).player, how, "{how:?}");
+        }
     }
 
     #[test]

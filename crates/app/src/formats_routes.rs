@@ -9,11 +9,11 @@
 //! engine plays keep what the server does with them (ADR 0021).
 
 use current_model::{
-    AudioFacts, Codec, Container, MediaSource, MediaStream, Route, RouteReason, StreamKind,
-    SubtitleChoice, SubtitleFormat, TrackChoice, VideoFacts, VideoRangeType,
+    AudioFacts, Codec, Container, HowToPlay, MediaSource, MediaStream, Route, RouteReason,
+    StreamKind, SubtitleChoice, SubtitleFormat, TrackChoice, VideoFacts, VideoRangeType,
 };
 use current_playback::route::local_routes;
-use current_playback::{DisplayKind, EnginePreference, EngineProfile, Engines, RouteContext};
+use current_playback::{DisplayKind, EngineProfile, Engines, RouteContext};
 
 use crate::formats::{
     AUDIO, CONTAINERS, FormatAction, FormatRow, FormatSupport, FormatTabKind, HDR, SUBTITLES,
@@ -21,12 +21,12 @@ use crate::formats::{
 };
 use crate::player::{CodecAnswer, DisplayFacts, windows_engine};
 
-/// Windows' own player beside the app engine: the UI's answers to [`crate::player::windows_codec_queries`], and whether the "Player"
-/// setting is "Always use the app engine".
+/// Windows' own player beside the app engine: the UI's answers to [`crate::player::windows_codec_queries`], and Settings' "How to
+/// play".
 #[derive(Clone, Copy, Debug)]
 pub struct NativeFacts<'a> {
     pub answers: &'a [CodecAnswer],
-    pub always_app_engine: bool,
+    pub how: HowToPlay,
 }
 
 /// A Store extension Windows' player needs for a codec: the CodecQuery subtype that finds its decoder (as
@@ -110,18 +110,19 @@ pub fn apply_routes(
             Some(_) => DisplayKind::Sdr,
             None => DisplayKind::Unknown,
         },
-        preference: if native.always_app_engine {
-            EnginePreference::AlwaysAppEngine
-        } else {
-            EnginePreference::Automatic
-        },
-        app_engine_chosen: false,
+        how: native.how,
+        chosen_here: false,
         speed_not_supported: false,
     };
-    if native.always_app_engine {
-        page.description.push_str(
-            " Settings is set to always use the app engine, so nothing plays in Windows' player.",
-        );
+    match native.how {
+        HowToPlay::AppEngine => page.description.push_str(
+            " Settings say to play with the app engine, so nothing plays in Windows' player.",
+        ),
+        HowToPlay::ServerRemux | HowToPlay::ServerTranscode => page.description.push_str(
+            " Settings say to play the server's stream, so the server streams every file; the rows say what each player plays from \
+             a file.",
+        ),
+        _ => {}
     }
     for tab in &mut page.tabs {
         for row in &mut tab.rows {
@@ -537,7 +538,11 @@ mod tests {
             &caps,
             NativeFacts {
                 answers,
-                always_app_engine: always,
+                how: if always {
+                    HowToPlay::AppEngine
+                } else {
+                    HowToPlay::Auto
+                },
             },
             display.as_ref(),
         );
@@ -785,10 +790,9 @@ mod tests {
     #[test]
     fn the_setting_always_app_engine_keeps_every_row_off_windows_player() {
         let page = page(FULL, Some(true), true);
-        assert!(
-            page.description
-                .ends_with("so nothing plays in Windows' player.")
-        );
+        assert!(page.description.ends_with(
+            "Settings say to play with the app engine, so nothing plays in Windows' player."
+        ));
         assert!(
             page.tabs
                 .iter()
@@ -798,6 +802,30 @@ mod tests {
         assert_eq!(
             row(&page, FormatTabKind::Video, "HEVC (H.265)").support_label,
             "App engine"
+        );
+    }
+
+    #[test]
+    fn how_to_play_at_a_server_step_says_the_server_streams_every_file() {
+        let caps = app();
+        let display = display(true);
+        let mut page = supported_formats(&EngineReport::Ready(caps.clone()), None, Some(&display));
+        let answers = answers(FULL);
+        apply_routes(
+            &mut page,
+            &caps,
+            NativeFacts {
+                answers: &answers,
+                how: HowToPlay::ServerTranscode,
+            },
+            Some(&display),
+        );
+        assert!(
+            page.description.contains(
+                "Settings say to play the server's stream, so the server streams every file"
+            ),
+            "{}",
+            page.description
         );
     }
 

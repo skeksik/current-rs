@@ -47,6 +47,7 @@ pub fn request(
         tracks,
         quality,
         direct_play,
+        force_video_transcode: false,
     }
 }
 
@@ -135,6 +136,7 @@ pub fn plan(
         }
         route
     };
+    mark_choice(&mut reasons, &route, inputs.context);
     Some(Planned {
         plan: PlaybackPlan {
             item: item.clone(),
@@ -209,6 +211,20 @@ fn action(direct: bool) -> StreamAction {
         StreamAction::Copy
     } else {
         StreamAction::Transcode
+    }
+}
+
+/// "How to play" in the reasons (ADR 0025, choice 3 as amended): a route at the chosen step says it was chosen (in the player or in
+/// Settings); one below it says the chosen step could not play this, before the reasons that say why. A route a failure moved down
+/// to says that instead ([`RouteReason::PREVIOUS_ROUTE_FAILED`]). Nothing with Auto.
+pub(crate) fn mark_choice(reasons: &mut Vec<RouteReason>, route: &Route, context: RouteContext) {
+    let (Some(step), Some(chosen)) = (context.how.step(), context.chosen_reason()) else {
+        return;
+    };
+    if route.step() == step {
+        reasons.insert(0, chosen);
+    } else if route.step() > step && !reasons.contains(&RouteReason::PREVIOUS_ROUTE_FAILED) {
+        reasons.insert(0, RouteReason::CHOSEN_ROUTE_UNAVAILABLE);
     }
 }
 
