@@ -262,6 +262,24 @@
                                 IsEnabled="False"
                                 Toggled="OnAutoSkipToggled" />
                         </toolkit:SettingsCard>
+                        <!-- How to play (ADR 0025, choice 3 as amended; owner, 2026-10-31): Auto, or the way every item starts with,
+                             falling back only to the ways below it; the player's Quality menu sets it for the item playing. No remux
+                             on the device on Windows (departure 1). A ComboBox in a SettingsCard, as the theme's above. Icon: Segoe
+                             Fluent Icons E768 "Play" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read
+                             2026-10-31). -->
+                        <toolkit:SettingsCard
+                            Header="How to play"
+                            Description="Auto picks the best way for each file. Another choice starts there and falls back only to the ways below it"
+                            AutomationProperties.Name="How to play">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xE768;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                            <ComboBox
+                                x:Name="HowToPlayBox"
+                                AutomationProperties.Name="How to play"
+                                IsEnabled="False"
+                                SelectionChanged="OnHowToPlayChanged" />
+                        </toolkit:SettingsCard>
                         <!-- Preferred quality (owner, 2026-10-27; ADR 0019, choice 10 as amended): Original or a step of the quality
                              menu; each item plays at the highest entry of its own menu not above it. The two switches below decide
                              which entries the list shows and how they are named, as they do for the player's menu. A ComboBox in a
