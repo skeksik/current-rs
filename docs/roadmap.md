@@ -316,7 +316,7 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       the previous play shown after Off → German (W7 §10, §13)
 - [x] "How to play" (owner, 2026-10-31; W7 §9, proposal 2; feat/how-to-play-core #128, feat/how-to-play-ffi #129,
       feat/how-to-play-windows): Auto, Native, Remux, App engine, Transcode, set globally in Settings →
-      Playback and for the current playback in the player; a route the file cannot use falls to the next supported one below it
+      Playback and for the current playback in the player (its own button next to Quality, owner 2026-10-31); a route the file cannot use falls to the next supported one below it
       (native → remux → app engine → server), and a chosen value does not switch back automatically. Replaces "Player" (Automatic,
       Always app engine) and "Play with app engine", which the core and the C# adapters have and the Windows app never showed.
       Amends ADR 0025 choice 3 with the owner's words; open points in the W7 notes

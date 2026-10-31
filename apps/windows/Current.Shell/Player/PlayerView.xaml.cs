@@ -421,6 +421,7 @@ public sealed partial class PlayerView : UserControl
             PlayPauseGlyph.Glyph = playing ? "" : "";
             SetName(PlayPauseButton, playing ? "Pause" : "Play");
             ShowPosition(state);
+            ShowHowToPlay(state);
             // Not under the user's hand: their change is on its way to the core.
             if (VolumeSlider.FocusState == FocusState.Unfocused)
             {
@@ -1042,23 +1043,21 @@ public sealed partial class PlayerView : UserControl
             item.Click += (_, _) => Long(ct => _session?.SetQualityAsync(chosen, ct) ?? Task.CompletedTask);
             QualityMenu.Items.Add(item);
         }
-        FillHowToPlay(core);
     }
 
     /// <summary>
-    /// "How to play" for the item playing (ADR 0025, choice 3 as amended; owner, 2026-10-31): a submenu of the Quality menu with the
-    /// choices the core says are possible for this file (Auto first), the one in use checked. A choice re-plans at the position at
-    /// once and holds for this item only; Settings → Playback sets it for every item. Nothing to choose, no submenu.
+    /// "How to play" for the item playing (ADR 0025, choice 3 as amended; owner, 2026-10-31): the button's menu lists the choices the
+    /// core says are possible for this file (Auto first), the one in use checked. A choice re-plans at the position at once and holds
+    /// for this item only; Settings → Playback sets it for every item.
     /// </summary>
-    private void FillHowToPlay(CoreHost core)
+    private void OnHowToPlayMenuOpening(object sender, object e)
     {
-        var state = State;
-        if (state.HowToPlayChoices.Count < 2)
+        HowToPlayMenu.Items.Clear();
+        if (App.Core is not { } core)
         {
             return;
         }
-        QualityMenu.Items.Add(new MenuFlyoutSeparator());
-        var menu = new MenuFlyoutSubItem { Text = "How to play" };
+        var state = State;
         foreach (var choice in state.HowToPlayChoices)
         {
             var item = new RadioMenuFlyoutItem
@@ -1069,9 +1068,19 @@ public sealed partial class PlayerView : UserControl
             };
             var chosen = choice;
             item.Click += (_, _) => Long(ct => _session?.ChooseHowToPlayAsync(chosen, ct) ?? Task.CompletedTask);
-            menu.Items.Add(item);
+            HowToPlayMenu.Items.Add(item);
         }
-        QualityMenu.Items.Add(menu);
+    }
+
+    /// <summary>The button shows only with something to choose; its name and tool tip say the choice in use ("How to play: Auto").</summary>
+    private void ShowHowToPlay(PlayerState state)
+    {
+        var choosable = state.HowToPlayChoices.Count > 1;
+        HowToPlayButton.Visibility = choosable ? Visibility.Visible : Visibility.Collapsed;
+        if (choosable && App.Core is { } core)
+        {
+            SetName(HowToPlayButton, core.HowToPlayButtonName(state.HowToPlay));
+        }
     }
 
     // Playback info ----------------------------------------------------------------------------------------------------------------
