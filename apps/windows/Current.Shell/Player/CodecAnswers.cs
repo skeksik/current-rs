@@ -8,7 +8,8 @@ namespace Current.Shell.Player;
 /// The UI's answers to the core's decoder questions (<see cref="PlatformEngineHost.WindowsCodecQueries"/>), asked before a player
 /// opens with Windows' own player (ADR 0025, W4): <c>CodecQuery.FindAllAsync(kind, CodecCategory.Decoder, subtype)</c> per question,
 /// which returns one entry per installed decoder and none when a Store extension is missing, and works unpackaged (W1 §3,
-/// docs/notes/windows-native-player.md). The subtype is the value of the <c>CodecSubtypes</c> property the core names (CodecSubtypes
+/// docs/notes/windows-native-player.md). Each answer carries the entries' <c>DisplayName</c>s, and the core decides which decode (W7 §4:
+/// Windows' own IEC 61937 converter is returned for AC-3 and E-AC-3 and decodes nothing). The subtype is the value of the <c>CodecSubtypes</c> property the core names (CodecSubtypes
 /// Class, learn.microsoft.com, ms.date 2017-02-08, read 2026-10-29: every name below is listed there), except AV1's, asked for by its
 /// FOURCC (below). A name not in that list, or a query that fails, answers 0 decoders: the codec then plays on libmpv. Asked once per
 /// app run, in parallel, off the UI thread.
@@ -53,16 +54,19 @@ internal static class CodecAnswers
                 if (Subtype(ask.Subtype) is not { } subtype)
                 {
                     Trace.TraceWarning($"Current: no CodecSubtypes property for {ask.Subtype}");
-                    return new CodecQueryAnswer(ask.Subtype, 0);
+                    return new CodecQueryAnswer(ask.Subtype, []);
                 }
                 var kind = ask.Kind == CodecQueryKind.Audio ? CodecKind.Audio : CodecKind.Video;
                 var found = await query.FindAllAsync(kind, CodecCategory.Decoder, subtype);
-                return new CodecQueryAnswer(ask.Subtype, (uint)found.Count);
+                var names = found.Select(codec => codec.DisplayName).ToList();
+                // Codec names only (no path, no user data), for the device check.
+                Trace.TraceInformation($"Current: CodecQuery {ask.Subtype}: {string.Join("; ", names)}");
+                return new CodecQueryAnswer(ask.Subtype, names);
             }
             catch (Exception error)
             {
                 Trace.TraceError($"Current: CodecQuery for {ask.Subtype} failed: {error.GetType().Name}");
-                return new CodecQueryAnswer(ask.Subtype, 0);
+                return new CodecQueryAnswer(ask.Subtype, []);
             }
         }));
         return answers;

@@ -247,9 +247,9 @@ internal static class SmokeRun
             return;
         }
         var answers = await CodecAnswers.GetAsync();
-        uint Decoders(string subtype) => answers.FirstOrDefault(answer => answer.Subtype == subtype)?.Decoders ?? 0;
+        int Decoders(string subtype) => answers.FirstOrDefault(answer => answer.Subtype == subtype)?.Decoders.Count ?? 0;
         var h264 = Decoders("VideoFormatH264");
-        Console.WriteLine($"     CodecQuery: {answers.Count(answer => answer.Decoders > 0)} of {answers.Count} asked for have a decoder");
+        Console.WriteLine($"     CodecQuery: {answers.Count(answer => answer.Decoders.Count > 0)} of {answers.Count} asked for have a decoder");
         if (h264 == 0)
         {
             Console.WriteLine("skip native playback: CodecQuery finds no H.264 decoder on this machine");

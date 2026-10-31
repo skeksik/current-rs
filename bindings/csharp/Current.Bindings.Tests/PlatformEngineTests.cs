@@ -17,7 +17,9 @@ internal static class PlatformEngineTests
         PlatformEngineHost.WindowsCodecQueries()
             .Select(ask => new CodecQueryAnswer(
                 ask.Subtype,
-                ask.Subtype is "VideoFormatH264" or "VideoFormatHevc" or "AudioFormatAac" ? 1u : 0u))
+                ask.Subtype is "VideoFormatH264" or "VideoFormatHevc" or "AudioFormatAac"
+                    ? new[] { "A decoder" }
+                    : Array.Empty<string>()))
             .ToArray();
 
     /// <summary>Records what the core asks, and reports when the test says so. Throws from every call when asked to.</summary>
