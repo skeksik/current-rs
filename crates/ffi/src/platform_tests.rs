@@ -204,7 +204,7 @@ fn a_platform_engine_plays_through_the_bridge_and_hands_over_on_a_failed_track()
         lines[..3],
         [
             "App engine",
-            "• Native could not start.",
+            "• The native player could not start the file.",
             "• The previous playback route could not start."
         ]
     );

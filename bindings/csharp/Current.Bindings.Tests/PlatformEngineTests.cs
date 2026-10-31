@@ -141,7 +141,7 @@ internal static class PlatformEngineTests
             Check(session.State.Value.Route!.Engine == RouteEngine.App, "libmpv's (the test engine's) surface");
             Check(engine.Calls.Contains("stop"), "the platform engine let the file go");
             lines = await session.PlaybackInfoLinesAsync(null, Panel);
-            Check(lines[0] == "App engine" && lines[1] == "• Native could not start.", $"the failed route named, not {string.Join(" | ", lines)}");
+            Check(lines[0] == "App engine" && lines[1] == "• The native player could not start the file.", $"the failed route named, not {string.Join(" | ", lines)}");
         }
         finally
         {

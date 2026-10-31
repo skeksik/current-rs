@@ -401,6 +401,9 @@ open_value! {
         HDR_ON_SDR_DISPLAY = "hdr_on_sdr_display",
         /// Current's (ADR 0025): the native engine ignores the speed chosen with this track.
         SPEED_NOT_SUPPORTED = "speed_not_supported",
+        /// Current's (ADR 0025, "Track changes"): a track change kept the file on its route although an earlier one in the order
+        /// would play it now (a track the engine plays does not move the file).
+        ROUTE_KEPT = "route_kept",
     }
 }
 
