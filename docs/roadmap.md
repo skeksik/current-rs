@@ -314,8 +314,9 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       a cue placed high in the canvas is outside the window; centre the canvas on the picture (W7 §11)
 - [ ] Native subtitle cues outlive a track or presentation change: an external WebVTT cue stuck on screen for 25 s, and a cue from
       the previous play shown after Off → German (W7 §10, §13)
-- [ ] "How to play" (owner, 2026-10-31; W7 §9, proposal 2): Auto, Native, Remux, App engine, Transcode, set globally in Settings →
-      Playback and for the current playback in the player; a route the file cannot use falls to the next supported one below it
+- [x] "How to play" (owner, 2026-10-31; W7 §9, proposal 2; feat/how-to-play-core #128, feat/how-to-play-ffi #129,
+      feat/how-to-play-windows): Auto, Native, Remux, App engine, Transcode, set globally in Settings →
+      Playback and for the current playback in the player (its own button next to Quality, owner 2026-10-31); a route the file cannot use falls to the next supported one below it
       (native → remux → app engine → server), and a chosen value does not switch back automatically. Replaces "Player" (Automatic,
       Always app engine) and "Play with app engine", which the core and the C# adapters have and the Windows app never showed.
       Amends ADR 0025 choice 3 with the owner's words; open points in the W7 notes
@@ -327,7 +328,7 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
 - [ ] Supported formats rows after W7: MOV (says app engine; MP4 files reach the core as `mov` and play natively), Dolby Vision 5 and
       8 ("Not checked on a device yet": checked in W1 and W7), MPEG-2 and MP3 (now seen natively), MPEG-4 Part 2 (Windows has a
       decoder, no row) (W7 §20)
-- [ ] Settings to turn off switching back to Windows' player, per situation (owner, 2026-10-29). A switch to libmpv still happens
+- [x] Settings to turn off switching back to Windows' player, per situation (owner, 2026-10-29). A switch to libmpv still happens
       when it must (a speed Windows' player ignores, PQ video on an SDR display, ADR 0025); with the setting off for that situation,
       the file stays on libmpv when the cause goes away (the speed back to normal, the window back on an HDR display) instead of
       moving back. The owner's answer after W7 (2026-10-31): "Setting to lock the supported player for current playback (native,
