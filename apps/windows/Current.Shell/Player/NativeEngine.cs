@@ -323,6 +323,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
             file.PendingSeek = position;
             return;
         }
+        // The cues shown are of the old position; those of the new one are read again once the seek completes.
         _subtitles.Clear();
         Seek(file, position);
     });
@@ -725,6 +726,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         {
             return;
         }
+        ShowActiveCues(file);
         _windowTimer.Stop();
         _windowTimer.Start();
     }
@@ -736,6 +738,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
             return;
         }
         ReportPosition(file);
+        ShowActiveCues(file);
         Report(file.Generation, new PlatformEngineEvent.Restarted());
     }
 
@@ -774,6 +777,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         var session = Player.PlaybackSession;
         var position = session.Position;
         Report(file.Generation, new PlatformEngineEvent.Position(position));
+        _subtitles.Expire(position);
         var ahead = BufferedAhead(session, position);
         if (ahead is { } buffered)
         {
@@ -988,6 +992,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
             return;
         }
         var target = file.Subtitle is PlatformTrack.Stream stream ? TrackFor(file, stream.Index) : null;
+        var changed = false;
         for (var i = 0; i < item.TimedMetadataTracks.Count; i++)
         {
             var mode = ReferenceEquals(item.TimedMetadataTracks[i], target)
@@ -996,14 +1001,23 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
             if (item.TimedMetadataTracks.GetPresentationMode((uint)i) != mode)
             {
                 item.TimedMetadataTracks.SetPresentationMode((uint)i, mode);
+                changed = true;
             }
         }
-        if (!ReferenceEquals(file.Shown, target))
+        // Any change of what is presented (a track switch, Off, a track turned on again) starts from nothing: no cue of a track no
+        // longer presented stays, and the cues of the one presented now are read again (W7 §13: a cue from that track's previous
+        // presentation was shown after Off and back).
+        if (changed || !ReferenceEquals(file.Shown, target))
         {
             file.Shown = target;
             _subtitles.Clear();
+            if (target is not null)
+            {
+                HookCues(file, target);
+                ShowActiveCues(file);
+            }
         }
-        if (target is not null)
+        else if (target is not null)
         {
             HookCues(file, target);
         }
@@ -1043,11 +1057,12 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         {
             var key = $"{prefix}:{CueKey(args.Cue)}";
             var start = args.Cue.StartTime;
+            var end = EndOf(args.Cue);
             switch (args.Cue)
             {
                 case TimedTextCue text:
                     var lines = text.Lines.Select(ToLine).ToList();
-                    FromItem(file, () => Show(file, track, () => _subtitles.ShowText(key, start, lines)));
+                    FromItem(file, () => Show(file, track, start, end, () => _subtitles.ShowText(key, start, end, lines)));
                     break;
                 case ImageCue image when image.SoftwareBitmap is { } bitmap:
                     var copy = ForOverlay(bitmap);
@@ -1057,12 +1072,12 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
                     // The overlay owns the copy once shown; every way it is not shown disposes it here.
                     var queued = _ui.TryEnqueue(() =>
                     {
-                        if (_disposed || _file != file || !ReferenceEquals(file.Shown, track))
+                        if (_disposed || _file != file || !Showable(file, track, start, end))
                         {
                             copy.Dispose();
                             return;
                         }
-                        _subtitles.ShowImage(key, copy, placement);
+                        _subtitles.ShowImage(key, start, end, copy, placement);
                     });
                     if (!queued)
                     {
@@ -1130,11 +1145,59 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     private string CueKey(IMediaCue cue) =>
         _cueKeys.GetValue(cue, _ => Interlocked.Increment(ref _cueCount).ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-    private static void Show(NativeFile file, TimedMetadataTrack track, Action show)
+    /// <summary>Shows a cue only while its track is the one presented and the position is within the cue's time: a cue event handed
+    /// to the UI thread late (an enter after its exit, or one from the track's previous presentation) shows nothing.</summary>
+    private void Show(NativeFile file, TimedMetadataTrack track, TimeSpan start, TimeSpan end, Action show)
     {
-        if (ReferenceEquals(file.Shown, track))
+        if (Showable(file, track, start, end))
         {
             show();
+        }
+    }
+
+    private bool Showable(NativeFile file, TimedMetadataTrack track, TimeSpan start, TimeSpan end) =>
+        ReferenceEquals(file.Shown, track) && SubtitleOverlay.Holds(start, end, Player.PlaybackSession.Position);
+
+    /// <summary>A cue's end; a PGS cue's Duration is the maximum (W1 §6), which would overflow.</summary>
+    private static TimeSpan EndOf(IMediaCue cue) =>
+        cue.Duration >= TimeSpan.MaxValue - cue.StartTime ? TimeSpan.MaxValue : cue.StartTime + cue.Duration;
+
+    /// <summary>The text cues active now on the track presented (<c>TimedMetadataTrack.ActiveCues</c>: "the list of media cues in the
+    /// TimedMetadataTrack that are currently active", learn.microsoft.com, ms.date 2017-02-08, read 2026-10-31), shown again after the
+    /// view was cleared for a track change or a seek, with the keys their exits will have. Image cues are left to their next cue:
+    /// converting each active one again costs a full-canvas copy, and PGS cues stay active until the next (W1 §6).</summary>
+    /// <remarks>Only once a frame has shown (<see cref="Shown"/> reads them then): <see cref="ApplySubtitle"/> also runs from
+    /// <see cref="Opened"/>, before <c>Play</c>, and anything that throws there ends the open without playing (CI's smoke run: the
+    /// second play, opened again with its subtitle file, never played after <c>ActiveCues</c> was read from <see cref="Opened"/>;
+    /// that <c>ActiveCues</c> threw is inferred, not traced). It never throws: a failure is logged by its type and the cues come
+    /// with their next enter.</remarks>
+    private void ShowActiveCues(NativeFile file)
+    {
+        if (!file.Started || file.Shown is not { } track)
+        {
+            return;
+        }
+        var prefix = file.CueTracks.FindIndex(hooked => ReferenceEquals(hooked, track)) + 1;
+        if (prefix == 0)
+        {
+            return;
+        }
+        try
+        {
+            foreach (var cue in track.ActiveCues)
+            {
+                if (cue is TimedTextCue text)
+                {
+                    var start = text.StartTime;
+                    var end = EndOf(text);
+                    var lines = text.Lines.Select(ToLine).ToList();
+                    Show(file, track, start, end, () => _subtitles.ShowText($"{prefix}:{CueKey(text)}", start, end, lines));
+                }
+            }
+        }
+        catch (Exception error)
+        {
+            Trace.TraceWarning($"Current: the native engine could not read the active cues: {error.GetType().Name}");
         }
     }
 
