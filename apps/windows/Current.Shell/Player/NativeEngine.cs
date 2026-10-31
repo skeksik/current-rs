@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Current.Bindings;
 using Microsoft.UI.Dispatching;
 using Windows.Graphics.Imaging;
@@ -122,6 +123,8 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     private (NativeFile File, uint Index)? _late;
     /// <summary>Gives each cue its own key (two cues may share a start and an empty Id).</summary>
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<IMediaCue, string> _cueKeys = new();
+    /// <summary>1 once an image cue's format was logged (<see cref="ForOverlay"/>).</summary>
+    private static int _imageCueLogged;
     private long _cueCount;
     /// <summary>The file open in the player; UI thread only.</summary>
     private NativeFile? _file;
@@ -1008,7 +1011,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
                     FromItem(file, () => Show(file, track, () => _subtitles.ShowText(key, start, lines)));
                     break;
                 case ImageCue image when image.SoftwareBitmap is { } bitmap:
-                    var copy = SoftwareBitmap.Convert(bitmap, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+                    var copy = ForOverlay(bitmap);
                     var placement = new SubtitlePlacement(image.Position.X, image.Position.Y,
                         image.Position.Unit == TimedTextUnit.Percentage, image.Extent.Width, image.Extent.Height,
                         image.Extent.Unit == TimedTextUnit.Percentage);
@@ -1044,6 +1047,44 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
                 track.CueExited -= exited;
             });
         }
+    }
+
+    /// <summary>
+    /// An image cue's bitmap as the overlay shows it: a copy in premultiplied BGRA, the format a SoftwareBitmap shown in XAML must have
+    /// ("A SoftwareBitmap displayed in a XAML app must be in BGRA pixel format with pre-multiplied alpha values", SoftwareBitmapSource
+    /// Class, Remarks, learn.microsoft.com, ms.date 2017-02-08, read 2026-10-31). W1 §6 saw PGS cues arrive as <c>Bgra8</c>
+    /// premultiplied, yet W7 §11 saw a cue FFmpeg and libmpv draw yellow (255, 215, 0) shown cyan: red and blue swapped, with nothing
+    /// in our path but this copy. So a cue that says <c>Bgra8</c> carries its pixels in RGBA order, and its red and blue are swapped
+    /// here; any other format is left to <c>SoftwareBitmap.Convert</c>. Why Media Foundation labels it so is not known (not verified:
+    /// seen with Windows 11 build 26300 only). The format is logged for the device check.
+    /// </summary>
+    private static SoftwareBitmap ForOverlay(SoftwareBitmap cue)
+    {
+        var format = cue.BitmapPixelFormat;
+        var copy = SoftwareBitmap.Convert(cue, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+        if (Interlocked.Exchange(ref _imageCueLogged, 1) == 0)
+        {
+            Trace.TraceInformation($"Current: native image cue {cue.PixelWidth}x{cue.PixelHeight}, {format}, {cue.BitmapAlphaMode}");
+        }
+        if (format == BitmapPixelFormat.Bgra8)
+        {
+            SwapRedAndBlue(copy);
+        }
+        return copy;
+    }
+
+    /// <summary>Swaps the first and third byte of every 4-byte pixel. Premultiplied alpha stays right: both channels were multiplied by
+    /// the same alpha.</summary>
+    private static void SwapRedAndBlue(SoftwareBitmap bitmap)
+    {
+        var bytes = new byte[4 * bitmap.PixelWidth * bitmap.PixelHeight];
+        var buffer = bytes.AsBuffer();
+        bitmap.CopyToBuffer(buffer);
+        for (var i = 0; i + 3 < bytes.Length; i += 4)
+        {
+            (bytes[i], bytes[i + 2]) = (bytes[i + 2], bytes[i]);
+        }
+        bitmap.CopyFromBuffer(buffer);
     }
 
     /// <summary>The same key for a cue's enter and exit, and a different one for every cue.</summary>
