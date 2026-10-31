@@ -365,9 +365,16 @@ public sealed partial class SettingsPage : Page
             HowToPlayBox.Items.Add(core.HowToPlayName(choice));
         }
         var current = core.PlaybackSettings().HowToPlay;
-        HowToPlayBox.SelectedIndex = _howToPlayChoices
-            .Select((choice, index) => (choice, index))
-            .FirstOrDefault(entry => entry.choice == current, (HowToPlay.Auto, 0)).index;
+        var selected = 0;
+        for (var i = 0; i < _howToPlayChoices.Count; i++)
+        {
+            if (_howToPlayChoices[i] == current)
+            {
+                selected = i;
+                break;
+            }
+        }
+        HowToPlayBox.SelectedIndex = selected;
         _showingHowToPlay = false;
     }
 
