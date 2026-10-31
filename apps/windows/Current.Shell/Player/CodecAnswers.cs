@@ -58,9 +58,8 @@ internal static class CodecAnswers
                 }
                 var kind = ask.Kind == CodecQueryKind.Audio ? CodecKind.Audio : CodecKind.Video;
                 var found = await query.FindAllAsync(kind, CodecCategory.Decoder, subtype);
+                // The names go to the core only, never to the log.
                 var names = found.Select(codec => codec.DisplayName).ToList();
-                // Codec names only (no path, no user data), for the device check.
-                Trace.TraceInformation($"Current: CodecQuery {ask.Subtype}: {string.Join("; ", names)}");
                 return new CodecQueryAnswer(ask.Subtype, names);
             }
             catch (Exception error)
