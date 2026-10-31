@@ -726,6 +726,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         {
             return;
         }
+        ShowActiveCues(file);
         _windowTimer.Stop();
         _windowTimer.Start();
     }
@@ -1165,9 +1166,14 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     /// TimedMetadataTrack that are currently active", learn.microsoft.com, ms.date 2017-02-08, read 2026-10-31), shown again after the
     /// view was cleared for a track change or a seek, with the keys their exits will have. Image cues are left to their next cue:
     /// converting each active one again costs a full-canvas copy, and PGS cues stay active until the next (W1 §6).</summary>
+    /// <remarks>Only once a frame has shown (<see cref="Shown"/> reads them then): <see cref="ApplySubtitle"/> also runs from
+    /// <see cref="Opened"/>, before <c>Play</c>, and anything that throws there ends the open without playing (CI's smoke run: the
+    /// second play, opened again with its subtitle file, never played after <c>ActiveCues</c> was read from <see cref="Opened"/>;
+    /// that <c>ActiveCues</c> threw is inferred, not traced). It never throws: a failure is logged by its type and the cues come
+    /// with their next enter.</remarks>
     private void ShowActiveCues(NativeFile file)
     {
-        if (file.Shown is not { } track)
+        if (!file.Started || file.Shown is not { } track)
         {
             return;
         }
@@ -1176,15 +1182,22 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         {
             return;
         }
-        foreach (var cue in track.ActiveCues)
+        try
         {
-            if (cue is TimedTextCue text)
+            foreach (var cue in track.ActiveCues)
             {
-                var start = text.StartTime;
-                var end = EndOf(text);
-                var lines = text.Lines.Select(ToLine).ToList();
-                Show(file, track, start, end, () => _subtitles.ShowText($"{prefix}:{CueKey(text)}", start, end, lines));
+                if (cue is TimedTextCue text)
+                {
+                    var start = text.StartTime;
+                    var end = EndOf(text);
+                    var lines = text.Lines.Select(ToLine).ToList();
+                    Show(file, track, start, end, () => _subtitles.ShowText($"{prefix}:{CueKey(text)}", start, end, lines));
+                }
             }
+        }
+        catch (Exception error)
+        {
+            Trace.TraceWarning($"Current: the native engine could not read the active cues: {error.GetType().Name}");
         }
     }
 
