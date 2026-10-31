@@ -75,8 +75,9 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     /// How long an HLS stream may take to show its first segment after a load or a seek outside what is buffered, before the file is
     /// reported Failed and the core moves it on (to libmpv). W1 §7: a far seek into a server's remux waited more than 20 s for the
     /// first segment, and Media Foundation gave up after about 10–12 s with <c>MF_E_NET_TIMEOUT</c> (0xC00D4278) and asked again; 8 s
-    /// comes before that (ADR 0025, caveat for W4). The segment has come when the position moves while playing, or a buffered range
-    /// reaches past the position (paused).
+    /// comes before that (ADR 0025, caveat for W4). The segment has come only when the position moves while playing. While paused, a
+    /// buffered range reaching past the position stops the clock but not the wait, and the next play starts the deadline again: W7 §8
+    /// saw a server stream loaded while paused report a buffered range and then never play, with no deadline left to end it.
     /// </summary>
     internal static readonly TimeSpan HlsFirstSegmentDeadline = TimeSpan.FromSeconds(8);
 
@@ -293,7 +294,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     protected override void SetPaused(bool paused) => Post(() =>
     {
         _paused = paused;
-        if (_file is { Opened: true, Failed: false })
+        if (_file is { Opened: true, Failed: false } file)
         {
             if (paused)
             {
@@ -301,6 +302,12 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
             }
             else
             {
+                // A wait that a buffered range held while paused: only playing shows whether the segment has come.
+                if (file.AwaitingSegment)
+                {
+                    _deadlineTimer.Stop();
+                    _deadlineTimer.Start();
+                }
                 Player.Play();
             }
         }
@@ -661,6 +668,10 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         {
             Player.Play();
         }
+        // The state as it is now: a change that came before this file counted as opened was dropped, and Pause on a player that is
+        // already paused raises none. Without this a file loaded while paused never told the core it was shown, so the core stayed
+        // Loading and ignored the play that followed (W7 §8, seen on the owner's PC with a server stream).
+        StateChanged(file);
     }
 
     private void Ended(NativeFile file)
@@ -755,7 +766,8 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     }
 
     /// <summary>The position and the buffered range; and an HLS wait ends once the segment has come: the position moves while
-    /// playing, or a buffered range reaches past it.</summary>
+    /// playing. Paused, a buffered range past the position stops the deadline until the next play (<see
+    /// cref="HlsFirstSegmentDeadline"/>).</summary>
     private void ReportPosition(NativeFile file)
     {
         var session = Player.PlaybackSession;
@@ -766,11 +778,20 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         {
             Report(file.Generation, new PlatformEngineEvent.Buffered(buffered));
         }
-        if (file.AwaitingSegment
-            && ((session.PlaybackState == MediaPlaybackState.Playing && position > file.AwaitedFrom) || ahead > TimeSpan.Zero))
+        if (!file.AwaitingSegment)
+        {
+            return;
+        }
+        if (session.PlaybackState == MediaPlaybackState.Playing && position > file.AwaitedFrom)
         {
             file.AwaitingSegment = false;
             _deadlineTimer.Stop();
+            Trace.TraceInformation("Current: the native engine's HLS stream plays");
+        }
+        else if (_paused && ahead > TimeSpan.Zero && _deadlineTimer.IsRunning)
+        {
+            _deadlineTimer.Stop();
+            Trace.TraceInformation("Current: the native engine's HLS stream has data while paused; the deadline waits for play");
         }
     }
 

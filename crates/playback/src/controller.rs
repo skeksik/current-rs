@@ -1204,7 +1204,17 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
 
     /// The engine made no progress for [`STALL_TIMEOUT`]: it is stopped and playback fails, reported stopped with `Failed = true`.
     /// Nothing is retried by itself; playing the item again resumes at the reported position.
+    ///
+    /// On the native engine the stall is a failed route instead, and the file moves on as after the engine's own error (ADR 0025,
+    /// "Fallback on a failed start"): the relay reported no failure of the server, which it does at once while the player waits
+    /// ([`Controller::stream_failed`]), so the engine is what does not move. W7 (§8) saw Windows' player load a server stream while
+    /// paused and then never play it; the stall rule ended that in "The server can't be reached" with libmpv never tried.
     async fn stall(&mut self) {
+        if self.role() == EngineRole::Native {
+            self.engine_failed(current_model::EngineErrorKind::LOADING_FAILED)
+                .await;
+            return;
+        }
         self.playing().stop();
         self.fail(PlaybackProblem::Network).await;
     }

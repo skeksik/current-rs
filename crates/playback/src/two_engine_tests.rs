@@ -11,7 +11,8 @@ use current_model::{
     VideoRangeType,
 };
 
-use crate::controller::{Controller, NativeEngine};
+use crate::clock::Clock;
+use crate::controller::{Controller, NativeEngine, STALL_TIMEOUT};
 use crate::engine::{EndReason, EngineEvent, EngineTrack};
 use crate::engines::{DisplayKind, EnginePreference, PlatformRules};
 use crate::quality::QualityPreference;
@@ -137,6 +138,7 @@ struct Two {
     player: Controller<FakeEngine, FakeServer, FakeClock>,
     server: FakeServer,
     native: SharedEngine,
+    clock: FakeClock,
 }
 
 impl Two {
@@ -154,7 +156,7 @@ impl Two {
         let player = Controller::new(
             app,
             server.clone(),
-            clock,
+            clock.clone(),
             QualityPreference::default(),
             AutoSkip::off(),
         )
@@ -169,6 +171,7 @@ impl Two {
             player,
             server,
             native,
+            clock,
         }
     }
 
@@ -208,6 +211,18 @@ impl Two {
         self.event(EngineEvent::Ended(EndReason::Error(
             EngineErrorKind::DECODER_FAILED,
         )));
+    }
+
+    /// Moves the clock on by `by`, running every tick that falls due on the way, at its time.
+    fn wait(&mut self, by: Duration) {
+        let target = self.clock.now() + by;
+        while let Some(deadline) = self.player.next_deadline().filter(|due| *due <= target) {
+            let now = self.clock.now();
+            self.clock.advance(deadline.saturating_sub(now));
+            block_on(self.player.tick());
+        }
+        let now = self.clock.now();
+        self.clock.advance(target.saturating_sub(now));
     }
 
     fn plan(&self) -> PlaybackPlan {
@@ -826,4 +841,97 @@ fn a_failed_play_lets_the_engine_that_has_the_file_go() {
         PlayerState::Failed { .. }
     ));
     assert!(two.native_commands().contains(&Command::Stop));
+}
+
+#[test]
+fn a_native_engine_that_never_plays_a_stream_loaded_while_paused_is_a_failed_route() {
+    // W7 §8: paused natively, a lower quality loads the server's stream on Windows' player, still paused; on resume the engine
+    // buffers and never plays. After the stall timeout the file moves on to the app engine's stream at the position, as after the
+    // engine's own error, instead of failing as a network problem.
+    let mut two = Two::playing(movie());
+    let stream = || {
+        let mut answer = answer(
+            hls(StreamAction::Transcode, StreamAction::Transcode),
+            vec![RouteReason::CONTAINER_BITRATE_EXCEEDS_LIMIT],
+        );
+        answer.source = movie();
+        Ok(answer)
+    };
+    two.server.answer(stream());
+    two.server.answer(stream());
+    two.at(4);
+    block_on(two.player.pause());
+    block_on(
+        two.player
+            .set_quality(crate::quality::Quality::Bitrate(4_000_000)),
+    );
+    let native_stream = two.plan().route;
+    assert!(matches!(
+        native_stream,
+        Route::ServerStream {
+            engine: EngineRole::Native,
+            ..
+        }
+    ));
+    two.start();
+    assert_eq!(two.player.status().state, PlayerState::Paused);
+    // Paused, nothing is expected to move: no stall however long.
+    two.wait(secs(600));
+    assert_eq!(two.player.status().state, PlayerState::Paused);
+    two.clear();
+
+    block_on(two.player.resume());
+    assert_eq!(two.native_commands(), vec![Command::Paused(false)]);
+    two.event(EngineEvent::Buffering(true));
+    two.wait(STALL_TIMEOUT - secs(1));
+    assert_eq!(two.player.status().state, PlayerState::Buffering);
+    two.wait(secs(1));
+
+    let plan = two.plan();
+    assert!(matches!(
+        plan.route,
+        Route::ServerStream {
+            engine: EngineRole::App,
+            ..
+        }
+    ));
+    assert_eq!(plan.failed_routes, vec![native_stream]);
+    assert!(
+        plan.reasons
+            .contains(&RouteReason::FALLBACK_AFTER_ENGINE_ERROR)
+    );
+    assert_eq!(plan.start, secs(4));
+    assert!(two.native_commands().contains(&Command::Stop));
+    let app = two.app_commands();
+    assert_eq!(loads(&app).len(), 1);
+    assert_eq!(
+        app.last(),
+        Some(&Command::Paused(false)),
+        "playing, as the user asked"
+    );
+    assert_eq!(two.player.status().state, PlayerState::Loading);
+    let stops: Vec<_> = two
+        .server
+        .take_reports()
+        .into_iter()
+        .filter_map(|(_, report)| match report {
+            crate::test_support::Report::Stopped(stop) => Some(stop),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        stops.iter().all(|stop| !stop.failed),
+        "a moved file is not a failed play: {stops:?}"
+    );
+
+    // The app engine's stream is the last route: its stall fails as before.
+    two.start();
+    two.event(EngineEvent::Buffering(true));
+    two.wait(STALL_TIMEOUT);
+    assert_eq!(
+        two.player.status().state,
+        PlayerState::Failed {
+            problem: current_model::PlaybackProblem::Network
+        }
+    );
 }
