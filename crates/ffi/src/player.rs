@@ -14,9 +14,9 @@ use tokio::runtime::Handle;
 use crate::browse::ItemRef;
 use crate::cancel::{self, CancelToken};
 use crate::player_records::{
-    CompositionSize, DisplayFacts, NowPlayingSnapshot, PlaybackInfoSnapshot,
-    PlaybackSettingsSnapshot, PlayerChoiceKind, PlayerEngineKind, PlayerStateSnapshot,
-    QualityChoice, QualityOptionInfo, SubtitleSelection,
+    CompositionSize, DisplayFacts, HowToPlayKind, NowPlayingSnapshot, PlaybackInfoSnapshot,
+    PlaybackSettingsSnapshot, PlayerEngineKind, PlayerStateSnapshot, QualityChoice,
+    QualityOptionInfo, SubtitleSelection,
 };
 use crate::player_words::PanelSizes;
 use crate::subscribe::{self, LiveListeners};
@@ -227,13 +227,17 @@ impl Player {
         self.quick(PlayerAction::Stop)
     }
 
-    /// "Play with app engine" (ADR 0025, choice 3): the item playing moves to libmpv at the position, then the server if libmpv
-    /// cannot. Only this item. Nothing changes on a player with libmpv alone.
+    /// "How to play" for the item playing only (ADR 0025, choice 3 as amended): it re-plans at the position at once, Auto included; the
+    /// next item uses Settings'. Offer the state's `how_to_play_choices`. It replaces "Play with app engine" (`AppEngine`).
     ///
     /// # Errors
     /// [`CoreError::Cancelled`]; [`CoreError::Player`] with `Closed`.
-    pub async fn play_with_app_engine(&self, token: Arc<CancelToken>) -> Result<(), CoreError> {
-        long!(self, token, |player| player.play_with_app_engine())
+    pub async fn choose_how_to_play(
+        &self,
+        how: HowToPlayKind,
+        token: Arc<CancelToken>,
+    ) -> Result<(), CoreError> {
+        long!(self, token, |player| player.choose_how_to_play(how.into()))
     }
 
     /// Seeks past the segment under the position.
@@ -381,15 +385,15 @@ impl Core {
         )
     }
 
-    /// Settings → Playback → "Player": "Automatic" or "Always app engine". Saved at once on the core's blocking pool; it applies from
-    /// the next item played.
+    /// Settings → Playback → "How to play" (it replaces "Player"). Saved at once on the core's blocking pool; it applies from the next
+    /// item played.
     ///
     /// # Errors
     /// [`CoreError::Store`] if the settings could not be saved: the setting stands for this run.
-    pub async fn set_player_choice(&self, choice: PlayerChoiceKind) -> Result<(), CoreError> {
+    pub async fn set_how_to_play(&self, how: HowToPlayKind) -> Result<(), CoreError> {
         let app = self.app.clone();
         self.runtime
-            .spawn_blocking(move || app.set_how_to_play(choice.into()))
+            .spawn_blocking(move || app.set_how_to_play(how.into()))
             .await
             .map_err(|error| CoreError::Runtime {
                 message: error.to_string(),

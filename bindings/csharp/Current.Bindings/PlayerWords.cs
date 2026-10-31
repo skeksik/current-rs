@@ -48,6 +48,18 @@ public static class PlayerWordsExtensions
     /// remux", "Server direct stream", "Server transcode".</summary>
     public static string RouteLabelName(this CoreHost core, RouteLabel label) => core.Core.RouteLabelName(PlayerMap.ToFfi(label));
 
+    /// <summary>"How to play"'s choice as Settings and the player's menu name it: "Auto", "Native", "Remux on this device", "App
+    /// engine", "Server remux", "Server transcode".</summary>
+    public static string HowToPlayName(this CoreHost core, HowToPlay how) => core.Core.HowToPlayName(PlayerMap.ToFfi(how));
+
+    /// <summary>Settings → Playback → "How to play"'s choices: every step but the remux on the device where the platform has none
+    /// (Windows: ADR 0025, departure 1).</summary>
+    public static IReadOnlyList<HowToPlay> SettingsHowToPlayChoices(this CoreHost core, bool hasDeviceRemux)
+    {
+        ArgumentNullException.ThrowIfNull(core);
+        return Array.ConvertAll(Ffi.CurrentFfiMethods.SettingsHowToPlayChoices(hasDeviceRemux), how => PlayerMap.From(how));
+    }
+
     /// <summary>Why the server streams rather than plays the file directly; a reason no release knows is its own name.</summary>
     public static string ReasonText(this CoreHost core, string reason)
     {

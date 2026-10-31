@@ -319,16 +319,30 @@ fn the_playback_settings_switch_skipping() {
             skips_intros_and_credits: false,
             shows_quality_resolution: true,
             shows_all_qualities: false,
-            player: PlayerChoiceKind::Automatic,
+            how_to_play: HowToPlayKind::Auto,
         }
     );
-    // "Player" round trips (ADR 0025, choice 3).
-    block_on(core.set_player_choice(PlayerChoiceKind::AlwaysAppEngine)).unwrap();
+    // "How to play" round trips (ADR 0025, choice 3 as amended), every choice.
+    for how in crate::settings_how_to_play_choices(true) {
+        block_on(core.set_how_to_play(how)).unwrap();
+        assert_eq!(core.playback_settings().how_to_play, how);
+    }
+    block_on(core.set_how_to_play(HowToPlayKind::Auto)).unwrap();
+    // Windows has no remux on the device: Settings leaves it out.
     assert_eq!(
-        core.playback_settings().player,
-        PlayerChoiceKind::AlwaysAppEngine
+        crate::settings_how_to_play_choices(false),
+        [
+            HowToPlayKind::Auto,
+            HowToPlayKind::Native,
+            HowToPlayKind::AppEngine,
+            HowToPlayKind::ServerRemux,
+            HowToPlayKind::ServerTranscode
+        ]
     );
-    block_on(core.set_player_choice(PlayerChoiceKind::Automatic)).unwrap();
+    assert_eq!(
+        core.how_to_play_name(HowToPlayKind::ServerTranscode),
+        "Server transcode"
+    );
     let preferred = QualityChoice::Bitrate {
         bits_per_second: 20_000_000,
     };
@@ -428,7 +442,7 @@ const RECORD_TYPES: &[&str] = &[
     "EngineOutputInfo",
     "PlaybackInfoSnapshot",
     "PlaybackSettingsSnapshot",
-    "PlayerChoiceKind",
+    "HowToPlayKind",
     "QualityOptionInfo",
     "QualityMenuEntry",
 ];

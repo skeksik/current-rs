@@ -99,6 +99,12 @@ impl Core {
         current_app::route_name(label.into()).to_owned()
     }
 
+    /// "How to play"'s choice as Settings and the player's menu name it: "Auto", "Native", "Remux on this device", "App engine",
+    /// "Server remux", "Server transcode".
+    pub fn how_to_play_name(&self, how: crate::HowToPlayKind) -> String {
+        current_app::how_to_play_name(how.into()).to_owned()
+    }
+
     /// Why the server streams rather than plays the file directly, in plain words; a reason no release knows is its own name.
     pub fn reason_text(&self, reason: String) -> String {
         current_app::reason_text(&reason).to_owned()

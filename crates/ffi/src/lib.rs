@@ -84,12 +84,12 @@ pub use platform_engine::{
     PlatformTrack, windows_codec_queries,
 };
 pub use player_records::{
-    CompositionSize, DisplayFacts, EngineKind, EngineOutputInfo, MediaStatusKind, NextEpisodeInfo,
-    NowPlayingSnapshot, PlanNoteInfo, PlaybackInfoSnapshot, PlaybackProblem,
-    PlaybackSettingsSnapshot, PlayerChoiceKind, PlayerEngineKind, PlayerProblem, PlayerStateKind,
+    CompositionSize, DisplayFacts, EngineKind, EngineOutputInfo, HowToPlayKind, MediaStatusKind,
+    NextEpisodeInfo, NowPlayingSnapshot, PlanNoteInfo, PlaybackInfoSnapshot, PlaybackProblem,
+    PlaybackSettingsSnapshot, PlayerEngineKind, PlayerProblem, PlayerStateKind,
     PlayerStateSnapshot, QualityChoice, QualityMenuEntry, QualityOptionInfo, RouteInfo, RouteKind,
     RouteLabelKind, SegmentInfo, SourceInfo, StreamInfo, StreamProtocolKind, SubtitleSelection,
-    TrackInfo, TranscodingInfo, quality_steps,
+    TrackInfo, TranscodingInfo, quality_steps, settings_how_to_play_choices,
 };
 // The player's words (ADR 0019), worded by the core.
 pub use player_words::PanelSizes;
