@@ -149,8 +149,9 @@ The existing client's behaviour is the default on every platform; where ours dif
      the route playing stops working (PQ on an SDR display, a track it cannot play, a speed, a failed start) it moves down to the next
      step that plays, and the reasons say the chosen step could not play this ("chosen_route_unavailable") before why.
    - Server remux asks the server for its stream without direct play and takes what it sends (a remux, else a direct stream or a
-     transcode, which then reads as fallen); server transcode also refuses video stream copy (`AllowVideoStreamCopy` false, Jellyfin
-     v10.11.3), so the server converts the video.
+     transcode, which then reads as fallen); server transcode also refuses video stream copy (`AllowVideoStreamCopy` false: at our
+     Jellyfin baseline v12.2, commit ca0f16eb, and at v12.3, 06de749d, it turns direct stream off and `StreamBuilder` copies no
+     video; `MediaInfoHelper.cs` and `StreamBuilder.cs`, read 2026-10-31), so the server converts the video.
    - Set globally in Settings → Playback, where it replaces "Player" and keeps its stored values ("automatic", "always_app_engine"),
      and in the player for the current item only; the next item uses Settings' again. Choosing in the player re-plans at once at the
      position, Auto included. The player offers Auto and the steps possible for the file (a local step whose route the check puts

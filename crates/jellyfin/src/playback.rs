@@ -48,11 +48,13 @@ pub struct PlaybackRequest {
     pub max_streaming_bitrate: u32,
     /// False after a fallback (ADR 0019, choice 9), or with "How to play" at a server step.
     pub direct_play: bool,
-    /// "How to play" is the server's transcode: `AllowVideoStreamCopy` false, so the server converts the video. In Jellyfin v10.11.3
-    /// that turns direct stream off (`MediaInfoHelper.SetDeviceSpecificData`: "if (!enableDirectStream || !allowVideoStreamCopy)
-    /// mediaSource.SupportsDirectStream = false"), adds `&allowVideoStreamCopy=false` to the transcoding URL, and `StreamBuilder` copies
-    /// video only "&& options.AllowVideoStreamCopy" (github.com/jellyfin/jellyfin, tag v10.11.3, Jellyfin.Api/Helpers/MediaInfoHelper.cs
-    /// and MediaBrowser.Model/Dlna/StreamBuilder.cs, read 2026-10-31).
+    /// "How to play" is the server's transcode: `AllowVideoStreamCopy` false, so the server converts the video. At our Jellyfin
+    /// baseline (v12.2, commit ca0f16eb) `MediaInfoController` takes it from the body ("allowVideoStreamCopy ??=
+    /// playbackInfoDto?.AllowVideoStreamCopy ?? true"); `MediaInfoHelper.SetDeviceSpecificData` then turns direct stream off ("if
+    /// (!enableDirectStream || !allowVideoStreamCopy)", line 232) and adds `&allowVideoStreamCopy=false` to the transcoding URL (line
+    /// 329), and `StreamBuilder` copies video only "&& options.AllowVideoStreamCopy" (line 882). The same lines at v12.3 (tag commit
+    /// 06de749d). Source: github.com/jellyfin/jellyfin at those commits, Jellyfin.Api/Controllers/MediaInfoController.cs,
+    /// Jellyfin.Api/Helpers/MediaInfoHelper.cs, MediaBrowser.Model/Dlna/StreamBuilder.cs, read 2026-10-31.
     pub force_video_transcode: bool,
 }
 
