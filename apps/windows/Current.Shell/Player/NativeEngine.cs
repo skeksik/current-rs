@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Current.Bindings;
 using Microsoft.UI.Dispatching;
 using Windows.Graphics.Imaging;
@@ -61,6 +62,9 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         /// <summary>The selected subtitle stream of the file has no track in Media Foundation (W1 §6: MP4's in-band <c>tx3g</c>
         /// gave none).</summary>
         public const string SubtitleMissing = "subtitle_missing";
+        /// <summary>The selected audio stream of the file has no track in Media Foundation once a frame shows (W7, "ALAC in MP4": the
+        /// picture moved and no sound came).</summary>
+        public const string AudioMissing = "audio_missing";
     }
 
     /// <summary>
@@ -122,6 +126,8 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     private (NativeFile File, uint Index)? _late;
     /// <summary>Gives each cue its own key (two cues may share a start and an empty Id).</summary>
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<IMediaCue, string> _cueKeys = new();
+    /// <summary>1 once an image cue's format was logged (<see cref="ForOverlay"/>).</summary>
+    private static int _imageCueLogged;
     private long _cueCount;
     /// <summary>The file open in the player; UI thread only.</summary>
     private NativeFile? _file;
@@ -492,7 +498,11 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
                 }
                 source.ExternalTimedTextSources.Add(text);
             }
-            var item = new MediaPlaybackItem(source, load.Start);
+            // Not MediaPlaybackItem(source, startTime): on the owner's PC that item counts Position and NaturalDuration from the
+            // start time (a 57 s file started at 25 s read 0:08 of 0:34 eight seconds in), so the core got positions, a duration and
+            // a fallback position that were not the file's, and an HLS stream started past the deadline never passed its start
+            // (docs/notes/windows-native-hls.md). The start is a seek once the file opens (Opened).
+            var item = new MediaPlaybackItem(source);
             file.Item = item;
             Hook(file, item);
             Player.Volume = _volume;
@@ -630,16 +640,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         LogSubtitleTracks(item);
         ApplySubtitle(file);
         HookTracks(file, item);
-        // The n-th of the file's own audio streams is the n-th audio track, from now on by its Id. A server stream (HLS) carries the
-        // one audio track the server was asked for.
-        if (!file.Hls)
-        {
-            var indices = _audioStreams();
-            for (var i = 0; i < indices.Count && i < item.AudioTracks.Count; i++)
-            {
-                file.AudioIds[indices[i]] = item.AudioTracks[i].Id;
-            }
-        }
+        MapAudio(file);
         ApplyAudio(file);
         CheckTracks(file);
         if (file.Failed)
@@ -648,6 +649,11 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         }
         ReportRates(file);
         Player.PlaybackSession.PlaybackRate = _speed;
+        if (file.PendingSeek is null && file.Load.Start > TimeSpan.Zero)
+        {
+            // The load's start; an HLS load already waits for its first segment from there (OpenAsync).
+            Player.PlaybackSession.Position = file.Load.Start;
+        }
         if (file.PendingSeek is { } seek)
         {
             file.PendingSeek = null;
@@ -713,6 +719,13 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         }
         file.Started = true;
         Report(file.Generation, new PlatformEngineEvent.Restarted());
+        // The tracks have settled once a frame shows: an audio stream asked for with no track now fails it.
+        MapAudio(file);
+        ApplyAudio(file);
+        if (file.Failed)
+        {
+            return;
+        }
         _windowTimer.Stop();
         _windowTimer.Start();
     }
@@ -795,17 +808,46 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
 
     // Tracks (UI thread) ----------------------------------------------------------------------------------------------------------
 
-    /// <summary>The core's audio choice: a server index found by its track's Id; Auto keeps Windows' own choice. Off is not offered by
-    /// Media Foundation's track list (not verified) and keeps the track playing.</summary>
-    private static void ApplyAudio(NativeFile file)
+    /// <summary>The n-th of the file's own audio streams is the n-th audio track, from then on by its Id; a stream already mapped
+    /// keeps its track. A server stream (HLS) carries the one audio track the server was asked for. When Media Foundation leaves out a
+    /// stream it cannot read, the streams after it would map to the wrong tracks: the counts are logged so the device check sees
+    /// it (not handled: the engine is not told each stream's codec).</summary>
+    private void MapAudio(NativeFile file)
     {
-        if (file.Item is not { } item || file.Audio is not PlatformTrack.Stream stream || file.Hls)
+        if (file.Hls || file.Item is not { } item)
+        {
+            return;
+        }
+        var indices = _audioStreams();
+        for (var i = 0; i < indices.Count && i < item.AudioTracks.Count; i++)
+        {
+            file.AudioIds.TryAdd(indices[i], item.AudioTracks[i].Id);
+        }
+        if (file.Started && indices.Count != item.AudioTracks.Count)
+        {
+            Trace.TraceWarning(
+                $"Current: the native engine has {item.AudioTracks.Count} audio tracks for {indices.Count} audio streams");
+        }
+    }
+
+    /// <summary>The core's audio choice: a server index found by its track's Id; Auto keeps Windows' own choice. Off is not offered by
+    /// Media Foundation's track list (not verified) and keeps the track playing. A stream with no track fails the track once a frame
+    /// has shown (the tracks have settled; before that it waits), so the core moves the file to libmpv instead of playing it silently
+    /// (W7, "ALAC in MP4"), as a subtitle stream with no track does (<see cref="CheckSubtitle"/>).</summary>
+    private void ApplyAudio(NativeFile file)
+    {
+        if (file.Failed || file.Item is not { } item || file.Audio is not PlatformTrack.Stream stream || file.Hls)
         {
             return;
         }
         if (!file.AudioIds.TryGetValue(stream.Index, out var id))
         {
-            Trace.TraceWarning("Current: the native engine has no track for the audio stream asked for");
+            Trace.TraceWarning(
+                $"Current: the native engine has no track for the audio stream asked for ({item.AudioTracks.Count} audio tracks, {_audioStreams().Count} streams)");
+            if (file.Started)
+            {
+                Fail(file, new PlatformEngineEvent.TrackFailed(Kinds.AudioMissing), null);
+            }
             return;
         }
         for (var i = 0; i < item.AudioTracks.Count; i++)
@@ -1022,7 +1064,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
                     FromItem(file, () => Show(file, track, start, end, () => _subtitles.ShowText(key, start, end, lines)));
                     break;
                 case ImageCue image when image.SoftwareBitmap is { } bitmap:
-                    var copy = SoftwareBitmap.Convert(bitmap, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+                    var copy = ForOverlay(bitmap);
                     var placement = new SubtitlePlacement(image.Position.X, image.Position.Y,
                         image.Position.Unit == TimedTextUnit.Percentage, image.Extent.Width, image.Extent.Height,
                         image.Extent.Unit == TimedTextUnit.Percentage);
@@ -1058,6 +1100,44 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
                 track.CueExited -= exited;
             });
         }
+    }
+
+    /// <summary>
+    /// An image cue's bitmap as the overlay shows it: a copy in premultiplied BGRA, the format a SoftwareBitmap shown in XAML must have
+    /// ("A SoftwareBitmap displayed in a XAML app must be in BGRA pixel format with pre-multiplied alpha values", SoftwareBitmapSource
+    /// Class, Remarks, learn.microsoft.com, ms.date 2017-02-08, read 2026-10-31). W1 §6 saw PGS cues arrive as <c>Bgra8</c>
+    /// premultiplied, yet W7 §11 saw a cue FFmpeg and libmpv draw yellow (255, 215, 0) shown cyan: red and blue swapped, with nothing
+    /// in our path but this copy. So a cue that says <c>Bgra8</c> carries its pixels in RGBA order, and its red and blue are swapped
+    /// here; any other format is left to <c>SoftwareBitmap.Convert</c>. Why Media Foundation labels it so is not known (not verified:
+    /// seen with Windows 11 build 26300 only). The format is logged for the device check.
+    /// </summary>
+    private static SoftwareBitmap ForOverlay(SoftwareBitmap cue)
+    {
+        var format = cue.BitmapPixelFormat;
+        var copy = SoftwareBitmap.Convert(cue, BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+        if (Interlocked.Exchange(ref _imageCueLogged, 1) == 0)
+        {
+            Trace.TraceInformation($"Current: native image cue {cue.PixelWidth}x{cue.PixelHeight}, {format}, {cue.BitmapAlphaMode}");
+        }
+        if (format == BitmapPixelFormat.Bgra8)
+        {
+            SwapRedAndBlue(copy);
+        }
+        return copy;
+    }
+
+    /// <summary>Swaps the first and third byte of every 4-byte pixel. Premultiplied alpha stays right: both channels were multiplied by
+    /// the same alpha.</summary>
+    private static void SwapRedAndBlue(SoftwareBitmap bitmap)
+    {
+        var bytes = new byte[4 * bitmap.PixelWidth * bitmap.PixelHeight];
+        var buffer = bytes.AsBuffer();
+        bitmap.CopyToBuffer(buffer);
+        for (var i = 0; i + 3 < bytes.Length; i += 4)
+        {
+            (bytes[i], bytes[i + 2]) = (bytes[i + 2], bytes[i]);
+        }
+        bitmap.CopyFromBuffer(buffer);
     }
 
     /// <summary>The same key for a cue's enter and exit, and a different one for every cue.</summary>

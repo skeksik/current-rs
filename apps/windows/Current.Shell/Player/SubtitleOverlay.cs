@@ -57,9 +57,14 @@ internal interface ISubtitleSink
 /// the app has no subtitle settings of its own). A line is 5% of the picture's height at 100% caption size, 4% of it above the
 /// picture's bottom, wrapping at 90% of its width: ours, not measured.</item>
 /// <item>Image cues (PGS): W1 §6 saw each as a full-canvas bitmap (position 0,0, extent 100% × 100%; 1920×1080 premultiplied BGRA
-/// for 1080p and 4K video alike). The canvas, the bitmap's own size, is fitted to the picture's width with its own aspect and its
-/// bottom on the picture's bottom, so a 16:9 canvas over a wider (cropped) picture is not squashed; a cue's position and extent are
-/// in percent of that canvas or in its pixels. Not verified beyond W1's files (W7).</item>
+/// for 1080p and 4K video alike). The canvas, the bitmap's own size, is placed as libmpv places a PGS canvas, so both engines show
+/// a cue in the same place: scaled to the picture's height with its own aspect and centred on the picture (mpv's
+/// <c>sub/sd_lavc.c</c>, "Force letter-boxing on all other Blu-ray subtitles", and <c>osd_rescale_bitmaps</c> in <c>sub/osd.c</c>,
+/// github.com/mpv-player/mpv at 9e2ed65, read 2026-10-31; mpv's exception for 720×480 and 720×576 video, which keeps the video's
+/// pixel aspect, is not followed: the native engine reports square pixels). So a 1080-high canvas over cropped 2.39:1 video is
+/// narrower than the picture and inside it: a cue placed high in the canvas shows at the picture's top (W7 §11 lost it above the
+/// window when the canvas was fitted to the width). A cue's position and extent are in percent of that canvas or in its pixels, and
+/// a cue is kept inside the window (a canvas wider than the picture, over 4:3 video, reaches past its sides).</item>
 /// <item>Above the bar: while the control panel shows, the whole layer moves up just enough for the cues to clear it, and back down
 /// when it hides, with the panel's own fade times (0.3 s in, 0.7 s out; PlayerView), each move starting where the last one is. The
 /// panel's top is measured against the MediaPlayerElement, which nothing moves. libmpv's subtitles do not do this yet
@@ -317,25 +322,33 @@ internal sealed class SubtitleOverlay : ISubtitleSink
         Lift();
     }
 
-    /// <summary>The canvas (the bitmap's own size) fitted to the picture's width, bottom on its bottom; the cue placed on it.</summary>
+    /// <summary>The canvas (the bitmap's own size) scaled to the picture's height and centred on it, as libmpv does (the class
+    /// summary); the cue placed on it and kept inside the window.</summary>
     private void Place(Picture picture)
     {
-        if (_picture.Width <= 0 || picture.CanvasWidth <= 0 || picture.CanvasHeight <= 0)
+        if (_picture.Width <= 0 || _picture.Height <= 0 || picture.CanvasWidth <= 0 || picture.CanvasHeight <= 0)
         {
             return;
         }
-        var canvasHeight = _picture.Width * picture.CanvasHeight / picture.CanvasWidth;
-        var canvas = new Rect(_picture.X, _picture.Bottom - canvasHeight, _picture.Width, canvasHeight);
+        var canvasWidth = _picture.Height * picture.CanvasWidth / picture.CanvasHeight;
+        var canvas = new Rect(_picture.X + ((_picture.Width - canvasWidth) / 2), _picture.Y, canvasWidth, _picture.Height);
         var placement = picture.Placement;
         var x = placement.XyInPercent ? placement.X / 100 : placement.X / picture.CanvasWidth;
         var y = placement.XyInPercent ? placement.Y / 100 : placement.Y / picture.CanvasHeight;
         var w = placement.SizeInPercent ? placement.Width / 100 : placement.Width / picture.CanvasWidth;
         var h = placement.SizeInPercent ? placement.Height / 100 : placement.Height / picture.CanvasHeight;
-        Canvas.SetLeft(picture.Image, canvas.X + (x * canvas.Width));
-        Canvas.SetTop(picture.Image, canvas.Y + (y * canvas.Height));
-        picture.Image.Width = Math.Max(0, w * canvas.Width);
-        picture.Image.Height = Math.Max(0, h * canvas.Height);
+        var width = Math.Max(0, w * canvas.Width);
+        var height = Math.Max(0, h * canvas.Height);
+        Canvas.SetLeft(picture.Image, Inside(canvas.X + (x * canvas.Width), width, _video.ActualWidth));
+        Canvas.SetTop(picture.Image, Inside(canvas.Y + (y * canvas.Height), height, _video.ActualHeight));
+        picture.Image.Width = width;
+        picture.Image.Height = height;
     }
+
+    /// <summary>An edge moved so that <paramref name="size"/> from it stays within 0 and <paramref name="window"/>; a cue larger than
+    /// the window keeps its start at 0.</summary>
+    private static double Inside(double start, double size, double window) =>
+        Math.Clamp(start, 0, Math.Max(0, window - size));
 
     private IEnumerable<SubtitleLine> OrderedLines() =>
         _lines.Values.OrderBy(cue => cue.Start).ThenBy(cue => cue.Order).SelectMany(cue => cue.Lines);
