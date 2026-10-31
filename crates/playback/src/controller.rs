@@ -400,6 +400,48 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             .any(|candidate| same_route(candidate, &current))
     }
 
+    /// A track change that keeps a local route: its reasons become the route check's for the new tracks, so the info panel keeps
+    /// no reason about a track no longer selected (W7 §19: after TrueHD and back to AAC, "can't decode Dolby TrueHD" stayed). A
+    /// route kept although an earlier one would play the file now says so ([`RouteReason::ROUTE_KEPT`]). A server stream's reasons
+    /// are the server's and stay.
+    fn refresh_reasons(&mut self, tracks: TrackChoice) {
+        if self.native.is_none() {
+            return;
+        }
+        let engines = self.engines();
+        let context = self.route_context();
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        let Some(planned) = &mut session.planned else {
+            return;
+        };
+        if !planned.plan.route.is_local() {
+            return;
+        }
+        let choices = route::local_routes(
+            &planned.plan.source,
+            tracks,
+            &engines,
+            context,
+            &session.failed_routes,
+        );
+        let Some(place) = choices
+            .iter()
+            .position(|choice| choice.route == planned.plan.route)
+        else {
+            return;
+        };
+        let choice = &choices[place];
+        planned.plan.reasons = choice.reasons.clone();
+        planned.plan.native_lacks = choice.native_lacks.clone();
+        if place > 0 {
+            planned.plan.reasons.push(RouteReason::ROUTE_KEPT);
+        }
+        // "How to play" says itself, as the planner has it.
+        planner::mark_choice(&mut planned.plan.reasons, &planned.plan.route, context);
+    }
+
     fn current_route(&self) -> Option<Route> {
         self.session
             .as_ref()?
@@ -736,6 +778,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut()) {
                 planned.plan.tracks.audio = Some(index);
             }
+            self.refresh_reasons(tracks);
             self.playing().select_audio(EngineTrack::Stream(index));
             self.report_progress().await;
             self.publish(true);
@@ -788,6 +831,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut()) {
             planned.plan.tracks.subtitle = choice;
         }
+        self.refresh_reasons(tracks);
         self.report_progress().await;
         self.publish(true);
     }
@@ -1291,7 +1335,17 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
 
     /// The engine made no progress for [`STALL_TIMEOUT`]: it is stopped and playback fails, reported stopped with `Failed = true`.
     /// Nothing is retried by itself; playing the item again resumes at the reported position.
+    ///
+    /// On the native engine the stall is a failed route instead, and the file moves on as after the engine's own error (ADR 0025,
+    /// "Fallback on a failed start"): the relay reported no failure of the server, which it does at once while the player waits
+    /// ([`Controller::stream_failed`]), so the engine is what does not move. W7 (§8) saw Windows' player load a server stream while
+    /// paused and then never play it; the stall rule ended that in "The server can't be reached" with libmpv never tried.
     async fn stall(&mut self) {
+        if self.role() == EngineRole::Native {
+            self.engine_failed(current_model::EngineErrorKind::LOADING_FAILED)
+                .await;
+            return;
+        }
         self.playing().stop();
         self.fail(PlaybackProblem::Network).await;
     }

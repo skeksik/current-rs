@@ -217,7 +217,7 @@ fn action(direct: bool) -> StreamAction {
 /// "How to play" in the reasons (ADR 0025, choice 3 as amended): a route at the chosen step says it was chosen (in the player or in
 /// Settings); one below it says the chosen step could not play this, before the reasons that say why. A route a failure moved down
 /// to says that instead ([`RouteReason::PREVIOUS_ROUTE_FAILED`]). Nothing with Auto.
-fn mark_choice(reasons: &mut Vec<RouteReason>, route: &Route, context: RouteContext) {
+pub(crate) fn mark_choice(reasons: &mut Vec<RouteReason>, route: &Route, context: RouteContext) {
     let (Some(step), Some(chosen)) = (context.how.step(), context.chosen_reason()) else {
         return;
     };

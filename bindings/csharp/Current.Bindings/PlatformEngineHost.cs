@@ -93,9 +93,10 @@ public enum CodecQueryKind
 /// with the value of the <c>Windows.Media.Core.CodecSubtypes</c> property named <see cref="Subtype"/>.</summary>
 public sealed record CodecQueryAsk(CodecQueryKind Kind, string Subtype);
 
-/// <summary>The UI's answer: how many decoders <c>CodecQuery</c> returned for <see cref="Subtype"/> (0 when an extension is
-/// missing).</summary>
-public sealed record CodecQueryAnswer(string Subtype, uint Decoders);
+/// <summary>The UI's answer: the <c>CodecInfo.DisplayName</c> of each entry <c>CodecQuery</c> returned for <see cref="Subtype"/> (none
+/// when an extension is missing). The core decides which of them decode: Windows' IEC 61937 converters, returned for AC-3 and E-AC-3,
+/// do not (W7 §4).</summary>
+public sealed record CodecQueryAnswer(string Subtype, IReadOnlyList<string> Decoders);
 
 /// <summary>
 /// The base of a platform's own player beside libmpv (ADR 0025): on Windows the app's Media Foundation engine derives from it (W4).
@@ -246,5 +247,5 @@ internal static class PlatformEngineMap
         _ => throw new ArgumentOutOfRangeException(nameof(report), report, "an event the bridge does not know"),
     };
 
-    public static Ffi.CodecQueryAnswer ToFfi(CodecQueryAnswer answer) => new(answer.Subtype, answer.Decoders);
+    public static Ffi.CodecQueryAnswer ToFfi(CodecQueryAnswer answer) => new(answer.Subtype, [.. answer.Decoders]);
 }

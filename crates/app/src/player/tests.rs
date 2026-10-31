@@ -760,10 +760,13 @@ fn windows_answers(hevc: bool) -> Vec<CodecAnswer> {
     super::windows_codec_queries()
         .into_iter()
         .map(|query| CodecAnswer {
-            decoders: u32::from(
-                ["VideoFormatH264", "AudioFormatAac"].contains(&query.subtype.as_str())
-                    || (hevc && query.subtype == "VideoFormatHevc"),
-            ),
+            decoders: if ["VideoFormatH264", "AudioFormatAac"].contains(&query.subtype.as_str())
+                || (hevc && query.subtype == "VideoFormatHevc")
+            {
+                vec!["A decoder".to_owned()]
+            } else {
+                Vec::new()
+            },
             subtype: query.subtype,
         })
         .collect()
