@@ -3,13 +3,14 @@
 //! information holds none. The sizes are measured by the platform ([`PanelSizes`]); numbers with decimals use the UI's decimal
 //! separator ([`NumberFormat`]), as the Windows app's .NET formats did before these lines moved here.
 
-use current_model::{Route, RouteReason, StreamProtocol};
+use current_model::{EngineRole, Route, RouteReason, StreamProtocol};
 
 use super::PlaybackInfo;
 use super::backend::DisplayFacts;
 use super::labels::bitrate_label;
 use super::words::{
-    native_lacks_text, plan_note_text, reason_text, route_name, route_name_one_engine,
+    engine_name, failed_route_text, native_lacks_text, plan_note_text, reason_text, route_name,
+    route_name_one_engine,
 };
 use crate::numbers::NumberFormat;
 
@@ -64,11 +65,14 @@ pub fn info_panel_lines(
             ),
             protocol.map(str::to_owned),
             container.map(str::to_owned),
+            // A server stream is played by either engine: which one, with a platform engine beside libmpv (W7 §8).
+            (info.platform_engine && !plan.route.is_local())
+                .then(|| engine_name(plan.route.engine()).to_owned()),
         ]));
         // The routes that could not start before this one, with a platform engine (with libmpv alone the fallback's reason says it).
         if info.platform_engine {
             for failed in &plan.failed_routes {
-                lines.push(format!("• {} could not start.", route_name(failed.label())));
+                lines.push(format!("• {}", failed_route_text(failed)));
             }
         }
         for reason in &plan.reasons {
@@ -128,7 +132,13 @@ pub fn info_panel_lines(
                     .display_title
                     .clone()
                     .or_else(|| stream.title.clone()),
-                stream.is_external.then(|| "external".to_owned()),
+                // The server's display title often says "External" already (W7 §10: "German - WEBVTT - External · external").
+                (stream.is_external
+                    && ![&stream.display_title, &stream.title]
+                        .into_iter()
+                        .flatten()
+                        .any(|title| title.to_lowercase().contains("external")))
+                .then(|| "external".to_owned()),
             ]));
         }
     }
@@ -168,12 +178,20 @@ pub fn info_panel_lines(
     }
     let engine = &info.engine;
     let video = engine.video.as_ref();
+    // The platform engine reports no decoder and no output (`PlaybackInfo::engine` is libmpv's): naming it is all that is known
+    // (W7 §1: "software decoder" on every native route was wrong, not just empty).
+    let native_plays =
+        info.platform_engine && plan.is_some_and(|plan| plan.route.engine() == EngineRole::Native);
     lines.push(String::new());
     lines.push(join([
         Some("Player".to_owned()),
-        Some(match engine.hardware_decoder.as_deref() {
-            Some(decoder) if !decoder.is_empty() => format!("decoder {decoder}"),
-            _ => "software decoder".to_owned(),
+        Some(if native_plays {
+            engine_name(EngineRole::Native).to_owned()
+        } else {
+            match engine.hardware_decoder.as_deref() {
+                Some(decoder) if !decoder.is_empty() => format!("decoder {decoder}"),
+                _ => "software decoder".to_owned(),
+            }
         }),
         video.map(|video| format!("{}×{}", video.width, video.height)),
         video.and_then(|video| video.pixel_format.clone()),
@@ -537,7 +555,7 @@ mod tests {
             lines[..3],
             [
                 "App engine",
-                "• Native could not start.",
+                "• The native player could not start the file.",
                 "• The previous playback route could not start.",
             ]
         );
@@ -604,6 +622,112 @@ mod tests {
         assert_eq!(
             lines,
             ["", "Player · software decoder", "Panel · 0×0 · view 0×0"]
+        );
+    }
+
+    #[test]
+    fn a_server_stream_names_its_engine_and_a_failed_one_the_engine_that_tried_it() {
+        // W7 §8: the native player's server transcode failed and the app engine plays it.
+        let mut info = info();
+        info.platform_engine = true;
+        let transcode = |engine| Route::ServerStream {
+            engine,
+            protocol: StreamProtocol::Hls,
+            container: Some("mp4".into()),
+            video: current_model::StreamAction::Transcode,
+            audio: current_model::StreamAction::Copy,
+        };
+        if let Some(plan) = info
+            .details
+            .as_mut()
+            .and_then(|details| details.plan.as_mut())
+        {
+            plan.route = transcode(EngineRole::App);
+            plan.reasons = vec![RouteReason::PREVIOUS_ROUTE_FAILED];
+            plan.failed_routes = vec![transcode(EngineRole::Native)];
+        }
+        let lines = info_panel_lines(&info, None, &panel(), &dot());
+        assert_eq!(
+            lines[..3],
+            [
+                "Server transcode · HLS · mp4 · app engine",
+                "• The native player could not start the server's transcode.",
+                "• The previous playback route could not start.",
+            ]
+        );
+        assert_eq!(
+            failed_route_text(&Route::ServerStream {
+                engine: EngineRole::App,
+                protocol: StreamProtocol::Hls,
+                container: None,
+                video: current_model::StreamAction::Copy,
+                audio: current_model::StreamAction::Copy,
+            }),
+            "The app engine could not start the server's remux."
+        );
+        assert_eq!(
+            failed_route_text(&Route::DeviceRemux),
+            "The remux on this device could not start."
+        );
+        assert_eq!(
+            failed_route_text(&Route::AppEngine),
+            "The app engine could not start the file."
+        );
+    }
+
+    #[test]
+    fn the_native_player_is_named_instead_of_a_decoder_it_never_reports() {
+        // W7 §1: "Player · software decoder" on every native route.
+        let mut info = info();
+        info.platform_engine = true;
+        info.engine = super::super::EngineOutput::default();
+        if let Some(plan) = info
+            .details
+            .as_mut()
+            .and_then(|details| details.plan.as_mut())
+        {
+            plan.route = Route::Native;
+        }
+        let lines = info_panel_lines(&info, None, &panel(), &dot());
+        assert!(
+            lines.contains(&"Player · native player".to_owned()),
+            "{lines:?}"
+        );
+        // libmpv with no hardware decoder still says so.
+        if let Some(plan) = info
+            .details
+            .as_mut()
+            .and_then(|details| details.plan.as_mut())
+        {
+            plan.route = Route::AppEngine;
+        }
+        let lines = info_panel_lines(&info, None, &panel(), &dot());
+        assert!(
+            lines.contains(&"Player · software decoder".to_owned()),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_external_track_whose_title_says_so_is_not_called_external_twice() {
+        // W7 §10: "German - WEBVTT - External · external".
+        let mut info = info();
+        if let Some(plan) = info
+            .details
+            .as_mut()
+            .and_then(|details| details.plan.as_mut())
+            && let Some(stream) = plan
+                .source
+                .streams
+                .iter_mut()
+                .find(|stream| stream.is_external)
+        {
+            stream.display_title = Some("German - WEBVTT - External".into());
+        }
+        let lines = info_panel_lines(&info, None, &panel(), &dot());
+        assert!(
+            lines.contains(&"#2 subtitle · srt · German - WEBVTT - External".to_owned()),
+            "{lines:?}"
         );
     }
 }
