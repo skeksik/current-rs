@@ -897,6 +897,31 @@ fn how_to_play_at_the_servers_transcode_asks_for_it_without_direct_play() {
 }
 
 #[test]
+fn a_chosen_transcode_shows_no_direct_play_error_in_the_servers_facts() {
+    let mut two = Two::playing(movie());
+    two.at(30);
+    let mut stream = answer(
+        hls(StreamAction::Transcode, StreamAction::Copy),
+        vec![RouteReason::DIRECT_PLAY_ERROR],
+    );
+    stream.source = movie();
+    two.server.answer(Ok(stream));
+    two.server.state().facts = Some(current_model::TranscodingFacts {
+        reasons: vec![RouteReason::DIRECT_PLAY_ERROR],
+        ..current_model::TranscodingFacts::default()
+    });
+    block_on(two.player.choose_how_to_play(HowToPlay::ServerTranscode));
+    two.start();
+    assert!(!two.plan().reasons.contains(&RouteReason::DIRECT_PLAY_ERROR));
+    let facts = two
+        .player
+        .details()
+        .and_then(|details| details.transcoding)
+        .expect("the server's facts");
+    assert!(facts.reasons.is_empty(), "{:?}", facts.reasons);
+}
+
+#[test]
 fn the_servers_remux_chosen_that_must_convert_says_it_fell() {
     let mut two = Two::playing(movie());
     let mut stream = answer(
