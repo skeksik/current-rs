@@ -136,6 +136,9 @@ struct Session {
     last_report: Duration,
     /// An engine failed in this play and the plan moved on (ADR 0019 choice 9, ADR 0025's chain).
     fallback_used: bool,
+    /// The plan playing was asked for without direct play (a server choice, a fallback, no local route): the server's
+    /// `DirectPlayError` then says nothing about the file ([`planner::plan`]), in its transcode's facts either.
+    asked_without_direct_play: bool,
     /// The routes that failed in this play, oldest first (ADR 0025): none is tried again.
     failed_routes: Vec<Route>,
     /// The engine that has the file, once loaded.
@@ -185,6 +188,7 @@ impl Session {
             item_stopped: false,
             last_report: now,
             fallback_used: false,
+            asked_without_direct_play: false,
             failed_routes: Vec::new(),
             loaded_on: None,
             how: HowToPlay::Auto,
@@ -1016,6 +1020,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         if session.chosen_here && session.how == how {
             return;
         }
+        // A server stream a server choice asked for is left for a local choice or Auto: the route check below sees only server routes
+        // while a server stream plays, so it would keep it (the owner's PC, 2026-11-06: Server transcode, then Auto and Native, moved
+        // nothing). A server stream the file or the quality needed stays, as the server would send it again.
+        let left_server_choice = session.how.is_server() && !how.is_server();
         session.how = how;
         session.chosen_here = true;
         if !matches!(self.phase, Phase::Active | Phase::Loading) {
@@ -1027,22 +1035,23 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             .as_ref()
             .map(|planned| planned.plan.route.clone());
         let stays = !how.is_server()
+            && !left_server_choice
             && current.as_ref().is_some_and(|current| {
                 self.candidates(tracks, self.route_context())
                     .first()
                     .is_some_and(|first| same_route(first, current))
             });
         if stays {
-            // The reasons now say the route was chosen.
+            // The reasons now say who chose the route, or with Auto that no one did.
             let reason = self.route_context().chosen_reason();
-            if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut())
-                && let Some(reason) = reason
-            {
+            if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut()) {
                 planned.plan.reasons.retain(|known| {
                     *known != RouteReason::SETTING_CHOSE_ROUTE
                         && *known != RouteReason::USER_CHOSE_ROUTE
                 });
-                planned.plan.reasons.insert(0, reason);
+                if let Some(reason) = reason {
+                    planned.plan.reasons.insert(0, reason);
+                }
             }
             self.publish(true);
             return;
@@ -1293,6 +1302,17 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             })
         {
             self.report_progress().await;
+            // The server's facts again with each report: read once at the start, they stayed the previous quality's after a change
+            // while paused, whose start comes before the server's new transcode (the owner's PC, 2026-11-06), and the speed and the
+            // share done never moved.
+            if self
+                .session
+                .as_ref()
+                .is_some_and(|session| !session.is_local())
+            {
+                self.read_transcoding_facts().await;
+                self.publish(true);
+            }
         }
         if self.publish_pending {
             self.publish(false);
@@ -1556,6 +1576,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             subtitle: EngineTrack::Off,
         };
         session.planned = Some(planned);
+        session.asked_without_direct_play = !direct_play;
         session.position = start;
         session.last_progress = self.clock.now();
         session.stream_lost = false;
@@ -1771,9 +1792,19 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         if self.session.as_ref().is_none_or(Session::is_local) {
             return;
         }
-        let Ok(Some(facts)) = self.server.transcoding_facts().await else {
+        let Ok(Some(mut facts)) = self.server.transcoding_facts().await else {
             return;
         };
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.asked_without_direct_play)
+        {
+            // The panel showed it under the server's line too (owner's PC, 2026-11-06).
+            facts
+                .reasons
+                .retain(|reason| *reason != RouteReason::DIRECT_PLAY_ERROR);
+        }
         if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut()) {
             planned.plan.route = planner::correct(&planned.plan.route, &facts);
         }

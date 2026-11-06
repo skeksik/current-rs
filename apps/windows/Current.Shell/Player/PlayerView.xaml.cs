@@ -622,7 +622,7 @@ public sealed partial class PlayerView : UserControl
         return null;
     }
 
-    /// <summary>A control's name for Narrator; a command's label too, which its tool tip shows while labels are collapsed.</summary>
+    /// <summary>A control's name for Narrator; a command's label and tool tip too.</summary>
     private static void SetName(DependencyObject element, string name)
     {
         AutomationProperties.SetName(element, name);
@@ -630,11 +630,55 @@ public sealed partial class PlayerView : UserControl
         {
             case AppBarButton button:
                 button.Label = name;
+                SetToolTip(button, name);
                 break;
             case AppBarToggleButton toggle:
                 toggle.Label = name;
+                SetToolTip(toggle, name);
                 break;
         }
+    }
+
+    /// <summary>
+    /// A collapsed label shows no tool tip of its own: on the owner's PC (2026-11-06) only the buttons with a keyboard shortcut showed
+    /// one, because "By default, when keyboard accelerators are declared, all controls (except MenuFlyoutItem and
+    /// ToggleMenuFlyoutItem) present the corresponding key combinations in a tooltip", appended to an AppBarButton's default one
+    /// ("Keyboard accelerators", learn.microsoft.com, ms.date 2026-08-28, read 2026-11-06). That one kept the first label: Play/Pause
+    /// read "Play (Ctrl+P)" while playing (owner's PC). So every command whose name changes gets its own, the shortcut in the same
+    /// form ("Pause (Ctrl+P)"); PlayerView.xaml sets the first one of those without a shortcut. Set only when the text changes: How
+    /// to play's name is set again on every state update, and a tool tip replaced before it opens never opens (owner's PC).
+    /// </summary>
+    private static void SetToolTip(UIElement command, string name)
+    {
+        var tip = command.KeyboardAccelerators.Count > 0 ? $"{name} ({ShortcutText(command.KeyboardAccelerators[0])})" : name;
+        if (ToolTipService.GetToolTip(command) as string != tip)
+        {
+            ToolTipService.SetToolTip(command, tip);
+        }
+    }
+
+    /// <summary>A shortcut as Windows' own tool tip writes it: "Ctrl+P", "F11".</summary>
+    private static string ShortcutText(KeyboardAccelerator accelerator)
+    {
+        var parts = new List<string>();
+        if (accelerator.Modifiers.HasFlag(Windows.System.VirtualKeyModifiers.Control))
+        {
+            parts.Add("Ctrl");
+        }
+        if (accelerator.Modifiers.HasFlag(Windows.System.VirtualKeyModifiers.Menu))
+        {
+            parts.Add("Alt");
+        }
+        if (accelerator.Modifiers.HasFlag(Windows.System.VirtualKeyModifiers.Shift))
+        {
+            parts.Add("Shift");
+        }
+        if (accelerator.Modifiers.HasFlag(Windows.System.VirtualKeyModifiers.Windows))
+        {
+            parts.Add("Win");
+        }
+        parts.Add(accelerator.Key.ToString());
+        return string.Join("+", parts);
     }
 
     private void ShowProblem(string? message)

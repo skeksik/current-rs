@@ -897,6 +897,93 @@ fn how_to_play_at_the_servers_transcode_asks_for_it_without_direct_play() {
 }
 
 #[test]
+fn a_local_choice_or_auto_leaves_a_server_stream_the_server_choice_asked_for() {
+    // The owner's PC, 2026-11-06: Server transcode, then Auto and then Native moved nothing; the file stayed on the server stream.
+    let stream = || {
+        let mut stream = answer(hls(StreamAction::Transcode, StreamAction::Copy), vec![]);
+        stream.source = movie();
+        Ok(stream)
+    };
+    for back in [HowToPlay::Auto, HowToPlay::Native] {
+        let mut two = Two::playing(movie());
+        two.at(30);
+        two.server.answer(stream());
+        block_on(two.player.choose_how_to_play(HowToPlay::ServerTranscode));
+        assert!(matches!(two.plan().route, Route::ServerStream { .. }));
+        two.start();
+        two.at(40);
+        block_on(two.player.choose_how_to_play(back));
+        let request = two.requests().pop().expect("a request");
+        assert!(request.direct_play, "{back:?}: asked with direct play");
+        assert_eq!(two.plan().route, Route::Native, "{back:?}");
+        assert_eq!(two.plan().start, secs(40), "{back:?}");
+        let chosen = two.plan().reasons.contains(&RouteReason::USER_CHOSE_ROUTE);
+        assert_eq!(
+            chosen,
+            back == HowToPlay::Native,
+            "{back:?}: {:?}",
+            two.plan().reasons
+        );
+    }
+}
+
+#[test]
+fn auto_keeps_a_server_stream_the_quality_needed_and_drops_the_chosen_reason() {
+    let mut two = Two::playing(movie());
+    two.at(30);
+    let mut stream = answer(
+        hls(StreamAction::Transcode, StreamAction::Copy),
+        vec![RouteReason::CONTAINER_BITRATE_EXCEEDS_LIMIT],
+    );
+    stream.source = movie();
+    two.server.answer(Ok(stream));
+    block_on(
+        two.player
+            .set_quality(crate::quality::Quality::Bitrate(4_000_000)),
+    );
+    assert!(matches!(two.plan().route, Route::ServerStream { .. }));
+    two.start();
+    // Native chosen: the stream already plays there, so it stays and says it was chosen; Auto then keeps the server stream (the
+    // quality needs it) without a new request, and no longer says it was chosen.
+    let asked = two.requests().len();
+    block_on(two.player.choose_how_to_play(HowToPlay::Native));
+    assert_eq!(two.plan().reasons[0], RouteReason::USER_CHOSE_ROUTE);
+    block_on(two.player.choose_how_to_play(HowToPlay::Auto));
+    assert_eq!(two.requests().len(), asked, "no new request");
+    assert!(matches!(two.plan().route, Route::ServerStream { .. }));
+    assert!(
+        !two.plan().reasons.contains(&RouteReason::USER_CHOSE_ROUTE),
+        "{:?}",
+        two.plan().reasons
+    );
+}
+
+#[test]
+fn a_chosen_transcode_shows_no_direct_play_error_in_the_servers_facts() {
+    let mut two = Two::playing(movie());
+    two.at(30);
+    let mut stream = answer(
+        hls(StreamAction::Transcode, StreamAction::Copy),
+        vec![RouteReason::DIRECT_PLAY_ERROR],
+    );
+    stream.source = movie();
+    two.server.answer(Ok(stream));
+    two.server.state().facts = Some(current_model::TranscodingFacts {
+        reasons: vec![RouteReason::DIRECT_PLAY_ERROR],
+        ..current_model::TranscodingFacts::default()
+    });
+    block_on(two.player.choose_how_to_play(HowToPlay::ServerTranscode));
+    two.start();
+    assert!(!two.plan().reasons.contains(&RouteReason::DIRECT_PLAY_ERROR));
+    let facts = two
+        .player
+        .details()
+        .and_then(|details| details.transcoding)
+        .expect("the server's facts");
+    assert!(facts.reasons.is_empty(), "{:?}", facts.reasons);
+}
+
+#[test]
 fn the_servers_remux_chosen_that_must_convert_says_it_fell() {
     let mut two = Two::playing(movie());
     let mut stream = answer(
