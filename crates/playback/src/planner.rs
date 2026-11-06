@@ -120,6 +120,14 @@ pub fn plan(
             reasons.push(RouteReason::QUALITY_LIMIT);
         }
         for reason in server_reasons {
+            // Asked without direct play, Jellyfin's `DirectPlayError` says nothing about the file: StreamBuilder sets it only when no
+            // profile played the file directly and no failure was recorded ("if (failureReasons == 0) { failureReasons =
+            // TranscodeReason.DirectPlayError; }", MediaBrowser.Model/Dlna/StreamBuilder.cs, jellyfin ca0f16eb, read 2026-11-06),
+            // which is what a request without direct play gets. The panel then said "Direct play failed on the server." under a
+            // transcode the owner chose (owner's PC, 2026-11-06).
+            if !request.direct_play && reason == RouteReason::DIRECT_PLAY_ERROR {
+                continue;
+            }
             if !reasons.contains(&reason) {
                 reasons.push(reason);
             }
@@ -302,6 +310,46 @@ mod tests {
                 RouteReason::new("SomeFutureReason"),
             ]
         );
+    }
+
+    #[test]
+    fn asked_without_direct_play_the_servers_direct_play_error_is_dropped() {
+        let answer_with_error = || {
+            answer(
+                hls(StreamAction::Transcode, StreamAction::Copy),
+                vec![RouteReason::DIRECT_PLAY_ERROR],
+            )
+        };
+        let mut request = ask(Quality::Maximum);
+        request.direct_play = false;
+        let planned = plan(
+            &item("e1"),
+            &request,
+            answer_with_error(),
+            &[],
+            &TranscodePermissions::default(),
+            true,
+            app_only(),
+        )
+        .expect("a route");
+        assert!(
+            planned.plan.reasons.is_empty(),
+            "{:?}",
+            planned.plan.reasons
+        );
+        // Asked with direct play, the server's word stands.
+        request.direct_play = true;
+        let planned = plan(
+            &item("e1"),
+            &request,
+            answer_with_error(),
+            &[],
+            &TranscodePermissions::default(),
+            true,
+            app_only(),
+        )
+        .expect("a route");
+        assert_eq!(planned.plan.reasons, vec![RouteReason::DIRECT_PLAY_ERROR]);
     }
 
     #[test]
