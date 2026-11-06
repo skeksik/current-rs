@@ -1,0 +1,809 @@
+//! The stream reader against a fake upstream holding one file in memory (ADR 0026, R1). Limits are scaled down (64 KiB ahead,
+//! 16 KiB behind) so the file stays small; the rules are the same as with libmpv's numbers.
+
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use current_net::header::{HeaderMap, HeaderName, HeaderValue};
+use current_net::{GatewayShape, StreamError, Url};
+use current_relay::{
+    Bytes, FileFacts, ReadError, ReaderLimits, ReaderRoute, ReaderRouteConfig, RelayEvent,
+    StreamReader, Upstream, UpstreamBody, UpstreamFuture, UpstreamRequest, UpstreamResponse,
+};
+use tokio::sync::{Semaphore, mpsc};
+use tokio::time::{sleep, timeout};
+
+const BASE: &str = "https://media.example.com/jf/";
+const PATH: &str = "/Videos/e1/stream";
+const SIZE: u64 = 1024 * 1024;
+const KIB: u64 = 1024;
+const CHUNK: usize = 4 * 1024;
+const ETAG: &str = "\"v1\"";
+/// The file plays for 100 s: 10485.76 bytes per second.
+const DURATION: Duration = Duration::from_secs(100);
+/// How long a read that should wait is given before it counts as waiting.
+const HELD: Duration = Duration::from_millis(150);
+const WAIT: Duration = Duration::from_secs(10);
+
+fn data() -> Bytes {
+    (0..SIZE)
+        .map(|at| (at % 251) as u8)
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn limits() -> ReaderLimits {
+    ReaderLimits {
+        ahead: 64 * KIB,
+        behind: 16 * KIB,
+        index_window: 16 * KIB,
+        max_windows: 4,
+        gap: 8 * KIB,
+        tries: 3,
+        backoff: Duration::ZERO,
+    }
+}
+
+fn facts() -> FileFacts {
+    FileFacts {
+        start: Duration::ZERO,
+        duration: Some(DURATION),
+        bitrate: None,
+        content_type: None,
+    }
+}
+
+fn rate_bytes(seconds: f64) -> u64 {
+    (seconds * SIZE as f64 / DURATION.as_secs_f64()) as u64
+}
+
+#[derive(Default)]
+struct Behaviour {
+    /// Per request, in order: break the body after this many bytes.
+    breaks: VecDeque<u64>,
+    /// Every request after the first fails with this.
+    later_fail: Option<StreamError>,
+    /// A request with `If-Range` gets a 200 with the whole file: the file changed.
+    changed: bool,
+    /// Every request fails with this.
+    refuse: Option<StreamError>,
+    /// Every request is answered with an HTML page.
+    html: bool,
+    /// Bodies of requests from this offset on wait for a permit per chunk.
+    gate: Option<(u64, Arc<Semaphore>)>,
+}
+
+/// A server holding one file: answers `Range: bytes=<from>-` with a 206 in chunks of [`CHUNK`].
+struct FakeFile {
+    data: Bytes,
+    sent: Mutex<Vec<(Option<String>, Option<String>)>>,
+    pulled: Arc<AtomicU64>,
+    /// Bytes pulled from gated bodies only.
+    gated: Arc<AtomicU64>,
+    live: Arc<AtomicUsize>,
+    behaviour: Mutex<Behaviour>,
+}
+
+impl FakeFile {
+    fn new() -> Arc<Self> {
+        Self::with(Behaviour::default())
+    }
+
+    fn with(behaviour: Behaviour) -> Arc<Self> {
+        Arc::new(Self {
+            data: data(),
+            sent: Mutex::new(Vec::new()),
+            pulled: Arc::new(AtomicU64::new(0)),
+            gated: Arc::new(AtomicU64::new(0)),
+            live: Arc::new(AtomicUsize::new(0)),
+            behaviour: Mutex::new(behaviour),
+        })
+    }
+
+    fn sent(&self) -> Vec<(Option<String>, Option<String>)> {
+        self.sent.lock().unwrap().clone()
+    }
+
+    fn pulled(&self) -> u64 {
+        self.pulled.load(Ordering::SeqCst)
+    }
+
+    fn answer(&self, request: &UpstreamRequest) -> Result<UpstreamResponse, StreamError> {
+        let text = |name: &str| {
+            request
+                .headers
+                .get(name)
+                .map(|value| value.to_str().unwrap().to_owned())
+        };
+        let range = text("range");
+        let if_range = text("if-range");
+        let first = {
+            let mut sent = self.sent.lock().unwrap();
+            sent.push((range.clone(), if_range.clone()));
+            sent.len() == 1
+        };
+        assert_eq!(request.path, PATH);
+        let mut behaviour = self.behaviour.lock().unwrap();
+        if let Some(error) = behaviour.refuse.clone() {
+            return Err(error);
+        }
+        if !first && let Some(error) = behaviour.later_fail.clone() {
+            return Err(error);
+        }
+        let from: u64 = range
+            .as_deref()
+            .and_then(|range| range.strip_prefix("bytes="))
+            .and_then(|range| range.strip_suffix('-'))
+            .map(|from| from.parse().unwrap())
+            .unwrap_or(0);
+        let whole = behaviour.changed && if_range.is_some();
+        let from = if whole { 0 } else { from };
+        let mut pairs = vec![
+            ("content-type", "video/x-matroska".to_owned()),
+            ("etag", ETAG.to_owned()),
+        ];
+        let status = if whole {
+            pairs.push(("content-length", SIZE.to_string()));
+            200
+        } else {
+            pairs.push(("content-range", format!("bytes {from}-{}/{SIZE}", SIZE - 1)));
+            206
+        };
+        if behaviour.html {
+            pairs[0].1 = "text/html".to_owned();
+        }
+        let gate = behaviour
+            .gate
+            .as_ref()
+            .filter(|(at, _)| from >= *at)
+            .map(|(_, gate)| gate.clone());
+        self.live.fetch_add(1, Ordering::SeqCst);
+        Ok(UpstreamResponse {
+            status,
+            headers: headers(&pairs),
+            base: Url::parse(BASE).unwrap(),
+            body: Box::new(FileBody {
+                data: self.data.slice(from as usize..),
+                break_after: behaviour.breaks.pop_front(),
+                sent: 0,
+                pulled: self.pulled.clone(),
+                gated: self.gated.clone(),
+                live: self.live.clone(),
+                gate,
+            }),
+        })
+    }
+}
+
+impl Upstream for FakeFile {
+    fn send(&self, request: UpstreamRequest) -> UpstreamFuture<'_, UpstreamResponse> {
+        let answer = self.answer(&request);
+        Box::pin(async move { answer })
+    }
+}
+
+struct FileBody {
+    data: Bytes,
+    break_after: Option<u64>,
+    sent: u64,
+    pulled: Arc<AtomicU64>,
+    gated: Arc<AtomicU64>,
+    live: Arc<AtomicUsize>,
+    gate: Option<Arc<Semaphore>>,
+}
+
+impl UpstreamBody for FileBody {
+    fn chunk(&mut self) -> UpstreamFuture<'_, Option<Bytes>> {
+        Box::pin(async move {
+            tokio::task::yield_now().await;
+            if let Some(gate) = &self.gate {
+                gate.acquire().await.unwrap().forget();
+            }
+            let mut take = CHUNK.min(self.data.len());
+            if let Some(limit) = self.break_after {
+                if self.sent >= limit {
+                    return Err(StreamError::Unreachable);
+                }
+                take = take.min((limit - self.sent) as usize);
+            }
+            if take == 0 {
+                return Ok(None);
+            }
+            let chunk = self.data.split_to(take);
+            self.sent += take as u64;
+            self.pulled.fetch_add(take as u64, Ordering::SeqCst);
+            if self.gate.is_some() {
+                self.gated.fetch_add(take as u64, Ordering::SeqCst);
+            }
+            Ok(Some(chunk))
+        })
+    }
+}
+
+impl Drop for FileBody {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn headers(pairs: &[(&'static str, String)]) -> HeaderMap {
+    let mut map = HeaderMap::new();
+    for (name, value) in pairs {
+        map.append(
+            HeaderName::from_static(name),
+            HeaderValue::from_str(value).unwrap(),
+        );
+    }
+    map
+}
+
+fn route(upstream: Arc<FakeFile>) -> (ReaderRoute, mpsc::UnboundedReceiver<RelayEvent>) {
+    let (events, received) = mpsc::unbounded_channel();
+    let route = ReaderRoute::new(
+        &tokio::runtime::Handle::current(),
+        ReaderRouteConfig {
+            upstream,
+            prefixes: vec!["/Videos/e1/".to_owned()],
+            events: Arc::new(events),
+        },
+    )
+    .unwrap();
+    (route, received)
+}
+
+async fn open(route: &ReaderRoute, limits: ReaderLimits, facts: FileFacts) -> StreamReader {
+    route
+        .open(PATH, vec![("static".into(), "true".into())], facts, limits)
+        .await
+        .unwrap()
+}
+
+async fn setup(
+    upstream: Arc<FakeFile>,
+) -> (
+    ReaderRoute,
+    StreamReader,
+    mpsc::UnboundedReceiver<RelayEvent>,
+) {
+    let (route, events) = route(upstream);
+    let reader = open(&route, limits(), facts()).await;
+    (route, reader, events)
+}
+
+fn drain(events: &mut mpsc::UnboundedReceiver<RelayEvent>) -> Vec<RelayEvent> {
+    let mut all = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        all.push(event);
+    }
+    all
+}
+
+/// A read that completes within [`HELD`], else `None`.
+async fn read_now(
+    reader: &StreamReader,
+    offset: u64,
+    len: u32,
+) -> Option<Result<Bytes, ReadError>> {
+    timeout(HELD, reader.read(offset, len)).await.ok()
+}
+
+/// Reads from `from` on until a read is held; checks every byte, and returns where it stopped.
+async fn read_until_held(reader: &StreamReader, from: u64) -> u64 {
+    let expected = data();
+    let mut at = from;
+    while let Some(read) = read_now(reader, at, 8 * 1024).await {
+        let bytes = read.unwrap();
+        if bytes.is_empty() {
+            break;
+        }
+        assert_eq!(
+            bytes,
+            expected.slice(at as usize..at as usize + bytes.len())
+        );
+        at += bytes.len() as u64;
+    }
+    at
+}
+
+/// Waits until `check` holds.
+async fn until(mut check: impl FnMut() -> bool) {
+    timeout(WAIT, async {
+        while !check() {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("condition not reached");
+}
+
+/// Lets the pumps run until nothing changes.
+async fn settle() {
+    sleep(Duration::from_millis(100)).await;
+}
+
+#[tokio::test]
+async fn opening_reads_size_type_and_stops_at_the_read_ahead() {
+    let upstream = FakeFile::new();
+    let (_route, reader, mut events) = setup(upstream.clone()).await;
+    assert_eq!(reader.size(), SIZE);
+    assert_eq!(reader.content_type(), "video/x-matroska");
+    settle().await;
+    // A reader nobody reads holds exactly the read-ahead and pulls at most one chunk more.
+    let facts = reader.facts();
+    assert_eq!(facts.held_ahead, 64 * KIB);
+    assert!(upstream.pulled() <= 64 * KIB + CHUNK as u64);
+    assert_eq!(upstream.sent(), vec![(Some("bytes=0-".into()), None)]);
+    assert!(facts.rate_known);
+    assert_eq!(facts.requests, 1);
+    assert!(drain(&mut events).is_empty());
+}
+
+#[tokio::test]
+async fn the_forward_limit_is_byte_exact_and_moves_with_the_position() {
+    let upstream = FakeFile::new();
+    let (_route, reader, _events) = setup(upstream.clone()).await;
+    assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+    // One second later the point is 10485 bytes on.
+    reader.set_position(Duration::from_secs(1));
+    assert_eq!(reader.facts().point, rate_bytes(1.0));
+    assert_eq!(
+        read_until_held(&reader, 64 * KIB).await,
+        rate_bytes(1.0) + 64 * KIB
+    );
+    settle().await;
+    assert!(upstream.pulled() <= rate_bytes(1.0) + 64 * KIB + CHUNK as u64);
+    assert_eq!(upstream.sent().len(), 1);
+}
+
+#[tokio::test]
+async fn the_read_ahead_budget_is_summed_over_the_windows() {
+    let upstream = FakeFile::new();
+    let (_route, reader, _events) = setup(upstream.clone()).await;
+    // Pin the point at the start, then move it so the limit is far enough for a second window.
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    reader.set_position(Duration::from_secs(5));
+    settle().await;
+    let playback = reader.facts().held_ahead;
+    assert_eq!(playback, 64 * KIB);
+    // A read past the playback window opens a second one, which fetches for its read beyond the budget...
+    let far = 100_000;
+    read_now(&reader, far, 1).await.unwrap().unwrap();
+    settle().await;
+    let facts = reader.facts();
+    assert_eq!(facts.windows, 2);
+    assert!(facts.held_ahead <= 64 * KIB + CHUNK as u64);
+    // ...and the playback window refills only to what the budget leaves.
+    read_until_held_from(&reader, 1, 32 * KIB).await;
+    settle().await;
+    assert_eq!(reader.facts().held_ahead, 64 * KIB);
+}
+
+/// Reads `count` bytes from `from` on.
+async fn read_until_held_from(reader: &StreamReader, from: u64, count: u64) {
+    let mut at = from;
+    while at < from + count {
+        let len = (from + count - at).min(8 * KIB) as u32;
+        at += read_now(reader, at, len).await.unwrap().unwrap().len() as u64;
+    }
+}
+
+#[tokio::test]
+async fn behind_keeps_the_back_budget_plus_the_unused_read_ahead() {
+    let upstream = FakeFile::new();
+    let (_route, reader, _events) = setup(upstream.clone()).await;
+    // Held at 64 KiB with the point at 0: 48 KiB read leaves 16 KiB ahead, so 16 + 48 KiB may stay behind (donation).
+    read_until_held_from(&reader, 0, 48 * KIB).await;
+    settle().await;
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    assert_eq!(upstream.sent().len(), 1, "the start was kept");
+    // With the point just past where the reads end and the read-ahead full, only 16 KiB stay behind.
+    reader.set_position(Duration::from_secs(34));
+    read_until_held_from(&reader, 48 * KIB, 300 * KIB).await;
+    settle().await;
+    assert_eq!(reader.facts().held_ahead, 64 * KIB);
+    read_now(&reader, 348 * KIB - 8 * KIB, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(upstream.sent().len(), 1, "8 KiB back is kept");
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    assert_eq!(upstream.sent().len(), 2, "the start was dropped");
+}
+
+#[tokio::test]
+async fn a_seek_moves_the_point_and_the_next_read_pins_it() {
+    let (_route, reader, _events) = setup(FakeFile::new()).await;
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    reader.set_position(Duration::from_secs(2));
+    assert_eq!(reader.facts().point, rate_bytes(2.0));
+    reader.seek_to(Duration::from_secs(50));
+    let estimate = rate_bytes(50.0);
+    assert_eq!(reader.facts().point, estimate);
+    // The player's first read there is where the file holds that position.
+    let anchor = estimate + 5_000;
+    read_now(&reader, anchor, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, anchor);
+    reader.set_position(Duration::from_secs(51));
+    assert_eq!(reader.facts().point, anchor + rate_bytes(1.0));
+}
+
+#[tokio::test]
+async fn only_a_read_at_the_playback_position_pins_the_point() {
+    let (_route, reader, _events) = setup(FakeFile::new()).await;
+    reader.seek_to(Duration::from_secs(50));
+    let estimate = rate_bytes(50.0);
+    // A scan further than the gap past the estimate, the file's head and an index read are served but pin nothing.
+    read_now(&reader, estimate + 3 * 8 * KIB, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    read_now(&reader, 100, 1).await.unwrap().unwrap();
+    read_now(&reader, SIZE - 1000, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, estimate);
+    // A read a little before the estimate does.
+    read_now(&reader, estimate - 1_000, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reader.facts().point, estimate - 1_000);
+}
+
+#[tokio::test]
+async fn a_held_read_is_served_while_the_player_starves() {
+    let (_route, reader, _events) = setup(FakeFile::new()).await;
+    assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+    let reader = Arc::new(reader);
+    let held = {
+        let reader = reader.clone();
+        tokio::spawn(async move { reader.read(64 * KIB, 100).await })
+    };
+    sleep(HELD).await;
+    assert!(!held.is_finished());
+    reader.set_starving(true);
+    let bytes = timeout(WAIT, held).await.unwrap().unwrap().unwrap();
+    assert_eq!(bytes, data().slice(64 * 1024..64 * 1024 + 100));
+    let facts = reader.facts();
+    assert_eq!(facts.starvation_releases, 1);
+    assert_eq!(facts.point, 64 * KIB);
+}
+
+#[tokio::test]
+async fn index_windows_read_without_the_limit_up_to_their_size() {
+    let upstream = FakeFile::new();
+    let (_route, reader, _events) = setup(upstream.clone()).await;
+    // The last 16 KiB of the file, far past the 64 KiB limit, read to the end.
+    assert_eq!(read_until_held(&reader, SIZE - 16 * KIB).await, SIZE);
+    assert_eq!(read_now(&reader, SIZE, 10).await.unwrap().unwrap().len(), 0);
+    // Just before them, past the limit: held.
+    assert!(read_now(&reader, SIZE - 32 * KIB, 10).await.is_none());
+}
+
+#[tokio::test]
+async fn a_broken_body_is_asked_again_with_if_range() {
+    let upstream = FakeFile::with(Behaviour {
+        breaks: VecDeque::from([20_000]),
+        ..Behaviour::default()
+    });
+    let (_route, reader, mut events) = setup(upstream.clone()).await;
+    assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+    assert_eq!(
+        upstream.sent(),
+        vec![
+            (Some("bytes=0-".into()), None),
+            (Some("bytes=20000-".into()), Some(ETAG.into())),
+        ]
+    );
+    let facts = reader.facts();
+    assert_eq!(facts.reconnects, 1);
+    assert_eq!(facts.requests, 2);
+    assert!(drain(&mut events).is_empty());
+}
+
+#[tokio::test]
+async fn a_file_changed_on_the_server_fails_as_a_bad_range() {
+    let upstream = FakeFile::with(Behaviour {
+        breaks: VecDeque::from([20_000]),
+        changed: true,
+        ..Behaviour::default()
+    });
+    let (_route, reader, mut events) = setup(upstream).await;
+    let at = read_until_held_upto(&reader, 20_000).await;
+    assert_eq!(at, 20_000);
+    assert_eq!(
+        timeout(WAIT, reader.read(20_000, 10)).await.unwrap(),
+        Err(ReadError::Failed)
+    );
+    assert_eq!(drain(&mut events), vec![RelayEvent::BadRange]);
+}
+
+/// Reads from 0 until a read fails or `end` is reached.
+async fn read_until_held_upto(reader: &StreamReader, end: u64) -> u64 {
+    let mut at = 0;
+    while at < end {
+        let len = (end - at).min(8 * KIB) as u32;
+        match timeout(WAIT, reader.read(at, len)).await.unwrap() {
+            Ok(bytes) => at += bytes.len() as u64,
+            Err(_) => break,
+        }
+    }
+    at
+}
+
+#[tokio::test]
+async fn a_window_fails_after_its_tries_and_reports_network_once() {
+    let upstream = FakeFile::with(Behaviour {
+        breaks: VecDeque::from([20_000]),
+        later_fail: Some(StreamError::Unreachable),
+        ..Behaviour::default()
+    });
+    let (_route, reader, mut events) = setup(upstream.clone()).await;
+    assert_eq!(read_until_held_upto(&reader, 20_000).await, 20_000);
+    assert_eq!(
+        timeout(WAIT, reader.read(20_000, 10)).await.unwrap(),
+        Err(ReadError::Failed)
+    );
+    assert_eq!(
+        timeout(WAIT, reader.read(20_000, 10)).await.unwrap(),
+        Err(ReadError::Failed)
+    );
+    assert_eq!(reader.facts().reconnects, 3);
+    assert_eq!(upstream.sent().len(), 4);
+    assert_eq!(drain(&mut events), vec![RelayEvent::Network]);
+}
+
+#[tokio::test]
+async fn refusals_and_failures_on_open_are_reported_once_per_route() {
+    let cases = [
+        (
+            Behaviour {
+                refuse: Some(StreamError::Refused {
+                    status: 403,
+                    shape: GatewayShape::Refused,
+                }),
+                ..Behaviour::default()
+            },
+            RelayEvent::Refused {
+                status: 403,
+                shape: GatewayShape::Refused,
+            },
+        ),
+        (
+            Behaviour {
+                refuse: Some(StreamError::Status { status: 404 }),
+                ..Behaviour::default()
+            },
+            RelayEvent::NotFound,
+        ),
+        (
+            Behaviour {
+                refuse: Some(StreamError::Status { status: 500 }),
+                ..Behaviour::default()
+            },
+            RelayEvent::Server { status: 500 },
+        ),
+        (
+            Behaviour {
+                html: true,
+                ..Behaviour::default()
+            },
+            RelayEvent::Refused {
+                status: 206,
+                shape: GatewayShape::SignIn,
+            },
+        ),
+    ];
+    for (behaviour, event) in cases {
+        let (route, mut events) = route(FakeFile::with(behaviour));
+        for _ in 0..2 {
+            let opened = route.open(PATH, Vec::new(), facts(), limits()).await;
+            assert_eq!(opened.unwrap_err(), ReadError::Failed);
+        }
+        assert_eq!(drain(&mut events), vec![event]);
+    }
+}
+
+#[tokio::test]
+async fn a_path_outside_the_prefixes_is_not_opened() {
+    let upstream = FakeFile::new();
+    let (route, _events) = route(upstream.clone());
+    let opened = route
+        .open("/Videos/other/stream", Vec::new(), facts(), limits())
+        .await;
+    assert_eq!(opened.unwrap_err(), ReadError::NotAllowed);
+    assert!(upstream.sent().is_empty());
+}
+
+#[tokio::test]
+async fn removing_the_route_cancels_reads_and_stops_the_requests() {
+    let upstream = FakeFile::new();
+    let (route, reader, _events) = setup(upstream.clone()).await;
+    assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+    let reader = Arc::new(reader);
+    let held = {
+        let reader = reader.clone();
+        tokio::spawn(async move { reader.read(64 * KIB, 10).await })
+    };
+    sleep(HELD).await;
+    route.remove();
+    assert_eq!(
+        timeout(WAIT, held).await.unwrap().unwrap(),
+        Err(ReadError::Cancelled)
+    );
+    assert_eq!(reader.read(0, 10).await, Err(ReadError::Cancelled));
+    until(|| upstream.live.load(Ordering::SeqCst) == 0).await;
+}
+
+#[tokio::test]
+async fn closing_the_reader_ends_its_requests() {
+    let upstream = FakeFile::new();
+    let (_route, reader, _events) = setup(upstream.clone()).await;
+    settle().await;
+    reader.close();
+    until(|| upstream.live.load(Ordering::SeqCst) == 0).await;
+}
+
+#[tokio::test]
+async fn the_least_recently_read_window_goes_first() {
+    let upstream = FakeFile::new();
+    let (route, _events) = route(upstream.clone());
+    let wide = ReaderLimits {
+        ahead: SIZE,
+        max_windows: 2,
+        ..limits()
+    };
+    let reader = open(&route, wide, facts()).await;
+    for offset in [300_000, 600_000] {
+        read_now(&reader, offset, 1).await.unwrap().unwrap();
+    }
+    assert_eq!(reader.facts().windows, 2);
+    // The window at 0 was dropped for the one at 600 000: reading there asks again.
+    read_now(&reader, 10, 1).await.unwrap().unwrap();
+    let sent = upstream.sent();
+    assert_eq!(sent.len(), 4);
+    assert_eq!(sent[3].0.as_deref(), Some("bytes=10-"));
+}
+
+#[tokio::test]
+async fn the_end_of_the_file_reads_empty() {
+    let (route, _events) = route(FakeFile::new());
+    let wide = ReaderLimits {
+        ahead: SIZE,
+        ..limits()
+    };
+    let reader = open(&route, wide, facts()).await;
+    let last = read_now(&reader, SIZE - 10, 100).await.unwrap().unwrap();
+    assert_eq!(last, data().slice(SIZE as usize - 10..));
+    assert!(
+        read_now(&reader, SIZE, 100)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        read_now(&reader, SIZE + 5, 100)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn two_reads_on_different_windows_run_at_once() {
+    let (route, _events) = route(FakeFile::new());
+    let wide = ReaderLimits {
+        ahead: SIZE,
+        ..limits()
+    };
+    let reader = open(&route, wide, facts()).await;
+    let (first, second) = tokio::join!(reader.read(200_000, 100), reader.read(700_000, 100));
+    let expected = data();
+    assert_eq!(first.unwrap(), expected.slice(200_000..200_100));
+    assert_eq!(second.unwrap(), expected.slice(700_000..700_100));
+    assert_eq!(reader.facts().windows, 3);
+}
+
+#[tokio::test]
+async fn a_cancelled_read_stops_what_its_window_fetched_for_it() {
+    let gate = Arc::new(Semaphore::new(0));
+    let far = 500_000;
+    let upstream = FakeFile::with(Behaviour {
+        gate: Some((far, gate.clone())),
+        ..Behaviour::default()
+    });
+    let (route, _events) = route(upstream.clone());
+    let wide = ReaderLimits {
+        ahead: SIZE,
+        ..limits()
+    };
+    let reader = Arc::new(open(&route, wide, facts()).await);
+    let gated = || upstream.gated.load(Ordering::SeqCst);
+    // A read three chunks into a window that is not the playback window: it fetches only for the read.
+    let waiting = {
+        let reader = reader.clone();
+        tokio::spawn(async move { reader.read(far + 3 * CHUNK as u64, 10).await })
+    };
+    gate.add_permits(1);
+    until(|| gated() == CHUNK as u64).await;
+    waiting.abort();
+    let _ = waiting.await;
+    gate.add_permits(10);
+    settle().await;
+    // At most the chunk already asked for when the read went: nothing more is fetched for nobody.
+    assert!(gated() <= 2 * CHUNK as u64);
+}
+
+#[tokio::test]
+async fn without_a_duration_the_bitrate_paces_the_point() {
+    let (route, _events) = route(FakeFile::new());
+    let reader = open(
+        &route,
+        limits(),
+        FileFacts {
+            duration: None,
+            bitrate: Some(80_000),
+            ..facts()
+        },
+    )
+    .await;
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    reader.set_position(Duration::from_secs(2));
+    // 80 000 bit/s is 10 000 bytes a second.
+    let facts = reader.facts();
+    assert!(facts.rate_known);
+    assert_eq!(facts.point, 20_000);
+}
+
+#[tokio::test]
+async fn without_any_rate_the_point_moves_only_at_seeks_and_starvation() {
+    let (route, _events) = route(FakeFile::new());
+    let reader = open(
+        &route,
+        limits(),
+        FileFacts {
+            duration: None,
+            bitrate: None,
+            ..facts()
+        },
+    )
+    .await;
+    assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+    reader.set_position(Duration::from_secs(30));
+    let facts = reader.facts();
+    assert!(!facts.rate_known);
+    assert_eq!(facts.point, 0);
+    assert_eq!(facts.served_ahead_time, None);
+    assert!(read_now(&reader, 64 * KIB, 10).await.is_none());
+    // A seek pins the point to the first read after it, wherever it is.
+    reader.seek_to(Duration::from_secs(60));
+    read_now(&reader, 600_000, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, 600_000);
+    assert_eq!(read_until_held(&reader, 600_001).await, 600_000 + 64 * KIB);
+    // Starving lets the held read through and pins the point there.
+    reader.set_starving(true);
+    read_now(&reader, 600_000 + 64 * KIB, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(reader.facts().point, 600_000 + 64 * KIB);
+}
+
+#[tokio::test]
+async fn facts_show_what_was_handed_out() {
+    let (_route, reader, _events) = setup(FakeFile::new()).await;
+    read_until_held_from(&reader, 0, 40 * KIB).await;
+    let facts = reader.facts();
+    assert_eq!(facts.point, 0);
+    assert_eq!(facts.served_ahead, 40 * KIB);
+    assert_eq!(
+        facts.served_ahead_time,
+        Some(Duration::from_secs_f64(
+            40.0 * 1024.0 / (SIZE as f64 / 100.0)
+        ))
+    );
+    assert_eq!(facts.read_rate, 40 * KIB / 5);
+    assert_eq!(facts.size, SIZE);
+}

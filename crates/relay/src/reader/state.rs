@@ -216,15 +216,17 @@ impl State {
         self.windows.iter().map(Window::held_behind).sum()
     }
 
-    /// The window that prefetches: the one, not an index window, that holds the point or reaches it within the gap.
+    /// The window that prefetches: the latest-starting one, not an index window, that starts at most the gap past the point and
+    /// ends at most the read-ahead before it. A window left further behind (the file's head read at a resume) does not fetch its way
+    /// up to the point.
     fn playback_window(&self) -> Option<u64> {
         let point = self.point();
         self.windows
             .iter()
             .filter(|window| {
                 !window.index
-                    && window.start <= point
-                    && point <= window.end.saturating_add(self.limits.gap)
+                    && window.start <= point.saturating_add(self.limits.gap)
+                    && window.end.saturating_add(self.limits.ahead) >= point
             })
             .max_by_key(|window| window.start)
             .map(|window| window.id)

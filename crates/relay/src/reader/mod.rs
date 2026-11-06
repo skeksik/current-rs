@@ -396,10 +396,12 @@ impl StreamReader {
 
     async fn read_inner(&self, offset: u64, max_len: u64) -> Result<Bytes, ReadError> {
         let inner = &self.inner;
+        // Registered once while this read waits for a window's next bytes, and dropped with the read.
+        let mut waiting: Option<Waiting<'_>> = None;
         loop {
             let mut notified = pin!(inner.changed.notified());
             notified.as_mut().enable();
-            let waiting = {
+            {
                 let mut state = lock(&inner.state);
                 if let Some(why) = state.closed {
                     return Err(why);
@@ -417,20 +419,27 @@ impl StreamReader {
                         inner.start_pump(&mut state, id, None);
                         continue;
                     }
-                    Step::Wait { window, missing } => missing.then(|| {
-                        if let Some(window) = state.window_mut(window) {
-                            window.waiting += 1;
+                    Step::Wait {
+                        window,
+                        missing: true,
+                    } if waiting
+                        .as_ref()
+                        .is_none_or(|waiting| waiting.window != window) =>
+                    {
+                        if let Some(entry) = state.window_mut(window) {
+                            entry.waiting += 1;
                         }
-                        Waiting { inner, window }
-                    }),
+                        drop(state);
+                        // Replaced outside the lock: dropping the old one takes it.
+                        waiting = Some(Waiting { inner, window });
+                        // Tell the window's pump, then check again with a fresh registration so this read does not wake itself.
+                        inner.changed.notify_waiters();
+                        continue;
+                    }
+                    Step::Wait { .. } => {}
                 }
-            };
-            if waiting.is_some() {
-                // The window's pump may fetch for this read now.
-                inner.changed.notify_waiters();
             }
             notified.await;
-            drop(waiting);
         }
     }
 
