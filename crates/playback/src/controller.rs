@@ -136,6 +136,9 @@ struct Session {
     last_report: Duration,
     /// An engine failed in this play and the plan moved on (ADR 0019 choice 9, ADR 0025's chain).
     fallback_used: bool,
+    /// The plan playing was asked for without direct play (a server choice, a fallback, no local route): the server's
+    /// `DirectPlayError` then says nothing about the file ([`planner::plan`]), in its transcode's facts either.
+    asked_without_direct_play: bool,
     /// The routes that failed in this play, oldest first (ADR 0025): none is tried again.
     failed_routes: Vec<Route>,
     /// The engine that has the file, once loaded.
@@ -185,6 +188,7 @@ impl Session {
             item_stopped: false,
             last_report: now,
             fallback_used: false,
+            asked_without_direct_play: false,
             failed_routes: Vec::new(),
             loaded_on: None,
             how: HowToPlay::Auto,
@@ -1572,6 +1576,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             subtitle: EngineTrack::Off,
         };
         session.planned = Some(planned);
+        session.asked_without_direct_play = !direct_play;
         session.position = start;
         session.last_progress = self.clock.now();
         session.stream_lost = false;
@@ -1787,9 +1792,19 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         if self.session.as_ref().is_none_or(Session::is_local) {
             return;
         }
-        let Ok(Some(facts)) = self.server.transcoding_facts().await else {
+        let Ok(Some(mut facts)) = self.server.transcoding_facts().await else {
             return;
         };
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.asked_without_direct_play)
+        {
+            // The panel showed it under the server's line too (owner's PC, 2026-11-06).
+            facts
+                .reasons
+                .retain(|reason| *reason != RouteReason::DIRECT_PLAY_ERROR);
+        }
         if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut()) {
             planned.plan.route = planner::correct(&planned.plan.route, &facts);
         }
