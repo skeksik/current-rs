@@ -1,7 +1,7 @@
 # 0026: One stream reader in the core, with libmpv's read-ahead limits
 
 Status: accepted (owner, 2026-11-06), from the shared-stream-reader spike. The owner chose A1, B1 and C1 (2026-11-06); the other
-options are kept as considered. Research, quotes and sources: `docs/notes/shared-stream-reader.md`. No product code was written.
+options are kept as considered. Implementation notes from R1 (feat/stream-reader, 2026-11-06) under "As built (R1)". Research, quotes and sources: `docs/notes/shared-stream-reader.md`. No product code was written.
 
 ## Context
 The owner's decision (2026-11-06): "Make limit calculation the same as it is in libmpv and proceed with shared module", on the
@@ -50,6 +50,29 @@ What led here:
   cancelled.
 - **The info panel** shows, for a route on the reader: buffered ahead (seconds and bytes, from the reader's served and fetched offsets
   against the point), the read rate, requests and reconnects, and starvation releases. Words in the core.
+
+### As built (R1)
+Written by R1 (feat/stream-reader, 2026-11-06), with the manager under the owner's rules; where it differs from the text above, this
+holds.
+- **A reader route is its own type** (`current_relay::ReaderRoute`): the relay's `Upstream`, prefixes and once-per-route events, but
+  no port, token or URL. `Relay::add_route` is unchanged. Dropping it cancels its readers (`ReadError::Cancelled`) and their requests.
+  This replaces "the listener starts on a route's first HTTP use".
+- **Only the playback window prefetches**: the latest-starting window, not an index window, that starts at most the gap (4 MiB) past
+  the point and ends at most the read-ahead before it. Other windows fetch only for reads waiting on them (up to the forward limit, not
+  held to the summed budget), so a window left at the file's head after a resume does not download its way up to the point. Bytes are
+  appended exactly to the limits; a chunk read past them waits in the pump (at most one chunk per window).
+- **Pinning the point:** after a start or `seek_to`, the first read that can be the playback position pins it: not an index read,
+  not a read in the file's first 4 MiB while the estimate is past them, not more than the gap past the estimate (a scan running
+  ahead), not more than the read-ahead before it. A starvation release pins it too.
+- **Without a duration** the server's bitrate gives the rate. Without either, the point does not follow the position: it moves only
+  when a read pins it after a start or seek and at starvation releases, so memory stays bounded and the player may stall briefly
+  each read-ahead; `ReaderFacts::rate_known` is false so the panel can say so.
+- **A file that changed on the server** (a 200 to an `If-Range` request, or another part than asked) fails the window as
+  `RelayEvent::BadRange`. A body that breaks off is asked again `tries` times (3) with a doubling back-off (500 ms first); the count
+  starts again after each chunk received.
+- **A cancelled read** (its future dropped) stops counting as waiting, so its window stops fetching for it.
+- **`ReaderFacts`:** size, point, `rate_known`, bytes held ahead, served ahead (bytes and time), the read rate over 5 s, requests,
+  reconnects, starvation releases, windows.
 
 ### Choice A: which crate (decided: A1, owner, 2026-11-06)
 - **A1 (chosen): a `reader` module in `current-relay`.** It reuses `Upstream`, `RelayEvent` and its once-per-route sink, the 206
@@ -104,7 +127,7 @@ What led here:
 - **ADR 0019, "What crosses `current-ffi`":** `PlatformFile` carries a `StreamReader` for routes on the reader and then no URL; the
   redaction exception for the relay URL holds only for files without a reader.
 - **ADR 0020:** a route can also be read through the stream reader (no HTTP hop): same server, prefixes, upstream, events and lifetime;
-  the listener starts on a route's first HTTP use instead of its creation. "Streaming" ("no buffering beyond a chunk per connection")
+  a route made for the reader is its own type and opens no port (R1, below). "Streaming" ("no buffering beyond a chunk per connection")
   stays the relay's rule; the reader buffers up to this record's limits. With A1, "Where it lives" names the reader.
 - **ADR 0025, "URLs across the bridge":** direct play on a platform engine reads through the reader where this record's table says,
   else through the relay as now; the info panel's reader facts.
