@@ -321,8 +321,8 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
 - [ ] The shared stream reader (owner, 2026-11-06; ADR 0026, accepted with A1, B1, C1): one reader in `current-relay` that every player can read a file
       through, at most 150 MiB ahead of the playback point and 50 MiB behind, as libmpv. Direct play on Windows' native route first;
       HLS and server streams unchanged; libmpv stays on HTTP (C1). In this order, one PR each:
-  - [ ] R1 (feat/stream-reader): the reader with its windows, limits, playback point and starvation guard, reconnects, the relay's
-        events and route lifetime; tests with a fake upstream
+  - [x] R1 (feat/stream-reader, #146): the reader with its windows, limits, playback point and starvation guard, reconnects, the
+        relay's events and route lifetime; tests with a fake upstream
   - [ ] R2 (feat/stream-reader-ffi): the `StreamReader` UniFFI object and `PlatformFile.reader`; the C# `Stream` adapter; bindings
         tests against the stand-in
   - [ ] R3 (feat/windows-native-reader): Windows' engine reads direct play through it (`MediaSource.CreateFromStream`), reports
