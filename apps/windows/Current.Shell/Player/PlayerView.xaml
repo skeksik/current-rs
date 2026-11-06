@@ -269,8 +269,8 @@
                     <!-- How to play (ADR 0025, choice 3 as amended; its own button next to Quality, owner 2026-10-31): Segoe Fluent
                          Icons E8AB "Switch" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-31). Its
                          name, tool tip and the choices' names are the core's; shown only when there is something to choose. -->
-                    <AppBarButton x:Name="HowToPlayButton" Style="{StaticResource TransportButtonStyle}" Label="How to play"
-                                  ToolTipService.ToolTip="How to play" Visibility="Collapsed">
+                    <AppBarButton x:Name="HowToPlayButton" Style="{StaticResource TransportButtonStyle}" Label="Player"
+                                  ToolTipService.ToolTip="Player" Visibility="Collapsed">
                         <AppBarButton.Icon>
                             <FontIcon Glyph="&#xE8AB;" />
                         </AppBarButton.Icon>

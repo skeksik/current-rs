@@ -343,10 +343,10 @@ fn the_playback_settings_switch_skipping() {
         core.how_to_play_name(HowToPlayKind::ServerTranscode),
         "Server transcode"
     );
-    assert_eq!(core.how_to_play_label(), "How to play");
+    assert_eq!(core.how_to_play_label(), "Player");
     assert_eq!(
         core.how_to_play_button_name(HowToPlayKind::Auto),
-        "How to play: Auto"
+        "Player: Auto"
     );
     let preferred = QualityChoice::Bitrate {
         bits_per_second: 20_000_000,

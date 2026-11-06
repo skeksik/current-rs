@@ -105,12 +105,12 @@ impl Core {
         current_app::how_to_play_name(how.into()).to_owned()
     }
 
-    /// The player's "How to play" button label: "How to play".
+    /// The player's "How to play" button label: "Player".
     pub fn how_to_play_label(&self) -> String {
         current_app::HOW_TO_PLAY.to_owned()
     }
 
-    /// The "How to play" button's tooltip and screen reader name, with the choice in use: "How to play: Auto".
+    /// The "How to play" button's tooltip and screen reader name, with the choice in use: "Player: Auto".
     pub fn how_to_play_button_name(&self, how: crate::HowToPlayKind) -> String {
         current_app::how_to_play_button_name(how.into())
     }

@@ -52,10 +52,10 @@ public static class PlayerWordsExtensions
     /// engine", "Server remux", "Server transcode".</summary>
     public static string HowToPlayName(this CoreHost core, HowToPlay how) => core.Core.HowToPlayName(PlayerMap.ToFfi(how));
 
-    /// <summary>The player's "How to play" button label: "How to play".</summary>
+    /// <summary>The player's "How to play" button label: "Player".</summary>
     public static string HowToPlayLabel(this CoreHost core) => core.Core.HowToPlayLabel();
 
-    /// <summary>The "How to play" button's tooltip and Narrator name, with the choice in use: "How to play: Auto".</summary>
+    /// <summary>The "How to play" button's tooltip and Narrator name, with the choice in use: "Player: Auto".</summary>
     public static string HowToPlayButtonName(this CoreHost core, HowToPlay how) =>
         core.Core.HowToPlayButtonName(PlayerMap.ToFfi(how));
 
