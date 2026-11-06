@@ -191,7 +191,7 @@
                         <x:Double x:Key="AppBarThemeCompactHeight">40</x:Double>
                         <x:Double x:Key="AppBarMoreButtonColumnMinWidth">0</x:Double>
                     </CommandBar.Resources>
-                    <AppBarButton x:Name="VolumeButton" Style="{StaticResource TransportButtonStyle}" Label="Volume">
+                    <AppBarButton x:Name="VolumeButton" Style="{StaticResource TransportButtonStyle}" Label="Volume" ToolTipService.ToolTip="Volume">
                         <AppBarButton.Icon>
                             <SymbolIcon x:Name="VolumeSymbol" Symbol="Volume" />
                         </AppBarButton.Icon>
@@ -202,6 +202,7 @@
                                         x:Name="MuteButton"
                                         Style="{StaticResource TransportToggleButtonStyle}"
                                         Label="Mute"
+                                        ToolTipService.ToolTip="Mute"
                                         Click="OnMute">
                                         <AppBarToggleButton.Icon>
                                             <SymbolIcon x:Name="MuteSymbol" Symbol="Volume" />
@@ -229,7 +230,7 @@
                             </Flyout>
                         </AppBarButton.Flyout>
                     </AppBarButton>
-                    <AppBarButton x:Name="SubtitlesButton" Style="{StaticResource TransportButtonStyle}" Label="Subtitles">
+                    <AppBarButton x:Name="SubtitlesButton" Style="{StaticResource TransportButtonStyle}" Label="Subtitles" ToolTipService.ToolTip="Subtitles">
                         <AppBarButton.Icon>
                             <FontIcon Glyph="&#xED1E;" />
                         </AppBarButton.Icon>
@@ -237,7 +238,8 @@
                             <MenuFlyout x:Name="SubtitlesMenu" Opening="OnSubtitlesMenuOpening" />
                         </AppBarButton.Flyout>
                     </AppBarButton>
-                    <AppBarButton x:Name="AudioButton" Style="{StaticResource TransportButtonStyle}" Label="Audio tracks">
+                    <AppBarButton x:Name="AudioButton" Style="{StaticResource TransportButtonStyle}" Label="Audio tracks"
+                                  ToolTipService.ToolTip="Audio tracks">
                         <AppBarButton.Icon>
                             <FontIcon Glyph="&#xED1F;" />
                         </AppBarButton.Icon>
@@ -273,7 +275,7 @@
                     <AppBarSeparator />
                     <!-- Quality: Segoe Fluent Icons E713 "Settings" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13,
                          read 2026-10-25). -->
-                    <AppBarButton x:Name="QualityButton" Style="{StaticResource TransportButtonStyle}" Label="Quality">
+                    <AppBarButton x:Name="QualityButton" Style="{StaticResource TransportButtonStyle}" Label="Quality" ToolTipService.ToolTip="Quality">
                         <AppBarButton.Icon>
                             <FontIcon Glyph="&#xE713;" />
                         </AppBarButton.Icon>
@@ -284,8 +286,8 @@
                     <!-- How to play (ADR 0025, choice 3 as amended; its own button next to Quality, owner 2026-10-31): Segoe Fluent
                          Icons E8AB "Switch" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-31). Its
                          name, tool tip and the choices' names are the core's; shown only when there is something to choose. -->
-                    <AppBarButton x:Name="HowToPlayButton" Style="{StaticResource TransportButtonStyle}" Label="How to play"
-                                  Visibility="Collapsed">
+                    <AppBarButton x:Name="HowToPlayButton" Style="{StaticResource TransportButtonStyle}" Label="Player"
+                                  ToolTipService.ToolTip="Player" Visibility="Collapsed">
                         <AppBarButton.Icon>
                             <FontIcon Glyph="&#xE8AB;" />
                         </AppBarButton.Icon>
