@@ -7,9 +7,11 @@ its clock stalls for 0.6–3 s at the start. Was that the network, the relay, or
 and is in no PR; this PR is notes only.
 
 ## Answer
-**Windows' player reads an HTTP stream at only about 110–140 Mbit/s, and that is what starves the video during its subtitle
-read-ahead.** The relay, `current-net`, the server and the network are each several times faster. The same player reading the same
-file from disk, with the same subtitle shown, does not stall.
+**Windows' player reads an HTTP stream at only about 110–140 Mbit/s, and its playback stalls while it reads.** The relay,
+`current-net`, the server and the network are each several times faster. From disk, the same player shows neither of the two stutters
+of the stutter notes (`docs/notes/windows-native-stutter.md`):
+- the start-up stall with an embedded text subtitle shown (Finding 1 there), which on a long 4K file lasts the whole play;
+- the stalls on 4K HDR10 at 60 fps without subtitles (Finding 2 there, whose cause was open), at 60 Hz as at 144 Hz.
 
 ## What was measured
 | Path | Rate | Stall at start with a subtitle shown | How measured |
@@ -39,7 +41,26 @@ bytes off the socket at that rate whatever the relay does, on one long connectio
 without `Range` (Python's `http.server`) left Windows' player in `Opening`, so the same file over HTTP without the relay was not
 measured. The disk run says parsing alone keeps up.
 
-## Why it shows only with a subtitle
+## A long file with a subtitle, and 4K60 without one
+Added the same day, once the server had indexed "W7 21 Long 4K HDR10 with SRT" (6 min, the 4K HDR10 60 fps file of W7 with an SRT
+track muxed in, made for this):
+
+| Case | Windows' player | libmpv |
+|---|---|---|
+| The 6-minute 4K file, SRT shown, 40 s from the start | **about half speed the whole time**: 18.8 s of video in 40 s, a 0.3–0.7 s stall twice a second; 64 s buffered and growing | smooth (65 s measured) |
+| "MKV, HEVC Main 10, HDR10, 4K, 60 fps", no subtitles, HDR monitor at 144 Hz, ~69 s | 19 stalls, 2.7 s lost (~4 %) | none |
+| The same at 60 Hz (the owner changed the refresh rate) | 15 stalls, 2.2 s lost (~3 %) | — |
+| The same file at 60 Hz, **from disk** (W1's prototype, the same `MediaPlayerElement`) | **none** (69 s) | — |
+
+libmpv's numbers come from the core's position (once a second in the player page); it showed four 50–70 ms dips exactly 10 s apart,
+which line up with the core's progress report and are taken as the measurement's own.
+
+Without a subtitle, Windows' player still read ahead the whole time on this 40 Mbit/s file (75 s buffered after 70 s, at 1–4 s of
+video per second, so near its ceiling), and the stalls came while 20–75 s were buffered. So the frames it had were not what was
+missing: inferred, its playback waits on its own network reads (not traced). The refresh rate is not the cause (60 Hz as 144 Hz), nor
+the GPU or the display (libmpv on the same monitor, Windows' player from disk).
+
+## Why it shows most with a subtitle
 Without a presented text track, Windows' player keeps about 15–20 s ahead and reads at the video's rate (67 Mbit/s for the 40 Mbit/s
 4K file), well under its ceiling. Presenting an MKV text track makes it read far ahead at once (W7's stutter notes: a 1-minute file
 in about 3 s). At ~120 Mbit/s that read-ahead and the playback share one slow reader, and a 40 Mbit/s video starves. Turning the
@@ -47,11 +68,8 @@ subtitle on 3 s later (`docs/notes/windows-native-stutter.md`, variant c) remove
 one (3.6 s lost after the subtitle came on), as a fixed ceiling predicts. Holding the start paused (variant b) did not help: the
 read-ahead ran the whole 4 s cap.
 
-The 4K HDR10 60 fps stalls without subtitles (the stutter notes' Finding 2) happened with 50–59 s buffered, so this ceiling does not
-explain them.
-
 ## Proposal
-1. **Feed Windows' player from our own stream instead of its HTTP reader.** `MediaSource` can be made from a random-access stream
+1. **Feed Windows' player from our own stream instead of its HTTP reader.** It would address both stutters, as the disk runs show. `MediaSource` can be made from a random-access stream
    (`MediaSource.CreateFromStream`, not verified here); the engine would hand it a stream that reads the relay's URL (or the core
    directly) with a large read-ahead, so Windows' player never does its own HTTP reads. Needs a spike first: whether Windows' player
    reads such a stream faster, how seeking and `Range` map onto it, and whether HLS (`AdaptiveMediaSource`) needs it at all (segments
@@ -62,8 +80,8 @@ explain them.
 
 ## Not verified
 - Whether the rate is Windows' HTTP reader or its MKV parsing over HTTP (see above).
-- How far the read-ahead goes in a feature-length file: "W7 21 Long 4K HDR10 with SRT" (6 min, made for this) is in the owner's
-  test folder but the server has not indexed it yet.
+- How far the read-ahead goes in a feature-length file: on the 6-minute file it went on for the 40 s measured.
+- That Windows' player's playback waits on its network reads (inferred from the stalls with a full buffer and none from disk).
 - Other Windows builds and other network adapters.
 - `MediaSource.CreateFromStream`'s behaviour with a custom stream (proposal 1).
 
