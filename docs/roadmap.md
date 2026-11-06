@@ -309,12 +309,27 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       Windows' player does not start the transcode; the route for server streams is decided with the cause known. Fixed: the
       paused hang (#122), the cause (the item's start time; notes #123, fix #124); checked on the owner's PC (recheck, #131). The
       route for server streams is still the owner's to decide (ADR 0025 unchanged: Windows' player first)
-- [ ] Crash in `Microsoft.Graphics.Display.dll` (0xc0000005) when a playing window moved to the SDR monitor and back (W7 §7);
-      the display watcher recreates its `DisplayInformation` on each monitor change (cause not verified). Fix: #126 (one per
+- [x] Crash in `Microsoft.Graphics.Display.dll` (0xc0000005) when a playing window moved to the SDR monitor and back (W7 §7);
+      the display watcher recreates its `DisplayInformation` on each monitor change (cause not verified). #126 (one per
       window; reproduced and checked on the owner's PC, a mouse drag included, #131)
 - [ ] Windows' player stutters on 4K HDR10 at 60 fps (about 40 Mbit/s) with Windows HDR on, and for the first seconds after a start
       (W7, "Playback smoothness"); find whether the decoder, the HDR composition or the relay. Notes: #127 (the start-up stall comes
-      with a presented MKV text subtitle; the 4K60 stalls are not the relay or the decoder's load, cause not found)
+      with a presented MKV text subtitle; the 4K60 stalls are not the relay or the decoder's load, cause not found). Cause: Windows'
+      player's own HTTP reading (notes #139); fed from our own stream it stalled nowhere but read the whole file into memory (notes
+      #141). Owner, 2026-11-06: one stream reader in the core with libmpv's limits; the tasks below (ADR 0026, accepted;
+      `docs/notes/shared-stream-reader.md`)
+- [ ] The shared stream reader (owner, 2026-11-06; ADR 0026, accepted with A1, B1, C1): one reader in `current-relay` that every player can read a file
+      through, at most 150 MiB ahead of the playback point and 50 MiB behind, as libmpv. Direct play on Windows' native route first;
+      HLS and server streams unchanged; libmpv stays on HTTP (C1). In this order, one PR each:
+  - [ ] R1 (feat/stream-reader): the reader with its windows, limits, playback point and starvation guard, reconnects, the relay's
+        events and route lifetime; tests with a fake upstream
+  - [ ] R2 (feat/stream-reader-ffi): the `StreamReader` UniFFI object and `PlatformFile.reader`; the C# `Stream` adapter; bindings
+        tests against the stand-in
+  - [ ] R3 (feat/windows-native-reader): Windows' engine reads direct play through it (`MediaSource.CreateFromStream`), reports
+        `Buffering` for the guard; the info panel's reader facts
+  - [ ] R4 (device check on the owner's PC): memory on a feature-length file, over Tailscale, a connection dropped mid-file, seeks,
+        an audio track switch, cues with the subtitle scan held (ADR 0026 B1), how often the starvation guard fired, and the
+        stutter cases again
 - [x] A selected audio stream with no Media Foundation track fails the track, so the file moves to libmpv: ALAC in MP4 plays silently
       on Windows' player today (W7, "ALAC in MP4"). #118; checked on the owner's PC, sound heard (#131)
 - [x] PGS on the native route: red and blue swapped (a yellow cue shows cyan), and on cropped video (a 1080-high canvas over 2.39:1)
@@ -395,6 +410,9 @@ Done when: a title can be found, requested and followed to "available", then pla
       needs rendering), then libmpv as the app engine (no longer deferred), then the server's remux or transcode. Needs FFmpeg's
       libavformat and libmpv on macOS (new dependencies, the owner's approval) and amends ADR 0008 and ADR 0010
   - [ ] M3-1: AVPlayer as a platform engine (ADR 0025's foreign trait) in Swift
+  - [ ] AVPlayer's direct play of a progressive file through the shared stream reader (ADR 0026): the Swift adapter over
+        `StreamReader` as an `AVAssetResourceLoaderDelegate`'s data source; whether `preferredForwardBufferDuration` applies to such
+        an asset; HLS and the device remux stay on the relay (a resource loader cannot serve segments)
   - [ ] M3-2 spike (spike/macos-device-remux): libavformat MKV to fMP4 HLS served by the relay: segments on keyframes, seeking,
         `hvc1`, Dolby Vision boxes, audio AVPlayer lacks, our LGPL build on macOS; an ADR
   - [ ] M3-3 spike (spike/macos-libmpv): libmpv under our SwiftUI controls (render API or `gpu-next`), HDR/EDR, our LGPL build; an ADR
@@ -412,6 +430,8 @@ Done when: everything from M1, M2 and M4 works on a Mac.
   - [ ] L1 spike (spike/linux-gstreamer): `playbin3` into `gtk4paintablesink` under our GTK controls: VA-API, HDR through GDK colour
         states, ASS and PGS on GStreamer (ADR 0025 departure 6), MPRIS; an ADR amending ADR 0011
   - [ ] L2: the GStreamer engine in Rust, implementing `Engine`; libmpv stays the app engine
+  - [ ] GStreamer's direct play through the shared stream reader (ADR 0026), in Rust with no bridge (`appsrc` in random-access mode
+        or `giostreamsrc`); what `playbin3`'s own queues buffer with it
 - [ ] Our LGPL-2.1 libmpv and FFmpeg for Linux (the distributions' builds are GPL; ADR 0003, ADR 0011), and the Linux CI job
 - [ ] Several player windows at once: libmpv engines share FFmpeg's log through the first mpv instance only (ADR 0019, 2026-10-25), so
       `current-mpv` runs one engine per process. For several players: one redactor for every engine's secrets, and a closed engine
