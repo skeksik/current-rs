@@ -303,34 +303,39 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       and their link (ADR 0021)
 - [x] W7 (test/windows-native-player-check, #117): device check on the owner's PC (`docs/notes/windows-native-player-check.md`). The
       failures, one task each:
-- [ ] Native HLS: no server transcode started on Windows' player in W7 (`stream_timeout` after 8 s, three tries out of three; then
+- [x] Native HLS: no server transcode started on Windows' player in W7 (`stream_timeout` after 8 s, three tries out of three; then
       libmpv played it), and a server stream loaded natively while paused hangs on play and ends in "The server can't be reached"
       with no fallback to libmpv (W7 §8). Owner, 2026-10-31: "Fix, then investigate": end the paused hang first, then find why
-      Windows' player does not start the transcode; the route for server streams is decided with the cause known
+      Windows' player does not start the transcode; the route for server streams is decided with the cause known. Fixed: the
+      paused hang (#122), the cause (the item's start time; notes #123, fix #124); checked on the owner's PC (recheck, #131). The
+      route for server streams is still the owner's to decide (ADR 0025 unchanged: Windows' player first)
 - [ ] Crash in `Microsoft.Graphics.Display.dll` (0xc0000005) when a playing window moved to the SDR monitor and back (W7 §7);
-      the display watcher recreates its `DisplayInformation` on each monitor change (cause not verified)
+      the display watcher recreates its `DisplayInformation` on each monitor change (cause not verified). Fix: #126 (one per
+      window; reproduced and checked on the owner's PC, a mouse drag included, #131)
 - [ ] Windows' player stutters on 4K HDR10 at 60 fps (about 40 Mbit/s) with Windows HDR on, and for the first seconds after a start
-      (W7, "Playback smoothness"); find whether the decoder, the HDR composition or the relay
-- [ ] A selected audio stream with no Media Foundation track fails the track, so the file moves to libmpv: ALAC in MP4 plays silently
-      on Windows' player today (W7, "ALAC in MP4")
-- [ ] PGS on the native route: red and blue swapped (a yellow cue shows cyan), and on cropped video (a 1080-high canvas over 2.39:1)
-      a cue placed high in the canvas is outside the window; centre the canvas on the picture (W7 §11)
-- [ ] Native subtitle cues outlive a track or presentation change: an external WebVTT cue stuck on screen for 25 s, and a cue from
-      the previous play shown after Off → German (W7 §10, §13)
+      (W7, "Playback smoothness"); find whether the decoder, the HDR composition or the relay. Notes: #127 (the start-up stall comes
+      with a presented MKV text subtitle; the 4K60 stalls are not the relay or the decoder's load, cause not found)
+- [x] A selected audio stream with no Media Foundation track fails the track, so the file moves to libmpv: ALAC in MP4 plays silently
+      on Windows' player today (W7, "ALAC in MP4"). #118; checked on the owner's PC, sound heard (#131)
+- [x] PGS on the native route: red and blue swapped (a yellow cue shows cyan), and on cropped video (a 1080-high canvas over 2.39:1)
+      a cue placed high in the canvas is outside the window; centre the canvas on the picture (W7 §11). #119; checked (#131)
+- [x] Native subtitle cues outlive a track or presentation change: an external WebVTT cue stuck on screen for 25 s, and a cue from
+      the previous play shown after Off → German (W7 §10, §13). #120; checked (#131)
 - [x] "How to play" (owner, 2026-10-31; W7 §9, proposal 2; feat/how-to-play-core #128, feat/how-to-play-ffi #129,
       feat/how-to-play-windows): Auto, Native, Remux, App engine, Transcode, set globally in Settings →
       Playback and for the current playback in the player (its own button next to Quality, owner 2026-10-31); a route the file cannot use falls to the next supported one below it
       (native → remux → app engine → server), and a chosen value does not switch back automatically. Replaces "Player" (Automatic,
       Always app engine) and "Play with app engine", which the core and the C# adapters have and the Windows app never showed.
       Amends ADR 0025 choice 3 with the owner's words; open points in the W7 notes
-- [ ] CodecQuery: Windows' "Dolby AC-3 and E-AC-3 IEC-61937 converter MFT" is counted as an AC-3/E-AC-3 decoder, so a PC without
-      the PC maker's Dolby decoder would send AC-3 natively (W7 §4)
-- [ ] Info panel words on Windows: "Player · software decoder" on every native route, a reason kept after the track it named is no
+- [x] CodecQuery: Windows' "Dolby AC-3 and E-AC-3 IEC-61937 converter MFT" is counted as an AC-3/E-AC-3 decoder, so a PC without
+      the PC maker's Dolby decoder would send AC-3 natively (W7 §4). #121; a PC without the Dolby decoder is still not tested
+- [x] Info panel words on Windows: "Player · software decoder" on every native route, a reason kept after the track it named is no
       longer selected, "Server transcode could not start" without saying the native engine's attempt failed, and "External ·
-      external" (W7 §1, §8, §10, §19)
-- [ ] Supported formats rows after W7: MOV (says app engine; MP4 files reach the core as `mov` and play natively), Dolby Vision 5 and
+      external" (W7 §1, §8, §10, §19). #125; checked (#131)
+- [x] Supported formats rows after W7: MOV (says app engine; MP4 files reach the core as `mov` and play natively), Dolby Vision 5 and
       8 ("Not checked on a device yet": checked in W1 and W7), MPEG-2 and MP3 (now seen natively), MPEG-4 Part 2 (Windows has a
-      decoder, no row) (W7 §20)
+      decoder, no row) (W7 §20). #118, #125; checked (#131). MPEG-4 Part 2 left as it is for the owner to decide (a native row
+      needs a CodecQuery subtype and a device check)
 - [x] Settings to turn off switching back to Windows' player, per situation (owner, 2026-10-29). A switch to libmpv still happens
       when it must (a speed Windows' player ignores, PQ video on an SDR display, ADR 0025); with the setting off for that situation,
       the file stays on libmpv when the cause goes away (the speed back to normal, the window back on an HDR display) instead of
