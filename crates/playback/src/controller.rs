@@ -1016,6 +1016,10 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         if session.chosen_here && session.how == how {
             return;
         }
+        // A server stream a server choice asked for is left for a local choice or Auto: the route check below sees only server routes
+        // while a server stream plays, so it would keep it (the owner's PC, 2026-11-06: Server transcode, then Auto and Native, moved
+        // nothing). A server stream the file or the quality needed stays, as the server would send it again.
+        let left_server_choice = session.how.is_server() && !how.is_server();
         session.how = how;
         session.chosen_here = true;
         if !matches!(self.phase, Phase::Active | Phase::Loading) {
@@ -1027,22 +1031,23 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             .as_ref()
             .map(|planned| planned.plan.route.clone());
         let stays = !how.is_server()
+            && !left_server_choice
             && current.as_ref().is_some_and(|current| {
                 self.candidates(tracks, self.route_context())
                     .first()
                     .is_some_and(|first| same_route(first, current))
             });
         if stays {
-            // The reasons now say the route was chosen.
+            // The reasons now say who chose the route, or with Auto that no one did.
             let reason = self.route_context().chosen_reason();
-            if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut())
-                && let Some(reason) = reason
-            {
+            if let Some(planned) = self.session.as_mut().and_then(|s| s.planned.as_mut()) {
                 planned.plan.reasons.retain(|known| {
                     *known != RouteReason::SETTING_CHOSE_ROUTE
                         && *known != RouteReason::USER_CHOSE_ROUTE
                 });
-                planned.plan.reasons.insert(0, reason);
+                if let Some(reason) = reason {
+                    planned.plan.reasons.insert(0, reason);
+                }
             }
             self.publish(true);
             return;
