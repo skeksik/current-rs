@@ -4,7 +4,7 @@ Status: accepted (2026-10-28, owner), from the native-player-first spike. The ro
 are the owner's (2026-10-28). Revised by task W1 (2026-10-28): departures 1 to 3 checked on the owner's PC and kept, departure 4
 dropped, departure 8 and the speed rule added (owner, 2026-10-28). Research, quotes and sources: `docs/notes/native-player-first.md`;
 the device check: `docs/notes/windows-native-player.md`. No product code was written. Choice 3 amended after W7 (owner, 2026-10-31;
-"How to play"), the amended text approved by the owner (2026-10-31).
+"How to play", named "Player" on screen on 2026-11-06), the amended text approved by the owner (2026-10-31).
 
 ## Context
 The owner's decision (2026-10-28): "Add a native player route for all the targets as it should've been from the very beginning, remux if
@@ -160,6 +160,9 @@ The existing client's behaviour is the default on every platform; where ours dif
      remux, Server transcode; no Device remux, departure 1). The player lists Auto and the choices that can play the item playing: a
      local step whose route the check puts first for the file with its tracks, and the server's steps its permissions allow.
    - In the player, "How to play" is its own button on the player bar, next to Quality (owner, 2026-10-31), not a submenu.
+   - **Named "Player" on screen (owner, 2026-11-06),** in Settings → Playback and on the player's button ("Player: Auto"), with its
+     reasons ("You chose this player."). The owner asked for "decoder or something like this" and chose "Player" over "Decoder" and
+     "Playback engine". The choices keep their names; the code keeps `HowToPlay`.
 
 ### Departures (approved by the owner, 2026-10-28)
 1. **Windows has no device remux.** What differs: the existing client remuxes MKV for its native player; Media Foundation reads MKV

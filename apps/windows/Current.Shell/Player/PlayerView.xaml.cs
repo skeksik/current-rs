@@ -1085,7 +1085,7 @@ public sealed partial class PlayerView : UserControl
         }
     }
 
-    /// <summary>The button shows only with something to choose; its name and tool tip say the choice in use ("How to play: Auto").</summary>
+    /// <summary>The button shows only with something to choose; its name and tool tip say the choice in use ("Player: Auto").</summary>
     private void ShowHowToPlay(PlayerState state)
     {
         var choosable = state.HowToPlayChoices.Count > 1;
