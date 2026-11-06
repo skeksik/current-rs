@@ -278,6 +278,9 @@ Fix and polish:
 - [x] No search or Refresh in the title bar while the player is open (owner, 2026-10-28; PR 106)
 - [ ] Browse by genre: a Genres tab and a Genres row on Home; Studios and Networks rows on Home (owner, 2026-10-26, from the Windows UI
       pass; moved here from M4, 2026-10-27)
+- [ ] Windows: the details page's poster crops an image of another shape from its left edge, while the tiles crop it around the centre
+      (owner, 2026-11-06). The tile draws it with an `ImageBrush`, the details page with an `Image` (`UniformToFill` in
+      `PosterFrame`); why the `Image` keeps its left part is not verified. Centre it as the tiles do, and check the backdrop too
 Native player first (owner, 2026-10-28; ADR 0025): Windows' own player (Media Foundation in `MediaPlayerElement`) first,
 then libmpv, then the server; no device remux on Windows (MF reads MKV; departure 1). In this order, one PR each:
 - [x] W1 spike (spike/windows-native-player, #105): a prototype on the owner's PC, as D2 was (`docs/notes/windows-native-player.md`).
