@@ -1101,7 +1101,7 @@ public sealed partial class PlayerView : UserControl
     private void OnInfo(object sender, RoutedEventArgs e)
     {
         var on = InfoButton.IsChecked == true;
-        InfoPanel.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        InfoPopup.IsOpen = on;
         if (on)
         {
             _infoTimer.Start();
@@ -1115,7 +1115,7 @@ public sealed partial class PlayerView : UserControl
 
     private async Task ShowInfoAsync()
     {
-        if (_session is not { } session || InfoPanel.Visibility != Visibility.Visible)
+        if (_session is not { } session || !InfoPopup.IsOpen)
         {
             return;
         }
@@ -1203,7 +1203,7 @@ public sealed partial class PlayerView : UserControl
         Visibility = Visibility.Collapsed;
         ProblemInfo.IsOpen = false;
         InfoButton.IsChecked = false;
-        InfoPanel.Visibility = Visibility.Collapsed;
+        InfoPopup.IsOpen = false;
         SkipButton.Visibility = Visibility.Collapsed;
         NextCard.Visibility = Visibility.Collapsed;
         BusyRing.IsActive = false;
