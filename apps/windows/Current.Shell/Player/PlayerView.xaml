@@ -74,28 +74,45 @@
             </InfoBar.ActionButton>
         </InfoBar>
 
-        <!-- Playback info: what the core's playback_info() says, never a URL. On the right, over the video, in the panel's acrylic. The
-             acrylic shows its tint only, not the video blurred: "It's not possible to have compositor content sample from external
-             content", and a SwapChainPanel is external content ("Visual layer overview", Differences from UWP, learn.microsoft.com,
-             ms.date 2026-03-16, read 2026-10-26; owner's run, 2026-10-26). -->
-        <Border
-            x:Name="InfoPanel"
+        <!-- Playback info: what the core's playback_info() says, never a URL. On the right, over the video, in a pop-up window of its own
+             with Windows' desktop acrylic, as the menus have (WinUI's MenuFlyoutPresenter sets SystemBackdrop to a DesktopAcrylicBackdrop
+             over a transparent background: generic.xaml, Microsoft.WindowsAppSDK.WinUI 2.3.9). Inside the window, acrylic shows its tint
+             only, never the video: "It's not possible to have compositor content sample from external content", and a SwapChainPanel
+             is external content ("Visual layer overview", Differences from UWP, learn.microsoft.com, ms.date 2026-03-16, read
+             2026-10-26). A pop-up not constrained to the window's bounds is a window of its own over ours, so its backdrop sees the
+             video; SystemBackdropElement draws that backdrop behind the panel's content with its corners (SystemBackdropElement,
+             learn.microsoft.com, updated 2026-07-17, read 2026-11-06). Set on the Popup itself, the backdrop drew nothing (owner's PC,
+             2026-11-06). Only this panel: the owner kept the control bar as it was (2026-11-06). The slot holds the pop-up's place at
+             the top right; the pop-up opens with the panel (PlayerView.xaml.cs, OnInfo). -->
+        <Grid
             Width="360"
             Margin="12"
             HorizontalAlignment="Right"
-            VerticalAlignment="Top"
-            Visibility="Collapsed"
-            Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
-            BorderThickness="1"
-            CornerRadius="{ThemeResource OverlayCornerRadius}">
-            <ScrollViewer x:Name="InfoScroller" MaxHeight="480">
-                <StackPanel Padding="16,12" Spacing="2">
-                    <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="Playback info" />
-                    <TextBlock x:Name="InfoText" Style="{StaticResource CaptionTextBlockStyle}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
-                </StackPanel>
-            </ScrollViewer>
-        </Border>
+            VerticalAlignment="Top">
+            <Popup x:Name="InfoPopup" ShouldConstrainToRootBounds="False" IsLightDismissEnabled="False">
+                <Border
+                    x:Name="InfoPanel"
+                    Width="360"
+                    Background="Transparent"
+                    BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{ThemeResource OverlayCornerRadius}">
+                    <Grid>
+                        <SystemBackdropElement CornerRadius="{ThemeResource OverlayCornerRadius}">
+                            <SystemBackdropElement.SystemBackdrop>
+                                <DesktopAcrylicBackdrop />
+                            </SystemBackdropElement.SystemBackdrop>
+                        </SystemBackdropElement>
+                        <ScrollViewer x:Name="InfoScroller" MaxHeight="480">
+                            <StackPanel Padding="16,12" Spacing="2">
+                                <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" AutomationProperties.HeadingLevel="Level2" Text="Playback info" />
+                                <TextBlock x:Name="InfoText" Style="{StaticResource CaptionTextBlockStyle}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+            </Popup>
+        </Grid>
 
         <StackPanel VerticalAlignment="Bottom">
             <!-- The skip button and the next-episode card, on the right above the controls, as the core reports them. They stay while
