@@ -675,6 +675,34 @@ fn the_servers_transcoding_facts_correct_the_route_after_start() {
     );
 }
 
+#[test]
+fn the_servers_transcoding_facts_are_read_again_with_each_progress_report() {
+    let mut player = Harness::new(AutoSkip::off());
+    player.server.answer(Ok(answer(
+        hls(StreamAction::Transcode, StreamAction::Transcode),
+        vec![],
+    )));
+    let facts = |bitrate| TranscodingFacts {
+        bitrate: Some(bitrate),
+        ..TranscodingFacts::default()
+    };
+    // At the start the server still reports the previous transcode.
+    player.server.state().facts = Some(facts(6_000_000));
+    player.play(MediaKind::MOVIE, Duration::ZERO);
+    player.start();
+    let bitrate = |player: &Harness| {
+        player
+            .player
+            .details()
+            .and_then(|d| d.transcoding)
+            .and_then(|t| t.bitrate)
+    };
+    assert_eq!(bitrate(&player), Some(6_000_000));
+    player.server.state().facts = Some(facts(4_000_000));
+    player.wait(PROGRESS_INTERVAL);
+    assert_eq!(bitrate(&player), Some(4_000_000));
+}
+
 fn with_segments(player: &mut Harness, segments: Vec<Segment>) {
     let mut with = answer(ServerOffer::DirectPlay, vec![]);
     with.source.has_segments = true;
