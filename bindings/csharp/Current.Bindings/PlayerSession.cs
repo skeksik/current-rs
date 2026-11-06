@@ -150,10 +150,11 @@ public sealed class PlayerSession : IAsyncDisposable
     public Task SetQualityAsync(QualityChoice quality, CancellationToken ct = default) =>
         CoreCall.RunVoidAsync(token => Open.SetQuality(PlayerMap.ToFfi(quality), token), ct);
 
-    /// <summary>"Play with app engine": the item playing moves to libmpv at the position, then the server if libmpv cannot (ADR 0025).
-    /// Only this item; nothing changes on a player with libmpv alone.</summary>
-    public Task PlayWithAppEngineAsync(CancellationToken ct = default) =>
-        CoreCall.RunVoidAsync(token => Open.PlayWithAppEngine(token), ct);
+    /// <summary>"How to play" for the item playing only (ADR 0025, choice 3 as amended): it re-plans at the position at once, Auto
+    /// included; the next item uses Settings'. Offer <see cref="PlayerState.HowToPlayChoices"/>. <see cref="HowToPlay.AppEngine"/> is
+    /// what "Play with app engine" was.</summary>
+    public Task ChooseHowToPlayAsync(HowToPlay how, CancellationToken ct = default) =>
+        CoreCall.RunVoidAsync(token => Open.ChooseHowToPlay(PlayerMap.ToFfi(how), token), ct);
 
     /// <summary>Plays the next episode now, from its start.</summary>
     public Task PlayNextAsync(CancellationToken ct = default) => CoreCall.RunVoidAsync(token => Open.PlayNext(token), ct);
@@ -285,13 +286,13 @@ public static class PlaybackExtensions
             return true;
         });
 
-    /// <summary>Settings → Playback → "Player" (ADR 0025): Automatic or Always app engine. Saved at once; it applies from the next
-    /// item played.</summary>
+    /// <summary>Settings → Playback → "How to play" (ADR 0025, choice 3 as amended; it replaces "Player"). Saved at once; it applies
+    /// from the next item played.</summary>
     /// <exception cref="CoreStoreException">The settings could not be saved: the setting stands for this run.</exception>
-    public static Task SetPlayerChoiceAsync(this CoreHost core, PlayerChoice choice) =>
+    public static Task SetHowToPlayAsync(this CoreHost core, HowToPlay how) =>
         CoreCall.RunUncancellableAsync(async () =>
         {
-            await core.Core.SetPlayerChoice(PlayerMap.ToFfi(choice)).ConfigureAwait(false);
+            await core.Core.SetHowToPlay(PlayerMap.ToFfi(how)).ConfigureAwait(false);
             return true;
         });
 

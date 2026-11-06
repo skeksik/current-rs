@@ -57,6 +57,8 @@ public sealed partial class SettingsPage : Page
             AllQualitiesSwitch.IsEnabled = true;
             ShowPreferredQuality(core);
             PreferredQualityBox.IsEnabled = true;
+            ShowHowToPlay(core);
+            HowToPlayBox.IsEnabled = true;
             ShowLibraryMemory(core.LibraryMemory);
             RememberSortSwitch.IsEnabled = RememberFilterSwitch.IsEnabled = RememberViewSwitch.IsEnabled = true;
             Servers ??= new ServersViewModel(core, new DispatcherQueueUi(DispatcherQueue));
@@ -341,6 +343,63 @@ public sealed partial class SettingsPage : Page
         {
             Trace.TraceError($"Current: changing the preferred quality failed: {error.GetType().Name}");
             ShowPreferredQuality(core);
+            ShowPlaybackInfo(ProblemTexts.Unexpected);
+        }
+    }
+
+    /// <summary>"How to play"'s list is being filled from the core: its SelectionChanged is not a choice of the user's.</summary>
+    private bool _showingHowToPlay;
+
+    /// <summary>The entries of "How to play"'s list, as the core lists them for Windows (index for index).</summary>
+    private IReadOnlyList<HowToPlay> _howToPlayChoices = [];
+
+    /// <summary>Fills "How to play"'s list as the core names it (no remux on the device on Windows, ADR 0025 departure 1) and selects
+    /// the setting's value.</summary>
+    private void ShowHowToPlay(CoreHost core)
+    {
+        _showingHowToPlay = true;
+        _howToPlayChoices = core.SettingsHowToPlayChoices(hasDeviceRemux: false);
+        HowToPlayBox.Items.Clear();
+        foreach (var choice in _howToPlayChoices)
+        {
+            HowToPlayBox.Items.Add(core.HowToPlayName(choice));
+        }
+        var current = core.PlaybackSettings().HowToPlay;
+        var selected = 0;
+        for (var i = 0; i < _howToPlayChoices.Count; i++)
+        {
+            if (_howToPlayChoices[i] == current)
+            {
+                selected = i;
+                break;
+            }
+        }
+        HowToPlayBox.SelectedIndex = selected;
+        _showingHowToPlay = false;
+    }
+
+    /// <summary>Saves "How to play" at once; it applies from the next item played. If it cannot be saved it still stands for this run
+    /// (the core's rule).</summary>
+    private async void OnHowToPlayChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var index = HowToPlayBox.SelectedIndex;
+        if (_showingHowToPlay || App.Core is not { } core || index < 0 || index >= _howToPlayChoices.Count)
+        {
+            return;
+        }
+        PlaybackInfo.IsOpen = false;
+        try
+        {
+            await core.SetHowToPlayAsync(_howToPlayChoices[index]);
+        }
+        catch (CoreStoreException error)
+        {
+            ShowPlaybackInfo($"It applies until Current closes. {ProblemTexts.Store(error.Problem)}");
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: changing how to play failed: {error.GetType().Name}");
+            ShowHowToPlay(core);
             ShowPlaybackInfo(ProblemTexts.Unexpected);
         }
     }

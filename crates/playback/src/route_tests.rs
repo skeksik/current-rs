@@ -4,16 +4,14 @@
 use std::time::Duration;
 
 use current_model::{
-    AudioFacts, Codec, CodecSupport, Container, EngineCapabilities, EngineRole, GapKind,
+    AudioFacts, Codec, CodecSupport, Container, EngineCapabilities, EngineRole, GapKind, HowToPlay,
     MediaSource, MediaStream, Route, RouteReason, ServerOffer, StreamAction, StreamKind,
     StreamProtocol, SubtitleChoice, SubtitleDelivery, SubtitleFormat, TrackChoice, TrackGap,
     VideoFacts, VideoRangeType,
 };
 
 use super::*;
-use crate::engines::{
-    DeviceRemux, DisplayKind, EnginePreference, EngineProfile, Engines, PlatformRules,
-};
+use crate::engines::{DeviceRemux, DisplayKind, EngineProfile, Engines, PlatformRules};
 
 fn native_caps() -> EngineCapabilities {
     EngineCapabilities {
@@ -479,30 +477,116 @@ fn an_unknown_display_keeps_pq_video_native() {
     assert_eq!(reasons, vec![RouteReason::NATIVE_FULLY_COMPATIBLE]);
 }
 
+fn how(how: HowToPlay, display: DisplayKind) -> RouteContext {
+    RouteContext {
+        how,
+        ..automatic(display)
+    }
+}
+
 #[test]
-fn the_setting_and_the_per_playback_choice_give_the_app_engine_only() {
-    let setting = RouteContext {
-        preference: EnginePreference::AlwaysAppEngine,
-        ..automatic(DisplayKind::Hdr)
-    };
-    let (order, reasons, _) = check(&movie(), tracks(1, None), &windows(), setting);
+fn how_to_play_at_the_app_engine_gives_the_app_engine_only() {
+    // The planner adds whether it was chosen in the player or in Settings (`planner::mark_choice`).
+    let (order, reasons, _) = check(
+        &movie(),
+        tracks(1, None),
+        &windows(),
+        how(HowToPlay::AppEngine, DisplayKind::Hdr),
+    );
     assert_eq!(order, vec![Route::AppEngine]);
-    assert_eq!(reasons, vec![RouteReason::SETTING_ALWAYS_APP_ENGINE]);
-    let chosen = RouteContext {
-        app_engine_chosen: true,
-        ..setting
-    };
-    let (order, reasons, _) = check(&movie(), tracks(1, None), &windows(), chosen);
-    assert_eq!(order, vec![Route::AppEngine]);
-    assert_eq!(reasons, vec![RouteReason::USER_CHOSE_APP_ENGINE]);
+    assert!(reasons.is_empty());
     // A file the app engine does not play: no local route, the server's stream.
     let mut webm = with_video(plain(0, StreamKind::VIDEO, "vp8"));
     webm.container = Some("webm".into());
     assert!(
-        check(&webm, tracks(1, None), &windows(), chosen)
-            .0
-            .is_empty()
+        check(
+            &webm,
+            tracks(1, None),
+            &windows(),
+            how(HowToPlay::AppEngine, DisplayKind::Hdr)
+        )
+        .0
+        .is_empty()
     );
+}
+
+#[test]
+fn how_to_play_at_a_step_keeps_the_order_below_it_and_never_goes_above() {
+    // Native chosen, and the file plays natively: native, then the app engine below it.
+    let native = how(HowToPlay::Native, DisplayKind::Hdr);
+    let (order, _, _) = check(&movie(), tracks(1, None), &windows(), native);
+    assert_eq!(order, vec![Route::Native, Route::AppEngine]);
+    // A track the native engine lacks (TrueHD): down to the app engine, saying why.
+    let (order, reasons, _) = check(&movie(), tracks(2, None), &windows(), native);
+    assert_eq!(order, vec![Route::AppEngine]);
+    assert_eq!(reasons, vec![RouteReason::NATIVE_LACKS]);
+    // PQ video on an SDR display: Auto puts the app engine first and native after it; Native chosen leaves native out, so nothing
+    // moves back up to it.
+    let pq = with_video(video("hevc", 10, VideoRangeType::HDR10, None));
+    let (order, _, _) = check(
+        &pq,
+        tracks(1, None),
+        &windows(),
+        automatic(DisplayKind::Sdr),
+    );
+    assert_eq!(order, vec![Route::AppEngine, Route::Native]);
+    let (order, reasons, _) = check(
+        &pq,
+        tracks(1, None),
+        &windows(),
+        how(HowToPlay::Native, DisplayKind::Sdr),
+    );
+    assert_eq!(order, vec![Route::AppEngine]);
+    assert_eq!(reasons, vec![RouteReason::HDR_ON_SDR_DISPLAY]);
+    // The app engine chosen never comes back up to native.
+    let (order, _, _) = check(
+        &movie(),
+        tracks(1, None),
+        &windows(),
+        how(HowToPlay::AppEngine, DisplayKind::Hdr),
+    );
+    assert_eq!(order, vec![Route::AppEngine]);
+}
+
+#[test]
+fn how_to_play_at_a_server_step_has_no_local_route() {
+    for chosen in [HowToPlay::ServerRemux, HowToPlay::ServerTranscode] {
+        assert!(
+            check(
+                &movie(),
+                tracks(1, None),
+                &windows(),
+                how(chosen, DisplayKind::Hdr)
+            )
+            .0
+            .is_empty(),
+            "{chosen:?}"
+        );
+    }
+}
+
+#[test]
+fn the_remux_chosen_is_taken_whenever_it_plays_the_file() {
+    let mut engines = windows();
+    engines.remux = Some(DeviceRemux {
+        containers: vec![Container::MKV],
+    });
+    // Auto: the file plays natively, no remux.
+    let (order, _, _) = check(
+        &movie(),
+        tracks(1, None),
+        &engines,
+        automatic(DisplayKind::Hdr),
+    );
+    assert_eq!(order[0], Route::Native);
+    // The remux chosen: the remux, then the app engine, never native.
+    let (order, _, _) = check(
+        &movie(),
+        tracks(1, None),
+        &engines,
+        how(HowToPlay::DeviceRemux, DisplayKind::Hdr),
+    );
+    assert_eq!(order, vec![Route::DeviceRemux, Route::AppEngine]);
 }
 
 #[test]
@@ -548,8 +632,8 @@ fn with_the_app_engine_only_the_servers_answer_stands() {
     for context in [
         automatic(DisplayKind::Sdr),
         RouteContext {
-            preference: EnginePreference::AlwaysAppEngine,
-            app_engine_chosen: true,
+            how: HowToPlay::AppEngine,
+            chosen_here: true,
             display: DisplayKind::Unknown,
             speed_not_supported: true,
         },
@@ -737,10 +821,7 @@ fn a_server_stream_follows_the_display_rules_and_the_users_choice() {
         engines_of(&routes),
         vec![EngineRole::Native, EngineRole::App]
     );
-    let chosen = RouteContext {
-        app_engine_chosen: true,
-        ..automatic(DisplayKind::Hdr)
-    };
+    let chosen = how(HowToPlay::AppEngine, DisplayKind::Hdr);
     let routes = server_routes(&transcode, &movie(), tracks(1, None), &engines, chosen, &[]);
     assert_eq!(engines_of(&routes), vec![EngineRole::App]);
 }

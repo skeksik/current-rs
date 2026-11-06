@@ -25,11 +25,40 @@ pub struct CodecQuery {
     pub subtype: String,
 }
 
-/// The UI's answer for one subtype: how many decoders `CodecQuery` returned. A subtype the core did not ask for is ignored.
+/// The UI's answer for one subtype: the display name of each entry `CodecQuery` returned (`CodecInfo.DisplayName`, "the friendly
+/// display name for the codec", Microsoft Learn, "CodecInfo.DisplayName Property", ms.date 2017-02-08, read 2026-10-31). A subtype
+/// the core did not ask for is ignored.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CodecAnswer {
     pub subtype: String,
-    pub decoders: u32,
+    pub decoders: Vec<String>,
+}
+
+impl CodecAnswer {
+    /// Whether `CodecQuery` found a decoder that decodes: any entry but one of Windows' IEC 61937 converters.
+    ///
+    /// W7 (docs/notes/windows-native-player-check.md §4) asked for `AudioFormatDolbyAC3` and `AudioFormatDolbyDDPlus` and got two
+    /// entries each: "Dolby Digital Plus Decoder MFT" (the PC maker's decoder) and "Dolby AC-3 and E-AC-3 IEC-61937 converter MFT".
+    /// The converter is Windows' own (`mfaudiocnv.dll`, W1 §3); it packs the bitstream for a receiver (S/PDIF, HDMI) and decodes
+    /// nothing, so a PC with only the converter cannot play AC-3 natively. Microsoft documents no `CodecInfo` field that tells a
+    /// converter from a decoder: `Category` says only "whether the codec is an encoder or a decoder" and `Subtypes` "the media
+    /// subtypes supported by the codec" (CodecInfo Class, Microsoft Learn, ms.date 2017-02-08, read 2026-10-31). So the name decides:
+    /// one naming IEC 61937, in any spacing or hyphenation, is a converter. That the name is the same on other Windows builds and
+    /// display languages is not verified.
+    pub fn has_decoder(&self) -> bool {
+        self.decoders
+            .iter()
+            .any(|name| !is_iec_61937_converter(name))
+    }
+}
+
+fn is_iec_61937_converter(name: &str) -> bool {
+    let squeezed: String = name
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    squeezed.contains("iec61937")
 }
 
 /// One row: the codec, the subtype that says Windows decodes it, and W1's limits.
@@ -40,7 +69,8 @@ struct Row {
 }
 
 /// Windows' decoders Current takes natively, with what W1 found (each row cites `docs/notes/windows-native-player.md`). TrueHD, DTS,
-/// multichannel PCM and Opus beyond stereo are left out on purpose: W1 §5 found them failing natively even where a subtype exists.
+/// multichannel PCM and Opus beyond stereo are left out on purpose: W1 §5 found them failing natively even where a subtype exists; ALAC
+/// too (W7, below).
 const WINDOWS: &[Row] = &[
     // §2: H.264 plays; H.264 High 10 reports `FullySupported` and then fails with `DecodingError`: 8 bit only.
     Row {
@@ -113,17 +143,15 @@ const WINDOWS: &[Row] = &[
             ..CodecSupport::any(Codec::OPUS)
         },
     },
-    // §3: MP3 and ALAC are among the built-in decoders seen; their playback was not checked (not verified).
+    // §3: MP3 is among the built-in decoders seen; W7 played MP3 in MKV natively with sound
+    // (docs/notes/windows-native-player-check.md §1).
     Row {
         kind: CodecKind::Audio,
         subtype: "AudioFormatMP3",
         support: || CodecSupport::any(Codec::MP3),
     },
-    Row {
-        kind: CodecKind::Audio,
-        subtype: "AudioFormatAlac",
-        support: || CodecSupport::any(Codec::ALAC),
-    },
+    // ALAC is left out although CodecQuery lists a built-in decoder (W1 §3): W7 played ALAC in MP4 natively with the picture moving
+    // and no sound, and Media Foundation exposed no audio track for it ("ALAC in MP4"). It plays on the app engine.
 ];
 
 /// What the UI on Windows is asked to look for, in the table's order.
@@ -143,7 +171,7 @@ pub fn windows_engine(answers: &[CodecAnswer]) -> (EngineProfile, PlatformRules)
     let found = |subtype: &str| {
         answers
             .iter()
-            .any(|answer| answer.subtype == subtype && answer.decoders > 0)
+            .any(|answer| answer.subtype == subtype && answer.has_decoder())
     };
     let pick = |kind: CodecKind| -> Vec<CodecSupport> {
         WINDOWS
@@ -191,7 +219,11 @@ mod tests {
         windows_codec_queries()
             .into_iter()
             .map(|query| CodecAnswer {
-                decoders: u32::from(found.contains(&query.subtype.as_str())),
+                decoders: if found.contains(&query.subtype.as_str()) {
+                    vec!["A decoder".to_owned()]
+                } else {
+                    Vec::new()
+                },
                 subtype: query.subtype,
             })
             .collect()
@@ -251,9 +283,10 @@ mod tests {
         let (engine, rules) = windows_engine(&answers(&["VideoFormatH264", "AudioFormatOpus"]));
         assert_eq!(engine.capabilities.video[0].max_bit_depth, Some(8));
         assert_eq!(engine.capabilities.audio[0].max_channels, Some(2));
-        // Never natively, whatever the answers: TrueHD, DTS.
+        // Never natively, whatever the answers: TrueHD, DTS, and ALAC (W7: silent).
         assert!(!engine.capabilities.decodes_audio(&Codec::TRUEHD));
         assert!(!engine.capabilities.decodes_audio(&Codec::DTS));
+        assert!(!engine.capabilities.decodes_audio(&Codec::ALAC));
         // SubRip and PGS inside a file natively (departure 3), and text subtitle files, WebVTT too.
         assert_eq!(
             engine.capabilities.subtitles,
@@ -275,18 +308,50 @@ mod tests {
         let (engine, _) = windows_engine(&[
             CodecAnswer {
                 subtype: "AudioFormatDts".into(),
-                decoders: 3,
+                decoders: vec!["A".into(), "B".into(), "C".into()],
             },
             CodecAnswer {
                 subtype: "SomethingNew".into(),
-                decoders: 1,
+                decoders: vec!["A".into()],
             },
             CodecAnswer {
                 subtype: "VideoFormatHevc".into(),
-                decoders: 0,
+                decoders: Vec::new(),
             },
         ]);
         assert!(engine.capabilities.video.is_empty());
         assert!(engine.capabilities.audio.is_empty());
+    }
+
+    #[test]
+    fn windows_iec_61937_converter_is_not_a_dolby_decoder() {
+        // W7 §4: the names CodecQuery returned for AC-3 and E-AC-3 on the owner's PC.
+        let decoder = "Dolby Digital Plus Decoder MFT";
+        let converter = "Dolby AC-3 and E-AC-3 IEC-61937 converter MFT";
+        let answer = |subtype: &str, names: &[&str]| CodecAnswer {
+            subtype: subtype.into(),
+            decoders: names.iter().map(|name| (*name).to_owned()).collect(),
+        };
+        // A PC with the PC maker's decoder: both natively.
+        let (with, _) = windows_engine(&[
+            answer("AudioFormatDolbyAC3", &[decoder, converter]),
+            answer("AudioFormatDolbyDDPlus", &[decoder, converter]),
+        ]);
+        assert_eq!(codecs(&with.capabilities.audio), ["ac3", "eac3"]);
+        // Only Windows' converter: neither.
+        let (without, _) = windows_engine(&[
+            answer("AudioFormatDolbyAC3", &[converter]),
+            answer("AudioFormatDolbyDDPlus", &[converter]),
+        ]);
+        assert!(without.capabilities.audio.is_empty());
+        // Any spelling of IEC 61937 is a converter; anything else is a decoder.
+        for name in ["IEC 61937 converter", "iec61937", "An IEC_61937 Converter"] {
+            assert!(
+                !answer("AudioFormatDolbyAC3", &[name]).has_decoder(),
+                "{name}"
+            );
+        }
+        assert!(answer("AudioFormatAac", &["Microsoft AAC Audio Decoder MFT"]).has_decoder());
+        assert!(!answer("AudioFormatAac", &[]).has_decoder());
     }
 }

@@ -379,7 +379,8 @@ internal static class PlayerTests
         // CodecQuery found H.264 and AAC only (ADR 0025, W6): H.264 plays in Windows' player; HEVC, which the test engine decodes, in
         // the app engine, with the Store link for the extension Windows' player lacks.
         var answers = PlatformEngineHost.WindowsCodecQueries()
-            .Select(ask => new CodecQueryAnswer(ask.Subtype, ask.Subtype is "VideoFormatH264" or "AudioFormatAac" ? 1u : 0u))
+            .Select(ask => new CodecQueryAnswer(
+                ask.Subtype, ask.Subtype is "VideoFormatH264" or "AudioFormatAac" ? new[] { "A decoder" } : Array.Empty<string>()))
             .ToList();
         var page = await core.SupportedFormatsAsync(null, null, answers);
         var video = page.Tabs[0].Rows;

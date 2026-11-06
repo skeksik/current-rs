@@ -264,6 +264,18 @@
                             <MenuFlyout x:Name="QualityMenu" Opening="OnQualityMenuOpening" />
                         </AppBarButton.Flyout>
                     </AppBarButton>
+                    <!-- How to play (ADR 0025, choice 3 as amended; its own button next to Quality, owner 2026-10-31): Segoe Fluent
+                         Icons E8AB "Switch" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-31). Its
+                         name, tool tip and the choices' names are the core's; shown only when there is something to choose. -->
+                    <AppBarButton x:Name="HowToPlayButton" Style="{StaticResource TransportButtonStyle}" Label="How to play"
+                                  Visibility="Collapsed">
+                        <AppBarButton.Icon>
+                            <FontIcon Glyph="&#xE8AB;" />
+                        </AppBarButton.Icon>
+                        <AppBarButton.Flyout>
+                            <MenuFlyout x:Name="HowToPlayMenu" Opening="OnHowToPlayMenuOpening" />
+                        </AppBarButton.Flyout>
+                    </AppBarButton>
                     <!-- Playback info: E946 "Info" (same page). Ctrl+I, Media Player's Properties (owner's PC, 2026-10-25). -->
                     <AppBarToggleButton x:Name="InfoButton" Style="{StaticResource TransportToggleButtonStyle}" Label="Playback info" Click="OnInfo">
                         <AppBarToggleButton.Icon>

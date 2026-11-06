@@ -264,6 +264,7 @@ impl MediaServer for JellyfinMedia {
                 Quality::Bitrate(bits) => bits,
             },
             direct_play: request.direct_play,
+            force_video_transcode: request.force_video_transcode,
         };
         let client = self.session()?;
         let answer = client

@@ -289,9 +289,11 @@ mod tests {
         let native = crate::windows_codec_queries()
             .into_iter()
             .map(|ask| CodecQueryAnswer {
-                decoders: u32::from(
-                    ask.subtype == "VideoFormatH264" || ask.subtype == "AudioFormatAac",
-                ),
+                decoders: if ask.subtype == "VideoFormatH264" || ask.subtype == "AudioFormatAac" {
+                    vec!["A decoder".to_owned()]
+                } else {
+                    Vec::new()
+                },
                 subtype: ask.subtype,
             })
             .collect();

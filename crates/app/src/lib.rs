@@ -29,16 +29,15 @@ use current_jellyfin::{
     AuthError, ClientIdentity, JellyfinClient, JellyfinIdentity, platform_name,
 };
 use current_model::{
-    AppTheme, Capabilities, ItemQuery, ItemRef, Library, MediaKind, NetworkFacts, SavedServer,
-    ServerAddress, ServerId, ServerRef,
+    AppTheme, Capabilities, HowToPlay, ItemQuery, ItemRef, Library, MediaKind, NetworkFacts,
+    SavedServer, ServerAddress, ServerId, ServerRef,
 };
 use current_net::{
     Gateway, NetError, RequestLog, RoamingAddresses, RoamingConfig, RoamingError, RuntimeHandle,
     Url,
 };
 use current_store::{
-    DeviceId, KindPage, LibraryChoices, LoadReport, PlayerChoice, Secrets, SettingsStore,
-    StoreError,
+    DeviceId, KindPage, LibraryChoices, LoadReport, Secrets, SettingsStore, StoreError,
 };
 use tokio::sync::watch;
 
@@ -98,10 +97,11 @@ pub use player::{
 };
 // The player's words and its problems (ADR 0019), worded once for every UI.
 pub use player::{
-    NO_AUDIO_TRACKS, PanelSizes, PlaybackProblem, PlayerProblem, SUBTITLES_OFF, countdown_text,
-    elapsed_label, episode_line, info_panel_lines, native_lacks_text, plan_note_text,
-    playback_problem_text, player_problem_text, position_label, reason_text, remaining_label,
-    route_name, route_name_one_engine, skip_label, spoken_time, time_label, track_name,
+    HOW_TO_PLAY, NO_AUDIO_TRACKS, PanelSizes, PlaybackProblem, PlayerProblem, SUBTITLES_OFF,
+    countdown_text, elapsed_label, episode_line, how_to_play_button_name, how_to_play_name,
+    info_panel_lines, native_lacks_text, plan_note_text, playback_problem_text,
+    player_problem_text, position_label, reason_text, remaining_label, route_name,
+    route_name_one_engine, skip_label, spoken_time, time_label, track_name,
 };
 /// What the server would convert the version `details` plays to, for naming its quality menu's steps ([`App::quality_options`]): the
 /// audio track playing, and the video codec the server reports it encodes to. Only a transcode's codec says what the server picks; a
@@ -563,7 +563,7 @@ impl App {
         if let (Some(answers), player::EngineReport::Ready(app)) = (&native, &engine) {
             let facts = formats_routes::NativeFacts {
                 answers,
-                always_app_engine: self.player_choice() == PlayerChoice::AlwaysAppEngine,
+                how: self.how_to_play(),
             };
             formats_routes::apply_routes(&mut page, app, facts, display.as_ref());
         }
@@ -601,17 +601,17 @@ impl App {
         self.playback.set_preferred_quality(&self.shared, preferred)
     }
 
-    /// Settings → Playback → "Player" (ADR 0025, choice 3): "Automatic" (the default) or "Always app engine".
-    pub fn player_choice(&self) -> PlayerChoice {
-        self.playback.player_choice()
+    /// Settings → Playback → "How to play" (ADR 0025, choice 3 as amended): Auto (the default) or the step every item starts at.
+    pub fn how_to_play(&self) -> HowToPlay {
+        self.playback.how_to_play()
     }
 
-    /// Sets "Player" and saves it; it applies from the next item played. Blocking file I/O: call it off the async runtime.
+    /// Sets "How to play" and saves it; it applies from the next item played. Blocking file I/O: call it off the async runtime.
     ///
     /// # Errors
     /// The settings could not be saved; the setting stands for this run.
-    pub fn set_player_choice(&self, choice: PlayerChoice) -> Result<(), StoreError> {
-        self.playback.set_player_choice(&self.shared, choice)
+    pub fn set_how_to_play(&self, how: HowToPlay) -> Result<(), StoreError> {
+        self.playback.set_how_to_play(&self.shared, how)
     }
 
     /// Settings → Playback's "Show resolution in quality menu": whether the quality menu names the resolution each choice gives

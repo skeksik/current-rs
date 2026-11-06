@@ -32,7 +32,7 @@ pub use item::{
 pub use media::{MediaSummary, StreamSummary};
 pub use network::{Connectivity, InterfaceKind, LocalInterface, NetworkFacts, NetworkKey};
 pub use playback::{
-    AudioFacts, Codec, EngineErrorKind, EngineRole, GapKind, MediaSource, MediaStream,
+    AudioFacts, Codec, EngineErrorKind, EngineRole, GapKind, HowToPlay, MediaSource, MediaStream,
     PlaybackPlan, PlaybackPreferences, PlaybackProblem, PlayerState, Route, RouteLabel,
     RouteReason, Segment, SegmentKind, ServerOffer, StreamAction, StreamKind, StreamProtocol,
     SubtitleChoice, SubtitleDelivery, SubtitleMode, TrackChoice, TrackGap, TranscodingFacts,

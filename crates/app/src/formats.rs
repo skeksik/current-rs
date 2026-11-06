@@ -284,17 +284,18 @@ pub(crate) const SUBTITLES: &[(&[SubtitleFormat], &str, &str)] = &[
 ];
 
 /// HDR rows: the name and a note that always applies. HDR10+ and Dolby Vision were not checked on a device (docs/notes/windows-video.md,
-/// "ADR 0007 item 5").
+/// "ADR 0007 item 5") until W1 and W7 played Dolby Vision profiles 5 and 8 in the app engine on the owner's PC
+/// (docs/notes/windows-native-player.md §4, docs/notes/windows-native-player-check.md §5); HDR10+ and profile 7 still were not.
 pub(crate) const HDR: &[(&str, &str)] = &[
     ("HDR10", ""),
     ("HDR10+", "Not checked on a device yet"),
     ("HLG", ""),
-    ("Dolby Vision profile 5", "Not checked on a device yet"),
+    ("Dolby Vision profile 5", ""),
     (
         "Dolby Vision profile 7",
         "Dual-layer. Not checked on a device yet",
     ),
-    ("Dolby Vision profile 8", "Not checked on a device yet"),
+    ("Dolby Vision profile 8", ""),
 ];
 
 /// The page for what is known now. `hardware` is `None` when the graphics card could not be tested (or the platform has no test);
@@ -1037,7 +1038,14 @@ mod tests {
         assert_eq!(dv.support, FormatSupport::Plays);
         assert_eq!(
             dv.notes,
-            "HDR or tone-mapped to SDR, depending on the display. Not checked on a device yet"
+            "HDR or tone-mapped to SDR, depending on the display"
+        );
+        // Profile 7 and HDR10+ were never checked on a device.
+        let dv7 = find(tab(&unknown, FormatTabKind::Hdr), "Dolby Vision profile 7");
+        assert!(
+            dv7.notes.ends_with("Not checked on a device yet"),
+            "{}",
+            dv7.notes
         );
     }
 

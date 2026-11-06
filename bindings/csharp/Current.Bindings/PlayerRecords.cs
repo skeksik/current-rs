@@ -117,13 +117,17 @@ public sealed record RouteInfo(
     RouteKind Kind, StreamProtocolKind? Protocol, string? Container, bool VideoCopied, bool AudioCopied,
     RouteLabel Label = RouteLabel.AppEngine, RouteEngine Engine = RouteEngine.App);
 
-/// <summary>Settings → Playback → "Player" (ADR 0025).</summary>
-public enum PlayerChoice
+/// <summary>"How to play" (ADR 0025, choice 3 as amended): Auto, or the step of the order a playback starts at; a step the file cannot
+/// use falls to the next one below. Words: <see cref="PlayerWordsExtensions.HowToPlayName"/>. Settings offers
+/// <see cref="PlayerWordsExtensions.SettingsHowToPlayChoices"/>, the player <see cref="PlayerState.HowToPlayChoices"/>.</summary>
+public enum HowToPlay
 {
-    /// <summary>The platform's player first, then libmpv, then the server.</summary>
-    Automatic,
-    /// <summary>libmpv, then the server.</summary>
-    AlwaysAppEngine,
+    Auto,
+    Native,
+    DeviceRemux,
+    AppEngine,
+    ServerRemux,
+    ServerTranscode,
 }
 
 /// <summary>An audio or subtitle track for the menus, by the server's index.</summary>
@@ -175,11 +179,13 @@ public sealed record PlayerState(
     NextEpisodeInfo? Next,
     QualityChoice Quality,
     byte Volume,
-    bool Muted)
+    bool Muted,
+    HowToPlay HowToPlay,
+    IReadOnlyList<HowToPlay> HowToPlayChoices)
 {
     public static PlayerState Idle { get; } = new(
         PlayerStateKind.Idle, null, null, TimeSpan.Zero, null, null, [], [], null, new SubtitleSelection.Default(), null, null, null,
-        new QualityChoice.Maximum(), 100, false);
+        new QualityChoice.Maximum(), 100, false, HowToPlay.Auto, []);
 }
 
 /// <summary>The playback status as the system media controls name it.</summary>
@@ -262,7 +268,7 @@ public sealed record PlaybackSettings(
     QualityChoice PreferredQuality,
     bool ShowsQualityResolution = true,
     bool ShowsAllQualities = false,
-    PlayerChoice Player = PlayerChoice.Automatic);
+    HowToPlay HowToPlay = HowToPlay.Auto);
 
 /// <summary>
 /// One entry of the quality menu as the core names it: the choice, the resolution the server would send it at ("4K", "1080p"...;
@@ -369,8 +375,25 @@ internal static class PlayerMap
         _ => Ffi.RouteLabelKind.AppEngine,
     };
 
-    public static Ffi.PlayerChoiceKind ToFfi(PlayerChoice choice) =>
-        choice == PlayerChoice.AlwaysAppEngine ? Ffi.PlayerChoiceKind.AlwaysAppEngine : Ffi.PlayerChoiceKind.Automatic;
+    public static Ffi.HowToPlayKind ToFfi(HowToPlay how) => how switch
+    {
+        HowToPlay.Native => Ffi.HowToPlayKind.Native,
+        HowToPlay.DeviceRemux => Ffi.HowToPlayKind.DeviceRemux,
+        HowToPlay.AppEngine => Ffi.HowToPlayKind.AppEngine,
+        HowToPlay.ServerRemux => Ffi.HowToPlayKind.ServerRemux,
+        HowToPlay.ServerTranscode => Ffi.HowToPlayKind.ServerTranscode,
+        _ => Ffi.HowToPlayKind.Auto,
+    };
+
+    public static HowToPlay From(Ffi.HowToPlayKind how) => how switch
+    {
+        Ffi.HowToPlayKind.Native => HowToPlay.Native,
+        Ffi.HowToPlayKind.DeviceRemux => HowToPlay.DeviceRemux,
+        Ffi.HowToPlayKind.AppEngine => HowToPlay.AppEngine,
+        Ffi.HowToPlayKind.ServerRemux => HowToPlay.ServerRemux,
+        Ffi.HowToPlayKind.ServerTranscode => HowToPlay.ServerTranscode,
+        _ => HowToPlay.Auto,
+    };
 
     private static TrackInfo From(Ffi.TrackInfo track) => new(
         track.Index, track.Label, track.Language, track.Codec, track.IsDefault, track.IsForced, track.IsHearingImpaired,
@@ -421,7 +444,9 @@ internal static class PlayerMap
             : null,
         From(state.Quality),
         state.Volume,
-        state.Muted);
+        state.Muted,
+        From(state.HowToPlay),
+        Array.ConvertAll(state.HowToPlayChoices, how => From(how)));
 
     public static NowPlaying From(Ffi.NowPlayingSnapshot now) => new(
         now.Item is { } item ? MapBrowse.From(item) : null,
@@ -481,7 +506,7 @@ internal static class PlayerMap
         new(
             settings.AutoSkip, settings.SkipsIntrosAndCredits, From(settings.PreferredQuality), settings.ShowsQualityResolution,
             settings.ShowsAllQualities,
-            settings.Player == Ffi.PlayerChoiceKind.AlwaysAppEngine ? PlayerChoice.AlwaysAppEngine : PlayerChoice.Automatic);
+            From(settings.HowToPlay));
 
     public static QualityOption From(Ffi.QualityOptionInfo option) => new(From(option.Quality), option.Resolution, option.Bitrate);
 

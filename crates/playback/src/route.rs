@@ -5,12 +5,12 @@
 //! that engine's capabilities, so a check here could only change routes the server already chose.
 
 use current_model::{
-    Codec, CodecSupport, EngineCapabilities, GapKind, MediaSource, MediaStream, Route, RouteReason,
-    ServerOffer, StreamAction, StreamKind, StreamProtocol, SubtitleChoice, SubtitleDelivery,
-    TrackChoice, TrackGap, VideoRangeType,
+    Codec, CodecSupport, EngineCapabilities, GapKind, HowToPlay, MediaSource, MediaStream, Route,
+    RouteReason, ServerOffer, StreamAction, StreamKind, StreamProtocol, SubtitleChoice,
+    SubtitleDelivery, TrackChoice, TrackGap, VideoRangeType,
 };
 
-use crate::engines::{DisplayKind, EnginePreference, EngineProfile, Engines};
+use crate::engines::{DisplayKind, EngineProfile, Engines};
 
 /// The video codecs a server transcode may send: those of `current-jellyfin`'s transcoding profiles (ADR 0019 choice 2: fMP4 HEVC
 /// then H.264, TS H.264), which the profile keeps to what the device decodes. A transcoded stream goes to the native engine only when
@@ -37,27 +37,29 @@ const RENDERED_SUBTITLES: &[&str] = &[
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct RouteContext {
     pub display: DisplayKind,
-    /// The "Player" setting.
-    pub preference: EnginePreference,
-    /// "Play with app engine" for this playback.
-    pub app_engine_chosen: bool,
+    /// "How to play" (ADR 0025, choice 3 as amended): the playback's own choice, else Settings'.
+    pub how: HowToPlay,
+    /// `how` was chosen in the player for this playback, not taken from Settings.
+    pub chosen_here: bool,
     /// The native engine ignores the speed chosen with this playback's tracks (ADR 0025, "Track changes"): the app engine plays it.
     pub speed_not_supported: bool,
 }
 
 impl RouteContext {
-    /// Why the app engine plays whatever the native engine could: the user's choice, the setting, or the speed; `None` for ADR
-    /// 0025's order.
-    fn app_engine_reason(self) -> Option<RouteReason> {
-        if self.app_engine_chosen {
-            Some(RouteReason::USER_CHOSE_APP_ENGINE)
-        } else if self.preference == EnginePreference::AlwaysAppEngine {
-            Some(RouteReason::SETTING_ALWAYS_APP_ENGINE)
-        } else if self.speed_not_supported {
-            Some(RouteReason::SPEED_NOT_SUPPORTED)
+    /// The reason a route at the chosen step carries; `None` with Auto.
+    pub fn chosen_reason(self) -> Option<RouteReason> {
+        self.how.step()?;
+        Some(if self.chosen_here {
+            RouteReason::USER_CHOSE_ROUTE
         } else {
-            None
-        }
+            RouteReason::SETTING_CHOSE_ROUTE
+        })
+    }
+
+    /// The app engine plays whatever the native engine could, server streams included: "How to play" starts at it, or a speed the
+    /// native engine ignores.
+    fn app_first(self) -> bool {
+        self.how == HowToPlay::AppEngine || self.speed_not_supported
     }
 }
 
@@ -105,9 +107,19 @@ pub fn local_routes(
     // The server offered direct play from a profile the app engine is part of: a codec or container it does not name, the app
     // engine plays as before ADR 0025, the native engine is not trusted with.
     let app_plays = gaps(&engines.app.capabilities, source, tracks, Unnamed::Plays).is_empty();
-    if let Some(reason) = context.app_engine_reason() {
+    // "How to play" at a server step: no local route; the planner asks the server for its stream.
+    if context.how.is_server() {
+        return Vec::new();
+    }
+    if context.app_first() {
+        // A speed says so; the app engine chosen is said by the planner ([`RouteContext::chosen_reason`]).
+        let reasons = if context.speed_not_supported {
+            vec![RouteReason::SPEED_NOT_SUPPORTED]
+        } else {
+            Vec::new()
+        };
         let routes = if app_plays {
-            vec![RouteChoice::new(Route::AppEngine, vec![reason], Vec::new())]
+            vec![RouteChoice::new(Route::AppEngine, reasons, Vec::new())]
         } else {
             Vec::new()
         };
@@ -162,6 +174,9 @@ pub fn local_routes(
     } else {
         None
     };
+    // What the pinned order below needs after the match takes these.
+    let display_rules = !display_reasons.is_empty();
+    let only_container_gaps = native_gaps.iter().all(|gap| gap.kind == GapKind::Container);
     let mut routes = Vec::new();
     match native_route {
         Some(native_route) if display_reasons.is_empty() => {
@@ -197,6 +212,30 @@ pub fn local_routes(
         }
         None => {}
     }
+    // "How to play" at the native route or the remux: the order from that step down, never above it. A display rule rules the native
+    // engine out (its reasons stay with the app engine), and the remux chosen is taken whenever it can play the file.
+    if let Some(pinned) = context.how.step() {
+        if display_rules {
+            routes.retain(|choice| choice.route.engine() != current_model::EngineRole::Native);
+        }
+        let remux_plays = remux_reads
+            && !dolby_vision_7
+            && rendered.is_none()
+            && only_container_gaps
+            && !display_rules;
+        if context.how == HowToPlay::DeviceRemux
+            && remux_plays
+            && !routes
+                .iter()
+                .any(|choice| choice.route == Route::DeviceRemux)
+        {
+            routes.insert(
+                0,
+                RouteChoice::new(Route::DeviceRemux, Vec::new(), Vec::new()),
+            );
+        }
+        routes.retain(|choice| choice.route.step() >= pinned);
+    }
     untried(routes, tried)
 }
 
@@ -213,7 +252,7 @@ pub fn server_routes(
 ) -> Vec<Route> {
     let mut routes = Vec::new();
     if let Some(native) = &engines.native {
-        let app_first = context.app_engine_reason().is_some();
+        let app_first = context.app_first();
         let copies_video = matches!(
             offer,
             ServerOffer::Stream {

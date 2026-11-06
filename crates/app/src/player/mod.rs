@@ -64,10 +64,10 @@ pub use labels::{
 pub use now_playing::{MediaStatus, NowPlaying, TIMELINE_INTERVAL};
 pub use problem::{PlaybackProblem, PlayerProblem};
 pub use words::{
-    NO_AUDIO_TRACKS, SUBTITLES_OFF, countdown_text, elapsed_label, episode_line, native_lacks_text,
-    plan_note_text, playback_problem_text, player_problem_text, position_label, reason_text,
-    remaining_label, route_name, route_name_one_engine, skip_label, spoken_time, time_label,
-    track_name,
+    HOW_TO_PLAY, NO_AUDIO_TRACKS, SUBTITLES_OFF, countdown_text, elapsed_label, episode_line,
+    how_to_play_button_name, how_to_play_name, native_lacks_text, plan_note_text,
+    playback_problem_text, player_problem_text, position_label, reason_text, remaining_label,
+    route_name, route_name_one_engine, skip_label, spoken_time, time_label, track_name,
 };
 
 pub(crate) use driver::{Context, NativeSetup, open};
@@ -164,6 +164,8 @@ pub enum PlayerAction {
     CompositionSize(CompositionSize),
     /// "Play with app engine" for the item playing (ADR 0025, choice 3).
     PlayWithAppEngine,
+    /// "How to play" chosen in the player for the item playing (ADR 0025, choice 3 as amended).
+    ChooseHowToPlay(current_model::HowToPlay),
 }
 
 impl PlayerAction {
@@ -313,6 +315,15 @@ impl Player {
     /// 3). Only this item; with libmpv alone nothing changes.
     pub async fn play_with_app_engine(&self) -> Result<(), PlayerError> {
         self.act(PlayerAction::PlayWithAppEngine).await
+    }
+
+    /// "How to play" for the item playing only (owner, 2026-10-31: "for the current playback"): it re-plans at the position at once,
+    /// Auto included; the next item uses Settings' choice. Offer only [`current_playback::PlayerStatus::how_to_play_choices`].
+    pub async fn choose_how_to_play(
+        &self,
+        how: current_model::HowToPlay,
+    ) -> Result<(), PlayerError> {
+        self.act(PlayerAction::ChooseHowToPlay(how)).await
     }
 
     /// Seeks past the segment under the position.

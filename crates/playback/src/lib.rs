@@ -26,9 +26,7 @@ pub use controller::{
     STATE_INTERVAL,
 };
 pub use engine::{EndReason, Engine, EngineEvent, EngineFile, EngineTrack, ExternalSubtitle};
-pub use engines::{
-    DeviceRemux, DisplayKind, EnginePreference, EngineProfile, Engines, PlatformRules,
-};
+pub use engines::{DeviceRemux, DisplayKind, EngineProfile, Engines, PlatformRules};
 pub use planner::{PlanNote, Planned, RouteInputs};
 pub use quality::{
     Quality, QualityOption, QualityPreference, QualityTarget, listed_quality,

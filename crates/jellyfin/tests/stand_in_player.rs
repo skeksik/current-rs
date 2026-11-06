@@ -109,6 +109,7 @@ async fn a_stream_without_a_gateway_needs_only_the_token_redacted() {
         tracks: TrackChoice::default(),
         max_streaming_bitrate: MAXIMUM_STREAMING_BITRATE,
         direct_play: true,
+        force_video_transcode: false,
     };
     let capabilities = EngineCapabilities {
         containers: vec![Container::MKV],

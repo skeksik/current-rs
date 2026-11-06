@@ -63,6 +63,9 @@ public sealed partial class PlayerView : UserControl
     /// <summary>The native route's subtitles (W5).</summary>
     private readonly SubtitleOverlay _subtitles;
     private CancellationTokenSource? _play;
+    /// <summary>A play asked for and not yet taken by the core (<see cref="PlayAsync"/>): an end shown meanwhile is the item before
+    /// it.</summary>
+    private CancellationTokenSource? _starting;
     /// <summary>The engine's open, which belongs to the player rather than to one play: a play that replaces another while the engine
     /// opens waits for the same open and plays on its session.</summary>
     private Task _opening = Task.CompletedTask;
@@ -179,6 +182,7 @@ public sealed partial class PlayerView : UserControl
                 Trace.TraceWarning("Current: the player did not take focus");
             }
         });
+        _starting = play;
         try
         {
             // An earlier close finishes first: one engine per process (ADR 0019).
@@ -222,6 +226,13 @@ public sealed partial class PlayerView : UserControl
             Trace.TraceError($"Current: playing failed: {error.GetType().Name}");
             BusyRing.IsActive = false;
             ShowProblem(ProblemTexts.Unexpected);
+        }
+        finally
+        {
+            if (_starting == play)
+            {
+                _starting = null;
+            }
         }
     }
 
@@ -421,6 +432,7 @@ public sealed partial class PlayerView : UserControl
             PlayPauseGlyph.Glyph = playing ? "" : "";
             SetName(PlayPauseButton, playing ? "Pause" : "Play");
             ShowPosition(state);
+            ShowHowToPlay(state);
             // Not under the user's hand: their change is on its way to the core.
             if (VolumeSlider.FocusState == FocusState.Unfocused)
             {
@@ -461,8 +473,10 @@ public sealed partial class PlayerView : UserControl
         {
             _showingState = false;
         }
-        // The end with no next episode to go to: back to the page it was played from, as the core has reported the stop.
-        if (state is { State: PlayerStateKind.Ended, Next: null })
+        // The end with no next episode to go to: back to the page it was played from, as the core has reported the stop. Not while a
+        // new play is on its way to the core: that end is the item before it, and closing would cancel the new play (CI's smoke run:
+        // the 8 s clip ended as its second play was asked for, and the player closed to Idle).
+        if (state is { State: PlayerStateKind.Ended, Next: null } && _starting is null)
         {
             _ = CloseAsync();
         }
@@ -1041,6 +1055,44 @@ public sealed partial class PlayerView : UserControl
             var chosen = entry.Option.Quality;
             item.Click += (_, _) => Long(ct => _session?.SetQualityAsync(chosen, ct) ?? Task.CompletedTask);
             QualityMenu.Items.Add(item);
+        }
+    }
+
+    /// <summary>
+    /// "How to play" for the item playing (ADR 0025, choice 3 as amended; owner, 2026-10-31): the button's menu lists the choices the
+    /// core says are possible for this file (Auto first), the one in use checked. A choice re-plans at the position at once and holds
+    /// for this item only; Settings → Playback sets it for every item.
+    /// </summary>
+    private void OnHowToPlayMenuOpening(object sender, object e)
+    {
+        HowToPlayMenu.Items.Clear();
+        if (App.Core is not { } core)
+        {
+            return;
+        }
+        var state = State;
+        foreach (var choice in state.HowToPlayChoices)
+        {
+            var item = new RadioMenuFlyoutItem
+            {
+                Text = core.HowToPlayName(choice),
+                GroupName = "how-to-play",
+                IsChecked = choice == state.HowToPlay,
+            };
+            var chosen = choice;
+            item.Click += (_, _) => Long(ct => _session?.ChooseHowToPlayAsync(chosen, ct) ?? Task.CompletedTask);
+            HowToPlayMenu.Items.Add(item);
+        }
+    }
+
+    /// <summary>The button shows only with something to choose; its name and tool tip say the choice in use ("How to play: Auto").</summary>
+    private void ShowHowToPlay(PlayerState state)
+    {
+        var choosable = state.HowToPlayChoices.Count > 1;
+        HowToPlayButton.Visibility = choosable ? Visibility.Visible : Visibility.Collapsed;
+        if (choosable && App.Core is { } core)
+        {
+            SetName(HowToPlayButton, core.HowToPlayButtonName(state.HowToPlay));
         }
     }
 

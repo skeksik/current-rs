@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use current_model::{
-    Codec, ItemRef, ItemSummary, MediaStream, PlaybackPlan, PlayerState, Route, Segment,
+    Codec, HowToPlay, ItemRef, ItemSummary, MediaStream, PlaybackPlan, PlayerState, Route, Segment,
     SegmentKind, TrackChoice, TranscodingFacts,
 };
 
@@ -112,6 +112,11 @@ pub struct PlayerStatus {
     pub quality: Quality,
     pub volume: u8,
     pub muted: bool,
+    /// "How to play" for the item playing: Settings', or the one chosen in the player (ADR 0025, choice 3 as amended).
+    pub how_to_play: HowToPlay,
+    /// The choices the player's "How to play" menu offers for the item playing ([`crate::Controller::how_to_play_choices`]); empty
+    /// while nothing plays.
+    pub how_to_play_choices: Vec<HowToPlay>,
 }
 
 /// What the controller tells the composition root, drained with [`Controller::take_events`](crate::Controller::take_events).

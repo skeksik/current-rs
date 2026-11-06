@@ -51,6 +51,7 @@ fn request() -> PlaybackRequest {
         tracks: TrackChoice::default(),
         max_streaming_bitrate: MAXIMUM_STREAMING_BITRATE,
         direct_play: true,
+        force_video_transcode: false,
     }
 }
 

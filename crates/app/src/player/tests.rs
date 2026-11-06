@@ -760,10 +760,13 @@ fn windows_answers(hevc: bool) -> Vec<CodecAnswer> {
     super::windows_codec_queries()
         .into_iter()
         .map(|query| CodecAnswer {
-            decoders: u32::from(
-                ["VideoFormatH264", "AudioFormatAac"].contains(&query.subtype.as_str())
-                    || (hevc && query.subtype == "VideoFormatHevc"),
-            ),
+            decoders: if ["VideoFormatH264", "AudioFormatAac"].contains(&query.subtype.as_str())
+                || (hevc && query.subtype == "VideoFormatHevc")
+            {
+                vec!["A decoder".to_owned()]
+            } else {
+                Vec::new()
+            },
             subtype: query.subtype,
         })
         .collect()
@@ -1044,12 +1047,9 @@ async fn without_the_codec_the_file_goes_to_libmpv_and_the_setting_and_choice_mo
     player.close().await;
 
     // "Always app engine" plays the next item there.
-    app.set_player_choice(current_store::PlayerChoice::AlwaysAppEngine)
+    app.set_how_to_play(current_model::HowToPlay::AppEngine)
         .unwrap();
-    assert_eq!(
-        app.player_choice(),
-        current_store::PlayerChoice::AlwaysAppEngine
-    );
+    assert_eq!(app.how_to_play(), current_model::HowToPlay::AppEngine);
     let platform = Arc::new(FakePlatform::default());
     let (player, control) = open_with(&app, platform.clone(), true).await;
     player
