@@ -1298,6 +1298,17 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             })
         {
             self.report_progress().await;
+            // The server's facts again with each report: read once at the start, they stayed the previous quality's after a change
+            // while paused, whose start comes before the server's new transcode (the owner's PC, 2026-11-06), and the speed and the
+            // share done never moved.
+            if self
+                .session
+                .as_ref()
+                .is_some_and(|session| !session.is_local())
+            {
+                self.read_transcoding_facts().await;
+                self.publish(true);
+            }
         }
         if self.publish_pending {
             self.publish(false);
