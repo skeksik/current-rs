@@ -368,6 +368,8 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     internal string? SubtitlePathForTest => Player.SubtitlePathForTest;
 
+    internal ulong? NativeLoadForTest => Player.NativeLoadForTest;
+
     internal bool ReopenForSubtitlesForTest
     {
         set => Player.ReopenForSubtitlesForTest = value;

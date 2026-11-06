@@ -349,21 +349,22 @@ internal static class SmokeRun
             window.ReopenForSubtitlesForTest = reopen;
             if (reopen)
             {
-                // A new play of the item: seen leaving Playing (loading again), then playing natively again.
+                // A new play of the item: the native engine has the core's next load open, and it plays. Not "seen leaving Playing
+                // first": between the two plays the core is out of Playing for about 50 ms (owner's PC, 2026-11-06), this poll's
+                // interval, so the poll could miss it; the new play then ran to the 8 s clip's end, the player closed, and the check
+                // failed with "left Playing, now Idle" (CI, 2026-11-06). The load is the new play's alone: the core publishes Preparing
+                // before it sends the load.
+                var before = window.NativeLoadForTest;
                 window.PlayForTest(core, new ItemRef(core.Servers[0].Server, NativeItemId));
-                var left = false;
-                var playing = await WaitUntilAsync(() =>
-                {
-                    var state = window.PlayerStateForTest;
-                    left |= state.State is not PlayerStateKind.Playing;
-                    return left && state is { State: PlayerStateKind.Playing, Route.Engine: RouteEngine.Platform };
-                }, Timeout * 3);
+                bool NewLoad() => window.NativeLoadForTest is { } load && load != before;
+                var playing = await WaitUntilAsync(() => NewLoad()
+                    && window.PlayerStateForTest is { State: PlayerStateKind.Playing, Route.Engine: RouteEngine.Platform }, Timeout * 3);
                 if (!playing)
                 {
                     // What the player reached, so a failure names its cause (no address or text in it).
                     var state = window.PlayerStateForTest;
                     check(false, "the stand-in's MP4 plays natively again for the subtitle check ("
-                        + $"{(left ? "left Playing" : "never left Playing")}, now {state.State}, "
+                        + $"{(NewLoad() ? "the new load open" : "no new load open")}, now {state.State}, "
                         + $"{state.Route?.Engine.ToString() ?? "no engine"} {state.Route?.Label.ToString() ?? "no route"}, "
                         + $"native failure {window.NativeFailureForTest ?? "none"}, subtitle path {window.SubtitlePathForTest ?? "none"})");
                     return;

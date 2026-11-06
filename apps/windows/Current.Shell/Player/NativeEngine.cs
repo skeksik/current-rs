@@ -220,6 +220,10 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     /// prints it).</summary>
     internal string? SubtitlePath { get; private set; }
 
+    /// <summary>For the smoke run: the core's generation of the load open (null: none). Each load the core sends has the next one; an
+    /// open again for subtitle files keeps it. UI thread only.</summary>
+    internal ulong? LoadForTest => _file?.Generation;
+
     /// <summary>For the smoke run: open the file again for every subtitle file, so that path is tested too.</summary>
     internal bool ReopenForSubtitlesForTest { get; set; }
 
