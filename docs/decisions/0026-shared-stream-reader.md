@@ -1,7 +1,7 @@
 # 0026: One stream reader in the core, with libmpv's read-ahead limits
 
-Status: proposed (2026-11-06), from the shared-stream-reader spike. Open choices A to C are for the owner, with a recommendation
-each. Research, quotes and sources: `docs/notes/shared-stream-reader.md`. No product code was written.
+Status: accepted (owner, 2026-11-06), from the shared-stream-reader spike. The owner chose A1, B1 and C1 (2026-11-06); the other
+options are kept as considered. Research, quotes and sources: `docs/notes/shared-stream-reader.md`. No product code was written.
 
 ## Context
 The owner's decision (2026-11-06): "Make limit calculation the same as it is in libmpv and proceed with shared module", on the
@@ -51,26 +51,26 @@ What led here:
 - **The info panel** shows, for a route on the reader: buffered ahead (seconds and bytes, from the reader's served and fetched offsets
   against the point), the read rate, requests and reconnects, and starvation releases. Words in the core.
 
-### Choice A: which crate
-- **A1 (recommended): a `reader` module in `current-relay`.** It reuses `Upstream`, `RelayEvent` and its once-per-route sink, the 206
+### Choice A: which crate (decided: A1, owner, 2026-11-06)
+- **A1 (chosen): a `reader` module in `current-relay`.** It reuses `Upstream`, `RelayEvent` and its once-per-route sink, the 206
   check and the route's lifetime; no hyper on its path. The crate becomes "the loopback relay and the stream reader"; it still knows no
   service. The relay's listener starts only when a route is used over HTTP, so a route read only through the reader opens no port.
-- A2: a new crate `current-reader` (copying `crates/model`'s shape) that depends on `current-relay` for the trait and the events. Cleaner
+- Considered, A2: a new crate `current-reader` (copying `crates/model`'s shape) that depends on `current-relay` for the trait and the events. Cleaner
   name, one more crate and a public seam in `current-relay` for routes.
-- A3: in `current-playback`: no, it has no HTTP by design (ADR 0019).
+- Considered, A3: in `current-playback`: no, it has no HTTP by design (ADR 0019).
 
-### Choice B: which windows the forward limit holds
-- **B1 (recommended): every window but index windows**, the subtitle scan included. The scan is what read the whole file in the
+### Choice B: which windows the forward limit holds (decided: B1, owner, 2026-11-06)
+- **B1 (chosen): every window but index windows**, the subtitle scan included. The scan is what read the whole file in the
   spike, so only this bounds the player's memory. Cost: if Windows' player waits for the scan to reach a cue before showing it, cues
   past the limit may come late or not at all; if its playback waits on the scan, playback may stall at the limit until the starvation
   guard releases the read. Neither is measured: a named measurement in R4 ("cues with the scan held").
-- B2: only the playback window. No risk to cues; the scan may again pull the whole file into the player's memory.
+- Considered, B2: only the playback window. No risk to cues; the scan may again pull the whole file into the player's memory.
 
-### Choice C: libmpv
-- **C1 (recommended): libmpv stays on HTTP** (directly, or through the relay where ADR 0020 says). It already applies these limits
+### Choice C: libmpv (decided: C1, owner, 2026-11-06)
+- **C1 (chosen): libmpv stays on HTTP** (directly, or through the relay where ADR 0020 says). It already applies these limits
   itself and plays smoothly; on mpv's custom stream API (`mpv_stream_cb_add_ro`, "not stable yet") mpv treats the stream as a local
   file (1 s read-ahead, no back cache) unless `cache=yes`, and then buffers 150 MiB itself on top of the reader (notes §3.2, §5).
-- C2: libmpv on the reader with `cache=yes`: one behaviour on every route, at the cost of double buffering, new `unsafe` callbacks in
+- Considered, C2: libmpv on the reader with `cache=yes`: one behaviour on every route, at the cost of double buffering, new `unsafe` callbacks in
   `current-mpv` that block an mpv thread on the core's runtime, and an unstable API. Lowering mpv's own limits instead would depart from
   "the same as libmpv" in mpv itself.
 
@@ -97,7 +97,7 @@ What led here:
 | The Mac's device remux (fMP4 HLS through the relay) | No: a resource loader cannot serve HLS segments (ADR 0020) |
 | AVPlayer direct play of a progressive file (M3) | Later, with M3-1 |
 | GStreamer direct play (M5) | Later, with L2 |
-| libmpv, every platform | Per choice C (recommended: no) |
+| libmpv, every platform | No: stays on HTTP (choice C1) |
 | Android, web | When those platforms start |
 
 ### What it amends (written by the task that implements each part)
@@ -108,10 +108,10 @@ What led here:
   stays the relay's rule; the reader buffers up to this record's limits. With A1, "Where it lives" names the reader.
 - **ADR 0025, "URLs across the bridge":** direct play on a platform engine reads through the reader where this record's table says,
   else through the relay as now; the info panel's reader facts.
-- **ADR 0002 and CLAUDE.md's layout:** only with A2 (a new crate).
+- **ADR 0002 and CLAUDE.md's layout:** no new crate (A1); CLAUDE.md's line for `crates/relay` names the reader (R1).
 
 ## Task split (Windows first; each one branch and PR)
-- **R1** (feat/stream-reader): the reader in the core (choice A) with windows, the limits, the playback point and its guards,
+- **R1** (feat/stream-reader): the reader in `current-relay` (choice A1) with windows, the limits, the playback point and its guards,
   reconnects, events and route lifetime; tests with a fake upstream: the forward and back limits (byte-exact), donation, the point
   moving with position events and at seeks, the starvation guard, index windows, a break mid-body reopened with `If-Range`, refusals
   mapped to `RelayEvent`s once, cancellation on route removal, bounded memory with a reader that never reads.

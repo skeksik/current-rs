@@ -316,11 +316,11 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       (W7, "Playback smoothness"); find whether the decoder, the HDR composition or the relay. Notes: #127 (the start-up stall comes
       with a presented MKV text subtitle; the 4K60 stalls are not the relay or the decoder's load, cause not found). Cause: Windows'
       player's own HTTP reading (notes #139); fed from our own stream it stalled nowhere but read the whole file into memory (notes
-      #141). Owner, 2026-11-06: one stream reader in the core with libmpv's limits; the tasks below (ADR 0026, proposed;
+      #141). Owner, 2026-11-06: one stream reader in the core with libmpv's limits; the tasks below (ADR 0026, accepted;
       `docs/notes/shared-stream-reader.md`)
-- [ ] The shared stream reader (owner, 2026-11-06; ADR 0026, proposed): one reader in the core that every player can read a file
+- [ ] The shared stream reader (owner, 2026-11-06; ADR 0026, accepted with A1, B1, C1): one reader in `current-relay` that every player can read a file
       through, at most 150 MiB ahead of the playback point and 50 MiB behind, as libmpv. Direct play on Windows' native route first;
-      HLS and server streams unchanged; libmpv per ADR 0026 choice C. In this order, one PR each:
+      HLS and server streams unchanged; libmpv stays on HTTP (C1). In this order, one PR each:
   - [ ] R1 (feat/stream-reader): the reader with its windows, limits, playback point and starvation guard, reconnects, the relay's
         events and route lifetime; tests with a fake upstream
   - [ ] R2 (feat/stream-reader-ffi): the `StreamReader` UniFFI object and `PlatformFile.reader`; the C# `Stream` adapter; bindings
@@ -328,7 +328,7 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
   - [ ] R3 (feat/windows-native-reader): Windows' engine reads direct play through it (`MediaSource.CreateFromStream`), reports
         `Buffering` for the guard; the info panel's reader facts
   - [ ] R4 (device check on the owner's PC): memory on a feature-length file, over Tailscale, a connection dropped mid-file, seeks,
-        an audio track switch, cues with the subtitle scan held (ADR 0026 choice B), how often the starvation guard fired, and the
+        an audio track switch, cues with the subtitle scan held (ADR 0026 B1), how often the starvation guard fired, and the
         stutter cases again
 - [x] A selected audio stream with no Media Foundation track fails the track, so the file moves to libmpv: ALAC in MP4 plays silently
       on Windows' player today (W7, "ALAC in MP4"). #118; checked on the owner's PC, sound heard (#131)

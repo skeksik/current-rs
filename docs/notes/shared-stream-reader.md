@@ -4,7 +4,8 @@ spike/shared-stream-reader, from `origin/main` at d4b88ff, written on 2026-11-06
 design: **"Make limit calculation the same as it is in libmpv and proceed with shared module"** (owner, 2026-11-06), on the
 manager's proposal the owner accepted: one stream reader in the shared Rust core, with one read-ahead rule, that every player can
 read a file through, so memory and buffering behave the same on every platform whatever each player does on its own. The decision
-record is ADR 0026 (proposed).
+record is ADR 0026, accepted by the owner on 2026-11-06 with choices A1 (a `reader` module in
+`current-relay`), B1 (the forward limit on every window but index windows) and C1 (libmpv stays on HTTP).
 
 Where it comes from:
 - Windows' player reads an HTTP stream at only about 110–140 Mbit/s, and its playback stalls while it reads far ahead for an MKV text
@@ -76,7 +77,7 @@ Correct on average; wrong where the bitrate is uneven (VBR):
   - Estimate **ahead** of the truth (a dense part later): the player may pull more than 150 MiB ahead. Costs memory only.
   Typical films vary less than that example, but a quiet first act and a loud last one is common; how far real files stray was not
   measured.
-- **Guards** (proposed, ADR 0026):
+- **Guards** (ADR 0026):
   1. **Anchored at each start and seek.** After a load or a seek the player's first read in the new window is where the file holds
      that position (the player found it in the container's index), so the point is set to that offset and moves on from there at the
      average rate (size / duration). The error then grows only from the last anchor, not from the start of the file. Cheap, but a long
@@ -213,14 +214,14 @@ read dropped).
 - **The playback window** (the one whose reads are nearest above the playback point): held to `point + 150 MiB`.
 - **An index window** (a few reads at the end of the file, Matroska `Cues`, `SeekHead`, tags): small, served without the forward
   limit up to 8 MiB per window (a proposal; cues of a 2-hour file are around a megabyte, not measured), counted in the budget.
-- **A scan window** (reads that run ahead faster than playback, the subtitle scan): the open choice B in ADR 0026.
-  - Recommended: held to `point + 150 MiB` like the playback window. The scan is what read the whole file in the spike, so this is
+- **A scan window** (reads that run ahead faster than playback, the subtitle scan): choice B in ADR 0026, decided B1 (owner, 2026-11-06).
+  - Chosen (B1): held to `point + 150 MiB` like the playback window. The scan is what read the whole file in the spike, so this is
     what bounds memory.
   - The cost: if Windows' player waits for the scan to reach a cue before it shows that cue, cues may come late or not at all for the
     part past the limit, and if its playback waits on the scan (the stutter notes saw its clock stall during the scan over HTTP),
     playback may stall at the limit. Guard 2 (§1) then releases the held read: memory again, not a stall. Neither was measured; it is
     a named measurement in the device check (R4).
-  - The alternative: only the playback window is held, index and scan windows read freely. No risk to cues, but the subtitle scan
+  - Considered (B2): only the playback window is held, index and scan windows read freely. No risk to cues, but the subtitle scan
     can again pull the whole file into the player's memory.
 
 ## 5. Should libmpv move onto the reader?
@@ -234,8 +235,8 @@ read dropped).
     filling its cache, then the video's rate; the long 4K file with a subtitle shown played without a stall), so it has no problem to
     fix.
   - `stream_cb.h` says the API "is not stable yet"; callbacks block an mpv thread on the core's runtime; new `unsafe` code.
-- **Recommendation: libmpv stays on HTTP** (directly, or through the relay where ADR 0020 says), and the question is reopened only if
-  the device check shows the two routes behaving differently in a way users notice. The owner decides.
+- **Decided (owner, 2026-11-06, ADR 0026 C1): libmpv stays on HTTP** (directly, or through the relay where ADR 0020 says), and the question is reopened only if
+  the device check shows the two routes behaving differently in a way users notice.
 
 ## 6. Dependencies
 None. The reader needs tokio, `bytes` and `current-net`, which `current-relay` already uses; UniFFI is in place. Nothing for the
