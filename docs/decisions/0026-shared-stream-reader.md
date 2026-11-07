@@ -1,7 +1,7 @@
 # 0026: One stream reader in the core, with libmpv's read-ahead limits
 
 Status: accepted (owner, 2026-11-06), from the shared-stream-reader spike. The owner chose A1, B1 and C1 (2026-11-06); the other
-options are kept as considered. Research, quotes and sources: `docs/notes/shared-stream-reader.md`. No product code was written.
+options are kept as considered. Implementation notes from R1 (feat/stream-reader, 2026-11-06) under "As built (R1)". Research, quotes and sources: `docs/notes/shared-stream-reader.md`. No product code was written.
 
 ## Context
 The owner's decision (2026-11-06): "Make limit calculation the same as it is in libmpv and proceed with shared module", on the
@@ -50,6 +50,42 @@ What led here:
   cancelled.
 - **The info panel** shows, for a route on the reader: buffered ahead (seconds and bytes, from the reader's served and fetched offsets
   against the point), the read rate, requests and reconnects, and starvation releases. Words in the core.
+
+### As built (R1)
+Written by R1 (feat/stream-reader, 2026-11-06), with the manager under the owner's rules; where it differs from the text above, this
+holds.
+- **A reader route is its own type** (`current_relay::ReaderRoute`): the relay's `Upstream`, prefixes and once-per-route events, but
+  no port, token or URL. `Relay::add_route` is unchanged. Dropping it cancels its readers (`ReadError::Cancelled`) and their requests.
+  This replaces "the listener starts on a route's first HTTP use".
+- **Only the playback window prefetches**: the latest-starting window, not an index window, that starts at most the gap (4 MiB) past
+  the point and ends at most the read-ahead before it. Other windows fetch only for reads waiting on them (up to the forward limit, not
+  held to the summed budget), so a window left at the file's head after a resume does not download its way up to the point. Bytes are
+  appended exactly to the limits; a chunk read past them waits in the pump (at most one chunk per window).
+- **Pinning the point:** after a start or `seek_to`, the point is pinned by the first read that began after it (each read is stamped
+  with the seek count when it begins, so a read held at the old limit and woken by the seek never pins it), is not an index read, is
+  not a read in the file's first 4 MiB while the estimate is past them, and lies within the read-ahead (150 MiB) either side of the
+  estimate; the window holding it is then the playback window and prefetches at once. With no rate at all the first such read pins
+  it wherever it is. A subtitle scan opens later and, at real sizes, further than the read-ahead past the estimate. A starvation
+  release pins it too, but only for a read begun since the last seek: a read held before it is served and leaves the point where it
+  is. (Changed after review, manager, 2026-11-07: a target more than the gap off the estimate pinned nothing and
+  its window did not prefetch, so an estimate error cut the read-ahead.)
+- **Index windows** are the last 8 MiB of a file more than twice that long; a smaller file has none.
+- **Known limits, for R4 to watch** (manager's review, 2026-11-07; not fixed): any first read after a seek within the read-ahead
+  of the estimate pins the point, so whether a player reads elsewhere (a scan, the cues) before its target is to be measured; two
+  seeks in a row (to 40 s, then 45 s) let a late read for the first, arriving after the second, pin the point, if the player does
+  not cancel the first; on a resume near the start, a header or probe read past the first 4 MiB can pin it.
+- **Without a duration** the server's bitrate gives the rate. Without either, the point does not follow the position: it moves only
+  when a read pins it after a start or seek and at starvation releases, so memory stays bounded and the player may stall briefly
+  each read-ahead; `ReaderFacts::rate_known` is false so the panel can say so.
+- **A file that changed on the server** fails the window as `RelayEvent::BadRange`: a 200 to an `If-Range` request (at any
+  offset), another part than asked, another total length in `Content-Range` than the first answer's, or a 416 to the reader's own
+  request. `If-Range` carries a strong `ETag` only: RFC 9110 §13.1.5 forbids a weak one, and a `Last-Modified` date only where it
+  is a strong validator (§8.8.2.2: next to a `Date` at least a second later), which the reader does not check; without a strong
+  `ETag` the total length is the check. A body that breaks off is asked again `tries` times (3) with a doubling back-off (500 ms first); the count
+  starts again after each chunk received.
+- **A cancelled read** (its future dropped) stops counting as waiting, so its window stops fetching for it.
+- **`ReaderFacts`:** size, point, `rate_known`, bytes held ahead, served ahead (bytes and time), the read rate over 5 s, requests,
+  reconnects, starvation releases, windows.
 
 ### Choice A: which crate (decided: A1, owner, 2026-11-06)
 - **A1 (chosen): a `reader` module in `current-relay`.** It reuses `Upstream`, `RelayEvent` and its once-per-route sink, the 206
@@ -104,7 +140,7 @@ What led here:
 - **ADR 0019, "What crosses `current-ffi`":** `PlatformFile` carries a `StreamReader` for routes on the reader and then no URL; the
   redaction exception for the relay URL holds only for files without a reader.
 - **ADR 0020:** a route can also be read through the stream reader (no HTTP hop): same server, prefixes, upstream, events and lifetime;
-  the listener starts on a route's first HTTP use instead of its creation. "Streaming" ("no buffering beyond a chunk per connection")
+  a route made for the reader is its own type and opens no port (R1, below). "Streaming" ("no buffering beyond a chunk per connection")
   stays the relay's rule; the reader buffers up to this record's limits. With A1, "Where it lives" names the reader.
 - **ADR 0025, "URLs across the bridge":** direct play on a platform engine reads through the reader where this record's table says,
   else through the relay as now; the info panel's reader facts.
