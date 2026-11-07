@@ -30,9 +30,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use current_net::RuntimeHandle;
-use current_net::header::{
-    CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, HeaderValue, LAST_MODIFIED,
-};
+use current_net::header::{CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, HeaderValue};
 use hyper::body::Bytes;
 use tokio::sync::Notify;
 
@@ -217,7 +215,7 @@ impl ReaderRoute {
         if !core.prefixes.allow(path) {
             return Err(ReadError::NotAllowed);
         }
-        let response = pump::request(core, path, &query, 0, None)
+        let response = pump::request(core, path, &query, 0, None, None)
             .await
             .map_err(|failure| {
                 if let Some(event) = failure.event() {
@@ -236,7 +234,11 @@ impl ReaderRoute {
                 .filter(|value: &&HeaderValue| !value.is_empty())
                 .cloned()
         };
-        let validator = header(ETAG).or_else(|| header(LAST_MODIFIED));
+        // RFC 9110 §13.1.5 (read 2026-11-06): "A client MUST NOT generate an If-Range header field containing an entity tag that
+        // is marked as weak", nor an HTTP-date unless it "is a strong validator in the sense defined by Section 8.8.2.2", which a
+        // Last-Modified is only next to a Date at least a second later. So a strong ETag only; without one every request after
+        // the first is checked by the file's total length instead (`pump::request`).
+        let validator = header(ETAG).filter(|tag| !tag.as_bytes().starts_with(b"W/"));
         let content_type = header(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok().map(str::to_owned))
             .or(facts.content_type.clone())
@@ -396,6 +398,7 @@ impl StreamReader {
 
     async fn read_inner(&self, offset: u64, max_len: u64) -> Result<Bytes, ReadError> {
         let inner = &self.inner;
+        let generation = lock(&inner.state).generation();
         // Registered once while this read waits for a window's next bytes, and dropped with the read.
         let mut waiting: Option<Waiting<'_>> = None;
         loop {
@@ -406,7 +409,7 @@ impl StreamReader {
                 if let Some(why) = state.closed {
                     return Err(why);
                 }
-                match state.read(offset, max_len, Instant::now()) {
+                match state.read(offset, max_len, generation, Instant::now()) {
                     Step::Data(bytes) => {
                         drop(state);
                         // The playback window may prefetch again.

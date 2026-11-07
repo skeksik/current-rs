@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use current_net::header::{HeaderMap, HeaderValue, IF_RANGE, RANGE};
+use current_net::header::{CONTENT_RANGE, HeaderMap, HeaderValue, IF_RANGE, RANGE};
 use current_net::{GatewayShape, StreamError};
 use hyper::body::Bytes;
 
@@ -31,13 +31,15 @@ impl Failure {
 }
 
 /// Asks for the file from `from` to its end. `validator` goes as `If-Range`: a server whose file changed answers 200 with the
-/// whole new file, which is refused (only a request from the first byte may be answered 200).
+/// whole new file, which is refused at any offset. Without a validator only the first request may be answered 200. `size`, once
+/// known, must be the total of every 206's `Content-Range`: another length is another file.
 pub(super) async fn request(
     core: &RouteCore,
     path: &str,
     query: &[(String, String)],
     from: u64,
     validator: Option<&HeaderValue>,
+    size: Option<u64>,
 ) -> Result<UpstreamResponse, Failure> {
     let range = format!("bytes={from}-");
     let mut headers = HeaderMap::new();
@@ -72,13 +74,30 @@ pub(super) async fn request(
         })));
     }
     match status {
-        206 if is_part_asked(Some(&range), &response.headers) => Ok(response),
-        200 if from == 0 => Ok(response),
-        // A 200 for a later range (the file changed, or ranges are ignored), or another part than the one asked for.
-        200 | 206 => Err(Failure::Final(Some(RelayEvent::BadRange))),
-        416 => Err(Failure::Final(None)),
+        206 if is_part_asked(Some(&range), &response.headers)
+            && size.is_none_or(|size| total_of(&response.headers) == Some(size)) =>
+        {
+            Ok(response)
+        }
+        200 if from == 0 && validator.is_none() && size.is_none() => Ok(response),
+        // A 200 to If-Range or for a later range (the file changed, or ranges are ignored), another part than the one asked for,
+        // another total length, or a range the file no longer has.
+        200 | 206 | 416 => Err(Failure::Final(Some(RelayEvent::BadRange))),
         status => Err(Failure::Final(Some(RelayEvent::Server { status }))),
     }
+}
+
+/// The total length in a `Content-Range` (`bytes <first>-<last>/<total>`).
+fn total_of(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(CONTENT_RANGE)?
+        .to_str()
+        .ok()?
+        .rsplit_once('/')?
+        .1
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Fetches the window `id` while it exists. `body` is the first answer's when the reader was just opened.
@@ -117,6 +136,7 @@ pub(super) async fn run(inner: Arc<Inner>, id: u64, mut body: Option<Box<dyn Ups
                 &inner.query,
                 from,
                 inner.validator.as_ref(),
+                Some(inner.size),
             )
             .await
             {

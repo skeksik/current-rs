@@ -61,14 +61,22 @@ holds.
   the point and ends at most the read-ahead before it. Other windows fetch only for reads waiting on them (up to the forward limit, not
   held to the summed budget), so a window left at the file's head after a resume does not download its way up to the point. Bytes are
   appended exactly to the limits; a chunk read past them waits in the pump (at most one chunk per window).
-- **Pinning the point:** after a start or `seek_to`, the first read that can be the playback position pins it: not an index read,
-  not a read in the file's first 4 MiB while the estimate is past them, not more than the gap past the estimate (a scan running
-  ahead), not more than the read-ahead before it. A starvation release pins it too.
+- **Pinning the point:** after a start or `seek_to`, the point is pinned by the first read that began after it (each read is stamped
+  with the seek count when it begins, so a read held at the old limit and woken by the seek never pins it), is not an index read, is
+  not a read in the file's first 4 MiB while the estimate is past them, and lies within the read-ahead (150 MiB) either side of the
+  estimate; the window holding it is then the playback window and prefetches at once. With no rate at all the first such read pins
+  it wherever it is. A subtitle scan opens later and, at real sizes, further than the read-ahead past the estimate. A starvation
+  release pins it too. (Changed after review, manager, 2026-11-07: a target more than the gap off the estimate pinned nothing and
+  its window did not prefetch, so an estimate error cut the read-ahead.)
+- **Index windows** are the last 8 MiB of a file more than twice that long; a smaller file has none.
 - **Without a duration** the server's bitrate gives the rate. Without either, the point does not follow the position: it moves only
   when a read pins it after a start or seek and at starvation releases, so memory stays bounded and the player may stall briefly
   each read-ahead; `ReaderFacts::rate_known` is false so the panel can say so.
-- **A file that changed on the server** (a 200 to an `If-Range` request, or another part than asked) fails the window as
-  `RelayEvent::BadRange`. A body that breaks off is asked again `tries` times (3) with a doubling back-off (500 ms first); the count
+- **A file that changed on the server** fails the window as `RelayEvent::BadRange`: a 200 to an `If-Range` request (at any
+  offset), another part than asked, another total length in `Content-Range` than the first answer's, or a 416 to the reader's own
+  request. `If-Range` carries a strong `ETag` only: RFC 9110 §13.1.5 forbids a weak one, and a `Last-Modified` date only where it
+  is a strong validator (§8.8.2.2: next to a `Date` at least a second later), which the reader does not check; without a strong
+  `ETag` the total length is the check. A body that breaks off is asked again `tries` times (3) with a doubling back-off (500 ms first); the count
   starts again after each chunk received.
 - **A cancelled read** (its future dropped) stops counting as waiting, so its window stops fetching for it.
 - **`ReaderFacts`:** size, point, `rate_known`, bytes held ahead, served ahead (bytes and time), the read rate over 5 s, requests,

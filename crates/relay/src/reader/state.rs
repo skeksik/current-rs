@@ -137,6 +137,9 @@ pub(crate) struct State {
     anchor: Option<Anchor>,
     /// After a start or a seek, until a read pins the point.
     awaiting_anchor: bool,
+    /// Counts seeks. A read stamps it when it begins, and only a read that began after the last seek may pin the point: one held
+    /// before it (at the old limit) is woken by the seek but is not the player's read at the new position.
+    generation: u64,
     starving: bool,
     pub(crate) closed: Option<ReadError>,
     pub(crate) requests: u64,
@@ -157,6 +160,7 @@ impl State {
             position: start,
             anchor: None,
             awaiting_anchor: true,
+            generation: 0,
             starving: false,
             closed: None,
             requests: 0,
@@ -204,8 +208,16 @@ impl State {
         }
     }
 
+    /// Whether `offset` is in the file's index area: its last [`ReaderLimits::index_window`] bytes, in a file more than twice
+    /// that long (a smaller file has no part read apart from its playback).
     fn is_index(&self, offset: u64) -> bool {
-        offset >= self.size.saturating_sub(self.limits.index_window)
+        let window = self.limits.index_window;
+        self.size > window.saturating_mul(2) && offset >= self.size - window
+    }
+
+    /// The seek count a read stamps when it begins.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub(crate) fn held_ahead(&self) -> u64 {
@@ -283,20 +295,20 @@ impl State {
         id
     }
 
-    /// Pins the point to a read after a start or seek, if the read can be the playback position: not an index read, not a read of
-    /// the file's head while the point is elsewhere, and not further than the gap past the estimate (a scan running ahead) or the
-    /// read-ahead before it (ADR 0026, "The playback point").
-    fn maybe_anchor(&mut self, offset: u64) {
-        if !self.awaiting_anchor || self.is_index(offset) {
+    /// Pins the point to a read after a start or seek, if the read can be the playback position (ADR 0026, "As built (R1)"): it
+    /// began after the last seek (`generation`), is not an index read, is not a read of the file's head while the estimate is past
+    /// it, and lies within the read-ahead either side of the estimate. Without any rate the first such read pins it wherever it is.
+    /// A scan opens later, and at real sizes further than the read-ahead past the estimate.
+    fn maybe_anchor(&mut self, offset: u64, generation: u64) {
+        if !self.awaiting_anchor || generation != self.generation || self.is_index(offset) {
             return;
         }
         if self.rate.is_some() {
             let estimate = self.estimate();
-            let gap = self.limits.gap;
-            let head = offset < gap && estimate >= gap;
-            let past = offset > estimate.saturating_add(gap);
-            let before = offset.saturating_add(self.limits.ahead) < estimate;
-            if head || past || before {
+            let ahead = self.limits.ahead;
+            let head = offset < self.limits.gap && estimate >= self.limits.gap;
+            let far = offset.abs_diff(estimate) > ahead;
+            if head || far {
                 return;
             }
         }
@@ -308,11 +320,18 @@ impl State {
     }
 
     /// One step of a read of up to `max_len` bytes at `offset`.
-    pub(crate) fn read(&mut self, offset: u64, max_len: u64, now: Instant) -> Step {
+    /// `generation` is [`State::generation`] when the read began.
+    pub(crate) fn read(
+        &mut self,
+        offset: u64,
+        max_len: u64,
+        generation: u64,
+        now: Instant,
+    ) -> Step {
         if offset >= self.size || max_len == 0 {
             return Step::Eof;
         }
-        self.maybe_anchor(offset);
+        self.maybe_anchor(offset, generation);
         let Some(at) = self.find(offset) else {
             return Step::Opened(self.open(offset));
         };
@@ -447,6 +466,7 @@ impl State {
         self.position = position;
         self.anchor = None;
         self.awaiting_anchor = true;
+        self.generation += 1;
     }
 
     pub(crate) fn set_starving(&mut self, starving: bool) {
@@ -476,7 +496,7 @@ impl State {
             served_ahead,
             served_ahead_time: self
                 .rate
-                .map(|rate| Duration::from_secs_f64(served_ahead as f64 / rate)),
+                .and_then(|rate| Duration::try_from_secs_f64(served_ahead as f64 / rate).ok()),
             read_rate: recent / RATE_SPAN.as_secs(),
             requests: self.requests,
             reconnects: self.reconnects,

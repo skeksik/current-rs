@@ -67,12 +67,22 @@ struct Behaviour {
     later_fail: Option<StreamError>,
     /// A request with `If-Range` gets a 200 with the whole file: the file changed.
     changed: bool,
+    /// The same, only for a request from the first byte.
+    changed_at_start: bool,
     /// Every request fails with this.
     refuse: Option<StreamError>,
     /// Every request is answered with an HTML page.
     html: bool,
     /// Bodies of requests from this offset on wait for a permit per chunk.
     gate: Option<(u64, Arc<Semaphore>)>,
+    /// The file's length; [`SIZE`] when `None`.
+    size: Option<u64>,
+    /// The validator headers sent instead of a strong `ETag` (`None`: [`ETAG`]).
+    validators: Option<Vec<(&'static str, String)>>,
+    /// Every request after the first answers with this total in its `Content-Range`.
+    later_total: Option<u64>,
+    /// Every request after the first gets a 416.
+    later_416: bool,
 }
 
 /// A server holding one file: answers `Range: bytes=<from>-` with a 206 in chunks of [`CHUNK`].
@@ -92,8 +102,12 @@ impl FakeFile {
     }
 
     fn with(behaviour: Behaviour) -> Arc<Self> {
+        let data = match behaviour.size {
+            Some(size) => data().slice(..size as usize),
+            None => data(),
+        };
         Arc::new(Self {
-            data: data(),
+            data,
             sent: Mutex::new(Vec::new()),
             pulled: Arc::new(AtomicU64::new(0)),
             gated: Arc::new(AtomicU64::new(0)),
@@ -138,19 +152,31 @@ impl FakeFile {
             .and_then(|range| range.strip_suffix('-'))
             .map(|from| from.parse().unwrap())
             .unwrap_or(0);
-        let whole = behaviour.changed && if_range.is_some();
+        let size = self.data.len() as u64;
+        let whole =
+            if_range.is_some() && (behaviour.changed || behaviour.changed_at_start && from == 0);
         let from = if whole { 0 } else { from };
-        let mut pairs = vec![
-            ("content-type", "video/x-matroska".to_owned()),
-            ("etag", ETAG.to_owned()),
-        ];
-        let status = if whole {
-            pairs.push(("content-length", SIZE.to_string()));
+        let mut pairs = vec![("content-type", "video/x-matroska".to_owned())];
+        match &behaviour.validators {
+            Some(validators) => pairs.extend(validators.iter().cloned()),
+            None => pairs.push(("etag", ETAG.to_owned())),
+        }
+        let refused_range = !first && behaviour.later_416;
+        let status = if refused_range {
+            pairs.push(("content-range", format!("bytes */{size}")));
+            416
+        } else if whole {
+            pairs.push(("content-length", size.to_string()));
             200
         } else {
-            pairs.push(("content-range", format!("bytes {from}-{}/{SIZE}", SIZE - 1)));
+            let total = behaviour.later_total.filter(|_| !first).unwrap_or(size);
+            pairs.push((
+                "content-range",
+                format!("bytes {from}-{}/{total}", size - 1),
+            ));
             206
         };
+        let from = if refused_range { size } else { from };
         if behaviour.html {
             pairs[0].1 = "text/html".to_owned();
         }
@@ -434,11 +460,12 @@ async fn only_a_read_at_the_playback_position_pins_the_point() {
     let (_route, reader, _events) = setup(FakeFile::new()).await;
     reader.seek_to(Duration::from_secs(50));
     let estimate = rate_bytes(50.0);
-    // A scan further than the gap past the estimate, the file's head and an index read are served but pin nothing.
-    read_now(&reader, estimate + 3 * 8 * KIB, 1)
-        .await
-        .unwrap()
-        .unwrap();
+    // A scan further than the read-ahead past the estimate is held; it, the file's head and an index read pin nothing.
+    assert!(
+        read_now(&reader, estimate + 64 * KIB + 8 * KIB, 1)
+            .await
+            .is_none()
+    );
     read_now(&reader, 100, 1).await.unwrap().unwrap();
     read_now(&reader, SIZE - 1000, 1).await.unwrap().unwrap();
     assert_eq!(reader.facts().point, estimate);
@@ -476,8 +503,10 @@ async fn index_windows_read_without_the_limit_up_to_their_size() {
     // The last 16 KiB of the file, far past the 64 KiB limit, read to the end.
     assert_eq!(read_until_held(&reader, SIZE - 16 * KIB).await, SIZE);
     assert_eq!(read_now(&reader, SIZE, 10).await.unwrap().unwrap().len(), 0);
-    // Just before them, past the limit: held.
+    // Just before them, past the limit: held, until the player starves.
     assert!(read_now(&reader, SIZE - 32 * KIB, 10).await.is_none());
+    reader.set_starving(true);
+    assert!(read_now(&reader, SIZE - 32 * KIB, 10).await.is_some());
 }
 
 #[tokio::test]
@@ -720,6 +749,8 @@ async fn a_cancelled_read_stops_what_its_window_fetched_for_it() {
         ..limits()
     };
     let reader = Arc::new(open(&route, wide, facts()).await);
+    // The player's first read, at the start, pins the point there.
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
     let gated = || upstream.gated.load(Ordering::SeqCst);
     // A read three chunks into a window that is not the playback window: it fetches only for the read.
     let waiting = {
@@ -734,6 +765,13 @@ async fn a_cancelled_read_stops_what_its_window_fetched_for_it() {
     settle().await;
     // At most the chunk already asked for when the read went: nothing more is fetched for nobody.
     assert!(gated() <= 2 * CHUNK as u64);
+    // The control: a read there now gets its bytes, so the window could have fetched them.
+    let at = far as usize + 3 * CHUNK;
+    let bytes = timeout(WAIT, reader.read(at as u64, 10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(bytes, data().slice(at..at + 10));
 }
 
 #[tokio::test]
@@ -777,6 +815,10 @@ async fn without_any_rate_the_point_moves_only_at_seeks_and_starvation() {
     assert_eq!(facts.point, 0);
     assert_eq!(facts.served_ahead_time, None);
     assert!(read_now(&reader, 64 * KIB, 10).await.is_none());
+    // The control: the same read goes through once the player starves.
+    reader.set_starving(true);
+    assert!(read_now(&reader, 64 * KIB, 10).await.is_some());
+    reader.set_starving(false);
     // A seek pins the point to the first read after it, wherever it is.
     reader.seek_to(Duration::from_secs(60));
     read_now(&reader, 600_000, 1).await.unwrap().unwrap();
@@ -806,4 +848,163 @@ async fn facts_show_what_was_handed_out() {
     );
     assert_eq!(facts.read_rate, 40 * KIB / 5);
     assert_eq!(facts.size, SIZE);
+}
+
+/// Starts a read that the limit holds, and checks it is held.
+async fn held_read(
+    reader: &Arc<StreamReader>,
+    offset: u64,
+) -> tokio::task::JoinHandle<Result<Bytes, ReadError>> {
+    let read = {
+        let reader = reader.clone();
+        tokio::spawn(async move { reader.read(offset, 10).await })
+    };
+    sleep(HELD).await;
+    assert!(!read.is_finished());
+    read
+}
+
+#[tokio::test]
+async fn a_read_held_before_a_seek_does_not_pin_the_point() {
+    let (_route, reader, _events) = setup(FakeFile::new()).await;
+    assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+    let reader = Arc::new(reader);
+    let stale = held_read(&reader, 64 * KIB).await;
+    // A seek 10 s on: the read held at the old limit is woken, but it began before the seek.
+    reader.seek_to(Duration::from_secs(10));
+    settle().await;
+    let estimate = rate_bytes(10.0);
+    assert_eq!(reader.facts().point, estimate);
+    // The player's read at the target pins it, and the read-ahead runs from there.
+    assert_eq!(
+        read_until_held(&reader, estimate).await,
+        estimate + 64 * KIB
+    );
+    assert_eq!(reader.facts().point, estimate);
+    stale.abort();
+}
+
+#[tokio::test]
+async fn without_any_rate_a_read_held_before_a_seek_does_not_pin_the_point() {
+    let (route, _events) = route(FakeFile::new());
+    let no_rate = FileFacts {
+        duration: None,
+        bitrate: None,
+        ..facts()
+    };
+    let reader = Arc::new(open(&route, limits(), no_rate).await);
+    assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+    let stale = held_read(&reader, 64 * KIB).await;
+    reader.seek_to(Duration::from_secs(60));
+    settle().await;
+    // The player's first read at the target is served at once and pins the point there.
+    read_now(&reader, 600_000, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, 600_000);
+    stale.abort();
+}
+
+#[tokio::test]
+async fn a_seek_target_off_the_estimate_pins_the_point_and_prefetches_at_once() {
+    let (_route, reader, _events) = setup(FakeFile::new()).await;
+    reader.seek_to(Duration::from_secs(50));
+    let target = rate_bytes(50.0) + 24 * KIB;
+    read_now(&reader, target, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, target);
+    settle().await;
+    // Its window is the playback window: it prefetched to the limit without being asked.
+    assert_eq!(reader.facts().held_ahead, 64 * KIB - 1);
+}
+
+#[tokio::test]
+async fn a_small_file_keeps_its_limit() {
+    // 24 KiB, less than twice the 16 KiB index window: no part of it is an index window.
+    let upstream = FakeFile::with(Behaviour {
+        size: Some(24 * KIB),
+        ..Behaviour::default()
+    });
+    let (route, _events) = route(upstream);
+    let small = ReaderLimits {
+        ahead: 4 * KIB,
+        gap: KIB,
+        ..limits()
+    };
+    let reader = open(&route, small, facts()).await;
+    assert_eq!(read_until_held(&reader, 0).await, 4 * KIB);
+    assert!(read_now(&reader, 12 * KIB, 10).await.is_none());
+    reader.set_starving(true);
+    assert!(read_now(&reader, 12 * KIB, 10).await.is_some());
+}
+
+#[tokio::test]
+async fn a_200_to_if_range_fails_even_from_the_first_byte() {
+    let upstream = FakeFile::with(Behaviour {
+        changed_at_start: true,
+        ..Behaviour::default()
+    });
+    let (route, mut events) = route(upstream);
+    let one = ReaderLimits {
+        ahead: SIZE,
+        max_windows: 1,
+        ..limits()
+    };
+    let reader = open(&route, one, facts()).await;
+    // A read far on drops the window at 0; reading at 0 again asks with If-Range, and the file changed.
+    read_now(&reader, 600_000, 1).await.unwrap().unwrap();
+    assert_eq!(
+        timeout(WAIT, reader.read(0, 10)).await.unwrap(),
+        Err(ReadError::Failed)
+    );
+    assert_eq!(drain(&mut events), vec![RelayEvent::BadRange]);
+}
+
+#[tokio::test]
+async fn another_total_length_fails_as_a_bad_range() {
+    let upstream = FakeFile::with(Behaviour {
+        breaks: VecDeque::from([20_000]),
+        validators: Some(Vec::new()),
+        later_total: Some(SIZE + 1),
+        ..Behaviour::default()
+    });
+    let (_route, reader, mut events) = setup(upstream.clone()).await;
+    assert_eq!(read_until_held_upto(&reader, 20_000).await, 20_000);
+    assert_eq!(
+        timeout(WAIT, reader.read(20_000, 10)).await.unwrap(),
+        Err(ReadError::Failed)
+    );
+    assert_eq!(drain(&mut events), vec![RelayEvent::BadRange]);
+    // Without a validator nothing goes as If-Range.
+    assert_eq!(upstream.sent()[1], (Some("bytes=20000-".into()), None));
+}
+
+#[tokio::test]
+async fn a_weak_entity_tag_or_a_date_is_not_sent_as_if_range() {
+    for validators in [
+        vec![("etag", "W/\"v1\"".to_owned())],
+        vec![("last-modified", "Tue, 03 Nov 2026 10:00:00 GMT".to_owned())],
+    ] {
+        let upstream = FakeFile::with(Behaviour {
+            breaks: VecDeque::from([20_000]),
+            validators: Some(validators),
+            ..Behaviour::default()
+        });
+        let (_route, reader, _events) = setup(upstream.clone()).await;
+        assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+        assert_eq!(upstream.sent()[1], (Some("bytes=20000-".into()), None));
+    }
+}
+
+#[tokio::test]
+async fn a_416_on_a_reconnect_reports_a_bad_range() {
+    let upstream = FakeFile::with(Behaviour {
+        breaks: VecDeque::from([20_000]),
+        later_416: true,
+        ..Behaviour::default()
+    });
+    let (_route, reader, mut events) = setup(upstream).await;
+    assert_eq!(read_until_held_upto(&reader, 20_000).await, 20_000);
+    assert_eq!(
+        timeout(WAIT, reader.read(20_000, 10)).await.unwrap(),
+        Err(ReadError::Failed)
+    );
+    assert_eq!(drain(&mut events), vec![RelayEvent::BadRange]);
 }
