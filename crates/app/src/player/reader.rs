@@ -307,7 +307,10 @@ impl PlatformReader {
                     feed.buffering = false;
                     feed.grace();
                 },
-                apply_starving,
+                |reader, feed| {
+                    reader.restarted();
+                    reader.set_starving(feed.starving());
+                },
             ),
             EngineEvent::Paused(false) => self.update(
                 |feed| {

@@ -476,6 +476,13 @@ impl StreamReader {
         self.inner.changed.notify_waiters();
     }
 
+    /// The player's first frame after the start or a seek: a point pinned by a starvation release while it opened is pinned again
+    /// by the next read that can be the playback position.
+    pub fn restarted(&self) {
+        lock(&self.inner.state).restarted();
+        self.inner.changed.notify_waiters();
+    }
+
     /// The file's duration, when it is known only after opening (the engine reports it): the point follows the position from then
     /// on, at size / duration.
     pub fn set_duration(&self, duration: Duration) {

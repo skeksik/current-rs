@@ -139,7 +139,13 @@ above, this holds.
   frame, and a read it needs to open (an MP4 whose index sits past the index window and the read-ahead) would otherwise be held
   until the core's stall rule ends the open as a failed route after 60 s (`STALL_TIMEOUT`, the only deadline on a non-HLS open).
   Kept over dropping the forward limit before the first frame: Windows' player reads ahead as fast as it is given (the spike), so
-  the limit is what bounds its memory from the start. Both numbers are guesses (`STALL_AFTER`, `STALL_TICK` in `player/reader.rs`) that R4 measures.
+  the limit is what bounds its memory from the start.
+- **A release does not pin the point far from the target** (after review, manager, 2026-11-07): a starvation release pins the point
+  only for a read begun since the last seek and within the read-ahead of the estimate (anywhere without a rate); any other is served
+  past the limit without pinning. Released while opening, an MP4's index at the file's end had pinned the point there, so the limit
+  lay past the end and Windows' player could read the whole file into memory again. And the player's first frame after the start
+  or a seek (`StreamReader::restarted`, fed from the engine's `Restarted`) pins the point again, as a seek does, when a release or a
+  read without a rate pinned it while the player opened; a point the player's read at the target pinned is kept. Both numbers are guesses (`STALL_AFTER`, `STALL_TICK` in `player/reader.rs`) that R4 measures.
 - **The info panel** shows, while the native player plays a file read through the core, "Read by Current · 31 s (150 MB) ahead ·
   42 Mbit/s · 3 requests" (served ahead in time when the rate is known, else the bytes alone; the read rate over 5 s; requests),
   then "· 1 reconnect" and "· 2 waits released" (the starvation guard's releases) only when not zero. Not on the app engine after a
