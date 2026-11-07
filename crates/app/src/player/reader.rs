@@ -234,3 +234,111 @@ impl ReaderSlot {
         *lock(&self.fed) = None;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use current_net::header::{HeaderMap, HeaderName, HeaderValue};
+    use current_net::{StreamError, Url};
+    use current_relay::{
+        ReaderRouteConfig, RelayEvent, RelayEvents, Upstream, UpstreamBody, UpstreamFuture,
+        UpstreamRequest, UpstreamResponse,
+    };
+
+    const SIZE: u64 = 1_000_000;
+
+    /// A server with one file of [`SIZE`] zero bytes, in 64 KiB chunks.
+    struct File;
+
+    struct Body(u64);
+
+    impl UpstreamBody for Body {
+        fn chunk(&mut self) -> UpstreamFuture<'_, Option<Bytes>> {
+            let take = (SIZE - self.0).min(64 * 1024);
+            self.0 += take;
+            Box::pin(async move { Ok((take > 0).then(|| Bytes::from(vec![0; take as usize]))) })
+        }
+    }
+
+    impl Upstream for File {
+        fn send(&self, request: UpstreamRequest) -> UpstreamFuture<'_, UpstreamResponse> {
+            let from: u64 = request
+                .headers
+                .get("range")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|range| range.strip_prefix("bytes="))
+                .and_then(|range| range.strip_suffix('-'))
+                .and_then(|from| from.parse().ok())
+                .unwrap_or(0);
+            let mut headers = HeaderMap::new();
+            let mut header = |name: &'static str, value: String| {
+                headers.insert(
+                    HeaderName::from_static(name),
+                    HeaderValue::from_str(&value).unwrap(),
+                );
+            };
+            header("content-type", "video/mp4".into());
+            header("content-range", format!("bytes {from}-{}/{SIZE}", SIZE - 1));
+            Box::pin(async move {
+                Ok::<_, StreamError>(UpstreamResponse {
+                    status: 206,
+                    headers,
+                    base: Url::parse("https://media.example.com/").unwrap(),
+                    body: Box::new(Body(from)),
+                })
+            })
+        }
+    }
+
+    struct NoEvents;
+
+    impl RelayEvents for NoEvents {
+        fn report(&self, _: RelayEvent) {}
+    }
+
+    fn reader() -> PlatformReader {
+        let route = ReaderRoute::new(
+            &tokio::runtime::Handle::current(),
+            ReaderRouteConfig {
+                upstream: Arc::new(File),
+                prefixes: vec!["/Videos/e1/".into()],
+                events: Arc::new(NoEvents),
+            },
+        )
+        .unwrap();
+        PlatformReader::new(route, "/Videos/e1/stream".into(), Vec::new())
+    }
+
+    #[tokio::test]
+    async fn the_engine_feeds_the_reader_before_and_after_it_opens() {
+        let reader = reader();
+        // Before opening: the load's start and the duration the engine reported are kept.
+        reader.start_at(Duration::from_secs(10));
+        reader.engine_event(&EngineEvent::Duration(Duration::from_secs(100)));
+        assert!(reader.facts().is_none());
+        assert_eq!(reader.open().await.unwrap(), (SIZE, "video/mp4".to_owned()));
+        let facts = reader.facts().unwrap();
+        assert!(facts.rate_known);
+        assert_eq!(facts.point, 100_000);
+        // After: positions and seeks move the point.
+        reader.engine_event(&EngineEvent::Position(Duration::from_secs(20)));
+        assert_eq!(reader.facts().unwrap().point, 200_000);
+        reader.seek_to(Duration::from_secs(50));
+        assert_eq!(reader.facts().unwrap().point, 500_000);
+        // Starving while buffering; no longer once playing again or paused.
+        let starving = |reader: &PlatformReader| lock(&reader.feed).starving;
+        for (event, after) in [
+            (EngineEvent::Buffering(true), true),
+            (EngineEvent::Restarted, false),
+            (EngineEvent::Buffering(true), true),
+            (EngineEvent::Paused(false), false),
+            (EngineEvent::Buffering(true), true),
+            (EngineEvent::Buffering(false), false),
+        ] {
+            reader.engine_event(&event);
+            assert_eq!(starving(&reader), after, "after {event:?}");
+        }
+        reader.cancel();
+        assert_eq!(reader.read(0, 10).await, Err(ReadError::Cancelled));
+    }
+}
