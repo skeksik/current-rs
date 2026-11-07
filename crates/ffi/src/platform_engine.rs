@@ -102,8 +102,8 @@ pub struct PlatformFile {
     pub subtitle: PlatformTrack,
     /// The URL is an HLS playlist (Windows: open it with `AdaptiveMediaSource`).
     pub hls: bool,
-    /// The core's stream reader for the file, when the engine reads it through the core instead of `url` (ADR 0026). Until R3
-    /// only when the player's stream reader switch is on ([`crate::Player::set_stream_reader`]).
+    /// The core's stream reader for the file, when the engine reads it through the core instead of `url`: direct play on the native
+    /// route (ADR 0026, "Which routes use it").
     pub reader: Option<Arc<StreamReader>>,
 }
 

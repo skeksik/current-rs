@@ -104,6 +104,9 @@ struct Anchor {
     /// Pinned while no rate was known: without one, any first read pins the point (the file's head included), so such an anchor
     /// is dropped once the rate becomes known ([`State::set_duration`]).
     without_rate: bool,
+    /// Pinned by a starvation release, not by a read [`State::maybe_anchor`] accepted: the player's first frame pins it again
+    /// ([`State::restarted`]), as it does one pinned without a rate.
+    released: bool,
 }
 
 /// What a read does next.
@@ -143,6 +146,8 @@ pub(crate) struct State {
     anchor: Option<Anchor>,
     /// After a start or a seek, until a read pins the point.
     awaiting_anchor: bool,
+    /// After a start or a seek, until the player's first frame ([`State::restarted`]).
+    awaiting_frame: bool,
     /// Counts seeks. A read stamps it when it begins, and only a read that began after the last seek may pin the point: one held
     /// before it (at the old limit) is woken by the seek but is not the player's read at the new position.
     generation: u64,
@@ -166,6 +171,7 @@ impl State {
             position: start,
             anchor: None,
             awaiting_anchor: true,
+            awaiting_frame: true,
             generation: 0,
             starving: false,
             closed: None,
@@ -323,6 +329,7 @@ impl State {
             offset,
             position: self.position,
             without_rate: self.rate.is_none(),
+            released: false,
         });
         self.awaiting_anchor = false;
     }
@@ -356,13 +363,17 @@ impl State {
                     missing: false,
                 };
             }
-            // The starvation guard: the player waits for this byte. A read begun since the last seek says the point is at least
-            // here; one begun before it (held at the old limit) is only served, so it cannot pin the point away from the target.
-            if generation == self.generation {
+            // The starvation guard: the player waits for this byte. A read begun since the last seek, within the read-ahead of the
+            // estimate (or anywhere without a rate), says the point is at least here. Any other is only served, so it cannot pin
+            // the point away from the target: one begun before the seek (held at the old limit), or one far from the estimate, such
+            // as an MP4's index past the index window that the player reads while it opens.
+            let near = self.rate.is_none() || offset.abs_diff(self.estimate()) <= self.limits.ahead;
+            if generation == self.generation && near {
                 self.anchor = Some(Anchor {
                     offset,
                     position: self.position,
                     without_rate: self.rate.is_none(),
+                    released: true,
                 });
                 self.awaiting_anchor = false;
             } else {
@@ -518,7 +529,26 @@ impl State {
         self.position = position;
         self.anchor = None;
         self.awaiting_anchor = true;
+        self.awaiting_frame = true;
         self.generation += 1;
+    }
+
+    /// The player's first frame after the start or a seek. A point pinned while the player opened by a starvation release, or by
+    /// any read while no rate was known (the first read pins it wherever it is, an index at the file's end included), need not be
+    /// where playback is: it is pinned again, as after a seek, by the next read that can be the playback position. A point a read
+    /// pinned with a rate known lies within the read-ahead of the estimate (the player's read at the target) and is kept.
+    pub(crate) fn restarted(&mut self) {
+        if !std::mem::take(&mut self.awaiting_frame) {
+            return;
+        }
+        if self
+            .anchor
+            .is_some_and(|anchor| anchor.released || anchor.without_rate)
+        {
+            self.anchor = None;
+            self.awaiting_anchor = true;
+            self.generation += 1;
+        }
     }
 
     pub(crate) fn set_starving(&mut self, starving: bool) {

@@ -178,11 +178,6 @@ public sealed class PlayerSession : IAsyncDisposable
 
     public void DismissNext() => Quick(() => Open.DismissNext());
 
-    /// <summary>Whether the platform engine's direct-play loads that follow read their file through the core's stream reader
-    /// (<see cref="PlatformLoad.Reader"/>, ADR 0026) instead of a relay URL. Off by default. A temporary switch until R3 replaces it
-    /// with the routing rule: the app does not call it yet.</summary>
-    public void SetStreamReader(bool enabled) => Quick(() => Open.SetStreamReader(enabled));
-
     /// <summary>0 to 100.</summary>
     public void SetVolume(byte volume) => Quick(() => Open.SetVolume(volume));
 

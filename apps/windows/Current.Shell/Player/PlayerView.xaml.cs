@@ -1369,6 +1369,14 @@ public sealed partial class PlayerView : UserControl
 
     internal bool NativeSurfaceShownForTest => NativeVideo.Visibility == Visibility.Visible;
 
+    /// <summary>For the smoke run: the native engine's last open read through the core's stream reader (ADR 0026).</summary>
+    internal bool NativeReadThroughCoreForTest => _native?.ReadThroughCore ?? false;
+
+    /// <summary>For the smoke run: the info panel's lines now, as the panel would show them.</summary>
+    internal Task<IReadOnlyList<string>> PlaybackInfoLinesForTestAsync() => _session is { } session
+        ? session.PlaybackInfoLinesAsync(_display?.Facts, MeasurePanel())
+        : Task.FromResult<IReadOnlyList<string>>([]);
+
     /// <summary>For the smoke run: seeks the item playing.</summary>
     internal void SeekForTest(TimeSpan position) => Quick(() => _session?.SeekTo(position));
 

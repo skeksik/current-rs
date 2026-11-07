@@ -520,6 +520,11 @@ impl<B: Backend> Driver<B> {
                     details: self.controller.details(),
                     engine: self.controller.engine().output(),
                     platform_engine: self.gate.is_some(),
+                    reader: self
+                        .readers
+                        .as_ref()
+                        .and_then(|readers| readers.fed())
+                        .and_then(|reader| reader.facts()),
                 });
             }
             Command::Summary(summary) => {

@@ -325,7 +325,7 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
         relay's events and route lifetime; tests with a fake upstream
   - [x] R2 (feat/stream-reader-ffi): the `StreamReader` UniFFI object and `PlatformFile.reader`; the C# `Stream` adapter; bindings
         tests against the stand-in; behind a temporary switch (`Player::set_stream_reader`, off by default)
-  - [ ] R3 (feat/windows-native-reader): Windows' engine reads direct play through it (`MediaSource.CreateFromStream`), reports
+  - [x] R3 (feat/windows-native-reader): Windows' engine reads direct play through it (`MediaSource.CreateFromStream`), reports
         `Buffering` for the guard and a position that stops while playing; the info panel's reader facts; the routing rule replaces
         R2's switch
   - [ ] R4 (device check on the owner's PC): memory on a feature-length file, over Tailscale, a connection dropped mid-file, seeks,

@@ -112,12 +112,8 @@ internal static class PlatformEngineTests
             await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.FromSeconds(3));
             Check(engine.Loads.Count == 1, $"one load on the platform engine, not {engine.Loads.Count}");
             var load = engine.Loads.Single();
-            // The relay's URL: 127.0.0.1 on the relay's own port, not the stand-in's, and no session token.
-            var url = new Uri(load.Url);
-            Check(url.Scheme == "http" && url.Host == "127.0.0.1", "a loopback URL");
-            Check(url.Port != new Uri(standIn.Address).Port, "the relay's port, not the server's");
-            Check(!load.Url.Contains("apikey", StringComparison.OrdinalIgnoreCase)
-                && !load.Url.Contains("api_key", StringComparison.OrdinalIgnoreCase), "no session token in the URL");
+            // Direct play on the native route reads through the core (ADR 0026): a reader, and no URL crosses the bridge.
+            Check(load.Reader is not null && load.Url.Length == 0, "a reader and no URL");
             Check(load.Start == TimeSpan.FromSeconds(3) && load.Audio == new PlatformTrack.Stream(1), $"the position and track, not {load}");
             // Neither the adapter's record nor the generated one prints the URL.
             Check(!load.ToString().Contains("127.0.0.1", StringComparison.Ordinal), $"no URL in {load}");
@@ -253,15 +249,14 @@ internal static class PlatformEngineTests
 
     private static byte StreamByte(long offset) => (byte)(offset % 251);
 
-    /// <summary>A player with the fake engine and the stream reader's switch on, playing the direct-play item.</summary>
+    /// <summary>A player with the fake engine playing the direct-play item, which it reads through the core.</summary>
     private static async Task<(FakeEngine Engine, PlayerSession Session, CoreFileReader Reader)> ReadingAsync(CoreHost core)
     {
         var engine = new FakeEngine();
         var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), new ManualDispatcher());
-        session.SetStreamReader(true);
         await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
         var load = engine.Loads.Last();
-        Check(load.Reader is not null, "a reader with the switch on");
+        Check(load.Reader is not null, "a reader for direct play on the native route");
         Check(load.Url.Length == 0, "no URL with a reader");
         return (engine, session, load.Reader!);
     }
@@ -272,14 +267,19 @@ internal static class PlatformEngineTests
         using var core = CoreHost.Create();
         await SignIn(core, standIn);
 
-        // Off by default: the URL as before, and no reader.
+        // A server stream (HLS) stays on the relay: its URL on 127.0.0.1, no session token, and no reader.
         var plain = new FakeEngine();
         var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, plain, Answers(), new ManualDispatcher());
         try
         {
-            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+            await session.PlayAsync(Item(StandIn.TranscodeItem), TimeSpan.Zero);
             var load = plain.Loads.Single();
-            Check(load.Reader is null && load.Url.Length > 0, "a relay URL and no reader by default");
+            var url = new Uri(load.Url);
+            Check(load.Hls && load.Reader is null, "HLS, and no reader");
+            Check(url.Scheme == "http" && url.Host == "127.0.0.1" && url.Port != new Uri(standIn.Address).Port,
+                "the relay's URL, not the server's");
+            Check(!load.Url.Contains("apikey", StringComparison.OrdinalIgnoreCase)
+                && !load.Url.Contains("api_key", StringComparison.OrdinalIgnoreCase), "no session token in the URL");
         }
         finally
         {
@@ -307,6 +307,12 @@ internal static class PlatformEngineTests
 
             stream.Seek(0, SeekOrigin.End);
             Check(await stream.ReadAsync(new byte[10]) == 0, "nothing at the end");
+
+            // A read by offset leaves the stream's position alone (one view per player source keeps its own).
+            var at = new byte[32];
+            read = await stream.ReadAtAsync(200_000, at);
+            Check(read > 0 && at.Take(read).Select((b, i) => b == StreamByte(200_000 + i)).All(same => same), "the bytes at 200 000");
+            Check(stream.Position == StreamLength, $"the position stays at the end, not {stream.Position}");
 
             // A position before the start is the caller's error.
             try
@@ -460,6 +466,194 @@ internal static class PlatformEngineTests
             Check(count > 0 && buffer.Take(count).Select((b, i) => b == StreamByte(200_000 + i)).All(same => same),
                 "the read's bytes are from where it began");
             Check(stream.Position == 10, $"the seek's position, not {stream.Position}");
+        }
+        finally
+        {
+            standIn.Send($"release {StreamPath}");
+            await session.CloseAsync();
+        }
+    }
+
+    /// <summary>Opens each load's reader as Windows' native player does (NativeEngine.OpenAsync) and reports a failed open as
+    /// <c>loading_failed</c>, the way it reports a source that would not open. With <c>failSource</c>, the stream opens and the
+    /// source made of it fails, as when <c>MediaSource.CreateFromStream</c> throws.</summary>
+    private sealed class ReadingEngine(bool failSource = false) : PlatformEngineHost
+    {
+        public ConcurrentQueue<string> Opens { get; } = new();
+
+        protected override void Load(PlatformLoad file)
+        {
+            var generation = file.Generation;
+            if (file.Reader is not { } reader)
+            {
+                return;
+            }
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await using var stream = await reader.OpenAsync();
+                    Opens.Enqueue("opened");
+                    if (failSource)
+                    {
+                        Report(generation, new PlatformEngineEvent.Failed("loading_failed"));
+                    }
+                }
+                catch (IOException)
+                {
+                    Opens.Enqueue("refused");
+                    Report(generation, new PlatformEngineEvent.Failed("loading_failed"));
+                }
+            });
+        }
+
+        protected override void AddSubtitle(PlatformSubtitle subtitle) { }
+        protected override void SetPaused(bool paused) { }
+        protected override void SeekTo(TimeSpan position) { }
+        protected override void SelectAudio(PlatformTrack track) { }
+        protected override void SelectSubtitle(PlatformTrack track) { }
+        protected override void SetVolume(byte volume) { }
+        protected override void SetMuted(bool muted) { }
+        protected override void SetSpeed(double speed) { }
+        protected override void Stop() { }
+    }
+
+    /// <summary>What the player reached, for a failure's message: state, route, engine, position, problem.</summary>
+    private static string Reached(PlayerSession session)
+    {
+        var state = session.State.Value;
+        return $"{state.State}, {state.Route?.Label.ToString() ?? "no route"} on {state.Route?.Engine.ToString() ?? "no engine"}, "
+            + $"at {state.Position}, problem {state.Problem?.ToString() ?? "none"}";
+    }
+
+    /// <summary><see cref="PlayerTests.Eventually"/>, whose failure says what the player reached instead.</summary>
+    private static async Task EventuallyReached(string what, ManualDispatcher ui, PlayerSession session, Func<bool> done)
+    {
+        try
+        {
+            await Eventually(what, ui, done);
+        }
+        catch (Exception)
+        {
+            Check(false, $"{what} (reached: {Reached(session)})");
+        }
+    }
+
+    /// <summary>
+    /// A stream the server refuses on the native route (a 500 to the reader's first request) fails the play with the server's
+    /// problem, with no fallback, as on the relay (the core's rule: another route would meet the same server); it does not hang in
+    /// Opening. A stream that opens but whose source fails moves to the app engine at the position (ADR 0025's fallback chain).
+    /// </summary>
+    public static async Task AFailedOpenOnTheNativeRouteEndsAsTheCoreRuleSays()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var ui = new ManualDispatcher();
+
+        var engine = new ReadingEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), ui);
+        try
+        {
+            standIn.Send($"fail-stream 500 {StreamPath}");
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.FromSeconds(42));
+            await EventuallyReached("a refused stream fails the play with the server's 500", ui, session, () => session.State.Value is
+                { State: PlayerStateKind.Failed, Problem: PlaybackProblem.Server { Status: 500 } });
+            Check(engine.Opens.Contains("refused"), $"the open was refused, not {string.Join(", ", engine.Opens)}");
+            Check(session.State.Value.Route?.Engine != RouteEngine.App, $"no fallback to the app engine ({Reached(session)})");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        // A fresh stand-in: its stream answers again.
+        using var whole = StandIn.Start();
+        using var next = CoreHost.Create();
+        await SignIn(next, whole);
+        var failing = new ReadingEngine(failSource: true);
+        session = await PlayerSession.OpenWithPlatformEngineAsync(next, Size, Display, failing, Answers(), ui);
+        try
+        {
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.FromSeconds(42));
+            await EventuallyReached("a source that fails moves to the app engine at 42 s", ui, session, () => session.State.Value is
+                { State: PlayerStateKind.Playing, Route.Label: RouteLabel.AppEngine }
+                && session.State.Value.Position == TimeSpan.FromSeconds(42));
+            Check(failing.Opens.SequenceEqual(new[] { "opened" }), $"one open, not {string.Join(", ", failing.Opens)}");
+            var lines = await session.PlaybackInfoLinesAsync(null, Panel);
+            Check(lines[0] == "App engine" && lines[1] == "• The native player could not start the file.",
+                $"the failed route named, not {string.Join(" | ", lines)}");
+            Check(!lines.Any(line => line.StartsWith("Read by Current", StringComparison.Ordinal)), "no reader line on the app engine");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task ADisposeDuringAnOpenFreesTheHandleWhenTheOpenEnds()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        standIn.Send($"hold {StreamPath}");
+
+        // Disposed while the open waits: the open ends at once, and the reader cannot be opened again.
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            var opening = reader.OpenAsync();
+            Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+            reader.Dispose();
+            var done = await Task.WhenAny(opening, Task.Delay(TimeSpan.FromSeconds(10)));
+            Check(done == opening, "the open ended with the Dispose");
+            try
+            {
+                await opening;
+                Check(false, "the open failed");
+            }
+            catch (Exception error) when (error is IOException or ObjectDisposedException)
+            {
+            }
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no open after Dispose");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        // Cancelled by the caller, then disposed: freed, not open again.
+        (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            using var cancel = new CancellationTokenSource();
+            var opening = reader.OpenAsync(cancel.Token);
+            Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+            cancel.Cancel();
+            try
+            {
+                await opening;
+                Check(false, "the open was cancelled");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            reader.Dispose();
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no open after Dispose");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
         finally
         {

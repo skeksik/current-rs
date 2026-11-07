@@ -5,20 +5,22 @@ namespace Current.Bindings;
 /// <summary>
 /// The core's stream reader for one file (ADR 0026): the platform engine reads a direct-play file through the core instead of a
 /// URL. <see cref="OpenAsync"/> makes the <see cref="Stream"/> to hand Windows' player (<c>MediaSource.CreateFromStream</c> over
-/// <c>AsRandomAccessStream()</c>). Until R3 a load has one only when the player's switch is on
-/// (<see cref="PlayerSession.SetStreamReader"/>).
+/// <c>AsRandomAccessStream()</c>). A load has one for direct play on the native route (ADR 0026).
 /// </summary>
 public sealed class CoreFileReader : IDisposable
 {
     private readonly Ffi.StreamReader _reader;
-    // 0: not opened; 1: an open is running or a stream owns the handle; 2: disposed or failed, the handle freed.
+    // 0: not opened; 1: an open is running; 2: disposed or failed, the handle freed; 3: a stream owns the handle.
     private int _opened;
+    // Dispose was called; an open running then frees the handle when it ends, whatever its outcome.
+    private int _disposeRequested;
 
     internal CoreFileReader(Ffi.StreamReader reader) => _reader = reader;
 
     /// <summary>Opens the file (the core's first request for it gives its size and type) and returns the one stream over it, which
     /// owns the reader: disposing the stream closes it and frees its handle. A second call throws.</summary>
-    /// <exception cref="InvalidOperationException">The stream was opened before.</exception>
+    /// <exception cref="InvalidOperationException">The stream was opened before, or an open is running.</exception>
+    /// <exception cref="ObjectDisposedException">The reader was disposed, before or during the open.</exception>
     /// <exception cref="OperationCanceledException"><paramref name="ct"/> was cancelled, or the playback moved on.</exception>
     /// <exception cref="IOException">The server refused or failed (the player shows why), or the reader was closed.</exception>
     public async Task<CoreReadStream> OpenAsync(CancellationToken ct = default)
@@ -26,38 +28,75 @@ public sealed class CoreFileReader : IDisposable
         switch (Interlocked.CompareExchange(ref _opened, 1, 0))
         {
             case 1:
+            case 3:
                 throw new InvalidOperationException("the stream of this file was opened before");
             case 2:
                 throw new ObjectDisposedException(nameof(CoreFileReader));
         }
+        Ffi.StreamFileInfo info;
         try
         {
-            var info = await StreamCall.RunAsync(token => _reader.Open(token), ct).ConfigureAwait(false);
-            return new CoreReadStream(_reader, info.Size, info.ContentType);
+            info = await StreamCall.RunAsync(token => _reader.Open(token), ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Cancelled by the caller before a stream owned the reader: it may be opened again.
+            // Cancelled by the caller before a stream owned the reader: it may be opened again, unless it was disposed meanwhile.
             Interlocked.Exchange(ref _opened, 0);
+            if (Volatile.Read(ref _disposeRequested) != 0)
+            {
+                Free();
+            }
             throw;
         }
         catch
         {
-            // Failed for good (refused, the playback moved on, closed): no stream will own the handle, so it is freed now.
+            // Failed for good (refused, the playback moved on, closed or disposed): no stream will own the handle, so it is freed now.
             Interlocked.Exchange(ref _opened, 2);
             _reader.Dispose();
             throw;
         }
+        var stream = new CoreReadStream(_reader, info.Size, info.ContentType);
+        Interlocked.Exchange(ref _opened, 3);
+        if (Volatile.Read(ref _disposeRequested) != 0)
+        {
+            // Disposed while the open ran, and the open won the race with the close: nobody takes the stream, so it frees the handle.
+            stream.Dispose();
+            throw new ObjectDisposedException(nameof(CoreFileReader));
+        }
+        return stream;
     }
 
-    /// <summary>Frees the reader's handle when no stream took it (a load whose file was never opened); a stream that took it frees
-    /// it when disposed.</summary>
+    /// <summary>Frees the reader's handle when no stream took it (a load whose file was never opened). During an open, closes the
+    /// reader so that the open ends, and the open frees the handle. A stream that took the handle frees it when disposed.</summary>
     public void Dispose()
     {
-        if (Interlocked.CompareExchange(ref _opened, 2, 0) == 0)
+        Interlocked.Exchange(ref _disposeRequested, 1);
+        if (Free())
         {
-            _reader.Dispose();
+            return;
         }
+        if (Volatile.Read(ref _opened) == 1)
+        {
+            try
+            {
+                _reader.Close();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The open ended and freed the handle meanwhile.
+            }
+        }
+    }
+
+    // Frees the handle if no open runs and no stream owns it; true when this call freed it.
+    private bool Free()
+    {
+        if (Interlocked.CompareExchange(ref _opened, 2, 0) != 0)
+        {
+            return false;
+        }
+        _reader.Dispose();
+        return true;
     }
 
     public override string ToString() => "CoreFileReader";
@@ -146,14 +185,7 @@ public sealed class CoreReadStream : Stream
             {
                 (offset, seeks) = (_position, _seeks);
             }
-            if (buffer.IsEmpty || offset >= Length)
-            {
-                return 0;
-            }
-            var bytes = await StreamCall.RunAsync(
-                token => _reader.Read((ulong)offset, (uint)buffer.Length, token), cancellationToken).ConfigureAwait(false);
-            var count = Math.Min(bytes.Length, buffer.Length);
-            bytes.AsSpan(0, count).CopyTo(buffer.Span);
+            var count = await ReadAtAsync(offset, buffer, cancellationToken).ConfigureAwait(false);
             lock (_place)
             {
                 // A seek while the read ran wins: the bytes are still the caller's, the position is the seek's.
@@ -168,6 +200,25 @@ public sealed class CoreReadStream : Stream
         {
             _turn.Release();
         }
+    }
+
+    /// <summary>Up to <c>buffer.Length</c> bytes at <paramref name="offset"/>, without this stream's position or its turn: for readers
+    /// that keep a position of their own (one view per player source). Reads at different offsets run side by side in the core.</summary>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled, or the playback moved on.</exception>
+    /// <exception cref="IOException">The server refused or failed, or the stream was closed.</exception>
+    public async ValueTask<int> ReadAtAsync(long offset, Memory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        if (buffer.IsEmpty || offset >= Length)
+        {
+            return 0;
+        }
+        var bytes = await StreamCall.RunAsync(
+            token => _reader.Read((ulong)offset, (uint)buffer.Length, token), cancellationToken).ConfigureAwait(false);
+        var count = Math.Min(bytes.Length, buffer.Length);
+        bytes.AsSpan(0, count).CopyTo(buffer.Span);
+        return count;
     }
 
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>

@@ -90,12 +90,14 @@ var tests = new (string Name, Func<Task> Run)[]
     ("How to play in the player moves the item, and Auto back", PlatformEngineTests.ChooseHowToPlayMovesTheItem),
     ("exceptions in a platform engine never bring the core down", PlatformEngineTests.EngineExceptionsNeverBringTheCoreDown),
     ("Always app engine plays the next item there", PlatformEngineTests.AlwaysAppEnginePlaysTheNextItemThere),
-    ("the stream reader is off by default and reads the file with the switch on", PlatformEngineTests.ReadsTheFileThroughTheCore),
+    ("direct play on the native route reads through the core, a server stream through the relay", PlatformEngineTests.ReadsTheFileThroughTheCore),
     ("a read of the stream reader is cancelled by its token", PlatformEngineTests.AReadIsCancelledByItsToken),
     ("a refused stream fails the reader with an IOException", PlatformEngineTests.ARefusedStreamFailsTheReader),
     ("a pending read ends cancelled when the playback stops or the player closes", PlatformEngineTests.APendingReadEndsWithThePlayback),
     ("a seek while a read waits keeps the seek's position", PlatformEngineTests.ASeekDuringAReadWins),
     ("a failed open or an unopened reader frees its handle", PlatformEngineTests.AFailedOpenOrAnUnopenedReaderFreesItsHandle),
+    ("a refused stream on the native route fails the play; a failed source moves to the app engine at the position", PlatformEngineTests.AFailedOpenOnTheNativeRouteEndsAsTheCoreRuleSays),
+    ("a Dispose during an open frees the handle when the open ends", PlatformEngineTests.ADisposeDuringAnOpenFreesTheHandleWhenTheOpenEnds),
     ("each play has the next number, the same item again too", PlatformEngineTests.EachPlayHasTheNextNumber),
 };
 

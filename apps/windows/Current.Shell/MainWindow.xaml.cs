@@ -360,6 +360,10 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     internal bool NativeSurfaceShownForTest => Player.NativeSurfaceShownForTest;
 
+    internal bool NativeReadThroughCoreForTest => Player.NativeReadThroughCoreForTest;
+
+    internal Task<IReadOnlyList<string>> PlaybackInfoLinesForTestAsync() => Player.PlaybackInfoLinesForTestAsync();
+
     internal Task SelectSubtitleForTestAsync(uint index) => Player.SelectSubtitleForTestAsync(index);
 
     internal void SeekForTest(TimeSpan position) => Player.SeekForTest(position);

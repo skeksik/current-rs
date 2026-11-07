@@ -109,6 +109,7 @@ impl JellyfinMedia {
         item: &ItemRef,
         path: &str,
         hls: bool,
+        native: bool,
         direct: Option<DirectFile>,
     ) -> Result<EngineStream, PlaybackProblem> {
         let relay = self.relay.relay().ok_or(PlaybackProblem::LocalRelay)?;
@@ -124,11 +125,11 @@ impl JellyfinMedia {
             route: number,
             sender: self.events.clone(),
         });
-        // A direct-play file for a platform engine may be read through the core instead (ADR 0026): the same server, prefixes and
-        // events as the relay route, ended with it.
-        // Direct play only: a server stream (progressive or HLS) stays on the relay (ADR 0026, "Which routes use it").
+        // Direct play on the platform engine's native route is read through the core (ADR 0026, "Which routes use it"): the same
+        // server, prefixes and events as the relay route, ended with it. A server stream (progressive or HLS) and libmpv stay on
+        // the relay or their URL.
         let reader = match (&self.readers, direct) {
-            (Some(readers), Some(direct)) if !hls && readers.enabled() => {
+            (Some(_), Some(direct)) if !hls && native => {
                 let reader = reader_for(
                     ReaderRouteConfig {
                         upstream: upstream.clone(),
@@ -138,7 +139,9 @@ impl JellyfinMedia {
                     path,
                     direct,
                 )?;
-                Some(Arc::new(reader))
+                let reader = Arc::new(reader);
+                reader.watch_for_stalls();
+                Some(reader)
             }
             _ => None,
         };
@@ -458,7 +461,7 @@ impl MediaServer for JellyfinMedia {
                 relayed: false,
             });
         }
-        self.relay(client, item, &target.path, hls, direct)
+        self.relay(client, item, &target.path, hls, always_relay, direct)
     }
 
     fn end_stream(&self) {

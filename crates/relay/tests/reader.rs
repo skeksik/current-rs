@@ -1163,3 +1163,68 @@ async fn a_right_anchor_pinned_without_a_rate_is_kept_when_the_duration_arrives(
     assert!(!front.is_finished(), "still held at the read-ahead's front");
     front.abort();
 }
+
+#[tokio::test]
+async fn a_release_far_from_the_estimate_while_opening_serves_without_pinning_the_point() {
+    // Started at 10 s, the player reads an MP4's index near the file's end (past the index window and the read-ahead) before its
+    // first frame; the opening stall lets it through.
+    let (route, _events) = route(FakeFile::new());
+    let start = FileFacts {
+        start: Duration::from_secs(10),
+        ..facts()
+    };
+    let reader = Arc::new(open(&route, limits(), start).await);
+    let estimate = rate_bytes(10.0);
+    assert_eq!(reader.facts().point, estimate);
+    let index = SIZE - 40 * KIB;
+    let held = {
+        let reader = reader.clone();
+        tokio::spawn(async move { reader.read(index, 100).await })
+    };
+    sleep(HELD).await;
+    assert!(!held.is_finished());
+    reader.set_starving(true);
+    let bytes = timeout(WAIT, held).await.unwrap().unwrap().unwrap();
+    assert_eq!(bytes, data().slice(index as usize..index as usize + 100));
+    reader.set_starving(false);
+    // Served, not pinned: the point stays at the target and playback from there still stops at the read-ahead.
+    assert_eq!(reader.facts().starvation_releases, 1);
+    assert_eq!(reader.facts().point, estimate);
+    reader.restarted();
+    assert_eq!(
+        read_until_held(&reader, estimate).await,
+        estimate + 64 * KIB
+    );
+    assert_eq!(reader.facts().point, estimate);
+}
+
+#[tokio::test]
+async fn the_first_frame_pins_again_a_point_a_release_pinned_and_keeps_one_a_read_pinned() {
+    // Without a rate the first read pins the point wherever it is, the index at the file's end too: the first frame drops it, and
+    // playback's read pins it.
+    let (files, _events) = route(FakeFile::new());
+    let no_rate = FileFacts {
+        duration: None,
+        ..facts()
+    };
+    let reader = open(&files, limits(), no_rate).await;
+    let index = SIZE - 40 * KIB;
+    read_now(&reader, index, 100).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, index);
+    reader.restarted();
+    assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+    assert_eq!(reader.facts().point, 0);
+
+    // A normal start: the player's read at the target pins the point, and the first frame keeps it.
+    let (files, _events) = route(FakeFile::new());
+    let start = FileFacts {
+        start: Duration::from_secs(10),
+        ..facts()
+    };
+    let reader = open(&files, limits(), start).await;
+    let target = rate_bytes(10.0) + 1_000;
+    read_now(&reader, target, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, target);
+    reader.restarted();
+    assert_eq!(reader.facts().point, target);
+}

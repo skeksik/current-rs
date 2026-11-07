@@ -120,6 +120,13 @@ The existing client's behaviour is the default on every platform; where ours dif
   stream for a platform engine goes through the loopback relay (ADR 0020), not only those on gateway addresses: the URL then holds the
   relay's route token only, never `ApiKey` (ADR 0020 choice 4 B), and the token dies with the route. The platform engine never logs
   the URL. Apple's AirPlay of relayed URLs fails (ADR 0008); AirPlay is decided with M3 (open point).
+  **Amended 2026-11-07 (ADR 0026, R3, feat/windows-native-reader):** direct play on Windows' native route reads through the core's
+  stream reader (ADR 0026, "Which routes use it"): the load carries a `StreamReader` and no URL, and Windows' player opens it with
+  `MediaSource.CreateFromStream`. A server that refuses or fails the stream fails the play with its problem and no fallback, as on
+  the relay (another route would meet the same server); an open that fails otherwise (no source made of the stream) is a failed open,
+  so the fallback chain moves the file on. HLS and every server stream still go through the relay as above; libmpv is unchanged. On that route the info
+  panel shows the reader's facts in one line: "Read by Current · 31 s (150 MB) ahead · 42 Mbit/s · 3 requests", with reconnects and
+  waits released only when there were any (wording for the owner's approval at R3's merge).
 - **Subtitles on the native route** are fetched by the core (ADR 0019, "External subtitles") and handed over as bytes; embedded text
   tracks are shown by our own view, so they sit above our control bar: AVPlayer's legible output (ADR 0008) and Windows' timed
   metadata tracks in `ApplicationPresented` mode (notes, "Subtitles").
