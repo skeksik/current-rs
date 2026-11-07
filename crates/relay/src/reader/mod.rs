@@ -278,15 +278,21 @@ impl ReaderRoute {
 
     /// Removes the route; the same as dropping it.
     pub fn remove(self) {}
-}
 
-impl Drop for ReaderRoute {
-    fn drop(&mut self) {
+    /// Cancels the route where it is shared and cannot be dropped: its readers end with [`ReadError::Cancelled`] and no reader opens
+    /// on it any more. Dropping it later does nothing more.
+    pub fn cancel(&self) {
         self.core.closed.store(true, Ordering::Release);
         let readers = std::mem::take(&mut *lock(&self.core.readers));
         for reader in readers.iter().filter_map(Weak::upgrade) {
             reader.close(ReadError::Cancelled);
         }
+    }
+}
+
+impl Drop for ReaderRoute {
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 
@@ -456,6 +462,13 @@ impl StreamReader {
     /// next read that can be the playback position.
     pub fn seek_to(&self, position: Duration) {
         lock(&self.inner.state).seek_to(position);
+        self.inner.changed.notify_waiters();
+    }
+
+    /// The file's duration, when it is known only after opening (the engine reports it): the point follows the position from then
+    /// on, at size / duration.
+    pub fn set_duration(&self, duration: Duration) {
+        lock(&self.inner.state).set_duration(duration);
         self.inner.changed.notify_waiters();
     }
 

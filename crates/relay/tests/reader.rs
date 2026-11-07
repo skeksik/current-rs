@@ -1034,3 +1034,33 @@ async fn a_read_held_before_a_seek_is_served_by_starvation_but_pins_nothing() {
     assert_eq!(read_until_held(&reader, target).await, target + 64 * KIB);
     assert_eq!(reader.facts().point, target);
 }
+
+#[tokio::test]
+async fn a_duration_known_after_opening_paces_the_point() {
+    let (route, _events) = route(FakeFile::new());
+    let unknown = FileFacts {
+        duration: None,
+        bitrate: None,
+        ..facts()
+    };
+    let reader = open(&route, limits(), unknown).await;
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    reader.set_position(Duration::from_secs(2));
+    assert_eq!(reader.facts().point, 0);
+    reader.set_duration(DURATION);
+    let facts = reader.facts();
+    assert!(facts.rate_known);
+    assert_eq!(facts.point, rate_bytes(2.0));
+}
+
+#[tokio::test]
+async fn cancelling_a_shared_route_ends_its_reads_and_refuses_new_ones() {
+    let upstream = FakeFile::new();
+    let (route, reader, _events) = setup(upstream.clone()).await;
+    assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+    route.cancel();
+    assert_eq!(reader.read(0, 10).await, Err(ReadError::Cancelled));
+    let opened = route.open(PATH, Vec::new(), facts(), limits()).await;
+    assert_eq!(opened.unwrap_err(), ReadError::Cancelled);
+    until(|| upstream.live.load(Ordering::SeqCst) == 0).await;
+}

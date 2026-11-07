@@ -468,6 +468,16 @@ impl State {
         }
     }
 
+    /// The file's duration, once known: the point then follows the position at size / duration (it replaces a bitrate's rate).
+    pub(crate) fn set_duration(&mut self, duration: Duration) {
+        if !duration.is_zero() {
+            let rate = self.size as f64 / duration.as_secs_f64();
+            if rate.is_finite() && rate > 0.0 {
+                self.rate = Some(rate);
+            }
+        }
+    }
+
     pub(crate) fn set_position(&mut self, position: Duration) {
         self.position = position;
     }
