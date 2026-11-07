@@ -282,7 +282,7 @@ async fn rewrite_playlist(
 /// Whether a 206's `Content-Range` is the part `range` (the request's `Range`) asked for: a single range (`bytes=<first>-[<last>]`,
 /// or `bytes=-<suffix>` with a known length) whose answer starts where it asked. A 206 to a request without `Range`, or without a
 /// readable `Content-Range`, is not.
-fn is_part_asked(range: Option<&str>, headers: &HeaderMap) -> bool {
+pub(crate) fn is_part_asked(range: Option<&str>, headers: &HeaderMap) -> bool {
     let Some(asked) = range.and_then(|range| range.trim().strip_prefix("bytes=")) else {
         return false;
     };
@@ -373,49 +373,49 @@ async fn read_playlist(
     String::from_utf8(text).map_err(|_| RelayEvent::PlaylistUnreadable)
 }
 
+/// The event a failed upstream request reports, if any: a 416 is the player's own business (it probes the end of a file), not a
+/// failure of the stream. Shared with the stream reader, so both report the same way.
+pub(crate) fn event_for(error: &StreamError) -> Option<RelayEvent> {
+    match error {
+        StreamError::Refused { status, shape } => Some(RelayEvent::Refused {
+            status: *status,
+            shape: shape.clone(),
+        }),
+        StreamError::Status { status: 404 } => Some(RelayEvent::NotFound),
+        StreamError::Status { status: 416 } => None,
+        StreamError::Status { status } => Some(RelayEvent::Server { status: *status }),
+        StreamError::Unreachable | StreamError::Tls | StreamError::Timeout => {
+            Some(RelayEvent::Network)
+        }
+        StreamError::InvalidRequest => Some(RelayEvent::InvalidRequest),
+    }
+}
+
 /// The answer to a failed upstream request, after reporting it. The player sees the server's status only where it means something
 /// to a player (404, 416 and 5xx); every other failure is a 502.
 fn failed(route: &RouteEntry, error: &StreamError) -> Response<RelayBody> {
+    if let Some(event) = event_for(error) {
+        route.events.report(event);
+    }
     let status = match error {
-        StreamError::Refused { status, shape } => {
-            route.events.report(RelayEvent::Refused {
-                status: *status,
-                shape: shape.clone(),
-            });
-            StatusCode::BAD_GATEWAY
-        }
-        StreamError::Status { status: 404 } => {
-            route.events.report(RelayEvent::NotFound);
-            StatusCode::NOT_FOUND
-        }
-        // A range past the end: the player's own business (it probes the end of a file), not a failure of the stream.
+        StreamError::Status { status: 404 } => StatusCode::NOT_FOUND,
         StreamError::Status { status: 416 } => StatusCode::RANGE_NOT_SATISFIABLE,
-        StreamError::Status { status } => {
-            route.events.report(RelayEvent::Server { status: *status });
-            StatusCode::from_u16(*status)
-                .ok()
-                .filter(StatusCode::is_server_error)
-                .unwrap_or(StatusCode::BAD_GATEWAY)
-        }
-        StreamError::Unreachable | StreamError::Tls => {
-            route.events.report(RelayEvent::Network);
-            StatusCode::BAD_GATEWAY
-        }
-        StreamError::Timeout => {
-            route.events.report(RelayEvent::Network);
-            StatusCode::GATEWAY_TIMEOUT
-        }
-        StreamError::InvalidRequest => {
-            route.events.report(RelayEvent::InvalidRequest);
-            StatusCode::BAD_GATEWAY
-        }
+        StreamError::Status { status } => StatusCode::from_u16(*status)
+            .ok()
+            .filter(StatusCode::is_server_error)
+            .unwrap_or(StatusCode::BAD_GATEWAY),
+        StreamError::Timeout => StatusCode::GATEWAY_TIMEOUT,
+        StreamError::Refused { .. }
+        | StreamError::Unreachable
+        | StreamError::Tls
+        | StreamError::InvalidRequest => StatusCode::BAD_GATEWAY,
     };
     empty(status)
 }
 
 /// Whether an answer says it is an HTML page: a gateway's sign-in where media was expected. Only the declared type: media bodies
 /// are not sniffed for it.
-fn is_html(headers: &HeaderMap) -> bool {
+pub(crate) fn is_html(headers: &HeaderMap) -> bool {
     headers
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())

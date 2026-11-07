@@ -175,10 +175,22 @@ fn a_player_plays_reports_and_releases_through_the_bridge() {
         player.subscribe_swap_chain(swaps),
     ];
 
-    block_on(player.play(item(DIRECT_PLAY_ITEM), 0, CancelToken::new())).unwrap();
-    let playing = until(&state_rx, "playing", |state| {
-        state.state == PlayerStateKind::Playing
+    // The state before the plan shows at once: the plan is held until it was seen. A state watch keeps only the latest value, so
+    // without the hold a fast run can plan before the listener runs and never deliver `Preparing`.
+    let plan = format!("/Items/{DIRECT_PLAY_ITEM}/PlaybackInfo");
+    stand_in.hold(&plan);
+    let playing_player = player.clone();
+    let play = std::thread::spawn(move || {
+        block_on(playing_player.play(item(DIRECT_PLAY_ITEM), 0, CancelToken::new()))
     });
+    let mut playing = until(&state_rx, "preparing", |state| {
+        state.state == PlayerStateKind::Preparing
+    });
+    stand_in.release(&plan);
+    play.join().unwrap().unwrap();
+    playing.extend(until(&state_rx, "playing", |state| {
+        state.state == PlayerStateKind::Playing
+    }));
     let last = playing.last().unwrap();
     assert_eq!(last.item, Some(item(DIRECT_PLAY_ITEM)));
     assert_eq!(last.duration_ms, Some(600_000));
@@ -188,12 +200,6 @@ fn a_player_plays_reports_and_releases_through_the_bridge() {
     );
     assert_eq!(last.audio, Some(1));
     assert_eq!(last.quality, QualityChoice::Maximum);
-    // The state before the plan shows at once.
-    assert!(
-        playing
-            .iter()
-            .any(|state| state.state == PlayerStateKind::Preparing)
-    );
     eventually("the start report", || {
         reports(&stand_in) == ["/Sessions/Playing"]
     });
@@ -343,10 +349,10 @@ fn the_playback_settings_switch_skipping() {
         core.how_to_play_name(HowToPlayKind::ServerTranscode),
         "Server transcode"
     );
-    assert_eq!(core.how_to_play_label(), "How to play");
+    assert_eq!(core.how_to_play_label(), "Player");
     assert_eq!(
         core.how_to_play_button_name(HowToPlayKind::Auto),
-        "How to play: Auto"
+        "Player: Auto"
     );
     let preferred = QualityChoice::Bitrate {
         bits_per_second: 20_000_000,

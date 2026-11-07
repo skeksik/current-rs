@@ -352,11 +352,17 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     internal PlayerState PlayerStateForTest => Player.StateForTest;
 
+    internal IReadOnlyList<string> PlayerTraceForTest => Player.TraceForTest;
+
     internal string? NativeFailureForTest => Player.NativeFailureForTest;
 
     internal int? NativeFailureCodeForTest => Player.NativeFailureCodeForTest;
 
     internal bool NativeSurfaceShownForTest => Player.NativeSurfaceShownForTest;
+
+    internal bool NativeReadThroughCoreForTest => Player.NativeReadThroughCoreForTest;
+
+    internal Task<IReadOnlyList<string>> PlaybackInfoLinesForTestAsync() => Player.PlaybackInfoLinesForTestAsync();
 
     internal Task SelectSubtitleForTestAsync(uint index) => Player.SelectSubtitleForTestAsync(index);
 
@@ -1242,7 +1248,7 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         // Back from the player closes it and shows the page it was played from (ADR 0007's closing order, PlayerView.CloseAsync).
         if (Player.IsOpen)
         {
-            _ = Player.CloseAsync();
+            _ = Player.CloseAsync("Back");
             return true;
         }
         // With the pane open over the page, back only closes the pane, from the title bar's Back button, Alt+Left, the GoBack key and

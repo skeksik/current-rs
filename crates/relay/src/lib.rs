@@ -10,6 +10,8 @@
 //! - Only `current-net`'s `STREAM_REQUEST_HEADERS` go upstream and only its `STREAM_RESPONSE_HEADERS` come back; HLS playlists are
 //!   rewritten so that every URI points back at the route, without `ApiKey`, or the playlist fails.
 //! - It knows no service: whatever implements [`Upstream`] can be relayed.
+//! - The stream reader ([`ReaderRoute`], [`StreamReader`], ADR 0026) reads a route's file by byte ranges for a player that takes a
+//!   stream instead of a URL, with libmpv's read-ahead limits; it opens no port.
 //!
 //! No Debug, Display or error of this crate shows a URL, a token or a credential.
 
@@ -17,6 +19,7 @@ mod body;
 mod events;
 mod path;
 mod playlist;
+mod reader;
 mod relay;
 mod serve;
 mod token;
@@ -25,6 +28,9 @@ mod upstream;
 pub use events::{RelayEvent, RelayEvents};
 pub use hyper::body::Bytes;
 pub use playlist::{MAX_PLAYLIST_BYTES, MAX_REWRITTEN_BYTES};
+pub use reader::{
+    FileFacts, ReadError, ReaderFacts, ReaderLimits, ReaderRoute, ReaderRouteConfig, StreamReader,
+};
 pub use relay::{FIRST_REQUEST_TIMEOUT, MAX_CONNECTIONS, Relay, Route, RouteConfig};
 pub use upstream::{
     StreamMethod, Upstream, UpstreamBody, UpstreamFuture, UpstreamRequest, UpstreamResponse,

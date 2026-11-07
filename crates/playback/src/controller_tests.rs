@@ -352,6 +352,21 @@ fn the_end_is_reported_once_and_stop_after_it_reports_nothing() {
 }
 
 #[test]
+fn each_play_has_the_next_number_and_its_end_carries_it() {
+    let mut player = Harness::playing(AutoSkip::off());
+    assert_eq!(player.player.status().play, 1);
+    player.event(EngineEvent::Ended(EndReason::Eof));
+    let ended = player.player.status();
+    assert_eq!((ended.state, ended.play), (PlayerState::Ended, 1));
+    // The same item again: a new number, so a UI can tell this play's end from the one before.
+    let again = ended.item.clone().unwrap();
+    block_on(player.player.play(again, MediaKind::MOVIE, Duration::ZERO));
+    let status = player.player.status();
+    assert_ne!(status.state, PlayerState::Ended);
+    assert_eq!(status.play, 2);
+}
+
+#[test]
 fn another_item_stops_the_first_and_loads_on_the_same_engine() {
     let mut player = Harness::playing(AutoSkip::off());
     player.at(100);

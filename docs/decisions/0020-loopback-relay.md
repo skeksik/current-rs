@@ -2,6 +2,7 @@
 
 Status: accepted (2026-10-26); open choices decided by the owner 2026-10-26 (see "Decided by the owner"). From the loopback relay
 spike. Amended 2026-10-29 (ADR 0025, W3): choice 1 widens to every stream for a platform engine; see "What the relay is".
+Amended 2026-11-06 (ADR 0026, R1, feat/stream-reader): a route can be read through the stream reader; see "Where it lives".
 Research, quotes and sources: `docs/notes/loopback-relay.md`. No product code was written.
 
 ## Context
@@ -122,6 +123,11 @@ the container.
 - **`current-relay`, a new crate** (choice 3): listener, routes, forwarding, playlist rewriting, its events. It depends on
   `current-net` (an `Upstream` trait that `ServerClient` implements, so tests can use a fake) and on hyper's server (choice 2). It knows no
   service: Stash scenes (later) use it unchanged.
+- **The stream reader** (amended 2026-11-06, ADR 0026 R1): `current-relay` also holds the stream reader (`reader` module), which
+  reads one file of a route by byte ranges for a player that takes a stream instead of a URL, with no HTTP hop. A reader route
+  (`ReaderRoute`) has the same upstream, prefixes, once-per-route events and lifetime as a route here, but opens no port and has no
+  token or URL. Its failures report the same `RelayEvent`s, through the same mapping, so the 401 rule is unchanged. "Streaming" above
+  stays this relay's rule; the reader buffers up to ADR 0026's limits (150 MiB ahead of the playback point, 50 MiB behind).
 - **`current-net`:** `ServerClient::send_stream`: the same address selection, gateway layer, `RequestAuth`, roaming retry and
   `Set-Cookie` updates as `send`, but no redirects, no total deadline, a read timeout, the header lists above, and a body read chunk by
   chunk. Logged per "The request log" above.

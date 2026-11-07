@@ -45,7 +45,7 @@ impl CancelToken {
 }
 
 /// Aborts the spawned work when the future awaiting it is dropped.
-struct AbortOnDrop<T>(JoinHandle<T>);
+pub(crate) struct AbortOnDrop<T>(pub(crate) JoinHandle<T>);
 
 impl<T> Drop for AbortOnDrop<T> {
     fn drop(&mut self) {

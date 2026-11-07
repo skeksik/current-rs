@@ -270,6 +270,8 @@ struct State {
     failing: Mutex<HashMap<String, u16>>,
     /// Stream paths (lowercase) whose next answer breaks off after this many body bytes.
     cuts: Mutex<HashMap<String, usize>>,
+    /// Stream answers to these paths (lower case) send this many bytes of their body, then wait until [`Controls::release`].
+    stalls: Mutex<HashMap<String, usize>>,
     /// Stream bodies go out in pieces of at most this many bytes, one per [`PACE_TICK`]; 0 sends them at once.
     pace: AtomicUsize,
     /// How long every JSON answer waits, in milliseconds, after it was read from the state on arrival: a slow server.
@@ -357,16 +359,53 @@ async fn listen(state: &Arc<State>) -> std::io::Result<(String, JoinHandle<()>)>
     let mut doors = lock(&state.doors);
     let index = doors.len();
     let serving = state.clone();
-    let task = tokio::spawn(async move {
-        while let Ok((socket, _)) = listener.accept().await {
-            tokio::spawn(serve(socket, serving.clone(), index));
-        }
-    });
+    let task = tokio::spawn(accept_all(listener, move |socket| {
+        tokio::spawn(serve(socket, serving.clone(), index));
+    }));
     let mut door = Door::new(index);
     door.listener = Some(task.abort_handle());
     doors.push(door);
     Ok((address, task))
 }
+
+/// Hands every accepted connection to `serve`, until the task is aborted. A failed accept never ends the loop: the listener
+/// stays open. Before this, the first failed accept ended the loop and dropped the listener, and every later connection to the
+/// stand-in failed. An error of one connection (reset or aborted before it was accepted) is skipped at once; any other error
+/// (such as running out of file handles) waits [`ACCEPT_RETRY`] first, so the loop does not spin while it lasts.
+async fn accept_all<L: Accept>(mut listener: L, mut serve: impl FnMut(L::Socket)) {
+    loop {
+        match listener.accept().await {
+            Ok(socket) => serve(socket),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(_) => tokio::time::sleep(ACCEPT_RETRY).await,
+        }
+    }
+}
+
+/// What [`accept_all`] accepts from: a [`TcpListener`], or a scripted one in the tests.
+trait Accept {
+    type Socket;
+
+    fn accept(&mut self)
+    -> impl std::future::Future<Output = std::io::Result<Self::Socket>> + Send;
+}
+
+impl Accept for TcpListener {
+    type Socket = TcpStream;
+
+    async fn accept(&mut self) -> std::io::Result<TcpStream> {
+        TcpListener::accept(self).await.map(|(socket, _)| socket)
+    }
+}
+
+/// How long the accept loop waits after an error that is not one connection's.
+const ACCEPT_RETRY: Duration = Duration::from_millis(10);
 
 /// Changes a running stand-in and reads what it received, from any thread.
 #[derive(Clone)]
@@ -422,7 +461,14 @@ impl Controls {
     pub fn release(&self, path: &str) {
         lock(&self.state.held).remove(path);
         lock(&self.state.held_answers).remove(path);
+        lock(&self.state.stalls).remove(&path.to_ascii_lowercase());
         self.state.released.notify_waiters();
+    }
+
+    /// Stream answers to `path` (any case) send `after` bytes of their body and then wait, the connection open, until
+    /// [`Controls::release`]: a server that stops sending mid-body, for as long as a test needs, whatever the network's speed.
+    pub fn stall_stream(&self, path: &str, after: usize) {
+        lock(&self.state.stalls).insert(path.to_ascii_lowercase(), after);
     }
 
     /// The paths of the requests received so far, oldest first.
@@ -765,9 +811,24 @@ async fn serve(mut socket: TcpStream, state: Arc<State>, door: usize) {
             } else {
                 None
             };
+            let stall = if (200..300).contains(&status) {
+                let path = received.path.to_ascii_lowercase();
+                lock(&state.stalls).get(&path).map(|after| (path, *after))
+            } else {
+                None
+            };
             let _ = socket.write_all(head.as_bytes()).await;
             if received.method != "HEAD" {
-                send_body(&state, &mut socket, &body, cut).await;
+                let body = match stall {
+                    Some((path, after)) if after < body.len() => {
+                        if !stall_body(&state, &mut socket, &body[..after], &path).await {
+                            return;
+                        }
+                        &body[after..]
+                    }
+                    _ => &body[..],
+                };
+                send_body(&state, &mut socket, body, cut).await;
             }
             let _ = socket.shutdown().await;
             return;
@@ -1015,6 +1076,30 @@ impl<'a> OpenStream<'a> {
 impl Drop for OpenStream<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Sends `head` of a stalled body, then waits until the stall on `path` is released ([`Controls::release`]); false when the client
+/// closed the connection meanwhile.
+async fn stall_body(state: &State, socket: &mut TcpStream, head: &[u8], path: &str) -> bool {
+    if socket.write_all(head).await.is_err() {
+        return false;
+    }
+    loop {
+        // Registered before the check, so a release between the two is not missed.
+        let released = state.released.notified();
+        if !lock(&state.stalls).contains_key(path) {
+            return true;
+        }
+        let mut probe = [0u8; 1];
+        tokio::select! {
+            () = released => {}
+            read = socket.read(&mut probe) => {
+                if matches!(read, Ok(0) | Err(_)) {
+                    return false;
+                }
+            }
+        }
     }
 }
 
@@ -1453,4 +1538,80 @@ fn decode(component: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&decoded).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::io;
+
+    use super::*;
+
+    /// Gives its results in order, then waits forever.
+    struct Scripted(VecDeque<io::Result<u32>>);
+
+    impl Accept for Scripted {
+        type Socket = u32;
+
+        async fn accept(&mut self) -> io::Result<u32> {
+            match self.0.pop_front() {
+                Some(result) => result,
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_accept_keeps_the_listener_accepting() {
+        let script = Scripted(VecDeque::from([
+            Ok(1),
+            Err(io::ErrorKind::ConnectionReset.into()),
+            Err(io::ErrorKind::ConnectionAborted.into()),
+            Ok(2),
+            // Not one connection's error: waits, then goes on.
+            Err(io::Error::other("out of handles")),
+            Ok(3),
+        ]));
+        let (sender, mut served) = mpsc::unbounded_channel();
+        let task = tokio::spawn(accept_all(script, move |socket| {
+            let _ = sender.send(socket);
+        }));
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let socket = tokio::time::timeout(Duration::from_secs(5), served.recv())
+                .await
+                .expect("served within 5 s")
+                .expect("the loop still runs");
+            seen.push(socket);
+        }
+        assert_eq!(seen, [1, 2, 3]);
+        assert!(!task.is_finished());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn the_stand_in_answers_after_a_connection_closed_before_its_accept() {
+        let stand_in = StandIn::start().await.unwrap();
+        let port: u16 = stand_in
+            .address()
+            .rsplit(':')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        // A connection closed at once, before the accept loop may have taken it.
+        drop(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        let mut socket = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        socket
+            .write_all(b"GET /System/Info/Public HTTP/1.1\r\nhost: 127.0.0.1\r\n\r\n")
+            .await
+            .unwrap();
+        let mut answer = Vec::new();
+        socket.read_to_end(&mut answer).await.unwrap();
+        assert!(
+            answer.starts_with(b"HTTP/1.1 200"),
+            "{}",
+            String::from_utf8_lossy(&answer)
+        );
+    }
 }

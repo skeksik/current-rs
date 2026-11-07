@@ -484,6 +484,9 @@ pub struct PlayerStateSnapshot {
     /// Set when `state` is `Failed`.
     pub problem: Option<PlaybackProblem>,
     pub item: Option<ItemRef>,
+    /// The number of the play this state is about: each play the player starts gets the next one, from 1 (0 while none), so the end
+    /// of an earlier play of the same item is told apart from the end of the play just asked for.
+    pub play: u64,
     pub position_ms: u64,
     pub duration_ms: Option<u64>,
     /// How far ahead of the position the engine holds data.
@@ -527,6 +530,7 @@ impl From<&PlayerStatus> for PlayerStateSnapshot {
             state,
             problem,
             item: status.item.as_ref().map(Into::into),
+            play: status.play,
             position_ms: millis(status.position),
             duration_ms: status.duration.map(millis),
             buffered_ms: status.buffered.map(millis),

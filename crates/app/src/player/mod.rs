@@ -36,6 +36,7 @@ mod platform;
 mod platform_caps;
 mod prefs;
 mod problem;
+mod reader;
 mod relay;
 mod server;
 #[cfg(any(test, feature = "test-engine"))]
@@ -77,6 +78,7 @@ pub use platform_caps::{
     CodecAnswer, CodecKind, CodecQuery, windows_codec_queries, windows_engine,
 };
 pub(crate) use prefs::PlaybackPrefs;
+pub use reader::PlatformReader;
 pub(crate) use relay::RelaySlot;
 
 /// Which engine [`App::open_player`](crate::App::open_player) uses in this build.
@@ -136,6 +138,8 @@ pub struct PlaybackInfo {
     pub engine: EngineOutput,
     /// The player has a platform engine beside libmpv (ADR 0025): the panel then names ADR 0025's routes.
     pub platform_engine: bool,
+    /// The facts of the stream reader the platform engine reads, on a direct play through the core (ADR 0026); `None` otherwise.
+    pub reader: Option<current_relay::ReaderFacts>,
 }
 
 /// The automatic skipping the playback settings name (ADR 0019, choice 8).
@@ -222,6 +226,8 @@ pub struct Player {
     state: watch::Receiver<PlayerStatus>,
     now_playing: watch::Receiver<NowPlaying>,
     swap_chain: watch::Receiver<Option<Arc<SwapChain>>>,
+    /// The platform engine's stream readers (ADR 0026); `None` without a platform engine.
+    readers: Option<Arc<reader::ReaderSlot>>,
 }
 
 impl std::fmt::Debug for Player {
@@ -233,6 +239,11 @@ impl std::fmt::Debug for Player {
 }
 
 impl Player {
+    /// The facts of the stream reader the platform engine reads now, once it opened.
+    pub fn stream_reader_facts(&self) -> Option<current_relay::ReaderFacts> {
+        self.readers.as_ref()?.fed()?.facts()
+    }
+
     /// The state, published at most 4 times a second for the position and at once on any other change.
     pub fn state(&self) -> watch::Receiver<PlayerStatus> {
         self.state.clone()

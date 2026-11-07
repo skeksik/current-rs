@@ -19,12 +19,14 @@ public abstract record PlatformTrack
 
 /// <summary>
 /// One file for the platform engine. <see cref="Url"/> is on the core's loopback relay (<c>http://127.0.0.1:&lt;port&gt;/&lt;route
-/// token&gt;/...</c>) and holds no session token (ADR 0025): never log, store or show it. <see cref="ToString"/> leaves it out.
+/// token&gt;/...</c>) and holds no session token (ADR 0025): never log, store or show it. <see cref="ToString"/> leaves it out. With
+/// a <see cref="Reader"/> (ADR 0026) <see cref="Url"/> is empty: read the file through the reader instead.
 /// </summary>
-public sealed record PlatformLoad(ulong Generation, string Url, TimeSpan Start, PlatformTrack Audio, PlatformTrack Subtitle, bool Hls)
+public sealed record PlatformLoad(
+    ulong Generation, string Url, TimeSpan Start, PlatformTrack Audio, PlatformTrack Subtitle, bool Hls, CoreFileReader? Reader = null)
 {
     public override string ToString() =>
-        $"PlatformLoad {{ Generation = {Generation}, Start = {Start}, Audio = {Audio}, Subtitle = {Subtitle}, Hls = {Hls} }}";
+        $"PlatformLoad {{ Generation = {Generation}, Start = {Start}, Audio = {Audio}, Subtitle = {Subtitle}, Hls = {Hls}, Reader = {Reader is not null} }}";
 }
 
 /// <summary>A subtitle the core fetched, for the engine to show over the video; <see cref="Format"/> by the server's name.</summary>
@@ -225,7 +227,8 @@ internal static class PlatformEngineMap
     };
 
     public static PlatformLoad From(Ffi.PlatformFile file) =>
-        new(file.Generation, file.Url, Ms(file.StartMs), From(file.Audio), From(file.Subtitle), file.Hls);
+        new(file.Generation, file.Url, Ms(file.StartMs), From(file.Audio), From(file.Subtitle), file.Hls,
+            file.Reader is { } reader ? new CoreFileReader(reader) : null);
 
     public static PlatformSubtitle From(Ffi.PlatformSubtitleFile subtitle) =>
         new(subtitle.Index, subtitle.Format, subtitle.Data, subtitle.Title, subtitle.Language, subtitle.Select);

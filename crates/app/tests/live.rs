@@ -53,7 +53,9 @@ async fn signed_in(stand_in: &StandIn, app: &App) -> ServerRef {
     }
     let found = match setup.state().borrow().clone() {
         AddServerState::Ready { server } => server,
-        state => panic!("{state:?}"),
+        // The request log says what each attempt ended in and how long it took, which tells a connection that failed at once
+        // from one that waited. It holds no address (ADR 0006).
+        state => panic!("{state:?}\nrequest log:\n{}", app.diagnostics_text()),
     };
     let flow = app.sign_in(found).unwrap();
     flow.with_password(USER_NAME, PASSWORD).await;

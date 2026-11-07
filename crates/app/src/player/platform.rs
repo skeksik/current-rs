@@ -14,6 +14,8 @@ use current_model::{EngineCapabilities, EngineErrorKind, SubtitleFormat};
 use current_playback::{Engine, EngineEvent, EngineFile, EngineTrack, ExternalSubtitle, StreamUrl};
 use tokio::sync::mpsc;
 
+use super::reader::{PlatformReader, ReaderSlot};
+
 /// What a platform engine call failed with. A failed load is a failed route (the controller tries the next one); a failed command is
 /// dropped, as libmpv's are: the core has no log, and the engine reports what follows from it as events.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,8 +26,9 @@ pub enum PlatformError {
 }
 
 /// One file for the platform engine. `url` is always on the loopback relay and holds the route's token only (ADR 0025, "URLs across
-/// the bridge"): never the session token. It has no `Display`, and its `Debug` shows no URL.
-#[derive(Clone, PartialEq, Eq)]
+/// the bridge"): never the session token. It has no `Display`, and its `Debug` shows no URL. With a `reader` (ADR 0026), `url` is
+/// empty and the engine reads the file through the reader.
+#[derive(Clone)]
 pub struct PlatformFile {
     /// The load's number; events about this file carry it.
     pub generation: u64,
@@ -35,7 +38,24 @@ pub struct PlatformFile {
     pub subtitle: EngineTrack,
     /// The URL is an HLS playlist (for Windows, `AdaptiveMediaSource`).
     pub hls: bool,
+    /// The core's stream reader for the file, when the engine reads it through the core instead of `url` (ADR 0026).
+    pub reader: Option<Arc<PlatformReader>>,
 }
+
+/// Every field but the reader, which has no equality of its own; whether there is one is compared.
+impl PartialEq for PlatformFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.generation == other.generation
+            && self.url == other.url
+            && self.start == other.start
+            && self.audio == other.audio
+            && self.subtitle == other.subtitle
+            && self.hls == other.hls
+            && self.reader.is_some() == other.reader.is_some()
+    }
+}
+
+impl Eq for PlatformFile {}
 
 impl std::fmt::Debug for PlatformFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -45,6 +65,7 @@ impl std::fmt::Debug for PlatformFile {
             .field("audio", &self.audio)
             .field("subtitle", &self.subtitle)
             .field("hls", &self.hls)
+            .field("reader", &self.reader.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -129,6 +150,8 @@ pub(crate) struct PlatformBackend {
     capabilities: EngineCapabilities,
     gate: Arc<LoadGate>,
     relay_port: RelayPort,
+    /// The stream readers (ADR 0026); none in the unit tests.
+    readers: Option<Arc<ReaderSlot>>,
 }
 
 impl PlatformBackend {
@@ -143,7 +166,14 @@ impl PlatformBackend {
             capabilities,
             gate,
             relay_port,
+            readers: None,
         }
+    }
+
+    /// Hands the platform engine the stream reader of each direct-play load that has one (ADR 0026).
+    pub(crate) fn with_readers(mut self, readers: Arc<ReaderSlot>) -> Self {
+        self.readers = Some(readers);
+        self
     }
 }
 
@@ -179,13 +209,29 @@ impl Engine for PlatformBackend {
             return Err(EngineErrorKind::LOADING_FAILED);
         }
         let generation = self.gate.next();
+        // The reader the media server made with this stream's relay route, for a direct-play file when readers are on.
+        let reader = match &self.readers {
+            Some(readers) if !file.hls => readers.current(),
+            _ => None,
+        };
+        if let Some(readers) = &self.readers {
+            readers.feed(generation, reader.clone());
+        }
+        let url = match &reader {
+            Some(reader) => {
+                reader.start_at(file.start);
+                StreamUrl::new("")
+            }
+            None => file.url,
+        };
         let file = PlatformFile {
             generation,
-            url: file.url,
+            url,
             start: file.start,
             audio: file.audio,
             subtitle: file.subtitle,
             hls: file.hls,
+            reader,
         };
         self.engine.load(file).map_err(|error| match error {
             PlatformError::Failed(kind) => kind,
@@ -209,6 +255,10 @@ impl Engine for PlatformBackend {
     }
 
     fn seek_to(&mut self, position: Duration) {
+        // The reader learns of the seek before the engine reads at the new position (ADR 0026, "The playback point").
+        if let Some(reader) = self.readers.as_ref().and_then(|readers| readers.fed()) {
+            reader.seek_to(position);
+        }
         let _ = self.engine.seek_to(position);
     }
 
@@ -235,6 +285,9 @@ impl Engine for PlatformBackend {
     fn stop(&mut self) {
         // Closed first: an event the engine sends while stopping is already the old file's.
         self.gate.close();
+        if let Some(readers) = &self.readers {
+            readers.stopped();
+        }
         let _ = self.engine.stop();
     }
 }
@@ -427,6 +480,7 @@ mod tests {
                 audio: EngineTrack::Auto,
                 subtitle: EngineTrack::Off,
                 hls: true,
+                reader: None,
             }
         );
         assert!(

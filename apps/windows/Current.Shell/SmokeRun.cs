@@ -228,8 +228,8 @@ internal static class SmokeRun
     /// <summary>
     /// A playback in Windows' own player (ADR 0025, W4) against the Jellyfin stand-in, when <c>CURRENT_STAND_IN</c> names it: signed in,
     /// the player page opens with both engines, the core sends the stand-in's MP4 (H.264, built into Windows; no audio, since CI's
-    /// runner has no audio device) to the native route through its relay, and it plays: the route is Native on Windows' player, its
-    /// surface shows and the position moves. Skipped, visibly, without the stand-in, and when this machine cannot play it through Media
+    /// runner has no audio device) to the native route, read through the core's stream reader (ADR 0026), and it plays: the route is
+    /// Native on Windows' player, its surface shows and the position moves. Skipped, visibly, without the stand-in, and when this machine cannot play it through Media
     /// Foundation: CodecQuery finds no H.264 decoder, or the engine fails with one of the HRESULTs below. Any other
     /// failure fails the run, so a broken engine cannot pass. The libmpv checks stay either way.
     /// </summary>
@@ -296,8 +296,8 @@ internal static class SmokeRun
             }, Timeout * 3);
             if (native)
             {
-                check(true, "the stand-in's MP4 plays in Windows' own player through the relay (route Native, its surface shown, the "
-                    + "position moves)");
+                check(true, "the stand-in's MP4 plays in Windows' own player (route Native, its surface shown, the position moves)");
+                await NativeReaderChecksAsync(window, check);
                 await NativeSubtitleChecksAsync(window, core, check);
             }
             else if (window.NativeFailureForTest is { } failure
@@ -334,6 +334,20 @@ internal static class SmokeRun
     }
 
     /// <summary>
+    /// Direct play on the native route reads through the core (ADR 0026, R3): the engine handed Windows' player the core's stream, not
+    /// a URL, and the info panel's reader line counts at least one request. The line is printed: it holds no address.
+    /// </summary>
+    private static async Task NativeReaderChecksAsync(MainWindow window, Action<bool, string> check)
+    {
+        check(window.NativeReadThroughCoreForTest, "the native MP4 is read through the core's stream reader, not a URL");
+        var lines = await window.PlaybackInfoLinesForTestAsync();
+        var reader = lines.FirstOrDefault(line => line.StartsWith("Read by Current", StringComparison.Ordinal));
+        var requests = reader is null ? null : System.Text.RegularExpressions.Regex.Match(reader, @"· (\d+) requests?\b");
+        check(requests is { Success: true } && int.Parse(requests.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) >= 1,
+            $"the info panel shows the reader's facts ({reader ?? "no reader line: " + string.Join(" | ", lines)})");
+    }
+
+    /// <summary>
     /// The native route's subtitles (ADR 0025, W5), right after native playback started: the item's external SubRip file selected,
     /// the core hands it over, the engine shows it either by adding it while the file plays or by opening the file again with it
     /// (printed: which one ran), and after a seek back to the start its one cue reaches our subtitle view with its text (compared,
@@ -367,6 +381,11 @@ internal static class SmokeRun
                         + $"{(NewLoad() ? "the new load open" : "no new load open")}, now {state.State}, "
                         + $"{state.Route?.Engine.ToString() ?? "no engine"} {state.Route?.Label.ToString() ?? "no route"}, "
                         + $"native failure {window.NativeFailureForTest ?? "none"}, subtitle path {window.SubtitlePathForTest ?? "none"})");
+                    // Why: the player's last state changes, plays, closes with their reason and caught exceptions (PlayerView).
+                    foreach (var line in window.PlayerTraceForTest)
+                    {
+                        Console.WriteLine($"       {line}");
+                    }
                     return;
                 }
             }

@@ -11,7 +11,7 @@ use current_model::{
 };
 
 use crate::quality::Quality;
-use crate::stream::{EngineStream, StreamUrl};
+use crate::stream::{DirectFile, EngineStream, StreamUrl};
 
 /// What a plan asks the server for (for Jellyfin, one `POST /Items/{id}/PlaybackInfo`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,13 +163,15 @@ pub trait MediaServer {
     /// [`PlaybackProblem::Network`] when `url` is not on the address in use any more. `hls`: the plan's route is HLS, so `url` is
     /// an HLS playlist; a relay route then refuses anything else at that URL (ADR 0020 task 4). `always_relay`: the stream is for a
     /// platform engine, which gets every stream through the relay, gateway or not, so its URL holds the route's token only (ADR 0025,
-    /// "URLs across the bridge"; ADR 0020 choice 1 widened).
+    /// "URLs across the bridge"; ADR 0020 choice 1 widened). `direct`: the plan's route is local (direct play, not a server
+    /// stream), with the source's duration and bitrate; only such a file may be read through the core's stream reader (ADR 0026).
     fn stream_url(
         &self,
         item: &ItemRef,
         url: &StreamUrl,
         hls: bool,
         always_relay: bool,
+        direct: Option<DirectFile>,
     ) -> Result<EngineStream, PlaybackProblem>;
 
     /// The stream [`MediaServer::stream_url`] gave is no longer played (a stop, another item, a failure, the end): its relay route,

@@ -112,12 +112,8 @@ internal static class PlatformEngineTests
             await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.FromSeconds(3));
             Check(engine.Loads.Count == 1, $"one load on the platform engine, not {engine.Loads.Count}");
             var load = engine.Loads.Single();
-            // The relay's URL: 127.0.0.1 on the relay's own port, not the stand-in's, and no session token.
-            var url = new Uri(load.Url);
-            Check(url.Scheme == "http" && url.Host == "127.0.0.1", "a loopback URL");
-            Check(url.Port != new Uri(standIn.Address).Port, "the relay's port, not the server's");
-            Check(!load.Url.Contains("apikey", StringComparison.OrdinalIgnoreCase)
-                && !load.Url.Contains("api_key", StringComparison.OrdinalIgnoreCase), "no session token in the URL");
+            // Direct play on the native route reads through the core (ADR 0026): a reader, and no URL crosses the bridge.
+            Check(load.Reader is not null && load.Url.Length == 0, "a reader and no URL");
             Check(load.Start == TimeSpan.FromSeconds(3) && load.Audio == new PlatformTrack.Stream(1), $"the position and track, not {load}");
             // Neither the adapter's record nor the generated one prints the URL.
             Check(!load.ToString().Contains("127.0.0.1", StringComparison.Ordinal), $"no URL in {load}");
@@ -226,7 +222,7 @@ internal static class PlatformEngineTests
         Check(core.PlaybackSettings().HowToPlay == HowToPlay.Auto, "Auto by default");
         Check(!core.SettingsHowToPlayChoices(false).Contains(HowToPlay.DeviceRemux), "no remux on the device in Windows' Settings");
         Check(core.HowToPlayName(HowToPlay.ServerTranscode) == "Server transcode", "the choice's name");
-        Check(core.HowToPlayLabel() == "How to play" && core.HowToPlayButtonName(HowToPlay.Auto) == "How to play: Auto",
+        Check(core.HowToPlayLabel() == "Player" && core.HowToPlayButtonName(HowToPlay.Auto) == "Player: Auto",
             "the button's words");
         await core.SetHowToPlayAsync(HowToPlay.AppEngine);
         Check(core.PlaybackSettings().HowToPlay == HowToPlay.AppEngine, "the setting read back");
@@ -245,4 +241,501 @@ internal static class PlatformEngineTests
             await core.SetHowToPlayAsync(HowToPlay.Auto);
         }
     }
+
+    /// <summary>The stand-in's direct-play stream (tools/jellyfin-stand-in/src/lib.rs): 256 KiB, its byte at <c>i</c> is <c>i % 251</c>.</summary>
+    private const long StreamLength = 256 * 1024;
+
+    private static string StreamPath => $"/Videos/{StandIn.DirectPlayItem}/stream";
+
+    private static byte StreamByte(long offset) => (byte)(offset % 251);
+
+    /// <summary>A player with the fake engine playing the direct-play item, which it reads through the core.</summary>
+    private static async Task<(FakeEngine Engine, PlayerSession Session, CoreFileReader Reader)> ReadingAsync(CoreHost core)
+    {
+        var engine = new FakeEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), new ManualDispatcher());
+        await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+        var load = engine.Loads.Last();
+        Check(load.Reader is not null, "a reader for direct play on the native route");
+        Check(load.Url.Length == 0, "no URL with a reader");
+        return (engine, session, load.Reader!);
+    }
+
+    public static async Task ReadsTheFileThroughTheCore()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+
+        // A server stream (HLS) stays on the relay: its URL on 127.0.0.1, no session token, and no reader.
+        var plain = new FakeEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, plain, Answers(), new ManualDispatcher());
+        try
+        {
+            await session.PlayAsync(Item(StandIn.TranscodeItem), TimeSpan.Zero);
+            var load = plain.Loads.Single();
+            var url = new Uri(load.Url);
+            Check(load.Hls && load.Reader is null, "HLS, and no reader");
+            Check(url.Scheme == "http" && url.Host == "127.0.0.1" && url.Port != new Uri(standIn.Address).Port,
+                "the relay's URL, not the server's");
+            Check(!load.Url.Contains("apikey", StringComparison.OrdinalIgnoreCase)
+                && !load.Url.Contains("api_key", StringComparison.OrdinalIgnoreCase), "no session token in the URL");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        var (engine, reading, reader) = await ReadingAsync(core);
+        try
+        {
+            Check(!engine.Loads.Last().ToString().Contains("127.0.0.1", StringComparison.Ordinal), "no URL in the load's text");
+            await using var stream = await reader.OpenAsync();
+            Check(stream.Length == StreamLength, $"the file's length, not {stream.Length}");
+            Check(stream.ContentType == "video/mp4", $"the file's type, not {stream.ContentType}");
+            Check(stream.CanRead && stream.CanSeek && !stream.CanWrite, "readable and seekable, not writable");
+
+            var start = new byte[100];
+            var read = await stream.ReadAsync(start);
+            Check(read > 0 && start.Take(read).Select((b, i) => b == StreamByte(i)).All(same => same), "the file's first bytes");
+            Check(stream.Position == read, $"the position moved on, to {stream.Position}");
+
+            stream.Seek(100_000, SeekOrigin.Begin);
+            var middle = new byte[64];
+            read = await stream.ReadAsync(middle);
+            Check(read > 0 && middle.Take(read).Select((b, i) => b == StreamByte(100_000 + i)).All(same => same), "the bytes at 100 000");
+
+            stream.Seek(0, SeekOrigin.End);
+            Check(await stream.ReadAsync(new byte[10]) == 0, "nothing at the end");
+
+            // A read by offset leaves the stream's position alone (one view per player source keeps its own).
+            var at = new byte[32];
+            read = await stream.ReadAtAsync(200_000, at);
+            Check(read > 0 && at.Take(read).Select((b, i) => b == StreamByte(200_000 + i)).All(same => same), "the bytes at 200 000");
+            Check(stream.Position == StreamLength, $"the position stays at the end, not {stream.Position}");
+
+            // A position before the start is the caller's error.
+            try
+            {
+                stream.Seek(-1, SeekOrigin.Begin);
+                Check(false, "a negative position refused");
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+            }
+
+            // Overlapping reads are taken one after another, each from where the last left the position.
+            stream.Seek(0, SeekOrigin.Begin);
+            var first = new byte[32];
+            var second = new byte[32];
+            var reads = await Task.WhenAll(stream.ReadAsync(first).AsTask(), stream.ReadAsync(second).AsTask());
+            Check(reads[0] > 0 && reads[1] > 0, "both overlapping reads got bytes");
+            Check(stream.Position == reads[0] + reads[1], $"the position after both, not {stream.Position}");
+
+            // The stream owns the reader: there is one per file.
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "a second open refused");
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+        finally
+        {
+            await reading.CloseAsync();
+        }
+    }
+
+    public static async Task AReadIsCancelledByItsToken()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            standIn.Send($"hold {StreamPath}");
+            using var cancel = new CancellationTokenSource();
+            var opening = reader.OpenAsync(cancel.Token);
+            // The control: the open waits for the held answer.
+            Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+            cancel.Cancel();
+            try
+            {
+                await opening;
+                Check(false, "the open was cancelled");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            standIn.Send($"release {StreamPath}");
+            await using var stream = await reader.OpenAsync();
+            Check(await stream.ReadAsync(new byte[10]) > 0, "a new read goes through");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task ARefusedStreamFailsTheReader()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            standIn.Send($"fail-stream 500 {StreamPath}");
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "the open failed");
+            }
+            catch (IOException)
+            {
+            }
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task APendingReadEndsWithThePlayback()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        standIn.Send($"hold {StreamPath}");
+
+        // A stop.
+        var (_, session, reader) = await ReadingAsync(core);
+        var opening = reader.OpenAsync();
+        Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+        session.Stop();
+        await ExpectCancelled(opening, "a stop");
+        await session.CloseAsync();
+
+        // A close.
+        (_, session, reader) = await ReadingAsync(core);
+        opening = reader.OpenAsync();
+        Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+        await session.CloseAsync();
+        await ExpectCancelled(opening, "a close");
+        standIn.Send($"release {StreamPath}");
+    }
+
+    private static async Task ExpectCancelled(Task task, string what)
+    {
+        var done = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Check(done == task, $"the read ended after {what}");
+        try
+        {
+            await task;
+            Check(false, $"the read was cancelled by {what}");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    public static async Task ASeekDuringAReadWins()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        // The server sends the file's first 100 000 bytes and waits until released, whatever the network's speed.
+        standIn.Send($"stall 100000 {StreamPath}");
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            await using var stream = await reader.OpenAsync();
+            stream.Seek(200_000, SeekOrigin.Begin);
+            var buffer = new byte[16];
+            var read = stream.ReadAsync(buffer).AsTask();
+            // The control: the read waits for bytes the server has not sent yet.
+            Check(await Task.WhenAny(read, Task.Delay(300)) != read, "the read waits");
+            stream.Seek(10, SeekOrigin.Begin);
+            standIn.Send($"release {StreamPath}");
+            var done = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(10)));
+            Check(done == read, $"the read ended once the server sent on ({standIn.Count(StreamPath)} requests to the stream)");
+            var count = await read;
+            Check(count > 0 && buffer.Take(count).Select((b, i) => b == StreamByte(200_000 + i)).All(same => same),
+                "the read's bytes are from where it began");
+            Check(stream.Position == 10, $"the seek's position, not {stream.Position}");
+        }
+        finally
+        {
+            standIn.Send($"release {StreamPath}");
+            await session.CloseAsync();
+        }
+    }
+
+    /// <summary>Opens each load's reader as Windows' native player does (NativeEngine.OpenAsync) and reports a failed open as
+    /// <c>loading_failed</c>, the way it reports a source that would not open. With <c>failSource</c>, the stream opens and the
+    /// source made of it fails, as when <c>MediaSource.CreateFromStream</c> throws.</summary>
+    private sealed class ReadingEngine(bool failSource = false) : PlatformEngineHost
+    {
+        public ConcurrentQueue<string> Opens { get; } = new();
+
+        protected override void Load(PlatformLoad file)
+        {
+            var generation = file.Generation;
+            if (file.Reader is not { } reader)
+            {
+                return;
+            }
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await using var stream = await reader.OpenAsync();
+                    Opens.Enqueue("opened");
+                    if (failSource)
+                    {
+                        Report(generation, new PlatformEngineEvent.Failed("loading_failed"));
+                    }
+                }
+                catch (IOException)
+                {
+                    Opens.Enqueue("refused");
+                    Report(generation, new PlatformEngineEvent.Failed("loading_failed"));
+                }
+            });
+        }
+
+        protected override void AddSubtitle(PlatformSubtitle subtitle) { }
+        protected override void SetPaused(bool paused) { }
+        protected override void SeekTo(TimeSpan position) { }
+        protected override void SelectAudio(PlatformTrack track) { }
+        protected override void SelectSubtitle(PlatformTrack track) { }
+        protected override void SetVolume(byte volume) { }
+        protected override void SetMuted(bool muted) { }
+        protected override void SetSpeed(double speed) { }
+        protected override void Stop() { }
+    }
+
+    /// <summary>What the player reached, for a failure's message: state, route, engine, position, problem.</summary>
+    private static string Reached(PlayerSession session)
+    {
+        var state = session.State.Value;
+        return $"{state.State}, {state.Route?.Label.ToString() ?? "no route"} on {state.Route?.Engine.ToString() ?? "no engine"}, "
+            + $"at {state.Position}, problem {state.Problem?.ToString() ?? "none"}";
+    }
+
+    /// <summary><see cref="PlayerTests.Eventually"/>, whose failure says what the player reached instead.</summary>
+    private static async Task EventuallyReached(string what, ManualDispatcher ui, PlayerSession session, Func<bool> done)
+    {
+        try
+        {
+            await Eventually(what, ui, done);
+        }
+        catch (Exception)
+        {
+            Check(false, $"{what} (reached: {Reached(session)})");
+        }
+    }
+
+    /// <summary>
+    /// A stream the server refuses on the native route (a 500 to the reader's first request) fails the play with the server's
+    /// problem, with no fallback, as on the relay (the core's rule: another route would meet the same server); it does not hang in
+    /// Opening. A stream that opens but whose source fails moves to the app engine at the position (ADR 0025's fallback chain).
+    /// </summary>
+    public static async Task AFailedOpenOnTheNativeRouteEndsAsTheCoreRuleSays()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var ui = new ManualDispatcher();
+
+        var engine = new ReadingEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), ui);
+        try
+        {
+            standIn.Send($"fail-stream 500 {StreamPath}");
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.FromSeconds(42));
+            await EventuallyReached("a refused stream fails the play with the server's 500", ui, session, () => session.State.Value is
+                { State: PlayerStateKind.Failed, Problem: PlaybackProblem.Server { Status: 500 } });
+            Check(engine.Opens.Contains("refused"), $"the open was refused, not {string.Join(", ", engine.Opens)}");
+            Check(session.State.Value.Route?.Engine != RouteEngine.App, $"no fallback to the app engine ({Reached(session)})");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        // A fresh stand-in: its stream answers again.
+        using var whole = StandIn.Start();
+        using var next = CoreHost.Create();
+        await SignIn(next, whole);
+        var failing = new ReadingEngine(failSource: true);
+        session = await PlayerSession.OpenWithPlatformEngineAsync(next, Size, Display, failing, Answers(), ui);
+        try
+        {
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.FromSeconds(42));
+            await EventuallyReached("a source that fails moves to the app engine at 42 s", ui, session, () => session.State.Value is
+                { State: PlayerStateKind.Playing, Route.Label: RouteLabel.AppEngine }
+                && session.State.Value.Position == TimeSpan.FromSeconds(42));
+            Check(failing.Opens.SequenceEqual(new[] { "opened" }), $"one open, not {string.Join(", ", failing.Opens)}");
+            var lines = await session.PlaybackInfoLinesAsync(null, Panel);
+            Check(lines[0] == "App engine" && lines[1] == "• The native player could not start the file.",
+                $"the failed route named, not {string.Join(" | ", lines)}");
+            Check(!lines.Any(line => line.StartsWith("Read by Current", StringComparison.Ordinal)), "no reader line on the app engine");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task ADisposeDuringAnOpenFreesTheHandleWhenTheOpenEnds()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        standIn.Send($"hold {StreamPath}");
+
+        // Disposed while the open waits: the open ends at once, and the reader cannot be opened again.
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            var opening = reader.OpenAsync();
+            Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+            reader.Dispose();
+            var done = await Task.WhenAny(opening, Task.Delay(TimeSpan.FromSeconds(10)));
+            Check(done == opening, "the open ended with the Dispose");
+            try
+            {
+                await opening;
+                Check(false, "the open failed");
+            }
+            catch (Exception error) when (error is IOException or ObjectDisposedException)
+            {
+            }
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no open after Dispose");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        // Cancelled by the caller, then disposed: freed, not open again.
+        (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            using var cancel = new CancellationTokenSource();
+            var opening = reader.OpenAsync(cancel.Token);
+            Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+            cancel.Cancel();
+            try
+            {
+                await opening;
+                Check(false, "the open was cancelled");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            reader.Dispose();
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no open after Dispose");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+        finally
+        {
+            standIn.Send($"release {StreamPath}");
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task AFailedOpenOrAnUnopenedReaderFreesItsHandle()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            standIn.Send($"fail-stream 500 {StreamPath}");
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "the open failed");
+            }
+            catch (IOException)
+            {
+            }
+            // The handle is gone with the failed open: the reader cannot be opened again.
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no second open after a failed one");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            reader.Dispose();
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        // A load whose file is never opened: disposing the reader frees the handle, and it cannot be opened after.
+        (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            reader.Dispose();
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no open after Dispose");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task EachPlayHasTheNextNumber()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var ui = new ManualDispatcher();
+        var engine = new FakeEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), ui);
+        try
+        {
+            Check(session.State.Value.Play == 0, "no play yet");
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+            await Eventually("the first play's number", ui, () => session.State.Value.Play == 1);
+            // The same item again: the next number, so the window tells the earlier play's end from this one's.
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+            await Eventually("the second play's number", ui, () => session.State.Value.Play == 2);
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
 }
+

@@ -21,6 +21,7 @@ use super::backend::{Backend, CompositionSize, DisplayFacts, Signal, SwapChain};
 use super::now_playing::{NowPlaying, TIMELINE_INTERVAL, now_playing};
 use super::platform::{LoadGate, PlatformBackend, PlatformEngine, PlatformEvents};
 use super::prefs::PlaybackPrefs;
+use super::reader::ReaderSlot;
 use super::relay::RelaySlot;
 use super::server::{JellyfinMedia, refusal_problem, relay_problem};
 use super::{Command, PlaybackInfo, Player, PlayerAction as Action, PlayerError, auto_skip};
@@ -68,6 +69,8 @@ struct Native {
     engine: NativeEngine,
     events: mpsc::UnboundedReceiver<(u64, EngineEvent)>,
     gate: Arc<LoadGate>,
+    /// The stream readers of its direct-play loads (ADR 0026).
+    readers: Arc<ReaderSlot>,
 }
 
 impl NativeSetup {
@@ -81,13 +84,15 @@ impl NativeSetup {
                 kind: EngineErrorKind::LOADING_FAILED,
             })?;
         let gate = Arc::new(LoadGate::default());
+        let readers = Arc::new(ReaderSlot::default());
         let relay_port = Box::new(move || relay.relay().and_then(|relay| relay.port()));
         let backend = PlatformBackend::new(
             self.engine,
             self.profile.capabilities,
             gate.clone(),
             relay_port,
-        );
+        )
+        .with_readers(readers.clone());
         Ok(Native {
             engine: NativeEngine {
                 engine: Box::new(backend),
@@ -98,6 +103,7 @@ impl NativeSetup {
             },
             events: receiver,
             gate,
+            readers,
         })
     }
 }
@@ -211,6 +217,7 @@ fn spawn<B: Backend>(
     let auto_skip_rx = context.prefs.auto_skip();
     let initial_skip = auto_skip(&auto_skip_rx.borrow());
     let (relay_events, relay_rx) = mpsc::unbounded_channel();
+    let readers = native.as_ref().map(|native| native.readers.clone());
     let mut controller = Controller::new(
         backend,
         JellyfinMedia::new(
@@ -218,6 +225,7 @@ fn spawn<B: Backend>(
             context.relay.clone(),
             context.browse.clone(),
             relay_events,
+            readers.clone(),
         ),
         clock,
         context.prefs.quality_preference(),
@@ -238,6 +246,7 @@ fn spawn<B: Backend>(
         raw: Some(raw),
         native_events,
         gate,
+        readers: readers.clone(),
         relay: Some(relay_rx),
         state,
         now_playing: now,
@@ -257,6 +266,7 @@ fn spawn<B: Backend>(
         state: state_rx,
         now_playing: now_rx,
         swap_chain: swap_chain_rx,
+        readers,
     }
 }
 
@@ -270,6 +280,8 @@ struct Driver<B: Backend> {
     native_events: Option<mpsc::UnboundedReceiver<(u64, EngineEvent)>>,
     /// Which of the platform engine's loads its events are taken for.
     gate: Option<Arc<LoadGate>>,
+    /// The platform engine's stream readers, fed its events (ADR 0026).
+    readers: Option<Arc<ReaderSlot>>,
     /// The relay routes' events, by route number.
     relay: Option<mpsc::UnboundedReceiver<(u64, RelayEvent)>>,
     state: watch::Sender<PlayerStatus>,
@@ -366,6 +378,9 @@ impl<B: Backend> Driver<B> {
                         .as_ref()
                         .is_some_and(|gate| gate.admits(generation))
                     {
+                        if let Some(readers) = &self.readers {
+                            readers.engine_event(generation, &event);
+                        }
                         self.controller.on_native_engine_event(event).await;
                     }
                 }
@@ -505,6 +520,11 @@ impl<B: Backend> Driver<B> {
                     details: self.controller.details(),
                     engine: self.controller.engine().output(),
                     platform_engine: self.gate.is_some(),
+                    reader: self
+                        .readers
+                        .as_ref()
+                        .and_then(|readers| readers.fed())
+                        .and_then(|reader| reader.facts()),
                 });
             }
             Command::Summary(summary) => {

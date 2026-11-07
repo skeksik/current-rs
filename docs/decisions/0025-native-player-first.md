@@ -4,7 +4,7 @@ Status: accepted (2026-10-28, owner), from the native-player-first spike. The ro
 are the owner's (2026-10-28). Revised by task W1 (2026-10-28): departures 1 to 3 checked on the owner's PC and kept, departure 4
 dropped, departure 8 and the speed rule added (owner, 2026-10-28). Research, quotes and sources: `docs/notes/native-player-first.md`;
 the device check: `docs/notes/windows-native-player.md`. No product code was written. Choice 3 amended after W7 (owner, 2026-10-31;
-"How to play"), the amended text approved by the owner (2026-10-31).
+"How to play", named "Player" on screen on 2026-11-06), the amended text approved by the owner (2026-10-31).
 
 ## Context
 The owner's decision (2026-10-28): "Add a native player route for all the targets as it should've been from the very beginning, remux if
@@ -120,6 +120,13 @@ The existing client's behaviour is the default on every platform; where ours dif
   stream for a platform engine goes through the loopback relay (ADR 0020), not only those on gateway addresses: the URL then holds the
   relay's route token only, never `ApiKey` (ADR 0020 choice 4 B), and the token dies with the route. The platform engine never logs
   the URL. Apple's AirPlay of relayed URLs fails (ADR 0008); AirPlay is decided with M3 (open point).
+  **Amended 2026-11-07 (ADR 0026, R3, feat/windows-native-reader):** direct play on Windows' native route reads through the core's
+  stream reader (ADR 0026, "Which routes use it"): the load carries a `StreamReader` and no URL, and Windows' player opens it with
+  `MediaSource.CreateFromStream`. A server that refuses or fails the stream fails the play with its problem and no fallback, as on
+  the relay (another route would meet the same server); an open that fails otherwise (no source made of the stream) is a failed open,
+  so the fallback chain moves the file on. HLS and every server stream still go through the relay as above; libmpv is unchanged. On that route the info
+  panel shows the reader's facts in one line: "Read by Current · 31 s (150 MB) ahead · 42 Mbit/s · 3 requests", with reconnects and
+  waits released only when there were any (wording for the owner's approval at R3's merge).
 - **Subtitles on the native route** are fetched by the core (ADR 0019, "External subtitles") and handed over as bytes; embedded text
   tracks are shown by our own view, so they sit above our control bar: AVPlayer's legible output (ADR 0008) and Windows' timed
   metadata tracks in `ApplicationPresented` mode (notes, "Subtitles").
@@ -160,6 +167,9 @@ The existing client's behaviour is the default on every platform; where ours dif
      remux, Server transcode; no Device remux, departure 1). The player lists Auto and the choices that can play the item playing: a
      local step whose route the check puts first for the file with its tracks, and the server's steps its permissions allow.
    - In the player, "How to play" is its own button on the player bar, next to Quality (owner, 2026-10-31), not a submenu.
+   - **Named "Player" on screen (owner, 2026-11-06),** in Settings → Playback and on the player's button ("Player: Auto"), with its
+     reasons ("You chose this player."). The owner asked for "decoder or something like this" and chose "Player" over "Decoder" and
+     "Playback engine". The choices keep their names; the code keeps `HowToPlay`.
 
 ### Departures (approved by the owner, 2026-10-28)
 1. **Windows has no device remux.** What differs: the existing client remuxes MKV for its native player; Media Foundation reads MKV

@@ -111,8 +111,8 @@ pub fn how_to_play_name(how: HowToPlay) -> &'static str {
 }
 
 /// The player's "How to play" button: its label, and the name that also says the choice in use, for its tooltip and screen readers
-/// ("How to play: Auto").
-pub const HOW_TO_PLAY: &str = "How to play";
+/// ("Player: Auto"). Named "Player" on screen (owner, 2026-11-06, replacing "How to play").
+pub const HOW_TO_PLAY: &str = "Player";
 
 pub fn how_to_play_button_name(how: HowToPlay) -> String {
     format!("{HOW_TO_PLAY}: {}", how_to_play_name(how))
@@ -234,10 +234,10 @@ pub fn reason_text(reason: &str) -> &str {
         "subtitle_needs_rendering" => "The subtitles need rendering the native player can't do.",
         "dolby_vision_profile_7" => "Dolby Vision profile 7 can't be remuxed on this device.",
         "previous_route_failed" => "The previous playback route could not start.",
-        "user_chose_route" => "You chose how to play this.",
-        "setting_chose_route" => "Settings say how to play.",
+        "user_chose_route" => "You chose this player.",
+        "setting_chose_route" => "Settings choose this player.",
         "chosen_route_unavailable" => {
-            "The way chosen can't play this, so the next one below it does."
+            "The player chosen can't play this, so the next one below it does."
         }
         "dolby_vision_on_app_engine" => "The app engine shows Dolby Vision best on this device.",
         "hdr_on_sdr_display" => "The app engine tone-maps HDR video for this SDR display.",
@@ -500,11 +500,11 @@ mod tests {
                 "previous_route_failed",
                 "The previous playback route could not start.",
             ),
-            ("user_chose_route", "You chose how to play this."),
-            ("setting_chose_route", "Settings say how to play."),
+            ("user_chose_route", "You chose this player."),
+            ("setting_chose_route", "Settings choose this player."),
             (
                 "chosen_route_unavailable",
-                "The way chosen can't play this, so the next one below it does.",
+                "The player chosen can't play this, so the next one below it does.",
             ),
             (
                 "dolby_vision_on_app_engine",
@@ -775,10 +775,10 @@ mod tests {
                 "Server transcode"
             ]
         );
-        assert_eq!(HOW_TO_PLAY, "How to play");
+        assert_eq!(HOW_TO_PLAY, "Player");
         assert_eq!(
             how_to_play_button_name(HowToPlay::AppEngine),
-            "How to play: App engine"
+            "Player: App engine"
         );
     }
 }

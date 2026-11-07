@@ -22,6 +22,7 @@ use crate::quality::{Quality, QualityPreference, snap_quality};
 use crate::route::{self, RouteContext};
 use crate::server::{MediaServer, ProgressReport, StopReport, TranscodePermissions};
 use crate::status::{AutoSkip, NextEpisode, PlaybackDetails, PlayerEvent, PlayerStatus, Track};
+use crate::stream::DirectFile;
 
 /// Progress reports while a file plays, paused or not (ADR 0019, choice 7); well under the server's 60 s HLS kill timer.
 pub const PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
@@ -108,6 +109,8 @@ enum Phase {
 #[derive(Debug)]
 struct Session {
     item: ItemRef,
+    /// This play's number ([`PlayerStatus::play`]).
+    play: u64,
     /// The quality limit in use: the preferred quality until the first plan, then the entry of the item's quality menu it snapped to
     /// ([`snap_quality`]), or the user's pick, which only this item keeps.
     quality: Quality,
@@ -171,6 +174,7 @@ impl Session {
     fn new(item: ItemRef, quality: Quality, start: Duration, now: Duration) -> Self {
         Self {
             item,
+            play: 0,
             quality,
             planned: None,
             notes: Vec::new(),
@@ -282,6 +286,8 @@ pub struct Controller<E, S, C> {
     auto_skip: AutoSkip,
     phase: Phase,
     session: Option<Session>,
+    /// How many plays this player started: the last one's number.
+    plays: u64,
     volume: u8,
     muted: bool,
     events: Vec<PlayerEvent>,
@@ -311,6 +317,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             auto_skip,
             phase: Phase::Idle,
             session: None,
+            plays: 0,
             volume: 100,
             muted: false,
             events: Vec::new(),
@@ -544,6 +551,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             return status;
         };
         status.item = Some(session.item.clone());
+        status.play = session.play;
         status.position = session.position;
         status.duration = session.duration;
         status.buffered = session.buffered;
@@ -603,6 +611,8 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             self.clock.now(),
         );
         session.how = self.how;
+        self.plays += 1;
+        session.play = self.plays;
         self.session = Some(session);
         let permissions = self.server.permissions().await.unwrap_or_default();
         if let Some(session) = &mut self.session {
@@ -1539,9 +1549,13 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         );
         // A stream for the native engine always goes through the relay (ADR 0025, "URLs across the bridge").
         let always_relay = planned.plan.route.engine() == EngineRole::Native;
+        let direct = planned.plan.route.is_local().then_some(DirectFile {
+            duration: planned.plan.source.duration,
+            bitrate: planned.plan.source.bitrate,
+        });
         let stream = match self
             .server
-            .stream_url(&item, &planned.url, hls, always_relay)
+            .stream_url(&item, &planned.url, hls, always_relay, direct)
         {
             Ok(stream) => stream,
             // The relay could not start for the native engine, which may only get relayed streams: a failed route, so libmpv (which

@@ -24,6 +24,7 @@ use current_model::EngineErrorKind;
 
 use crate::player::Player;
 use crate::player_records::{CompositionSize, DisplayFacts};
+use crate::stream_reader::StreamReader;
 use crate::{Core, CoreError};
 
 /// What a platform engine call failed with. A `kind` that is not a short `[a-z0-9_]` name becomes `unexpected`.
@@ -86,11 +87,11 @@ impl From<EngineTrack> for PlatformTrack {
 }
 
 /// One file to load. `url` is on the loopback relay (`http://127.0.0.1:<port>/<route token>/...`) and holds no session token; never
-/// log, store or show it. Its Rust `Debug` leaves the URL out, and it is exported (`uniffi::export(Debug)`) so the generated C#
+/// log, store or show it. With a `reader` (ADR 0026), `url` is empty: read the file through the reader instead. Its Rust `Debug` leaves the URL out, and it is exported (`uniffi::export(Debug)`) so the generated C#
 /// `ToString()` uses it instead of printing every member (uniffi-bindgen-cs v0.11.1+v0.31.0, `macros.cs`,
 /// `value_type_uniffi_traits`: "Display is preferred over Debug for ToString()", read 2026-10-29); Swift's generated description
 /// is not verified.
-#[derive(Clone, PartialEq, Eq, uniffi::Record)]
+#[derive(Clone, uniffi::Record)]
 #[uniffi::export(Debug)]
 pub struct PlatformFile {
     /// The load's number: every event about this file carries it ([`PlatformEngineEvents::send`]).
@@ -101,7 +102,25 @@ pub struct PlatformFile {
     pub subtitle: PlatformTrack,
     /// The URL is an HLS playlist (Windows: open it with `AdaptiveMediaSource`).
     pub hls: bool,
+    /// The core's stream reader for the file, when the engine reads it through the core instead of `url`: direct play on the native
+    /// route (ADR 0026, "Which routes use it").
+    pub reader: Option<Arc<StreamReader>>,
 }
+
+/// Every field but the reader, which has no equality of its own; whether there is one is compared.
+impl PartialEq for PlatformFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.generation == other.generation
+            && self.url == other.url
+            && self.start_ms == other.start_ms
+            && self.audio == other.audio
+            && self.subtitle == other.subtitle
+            && self.hls == other.hls
+            && self.reader.is_some() == other.reader.is_some()
+    }
+}
+
+impl Eq for PlatformFile {}
 
 impl std::fmt::Debug for PlatformFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -111,6 +130,7 @@ impl std::fmt::Debug for PlatformFile {
             .field("audio", &self.audio)
             .field("subtitle", &self.subtitle)
             .field("hls", &self.hls)
+            .field("reader", &self.reader.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -124,6 +144,9 @@ fn platform_file(file: current_app::PlatformFile) -> PlatformFile {
         audio: file.audio.into(),
         subtitle: file.subtitle.into(),
         hls: file.hls,
+        reader: file
+            .reader
+            .map(|reader| Arc::new(StreamReader::new(reader))),
     }
 }
 
@@ -434,6 +457,7 @@ mod tests {
             audio: PlatformTrack::Auto,
             subtitle: PlatformTrack::Off,
             hls: false,
+            reader: None,
         };
         let shown = format!("{file:?}");
         assert!(

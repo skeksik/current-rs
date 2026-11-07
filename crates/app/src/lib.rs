@@ -93,8 +93,10 @@ pub use player::{
 // A platform's own player beside libmpv (ADR 0025), and the facts its UI reports.
 pub use player::{
     CodecAnswer, CodecKind, CodecQuery, PlatformEngine, PlatformError, PlatformEvents,
-    PlatformFile, PlatformSubtitle, windows_codec_queries,
+    PlatformFile, PlatformReader, PlatformSubtitle, windows_codec_queries,
 };
+// The stream reader a platform engine may read a direct-play file through (ADR 0026).
+pub use current_relay::{ReadError, ReaderFacts};
 // The player's words and its problems (ADR 0019), worded once for every UI.
 pub use player::{
     HOW_TO_PLAY, NO_AUDIO_TRACKS, PanelSizes, PlaybackProblem, PlayerProblem, SUBTITLES_OFF,
