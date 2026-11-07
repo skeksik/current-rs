@@ -102,6 +102,14 @@ this holds.
   feeds it the engine's position, duration (the reader learns the rate from the engine's `Duration`, `StreamReader::set_duration`),
   and buffering: `Buffering(true)` is starving, `Buffering(false)`, `Loaded`, `Restarted` and `Paused` end it. "Its position stops
   while `Playing`" is not fed yet: R3 adds it with the Windows engine.
+- **Direct play only, with the plan's rate** (after review, manager, 2026-11-07): `MediaServer::stream_url` takes a `DirectFile`
+  (the source's duration and bitrate) for a local route and none for a server stream, so a progressive or HLS server stream never
+  gets a reader. The reader starts with the source's duration, so the file's head, which the player reads first, does not pin the
+  point. Without one, a point pinned while no rate was known is dropped when the engine's `Duration` arrives, and the next read that
+  can be the playback position pins it again. What the engine says while the reader's first request runs (a seek, buffering, the
+  duration) is applied once it opens.
+- **C#:** the `CoreReadStream` owns the reader's handle (one stream per file; a second `OpenAsync` throws; disposing closes and
+  frees it), takes overlapping reads one after another, and throws `ArgumentOutOfRangeException` for a negative position.
 - **A temporary switch:** a load gets a reader only when `Player::set_stream_reader(true)` was called (off by default); no app calls
   it. R3 replaces it with the routing rule of "Which routes use it".
 - **The reader's facts** stay reachable for R3's info panel: `current_app::Player::stream_reader_facts()`.
