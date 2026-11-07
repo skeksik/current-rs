@@ -11,9 +11,8 @@
          the CanDragItems property must be set to true" (ListViewBase.CanReorderItems, learn.microsoft.com, updated 2026-07-28, read
          2026-10-28). Each row also has Move up and Move down buttons and Alt+Up and Alt+Down, the keyboard's way (whether ListView
          reorders from the keyboard on its own is not verified; Alt+Up and Alt+Down as a Windows convention not verified either), and
-         a show switch: a ToggleSwitch in Settings and the Home dialog, an eye toggle button in the 300 px pane (Compact), where a
-         ToggleSwitch's width does not fit. Glyphs: Segoe Fluent Icons E784 "GripperBarVertical", E70E "ChevronUp", E70D "ChevronDown",
-         E890 "View" ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-28). -->
+         a show switch (a ToggleSwitch). Glyphs: Segoe Fluent Icons E784 "GripperBarVertical", E70E "ChevronUp", E70D "ChevronDown"
+         ("Segoe Fluent Icons font", learn.microsoft.com, ms.date 2026-10-13, read 2026-10-28). -->
     <ListView
         x:Name="List"
         ItemsSource="{x:Bind Rows}"
@@ -77,27 +76,16 @@
                         Click="OnMoveDown">
                         <FontIcon FontSize="12" Glyph="&#xE70D;" />
                     </Button>
-                    <Grid Grid.Column="5" VerticalAlignment="Center">
-                        <ToggleSwitch
-                            MinWidth="0"
-                            OnContent="On"
-                            OffContent="Off"
-                            Tag="{x:Bind}"
-                            IsOn="{x:Bind IsShown, Mode=OneWay}"
-                            Visibility="{x:Bind SwitchVisibility}"
-                            AutomationProperties.Name="{x:Bind ShowLabel, Mode=OneWay}"
-                            Toggled="OnSwitchToggled" />
-                        <ToggleButton
-                            Padding="8"
-                            Tag="{x:Bind}"
-                            IsChecked="{x:Bind IsShown, Mode=OneWay}"
-                            Visibility="{x:Bind ButtonVisibility}"
-                            AutomationProperties.Name="{x:Bind ShowLabel, Mode=OneWay}"
-                            ToolTipService.ToolTip="Show in the navigation pane"
-                            Click="OnShowClick">
-                            <FontIcon FontSize="12" Glyph="&#xE890;" />
-                        </ToggleButton>
-                    </Grid>
+                    <ToggleSwitch
+                        Grid.Column="5"
+                        MinWidth="0"
+                        VerticalAlignment="Center"
+                        OnContent="On"
+                        OffContent="Off"
+                        Tag="{x:Bind}"
+                        IsOn="{x:Bind IsShown, Mode=OneWay}"
+                        AutomationProperties.Name="{x:Bind ShowLabel, Mode=OneWay}"
+                        Toggled="OnSwitchToggled" />
                 </Grid>
             </DataTemplate>
         </ListView.ItemTemplate>

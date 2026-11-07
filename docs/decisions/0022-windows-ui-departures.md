@@ -1,6 +1,7 @@
 # 0022: Windows UI departures
 
 Status: accepted (2026-10-27, owner), from the Windows UI polish pass (fix/windows-ui-polish) and the manager's review of it.
+Amended 2026-11-07 (owner): departures 8 and 9 withdrawn (below).
 
 ## Context
 ADR 0001 makes native behaviour the default: "Departing from it needs a reason and the owner's agreement, recorded in a decision record."
@@ -51,7 +52,8 @@ Each choice below stays until the owner changes it.
    handle any input events on itself" (Control.IsEnabled, learn.microsoft.com, updated 2026-07-28, read 2026-10-27). Its own name says
    why, "Catalog (needs Seerr)", as its tooltip may then not show (not verified), nor is how Narrator reads it verified.
 
-8. **An edit mode in the navigation pane** (owner, 2026-10-28; ADR 0024). NavigationView has no reordering or editing of its own: its
+8. *(Withdrawn 2026-11-07: the pane no longer has an edit mode; see the amendment.)* **An edit mode in the navigation pane** (owner,
+   2026-10-28; ADR 0024). NavigationView has no reordering or editing of its own: its
    class reference lists no `CanReorderItems`, `CanDragItems` or reorder event (learn.microsoft.com, Windows App SDK 2.0, updated
    2026-07-28, read 2026-10-28), and its guide does not mention it ("NavigationView", ms.date 2026-10-02, read 2026-10-28). Windows'
    own pattern for showing and hiding items is a switch on a Settings page (Start settings' "Folders", "Customize the Windows Start
@@ -60,7 +62,7 @@ Each choice below stays until the owner changes it.
    Series, Favourites and Recently added, the libraries), each item with a drag handle, Move up and Move down, and an eye to show or
    hide it; Home and Settings show dimmed and fixed. Done, Escape, choosing a page or closing the pane leaves it. The nearest Windows precedent,
    Quick settings' edit mode (pencil, unpin, drag, Done), is described only by third-party sources (not verified with Microsoft).
-9. **An "Edit navigation" item in the pane's footer**, with a pencil, above Settings, shown only while the pane is open (owner,
+9. *(Withdrawn 2026-11-07: the footer item is removed; see the amendment.)* **An "Edit navigation" item in the pane's footer**, with a pencil, above Settings, shown only while the pane is open (owner,
    2026-10-28; ADR 0024). The NavigationView guide's footer holds Settings and items like it; an edit command there is the owner's
    choice. Reason: the owner chose this entry, the only one into edit mode. Whether footer items sit above the Settings item is not
    verified.
@@ -68,3 +70,8 @@ Each choice below stays until the owner changes it.
 ## Consequences
 - A review checks a new menu, title bar item or shade against this list before calling it a departure.
 - macOS and Linux decide their own; none of these carries over without the owner's choice for that platform.
+
+## Amendment (2026-11-07, owner)
+The owner, 2026-11-07: "remove edit buttons from sidebar and home page, leave only in settings". Departures 8 and 9 are withdrawn: the pane no longer has an edit mode nor the "Edit navigation"
+footer item, and Home no longer has "Edit Home". The arrangement is edited only in Settings → Personalization, Windows' own pattern
+for showing and hiding items (ADR 0024, amended).

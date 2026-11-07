@@ -7,9 +7,10 @@ using Microsoft.UI.Xaml.Controls;
 namespace Current.Shell.Browsing;
 
 /// <summary>
-/// The arrangement editor of Settings' "Navigation pane" and "Home" expanders and of the Edit Home dialog (ADR 0024): for each
-/// signed-in server (a heading per server when more than one is), one <see cref="ArrangeList"/> per group with its Reset button. It
-/// follows the hub: a server signed in or out, its libraries or its arrangement changed. Dispose it when its page or dialog goes.
+/// The arrangement editor of Settings' "Navigation pane" and "Home" expanders (ADR 0024), the only place the arrangement is edited
+/// (owner, 2026-11-07): for each signed-in server (a heading per server when more than one is), one <see cref="ArrangeList"/> per
+/// group with its Reset button. It follows the hub: a server signed in or out, its libraries or its arrangement changed. Dispose it
+/// when its page goes.
 /// </summary>
 internal sealed class ArrangementEditor : IDisposable
 {
@@ -17,7 +18,7 @@ internal sealed class ArrangementEditor : IDisposable
     private readonly bool _home;
     private readonly Dictionary<(ServerRef Server, NavGroup Group), (ArrangeList List, Button Reset)> _lists = [];
 
-    /// <summary>The editor's content: put it in the expander or the dialog.</summary>
+    /// <summary>The editor's content: put it in the expander.</summary>
     public StackPanel Root { get; } = new() { Spacing = 4 };
 
     /// <summary>An editor of the pane's groups, or with <paramref name="home"/> of Home's rows.</summary>
