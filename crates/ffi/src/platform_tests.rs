@@ -255,7 +255,10 @@ fn reading(core: &Core, start_ms: u64) -> (Arc<FakeEngine>, Arc<Player>, Arc<Str
             .unwrap();
     block_on(player.play(item(DIRECT_PLAY_ITEM), start_ms, CancelToken::new())).unwrap();
     let file = engine.last();
-    let reader = file.reader.clone().expect("a reader for direct play on the native route");
+    let reader = file
+        .reader
+        .clone()
+        .expect("a reader for direct play on the native route");
     (engine, player, reader)
 }
 

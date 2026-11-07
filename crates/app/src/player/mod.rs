@@ -138,6 +138,8 @@ pub struct PlaybackInfo {
     pub engine: EngineOutput,
     /// The player has a platform engine beside libmpv (ADR 0025): the panel then names ADR 0025's routes.
     pub platform_engine: bool,
+    /// The facts of the stream reader the platform engine reads, on a direct play through the core (ADR 0026); `None` otherwise.
+    pub reader: Option<current_relay::ReaderFacts>,
 }
 
 /// The automatic skipping the playback settings name (ADR 0019, choice 8).

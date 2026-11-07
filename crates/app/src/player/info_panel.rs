@@ -198,6 +198,10 @@ pub fn info_panel_lines(
         video.and_then(|video| video.primaries.clone()),
         video.and_then(|video| video.transfer.clone()),
     ]));
+    // What the core's stream reader did for the platform engine (ADR 0026, R3).
+    if let Some(reader) = info.reader.as_ref().filter(|_| native_plays) {
+        lines.push(reader_line(reader, format));
+    }
     if let Some(display) = display {
         lines.push(join([
             Some("Display".to_owned()),
@@ -238,6 +242,33 @@ pub fn info_panel_lines(
             .map(|(width, height)| format!("window {width}×{height}")),
     ]));
     lines
+}
+
+/// "Read by Current · 31 s (150 MB) ahead · 42.5 Mbit/s · 3 requests", with reconnects and waits released only when there were any.
+fn reader_line(reader: &current_relay::ReaderFacts, format: &NumberFormat) -> String {
+    let megabytes = format!("{} MB", reader.served_ahead.div_ceil(1_000_000));
+    let count = |n: u64, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    join([
+        Some("Read by Current".to_owned()),
+        Some(match reader.served_ahead_time {
+            Some(time) => format!("{} s ({megabytes}) ahead", time.as_secs()),
+            None => format!("{megabytes} ahead"),
+        }),
+        // Bytes a second to bits; a rate past u32's bits is far beyond any network here.
+        Some(bitrate_label(
+            u32::try_from(reader.read_rate.saturating_mul(8)).unwrap_or(u32::MAX),
+            format,
+        )),
+        Some(count(reader.requests, "request", "requests")),
+        (reader.reconnects > 0).then(|| count(reader.reconnects, "reconnect", "reconnects")),
+        (reader.starvation_releases > 0).then(|| {
+            count(
+                reader.starvation_releases,
+                "wait released",
+                "waits released",
+            )
+        }),
+    ])
 }
 
 /// The parts known and not empty, joined by " · ".
@@ -396,6 +427,7 @@ mod tests {
         };
         PlaybackInfo {
             platform_engine: false,
+            reader: None,
             details: Some(PlaybackDetails {
                 plan: Some(PlaybackPlan {
                     item: ItemRef::new(
@@ -729,5 +761,63 @@ mod tests {
             lines.contains(&"#2 subtitle · srt · German - WEBVTT - External".to_owned()),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn a_direct_play_the_core_reads_for_the_native_player_says_what_it_read() {
+        let mut info = info();
+        info.platform_engine = true;
+        info.engine = super::super::EngineOutput::default();
+        if let Some(plan) = info
+            .details
+            .as_mut()
+            .and_then(|details| details.plan.as_mut())
+        {
+            plan.route = Route::Native;
+        }
+        let mut facts = current_relay::ReaderFacts {
+            size: 2_000_000_000,
+            point: 200_000_000,
+            rate_known: true,
+            held_ahead: 10_000_000,
+            served_ahead: 150_000_000,
+            served_ahead_time: Some(std::time::Duration::from_millis(31_400)),
+            read_rate: 5_312_500,
+            requests: 3,
+            reconnects: 0,
+            starvation_releases: 0,
+            windows: 1,
+        };
+        info.reader = Some(facts.clone());
+        let line = |info: &PlaybackInfo, format: &NumberFormat| {
+            info_panel_lines(info, None, &panel(), format)
+                .into_iter()
+                .find(|line| line.starts_with("Read by Current"))
+        };
+        assert_eq!(
+            line(&info, &dot()).as_deref(),
+            Some("Read by Current · 31 s (150 MB) ahead · 42.5 Mbit/s · 3 requests")
+        );
+        // Reconnects and waits released show once there were any; no rate known, the bytes alone.
+        facts.reconnects = 1;
+        facts.starvation_releases = 2;
+        facts.requests = 1;
+        facts.served_ahead_time = None;
+        info.reader = Some(facts);
+        assert_eq!(
+            line(&info, &comma()).as_deref(),
+            Some(
+                "Read by Current · 150 MB ahead · 42,5 Mbit/s · 1 request · 1 reconnect · 2 waits released"
+            )
+        );
+        // The app engine plays (a fallback): no reader line.
+        if let Some(plan) = info
+            .details
+            .as_mut()
+            .and_then(|details| details.plan.as_mut())
+        {
+            plan.route = Route::AppEngine;
+        }
+        assert_eq!(line(&info, &dot()), None);
     }
 }
