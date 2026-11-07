@@ -245,4 +245,167 @@ internal static class PlatformEngineTests
             await core.SetHowToPlayAsync(HowToPlay.Auto);
         }
     }
+
+    /// <summary>The stand-in's direct-play stream (tools/jellyfin-stand-in/src/lib.rs): 256 KiB, its byte at <c>i</c> is <c>i % 251</c>.</summary>
+    private const long StreamLength = 256 * 1024;
+
+    private static string StreamPath => $"/Videos/{StandIn.DirectPlayItem}/stream";
+
+    private static byte StreamByte(long offset) => (byte)(offset % 251);
+
+    /// <summary>A player with the fake engine and the stream reader's switch on, playing the direct-play item.</summary>
+    private static async Task<(FakeEngine Engine, PlayerSession Session, CoreFileReader Reader)> ReadingAsync(CoreHost core)
+    {
+        var engine = new FakeEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), new ManualDispatcher());
+        session.SetStreamReader(true);
+        await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+        var load = engine.Loads.Last();
+        Check(load.Reader is not null, "a reader with the switch on");
+        Check(load.Url.Length == 0, "no URL with a reader");
+        return (engine, session, load.Reader!);
+    }
+
+    public static async Task ReadsTheFileThroughTheCore()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+
+        // Off by default: the URL as before, and no reader.
+        var plain = new FakeEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, plain, Answers(), new ManualDispatcher());
+        try
+        {
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+            var load = plain.Loads.Single();
+            Check(load.Reader is null && load.Url.Length > 0, "a relay URL and no reader by default");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        var (engine, reading, reader) = await ReadingAsync(core);
+        try
+        {
+            Check(!engine.Loads.Last().ToString().Contains("127.0.0.1", StringComparison.Ordinal), "no URL in the load's text");
+            await using var stream = await reader.OpenAsync();
+            Check(stream.Length == StreamLength, $"the file's length, not {stream.Length}");
+            Check(stream.ContentType == "video/mp4", $"the file's type, not {stream.ContentType}");
+            Check(stream.CanRead && stream.CanSeek && !stream.CanWrite, "readable and seekable, not writable");
+
+            var start = new byte[100];
+            var read = await stream.ReadAsync(start);
+            Check(read > 0 && start.Take(read).Select((b, i) => b == StreamByte(i)).All(same => same), "the file's first bytes");
+            Check(stream.Position == read, $"the position moved on, to {stream.Position}");
+
+            stream.Seek(100_000, SeekOrigin.Begin);
+            var middle = new byte[64];
+            read = await stream.ReadAsync(middle);
+            Check(read > 0 && middle.Take(read).Select((b, i) => b == StreamByte(100_000 + i)).All(same => same), "the bytes at 100 000");
+
+            stream.Seek(0, SeekOrigin.End);
+            Check(await stream.ReadAsync(new byte[10]) == 0, "nothing at the end");
+        }
+        finally
+        {
+            await reading.CloseAsync();
+        }
+    }
+
+    public static async Task AReadIsCancelledByItsToken()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            standIn.Send($"hold {StreamPath}");
+            using var cancel = new CancellationTokenSource();
+            var opening = reader.OpenAsync(cancel.Token);
+            // The control: the open waits for the held answer.
+            Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+            cancel.Cancel();
+            try
+            {
+                await opening;
+                Check(false, "the open was cancelled");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            standIn.Send($"release {StreamPath}");
+            await using var stream = await reader.OpenAsync();
+            Check(await stream.ReadAsync(new byte[10]) > 0, "a new read goes through");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task ARefusedStreamFailsTheReader()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            standIn.Send($"fail-stream 500 {StreamPath}");
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "the open failed");
+            }
+            catch (IOException)
+            {
+            }
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task APendingReadEndsWithThePlayback()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        standIn.Send($"hold {StreamPath}");
+
+        // A stop.
+        var (_, session, reader) = await ReadingAsync(core);
+        var opening = reader.OpenAsync();
+        Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+        session.Stop();
+        await ExpectCancelled(opening, "a stop");
+        await session.CloseAsync();
+
+        // A close.
+        (_, session, reader) = await ReadingAsync(core);
+        opening = reader.OpenAsync();
+        Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+        await session.CloseAsync();
+        await ExpectCancelled(opening, "a close");
+        standIn.Send($"release {StreamPath}");
+    }
+
+    private static async Task ExpectCancelled(Task task, string what)
+    {
+        var done = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Check(done == task, $"the read ended after {what}");
+        try
+        {
+            await task;
+            Check(false, $"the read was cancelled by {what}");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
 }
+
