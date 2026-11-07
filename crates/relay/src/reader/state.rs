@@ -105,7 +105,7 @@ struct Anchor {
     /// is dropped once the rate becomes known ([`State::set_duration`]).
     without_rate: bool,
     /// Pinned by a starvation release, not by a read [`State::maybe_anchor`] accepted: the player's first frame pins it again
-    /// ([`State::restarted`]), as it does one pinned without a rate.
+    /// ([`State::restarted`]), as it does one the file's head pinned without a rate.
     released: bool,
 }
 
@@ -533,18 +533,26 @@ impl State {
         self.generation += 1;
     }
 
-    /// The player's first frame after the start or a seek. A point pinned while the player opened by a starvation release, or by
-    /// any read while no rate was known (the first read pins it wherever it is, an index at the file's end included), need not be
-    /// where playback is: it is pinned again, as after a seek, by the next read that can be the playback position. A point a read
-    /// pinned with a rate known lies within the read-ahead of the estimate (the player's read at the target) and is kept.
+    /// The player's first frame after the start or a seek. A point a starvation release pinned while the player opened, or one the
+    /// file's head pinned while no rate was known (the player reads the head first, wherever playback starts), need not be where
+    /// playback is: it is pinned again, as after a seek, by the next read that can be the playback position. Kept: a point a read
+    /// pinned with a rate known (within the read-ahead of the estimate), and one a read pinned past the head without a rate (the
+    /// player's read at the seek target; without a rate nothing tells it from any other read, so the first one stands).
+    ///
+    /// The engine's first frame does not say which seek it ends: a late one of an earlier seek can come after the next
+    /// [`State::seek_to`]. While nothing has pinned the point since the seek there is nothing to judge, so the check waits for the
+    /// next first frame instead of being used up by the late one. Counting seeks against first frames was not chosen: an engine
+    /// that merges seeks into one first frame (whether Windows' player does is not verified) would leave the count behind for good.
     pub(crate) fn restarted(&mut self) {
-        if !std::mem::take(&mut self.awaiting_frame) {
+        if !self.awaiting_frame {
             return;
         }
-        if self
-            .anchor
-            .is_some_and(|anchor| anchor.released || anchor.without_rate)
-        {
+        let Some(anchor) = self.anchor else {
+            // Nothing pinned since the start or the seek.
+            return;
+        };
+        self.awaiting_frame = false;
+        if anchor.released || (anchor.without_rate && anchor.offset < self.limits.gap) {
             self.anchor = None;
             self.awaiting_anchor = true;
             self.generation += 1;
