@@ -83,6 +83,8 @@ struct Behaviour {
     later_total: Option<u64>,
     /// Every request after the first gets a 416.
     later_416: bool,
+    /// Every answer waits for a permit before its headers come.
+    answer_gate: Option<Arc<Semaphore>>,
 }
 
 /// A server holding one file: answers `Range: bytes=<from>-` with a 206 in chunks of [`CHUNK`].
@@ -205,8 +207,14 @@ impl FakeFile {
 
 impl Upstream for FakeFile {
     fn send(&self, request: UpstreamRequest) -> UpstreamFuture<'_, UpstreamResponse> {
+        let gate = self.behaviour.lock().unwrap().answer_gate.clone();
         let answer = self.answer(&request);
-        Box::pin(async move { answer })
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                gate.acquire().await.unwrap().forget();
+            }
+            answer
+        })
     }
 }
 
@@ -1063,4 +1071,33 @@ async fn cancelling_a_shared_route_ends_its_reads_and_refuses_new_ones() {
     let opened = route.open(PATH, Vec::new(), facts(), limits()).await;
     assert_eq!(opened.unwrap_err(), ReadError::Cancelled);
     until(|| upstream.live.load(Ordering::SeqCst) == 0).await;
+}
+
+#[tokio::test]
+async fn cancelling_the_route_ends_an_open_waiting_for_the_server() {
+    let gate = Arc::new(Semaphore::new(0));
+    let upstream = FakeFile::with(Behaviour {
+        answer_gate: Some(gate.clone()),
+        ..Behaviour::default()
+    });
+    let (route, _events) = route(upstream);
+    let route = Arc::new(route);
+    let opening = {
+        let route = route.clone();
+        tokio::spawn(async move {
+            route
+                .open(PATH, Vec::new(), facts(), limits())
+                .await
+                .map(|_| ())
+        })
+    };
+    // The control: the open waits for the server's answer.
+    sleep(HELD).await;
+    assert!(!opening.is_finished());
+    route.cancel();
+    assert_eq!(
+        timeout(WAIT, opening).await.unwrap().unwrap(),
+        Err(ReadError::Cancelled)
+    );
+    gate.add_permits(10);
 }
