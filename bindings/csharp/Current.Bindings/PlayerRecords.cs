@@ -162,11 +162,14 @@ public sealed record SegmentInfo(string Kind, TimeSpan Start, TimeSpan End);
 /// runs.</summary>
 public sealed record NextEpisodeInfo(ItemRef Item, string Name, string? Series, uint? Season, uint? Episode, string Number, uint? Countdown);
 
-/// <summary>The player's state: at most 4 changes a second for the position, at once for anything else.</summary>
+/// <summary>The player's state: at most 4 changes a second for the position, at once for anything else. <see cref="Play"/> is the
+/// number of the play the state is about: each play the player starts gets the next one, from 1 (0 while none), so the end of an
+/// earlier play, of the same item too, is told apart from the end of the play just asked for.</summary>
 public sealed record PlayerState(
     PlayerStateKind State,
     PlaybackProblem? Problem,
     ItemRef? Item,
+    ulong Play,
     TimeSpan Position,
     TimeSpan? Duration,
     TimeSpan? Buffered,
@@ -184,7 +187,7 @@ public sealed record PlayerState(
     IReadOnlyList<HowToPlay> HowToPlayChoices)
 {
     public static PlayerState Idle { get; } = new(
-        PlayerStateKind.Idle, null, null, TimeSpan.Zero, null, null, [], [], null, new SubtitleSelection.Default(), null, null, null,
+        PlayerStateKind.Idle, null, null, 0, TimeSpan.Zero, null, null, [], [], null, new SubtitleSelection.Default(), null, null, null,
         new QualityChoice.Maximum(), 100, false, HowToPlay.Auto, []);
 }
 
@@ -429,6 +432,7 @@ internal static class PlayerMap
         From(state.State),
         state.Problem is { } problem ? From(problem) : null,
         state.Item is { } item ? MapBrowse.From(item) : null,
+        state.Play,
         Ms(state.PositionMs),
         Ms(state.DurationMs),
         Ms(state.BufferedMs),
