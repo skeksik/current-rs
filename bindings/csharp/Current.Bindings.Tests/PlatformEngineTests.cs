@@ -441,8 +441,8 @@ internal static class PlatformEngineTests
         using var standIn = StandIn.Start();
         using var core = CoreHost.Create();
         await SignIn(core, standIn);
-        // The file comes at 64 KiB/s: a read near its end waits for a few seconds.
-        standIn.Send("pace 65536");
+        // The server sends the file's first 100 000 bytes and waits until released, whatever the network's speed.
+        standIn.Send($"stall 100000 {StreamPath}");
         var (_, session, reader) = await ReadingAsync(core);
         try
         {
@@ -453,8 +453,9 @@ internal static class PlatformEngineTests
             // The control: the read waits for bytes the server has not sent yet.
             Check(await Task.WhenAny(read, Task.Delay(300)) != read, "the read waits");
             stream.Seek(10, SeekOrigin.Begin);
-            var done = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(20)));
-            Check(done == read, "the read ended");
+            standIn.Send($"release {StreamPath}");
+            var done = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(10)));
+            Check(done == read, $"the read ended once the server sent on ({standIn.Count(StreamPath)} requests to the stream)");
             var count = await read;
             Check(count > 0 && buffer.Take(count).Select((b, i) => b == StreamByte(200_000 + i)).All(same => same),
                 "the read's bytes are from where it began");
@@ -462,7 +463,7 @@ internal static class PlatformEngineTests
         }
         finally
         {
-            standIn.Send("pace 0");
+            standIn.Send($"release {StreamPath}");
             await session.CloseAsync();
         }
     }

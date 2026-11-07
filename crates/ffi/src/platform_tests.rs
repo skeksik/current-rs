@@ -464,3 +464,29 @@ fn a_server_stream_gets_its_url_and_no_reader_even_with_the_switch_on() {
     assert!(file.reader.is_none(), "a server stream stays on the relay");
     block_on(player.close());
 }
+
+#[test]
+fn a_read_waiting_for_bytes_the_server_has_not_sent_ends_when_they_come() {
+    let _turn = engine_turn();
+    let stand_in = stand_in(Gate::Off);
+    let core = Core::new().unwrap();
+    signed_in(&core, &stand_in, false);
+    // The server sends the first 100 000 bytes and waits.
+    stand_in.stall_stream(&stream_path(), 100_000);
+    let (_engine, player, reader) = reading(&core, 0);
+    block_on(reader.open(CancelToken::new())).unwrap();
+    let pending = {
+        let reader = reader.clone();
+        in_background(move || block_on(reader.read(200_000, 16, CancelToken::new())))
+    };
+    assert!(pending.recv_timeout(PENDING).is_err(), "the read waits");
+    stand_in.release(&stream_path());
+    let bytes = pending.recv_timeout(DONE).unwrap().unwrap();
+    assert_eq!(
+        bytes,
+        (200_000..200_016).map(stream_byte).collect::<Vec<_>>()
+    );
+    // One request: the body went on where it stopped.
+    assert_eq!(stand_in.streams().len(), 1);
+    block_on(player.close());
+}
