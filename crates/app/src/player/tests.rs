@@ -1127,6 +1127,76 @@ async fn a_throwing_platform_engine_never_brings_the_core_down() {
 }
 
 #[tokio::test]
+async fn a_reader_the_server_refuses_fails_the_play_without_a_fallback() {
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let platform = Arc::new(FakePlatform::default());
+    let (player, control) = open_with(&app, platform.clone(), true).await;
+    let path = format!("/Videos/{DIRECT_PLAY_ITEM}/stream");
+
+    // The server answers the reader's first request with a 500: the play fails with the server's problem and no fallback, as on
+    // the relay (`Controller::stream_failed`: another route would meet the same server), and does not hang in Loading.
+    stand_in.fail_stream(&path, 500);
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::from_secs(42))
+        .await
+        .unwrap();
+    let file = platform.last();
+    let reader = file.reader.clone().expect("a reader");
+    assert!(reader.open().await.is_err());
+    // What NativeEngine then reports; dropped, the play has failed already.
+    platform.send(
+        file.generation,
+        EngineEvent::Ended(EndReason::Error(EngineErrorKind::LOADING_FAILED)),
+    );
+    let status = until(&player.state(), |status| {
+        matches!(status.state, PlayerState::Failed { .. })
+    })
+    .await;
+    assert_eq!(
+        status.state,
+        PlayerState::Failed {
+            problem: PlaybackProblem::Server { status: 500 }
+        }
+    );
+    assert_eq!(loads(&control), 0, "no fallback to libmpv");
+    player.close().await;
+}
+
+#[tokio::test]
+async fn an_open_the_platform_engine_fails_on_a_read_file_falls_back_at_the_position() {
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let platform = Arc::new(FakePlatform::default());
+    let (player, control) = open_with(&app, platform.clone(), true).await;
+    // The stream opens but Windows' player cannot make a source of it (NativeEngine reports `loading_failed`): libmpv plays at
+    // the position.
+    player
+        .play(item(&server, DIRECT_PLAY_ITEM), Duration::from_secs(42))
+        .await
+        .unwrap();
+    let file = platform.last();
+    let reader = file.reader.clone().expect("a reader");
+    assert!(reader.open().await.is_ok());
+    platform.send(
+        file.generation,
+        EngineEvent::Ended(EndReason::Error(EngineErrorKind::LOADING_FAILED)),
+    );
+    let status = until(&player.state(), |status| {
+        playing(status)
+            && status.route.as_ref().map(|route| route.label()) == Some(RouteLabel::AppEngine)
+    })
+    .await;
+    assert_eq!(status.position, Duration::from_secs(42));
+    assert_eq!(loads(&control), 1);
+    player.close().await;
+}
+
+#[tokio::test]
 async fn the_platform_engines_reader_ends_when_the_item_stops() {
     let _engine = ENGINE.lock().await;
     let stand_in = StandIn::start().await.unwrap();

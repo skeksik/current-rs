@@ -33,7 +33,8 @@ namespace Current.Shell.Player;
 /// <see cref="CoreReadStream"/> wrapped by <c>AsRandomAccessStream()</c> (WindowsRuntimeStreamExtensions, learn.microsoft.com, ms.date
 /// 2025-07-01, read 2026-10-25: "Converts the specified stream to a random access stream"; the spike played through it,
 /// docs/notes/windows-native-own-stream.md). One stream per play, freed with it; an open again for a subtitle file reuses it. A
-/// stream that will not open is a failed open (<c>loading_failed</c>), so ADR 0025's fallback chain moves the file on.</item>
+/// stream that will not open is a failed open (<c>loading_failed</c>): the core moves the file on through ADR 0025's fallback chain,
+/// unless the server refused or failed it, which has failed the play already (as on the relay).</item>
 /// <item>HLS through <c>AdaptiveMediaSource</c> (W1 §7), with a deadline of its own for the first segment (<see
 /// cref="HlsFirstSegmentDeadline"/>).</item>
 /// <item>The system media controls stay ours (MediaControls): <c>CommandManager.IsEnabled = false</c>, as W1 §8 checked.</item>
@@ -516,8 +517,8 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
                         // Closed or opened again meanwhile: nothing more is said about this file.
                         return;
                     }
-                    // Refused, failed or the playback moved on, before the player had a source: the open failed (ADR 0025's
-                    // fallback chain moves the file on).
+                    // Refused, failed or the playback moved on, before the player had a source: the open failed. The core moves the
+                    // file on (ADR 0025's fallback chain), unless the server's refusal has failed the play already.
                     Trace.TraceWarning($"Current: the native engine could not open the core's stream: {error.GetType().Name}");
                     Fail(file, new PlatformEngineEvent.Failed(Kinds.LoadingFailed), null);
                     return;

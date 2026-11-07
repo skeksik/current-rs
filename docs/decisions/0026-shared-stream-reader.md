@@ -125,9 +125,11 @@ above, this holds.
   libmpv's loads never get one (C1).
 - **Windows** (`NativeEngine`): one `CoreReadStream` per play, opened by the first open and shared by an open again for a subtitle
   file (one that starts while the first still waits shares its open), freed with the play. Each `MediaSource` reads it through a view
-  that does not close it (whether disposing a `MediaSource` closes its stream is not verified). An open of the stream that fails
-  (refused, failed, the playback moved on) before Windows' player has a source is reported as `loading_failed`, so ADR 0025's
-  fallback chain moves the file on; a bindings test plays a refused stream on to the app engine at the start position.
+  that does not close it (whether disposing a `MediaSource` closes its stream is not verified). An open that fails before Windows'
+  player has a source is reported as `loading_failed`. What follows is the core's: a server that refused or failed the stream
+  (the reader's route reports it as the relay's does) has failed the play already with its problem and no fallback
+  (`Controller::stream_failed`: another route would meet the same server), and the engine's report is dropped; any other failed
+  open moves the file on through ADR 0025's fallback chain, at the position. Rust and bindings tests cover both.
 - **"Its position stops while `Playing`" is starving** beside `Buffering(true)`: the reader checks every 500 ms whether the engine
   plays, does not buffer and its position has not moved for 2 s, counting from the last position change, start, seek or resume;
   pause and the end stop it. Both numbers are guesses (`STALL_AFTER`, `STALL_TICK` in `player/reader.rs`) that R4 measures.

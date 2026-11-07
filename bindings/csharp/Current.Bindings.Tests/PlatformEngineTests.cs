@@ -469,8 +469,9 @@ internal static class PlatformEngineTests
     }
 
     /// <summary>Opens each load's reader as Windows' native player does (NativeEngine.OpenAsync) and reports a failed open as
-    /// <c>loading_failed</c>, the way it reports a source that would not open.</summary>
-    private sealed class ReadingEngine : PlatformEngineHost
+    /// <c>loading_failed</c>, the way it reports a source that would not open. With <c>failSource</c>, the stream opens and the
+    /// source made of it fails, as when <c>MediaSource.CreateFromStream</c> throws.</summary>
+    private sealed class ReadingEngine(bool failSource = false) : PlatformEngineHost
     {
         public ConcurrentQueue<string> Opens { get; } = new();
 
@@ -487,6 +488,10 @@ internal static class PlatformEngineTests
                 {
                     await using var stream = await reader.OpenAsync();
                     Opens.Enqueue("opened");
+                    if (failSource)
+                    {
+                        Report(generation, new PlatformEngineEvent.Failed("loading_failed"));
+                    }
                 }
                 catch (IOException)
                 {
@@ -507,22 +512,68 @@ internal static class PlatformEngineTests
         protected override void Stop() { }
     }
 
-    public static async Task ARefusedStreamOnTheNativeRouteEndsOnTheAppEngineAtThePosition()
+    /// <summary>What the player reached, for a failure's message: state, route, engine, position, problem.</summary>
+    private static string Reached(PlayerSession session)
+    {
+        var state = session.State.Value;
+        return $"{state.State}, {state.Route?.Label.ToString() ?? "no route"} on {state.Route?.Engine.ToString() ?? "no engine"}, "
+            + $"at {state.Position}, problem {state.Problem?.ToString() ?? "none"}";
+    }
+
+    /// <summary><see cref="PlayerTests.Eventually"/>, whose failure says what the player reached instead.</summary>
+    private static async Task EventuallyReached(string what, ManualDispatcher ui, PlayerSession session, Func<bool> done)
+    {
+        try
+        {
+            await Eventually(what, ui, done);
+        }
+        catch (Exception)
+        {
+            Check(false, $"{what} (reached: {Reached(session)})");
+        }
+    }
+
+    /// <summary>
+    /// A stream the server refuses on the native route (a 500 to the reader's first request) fails the play with the server's
+    /// problem, with no fallback, as on the relay (the core's rule: another route would meet the same server); it does not hang in
+    /// Opening. A stream that opens but whose source fails moves to the app engine at the position (ADR 0025's fallback chain).
+    /// </summary>
+    public static async Task AFailedOpenOnTheNativeRouteEndsAsTheCoreRuleSays()
     {
         using var standIn = StandIn.Start();
         using var core = CoreHost.Create();
         await SignIn(core, standIn);
-        standIn.Send($"fail-stream 500 {StreamPath}");
         var ui = new ManualDispatcher();
+
         var engine = new ReadingEngine();
         var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), ui);
         try
         {
+            standIn.Send($"fail-stream 500 {StreamPath}");
             await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.FromSeconds(42));
-            await Eventually("on the app engine at the position", ui, () => session.State.Value.State == PlayerStateKind.Playing
-                && session.State.Value.Route?.Label == RouteLabel.AppEngine
+            await EventuallyReached("a refused stream fails the play with the server's 500", ui, session, () => session.State.Value is
+                { State: PlayerStateKind.Failed, Problem: PlaybackProblem.Server { Status: 500 } });
+            Check(engine.Opens.Contains("refused"), $"the open was refused, not {string.Join(", ", engine.Opens)}");
+            Check(session.State.Value.Route?.Engine != RouteEngine.App, $"no fallback to the app engine ({Reached(session)})");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        // A fresh stand-in: its stream answers again.
+        using var whole = StandIn.Start();
+        using var next = CoreHost.Create();
+        await SignIn(next, whole);
+        var failing = new ReadingEngine(failSource: true);
+        session = await PlayerSession.OpenWithPlatformEngineAsync(next, Size, Display, failing, Answers(), ui);
+        try
+        {
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.FromSeconds(42));
+            await EventuallyReached("a source that fails moves to the app engine at 42 s", ui, session, () => session.State.Value is
+                { State: PlayerStateKind.Playing, Route.Label: RouteLabel.AppEngine }
                 && session.State.Value.Position == TimeSpan.FromSeconds(42));
-            Check(engine.Opens.SequenceEqual(new[] { "refused" }), $"one refused open, not {string.Join(", ", engine.Opens)}");
+            Check(failing.Opens.SequenceEqual(new[] { "opened" }), $"one open, not {string.Join(", ", failing.Opens)}");
             var lines = await session.PlaybackInfoLinesAsync(null, Panel);
             Check(lines[0] == "App engine" && lines[1] == "• The native player could not start the file.",
                 $"the failed route named, not {string.Join(" | ", lines)}");
