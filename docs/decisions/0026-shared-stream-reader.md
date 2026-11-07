@@ -1,7 +1,7 @@
 # 0026: One stream reader in the core, with libmpv's read-ahead limits
 
 Status: accepted (owner, 2026-11-06), from the shared-stream-reader spike. The owner chose A1, B1 and C1 (2026-11-06); the other
-options are kept as considered. Implementation notes from R1 (feat/stream-reader, 2026-11-06) under "As built (R1)". Research, quotes and sources: `docs/notes/shared-stream-reader.md`. No product code was written.
+options are kept as considered. Implementation notes from R1 (feat/stream-reader, 2026-11-06) under "As built (R1)", from R2 and R3 under theirs. Research, quotes and sources: `docs/notes/shared-stream-reader.md`. No product code was written.
 
 ## Context
 The owner's decision (2026-11-06): "Make limit calculation the same as it is in libmpv and proceed with shared module", on the
@@ -116,6 +116,29 @@ this holds.
 - **A temporary switch:** a load gets a reader only when `Player::set_stream_reader(true)` was called (off by default); no app calls
   it. R3 replaces it with the routing rule of "Which routes use it".
 - **The reader's facts** stay reachable for R3's info panel: `current_app::Player::stream_reader_facts()`.
+
+### As built (R3)
+Written by R3 (feat/windows-native-reader, 2026-11-07), with the manager under the owner's rules; where it differs from the text
+above, this holds.
+- **The routing rule replaces R2's switch** (`Player::set_stream_reader` is gone): the media server makes a reader for a direct-play
+  file (a `DirectFile`) on the platform engine's route that is not HLS; every server stream keeps its relay URL and gets no reader;
+  libmpv's loads never get one (C1).
+- **Windows** (`NativeEngine`): one `CoreReadStream` per play, opened by the first open and shared by an open again for a subtitle
+  file (one that starts while the first still waits shares its open), freed with the play. Each `MediaSource` reads it through a view
+  that does not close it (whether disposing a `MediaSource` closes its stream is not verified). An open of the stream that fails
+  (refused, failed, the playback moved on) before Windows' player has a source is reported as `loading_failed`, so ADR 0025's
+  fallback chain moves the file on; a bindings test plays a refused stream on to the app engine at the start position.
+- **"Its position stops while `Playing`" is starving** beside `Buffering(true)`: the reader checks every 500 ms whether the engine
+  plays, does not buffer and its position has not moved for 2 s, counting from the last position change, start, seek or resume;
+  pause and the end stop it. Both numbers are guesses (`STALL_AFTER`, `STALL_TICK` in `player/reader.rs`) that R4 measures.
+- **The info panel** shows, while the native player plays a file read through the core, "Read by Current · 31 s (150 MB) ahead ·
+  42 Mbit/s · 3 requests" (served ahead in time when the rate is known, else the bytes alone; the read rate over 5 s; requests),
+  then "· 1 reconnect" and "· 2 waits released" (the starvation guard's releases) only when not zero. Not on the app engine after a
+  fallback.
+- **C#:** `CoreFileReader.Dispose` during a running open closes the reader, and the open frees the handle when it ends (a stream
+  that wins the race is disposed); an open the caller cancelled after a `Dispose` frees it too instead of allowing another open.
+- **Smoke run:** the stand-in's MP4 on the native route must be read through the core (the engine's flag) and the info panel's
+  reader line must count at least one request.
 
 ### Choice A: which crate (decided: A1, owner, 2026-11-06)
 - **A1 (chosen): a `reader` module in `current-relay`.** It reuses `Upstream`, `RelayEvent` and its once-per-route sink, the 206
