@@ -87,6 +87,25 @@ holds.
 - **`ReaderFacts`:** size, point, `rate_known`, bytes held ahead, served ahead (bytes and time), the read rate over 5 s, requests,
   reconnects, starvation releases, windows.
 
+### As built (R2)
+Written by R2 (feat/stream-reader-ffi, 2026-11-07), with the manager under the owner's rules; where it differs from the text above,
+this holds.
+- **Size and type come from an async `open`**, not from sync `size()` and `content_type()`: they are known only from the server's
+  first answer, and the core hands the reader over in `Engine::load`, which cannot wait. `StreamReader` (current-ffi):
+  `open(cancel) -> StreamFileInfo { size, content_type }` (later calls answer at once), `read(offset, max_len, cancel) -> Vec<u8>`,
+  `close()`; `StreamReadError` is `Cancelled` (the token, or the playback moved on), `Failed`, `Closed`. The C# adapter is
+  `CoreFileReader.OpenAsync` giving a `CoreReadStream : Stream`.
+- **The core side** (current-app, `player/reader.rs`): the media server makes a reader route beside the relay route of a direct-play
+  stream for the platform engine (same upstream, prefixes and event number) and ends it with that route, so a stop, another item, a
+  re-plan or the player closing ends pending reads as `Cancelled`, an open still waiting for the server's first answer included.
+  The backend hands the reader with the load (`PlatformFile.reader`, URL empty) and tells it of seeks before the engine; the driver
+  feeds it the engine's position, duration (the reader learns the rate from the engine's `Duration`, `StreamReader::set_duration`),
+  and buffering: `Buffering(true)` is starving, `Buffering(false)`, `Loaded`, `Restarted` and `Paused` end it. "Its position stops
+  while `Playing`" is not fed yet: R3 adds it with the Windows engine.
+- **A temporary switch:** a load gets a reader only when `Player::set_stream_reader(true)` was called (off by default); no app calls
+  it. R3 replaces it with the routing rule of "Which routes use it".
+- **The reader's facts** stay reachable for R3's info panel: `current_app::Player::stream_reader_facts()`.
+
 ### Choice A: which crate (decided: A1, owner, 2026-11-06)
 - **A1 (chosen): a `reader` module in `current-relay`.** It reuses `Upstream`, `RelayEvent` and its once-per-route sink, the 206
   check and the route's lifetime; no hyper on its path. The crate becomes "the loopback relay and the stream reader"; it still knows no
