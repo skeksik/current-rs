@@ -68,6 +68,11 @@ public sealed partial class PlayerView : UserControl
     /// <summary>The lowest play number whose end closes the player: the play asked for last gets at least this one. An end of an
     /// earlier play, shown after a new one was asked for (of the same item too), is the item before it and closes nothing.</summary>
     private ulong _closeFromPlay;
+    /// <summary>For the smoke run's failure report: the last changes of the player's state, plays asked for, closes with their
+    /// reason, and exceptions caught, with the time since the view was made. No URL or text from a server in it.</summary>
+    private readonly Queue<string> _trace = new();
+    private readonly Stopwatch _traceClock = Stopwatch.StartNew();
+    private string? _lastTraced;
     /// <summary>The engine's open, which belongs to the player rather than to one play: a play that replaces another while the engine
     /// opens waits for the same open and plays on its session.</summary>
     private Task _opening = Task.CompletedTask;
@@ -186,6 +191,7 @@ public sealed partial class PlayerView : UserControl
         });
         // No end closes the player until this play's number is known (below): one shown meanwhile is the item before it.
         _closeFromPlay = ulong.MaxValue;
+        Note($"play asked for item {item.Id} (session {(_session is null ? "none" : "open")}, last play {_lastPlay})");
         try
         {
             // An earlier close finishes first: one engine per process (ADR 0019).
@@ -209,26 +215,33 @@ public sealed partial class PlayerView : UserControl
             // The core numbers each play of a session from 1, in order: this one's is above any shown so far. Set with no await
             // between it and the play's request, so no earlier play's end can read as this one's.
             _closeFromPlay = _lastPlay + 1;
+            Note($"play requested (ends close from play {_closeFromPlay})");
             await _session.PlayAsync(item, start, play.Token);
+            Note("play request returned");
         }
-        catch (Exception) when (play.IsCancellationRequested)
+        catch (Exception error) when (play.IsCancellationRequested)
         {
             // A later play or a close took over, and says what it has to.
+            Note($"play cancelled: {error.GetType().Name}");
         }
         catch (PlayerException error) when (error.Problem is PlayerProblem.Replaced or PlayerProblem.Closed)
         {
             // A later play or a close took over.
+            Note($"play taken over: {error.Problem.GetType().Name}");
         }
         catch (PlayerException error)
         {
+            Note($"play failed: {error.Problem.GetType().Name}");
             BusyRing.IsActive = false;
             ShowProblem(core.PlayerProblemText(error.Problem));
         }
         catch (OperationCanceledException)
         {
+            Note("play cancelled by the core");
         }
         catch (Exception error)
         {
+            Note($"play threw {error.GetType().Name}");
             Trace.TraceError($"Current: playing failed: {error.GetType().Name}");
             BusyRing.IsActive = false;
             ShowProblem(ProblemTexts.Unexpected);
@@ -318,7 +331,7 @@ public sealed partial class PlayerView : UserControl
         session.State.PropertyChanged += OnState;
         session.NowPlaying.PropertyChanged += OnNowPlaying;
         session.SwapChain.PropertyChanged += OnSwapChain;
-        _media = new MediaControls(WinRT.Interop.WindowNative.GetWindowHandle(_window), DispatcherQueue, session, () => _ = CloseAsync());
+        _media = new MediaControls(WinRT.Interop.WindowNative.GetWindowHandle(_window), DispatcherQueue, session, () => _ = CloseAsync("the media controls' stop"));
         OnSwapChain(null, null!);
         OnState(null, null!);
         OnNowPlaying(null, null!);
@@ -426,6 +439,14 @@ public sealed partial class PlayerView : UserControl
     {
         var state = State;
         _lastPlay = Math.Max(_lastPlay, state.Play);
+        // Each change but the position's.
+        var traced = $"state {state.State} item {state.Item?.Id ?? "none"} play {state.Play} next {state.Next is not null} "
+            + $"route {state.Route?.Engine.ToString() ?? "none"}/{state.Route?.Label.ToString() ?? "none"}";
+        if (traced != _lastTraced)
+        {
+            _lastTraced = traced;
+            Note($"{traced} (close from play {_closeFromPlay})");
+        }
         KeepKeyboardFocus();
         _showingState = true;
         try
@@ -491,7 +512,7 @@ public sealed partial class PlayerView : UserControl
         // a flag cleared when the play request returned did not, since the earlier end can reach the UI after that.
         if (state is { State: PlayerStateKind.Ended, Next: null } && state.Play >= _closeFromPlay)
         {
-            _ = CloseAsync();
+            _ = CloseAsync($"the end of play {state.Play}");
         }
     }
 
@@ -959,7 +980,7 @@ public sealed partial class PlayerView : UserControl
 
     private void OnDismissNext(object sender, RoutedEventArgs e) => Quick(() => _session?.DismissNext());
 
-    private void OnProblemBack(object sender, RoutedEventArgs e) => _ = CloseAsync();
+    private void OnProblemBack(object sender, RoutedEventArgs e) => _ = CloseAsync("Back on the problem");
 
     private void OnMute(object sender, RoutedEventArgs e) => Quick(() => _session?.SetMuted(MuteButton.IsChecked == true));
 
@@ -1210,8 +1231,9 @@ public sealed partial class PlayerView : UserControl
     /// closes (reporting the stop and destroying the engine, PlayerSession.CloseAsync). The view hides at once; the close finishes in
     /// the background, and a play started meanwhile waits for it.
     /// </summary>
-    internal Task CloseAsync()
+    internal Task CloseAsync(string reason)
     {
+        Note($"close: {reason} (open {_open}, last play {_lastPlay}, close from play {_closeFromPlay})");
         if (!_open)
         {
             return _closing;
@@ -1286,7 +1308,7 @@ public sealed partial class PlayerView : UserControl
     /// opens once it finds the player closed (OpenAsync). For the window's close, before the core goes.</summary>
     internal async Task CloseAndWaitAsync()
     {
-        _ = CloseAsync();
+        _ = CloseAsync("the window's close");
         try
         {
             await _opening;
@@ -1328,6 +1350,18 @@ public sealed partial class PlayerView : UserControl
 
     /// <summary>For the smoke run: the core's state of the player, and the native engine's last failure (kind and HRESULT).</summary>
     internal PlayerState StateForTest => State;
+
+    /// <summary>For the smoke run's failure report: the trace, oldest first.</summary>
+    internal IReadOnlyList<string> TraceForTest => [.. _trace];
+
+    private void Note(string what)
+    {
+        _trace.Enqueue($"{_traceClock.Elapsed.TotalSeconds:F2}s {what}");
+        while (_trace.Count > 60)
+        {
+            _trace.Dequeue();
+        }
+    }
 
     internal string? NativeFailureForTest => _native?.LastFailure;
 

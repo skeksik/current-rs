@@ -366,6 +366,11 @@ internal static class SmokeRun
                         + $"{(left ? "left Playing" : "never left Playing")}, now {state.State}, "
                         + $"{state.Route?.Engine.ToString() ?? "no engine"} {state.Route?.Label.ToString() ?? "no route"}, "
                         + $"native failure {window.NativeFailureForTest ?? "none"}, subtitle path {window.SubtitlePathForTest ?? "none"})");
+                    // Why: the player's last state changes, plays, closes with their reason and caught exceptions (PlayerView).
+                    foreach (var line in window.PlayerTraceForTest)
+                    {
+                        Console.WriteLine($"       {line}");
+                    }
                     return;
                 }
             }
