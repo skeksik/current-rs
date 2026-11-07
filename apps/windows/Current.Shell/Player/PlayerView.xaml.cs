@@ -1390,6 +1390,9 @@ public sealed partial class PlayerView : UserControl
 
     internal string? SubtitlePathForTest => _native?.SubtitlePath;
 
+    /// <summary>The native engine's load open (NativeEngine.LoadForTest).</summary>
+    internal ulong? NativeLoadForTest => _native?.LoadForTest;
+
     /// <summary>For the smoke run: the native engine opens the file again for every subtitle file (that path, tested).</summary>
     internal bool ReopenForSubtitlesForTest
     {
