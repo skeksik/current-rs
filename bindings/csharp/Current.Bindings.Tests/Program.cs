@@ -90,6 +90,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("How to play in the player moves the item, and Auto back", PlatformEngineTests.ChooseHowToPlayMovesTheItem),
     ("exceptions in a platform engine never bring the core down", PlatformEngineTests.EngineExceptionsNeverBringTheCoreDown),
     ("Always app engine plays the next item there", PlatformEngineTests.AlwaysAppEnginePlaysTheNextItemThere),
+    ("each play has the next number, the same item again too", PlatformEngineTests.EachPlayHasTheNextNumber),
 };
 
 var failed = 0;

@@ -63,9 +63,11 @@ public sealed partial class PlayerView : UserControl
     /// <summary>The native route's subtitles (W5).</summary>
     private readonly SubtitleOverlay _subtitles;
     private CancellationTokenSource? _play;
-    /// <summary>A play asked for and not yet taken by the core (<see cref="PlayAsync"/>): an end shown meanwhile is the item before
-    /// it.</summary>
-    private CancellationTokenSource? _starting;
+    /// <summary>The highest play number (<see cref="PlayerState.Play"/>) the session's states have shown.</summary>
+    private ulong _lastPlay;
+    /// <summary>The lowest play number whose end closes the player: the play asked for last gets at least this one. An end of an
+    /// earlier play, shown after a new one was asked for (of the same item too), is the item before it and closes nothing.</summary>
+    private ulong _closeFromPlay;
     /// <summary>The engine's open, which belongs to the player rather than to one play: a play that replaces another while the engine
     /// opens waits for the same open and plays on its session.</summary>
     private Task _opening = Task.CompletedTask;
@@ -182,7 +184,8 @@ public sealed partial class PlayerView : UserControl
                 Trace.TraceWarning("Current: the player did not take focus");
             }
         });
-        _starting = play;
+        // No end closes the player until this play's number is known (below): one shown meanwhile is the item before it.
+        _closeFromPlay = ulong.MaxValue;
         try
         {
             // An earlier close finishes first: one engine per process (ADR 0019).
@@ -203,6 +206,9 @@ public sealed partial class PlayerView : UserControl
                     return;
                 }
             }
+            // The core numbers each play of a session from 1, in order: this one's is above any shown so far. Set with no await
+            // between it and the play's request, so no earlier play's end can read as this one's.
+            _closeFromPlay = _lastPlay + 1;
             await _session.PlayAsync(item, start, play.Token);
         }
         catch (Exception) when (play.IsCancellationRequested)
@@ -229,9 +235,11 @@ public sealed partial class PlayerView : UserControl
         }
         finally
         {
-            if (_starting == play)
+            // A play that never reached the core (cancelled, or failed before its request) leaves the rule as the later play or
+            // close sets it; one that did keeps its number.
+            if (_play == play && _closeFromPlay == ulong.MaxValue)
             {
-                _starting = null;
+                _closeFromPlay = _lastPlay + 1;
             }
         }
     }
@@ -304,6 +312,8 @@ public sealed partial class PlayerView : UserControl
         display.Changed += OnDisplayChanged;
         _compositionSize = size;
         _session = session;
+        // A new session numbers its plays from 1 again.
+        _lastPlay = 0;
         _qualityOptions = null;
         session.State.PropertyChanged += OnState;
         session.NowPlaying.PropertyChanged += OnNowPlaying;
@@ -415,6 +425,7 @@ public sealed partial class PlayerView : UserControl
     private void OnState(object? sender, PropertyChangedEventArgs e)
     {
         var state = State;
+        _lastPlay = Math.Max(_lastPlay, state.Play);
         KeepKeyboardFocus();
         _showingState = true;
         try
@@ -473,10 +484,12 @@ public sealed partial class PlayerView : UserControl
         {
             _showingState = false;
         }
-        // The end with no next episode to go to: back to the page it was played from, as the core has reported the stop. Not while a
-        // new play is on its way to the core: that end is the item before it, and closing would cancel the new play (CI's smoke run:
-        // the 8 s clip ended as its second play was asked for, and the player closed to Idle).
-        if (state is { State: PlayerStateKind.Ended, Next: null } && _starting is null)
+        // The end with no next episode to go to: back to the page it was played from, as the core has reported the stop. Only the end
+        // of the play asked for last (or a later one the core started, the next episode): the end of the play before it, shown after
+        // a new play was asked for, would close the player and cancel the new play (CI's smoke run: the 8 s clip ended as its second
+        // play was asked for, and the player closed to Idle). The play's number tells them apart, for the same item played again too;
+        // a flag cleared when the play request returned did not, since the earlier end can reach the UI after that.
+        if (state is { State: PlayerStateKind.Ended, Next: null } && state.Play >= _closeFromPlay)
         {
             _ = CloseAsync();
         }
