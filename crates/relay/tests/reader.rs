@@ -1008,3 +1008,29 @@ async fn a_416_on_a_reconnect_reports_a_bad_range() {
     );
     assert_eq!(drain(&mut events), vec![RelayEvent::BadRange]);
 }
+
+#[tokio::test]
+async fn a_read_held_before_a_seek_is_served_by_starvation_but_pins_nothing() {
+    let (_route, reader, _events) = setup(FakeFile::new()).await;
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    // Playing at 50 s: the limit is 64 KiB past 50 s, and a read waits there.
+    reader.set_position(Duration::from_secs(50));
+    let old_limit = rate_bytes(50.0) + 64 * KIB;
+    assert_eq!(read_until_held(&reader, rate_bytes(50.0)).await, old_limit);
+    let reader = Arc::new(reader);
+    let stale = held_read(&reader, old_limit).await;
+    // A seek back to 20 s, and the player buffers, as it does after a seek.
+    reader.seek_to(Duration::from_secs(20));
+    reader.set_starving(true);
+    let bytes = timeout(WAIT, stale).await.unwrap().unwrap().unwrap();
+    assert_eq!(
+        bytes,
+        data().slice(old_limit as usize..old_limit as usize + 10)
+    );
+    assert_eq!(reader.facts().point, rate_bytes(20.0));
+    reader.set_starving(false);
+    // The read at the target still pins the point, and the limit holds from there.
+    let target = rate_bytes(20.0);
+    assert_eq!(read_until_held(&reader, target).await, target + 64 * KIB);
+    assert_eq!(reader.facts().point, target);
+}

@@ -66,9 +66,14 @@ holds.
   not a read in the file's first 4 MiB while the estimate is past them, and lies within the read-ahead (150 MiB) either side of the
   estimate; the window holding it is then the playback window and prefetches at once. With no rate at all the first such read pins
   it wherever it is. A subtitle scan opens later and, at real sizes, further than the read-ahead past the estimate. A starvation
-  release pins it too. (Changed after review, manager, 2026-11-07: a target more than the gap off the estimate pinned nothing and
+  release pins it too, but only for a read begun since the last seek: a read held before it is served and leaves the point where it
+  is. (Changed after review, manager, 2026-11-07: a target more than the gap off the estimate pinned nothing and
   its window did not prefetch, so an estimate error cut the read-ahead.)
 - **Index windows** are the last 8 MiB of a file more than twice that long; a smaller file has none.
+- **Known limits, for R4 to watch** (manager's review, 2026-11-07; not fixed): any first read after a seek within the read-ahead
+  of the estimate pins the point, so whether a player reads elsewhere (a scan, the cues) before its target is to be measured; two
+  seeks in a row (to 40 s, then 45 s) let a late read for the first, arriving after the second, pin the point, if the player does
+  not cancel the first; on a resume near the start, a header or probe read past the first 4 MiB can pin it.
 - **Without a duration** the server's bitrate gives the rate. Without either, the point does not follow the position: it moves only
   when a read pins it after a start or seek and at starvation releases, so memory stays bounded and the player may stall briefly
   each read-ahead; `ReaderFacts::rate_known` is false so the panel can say so.

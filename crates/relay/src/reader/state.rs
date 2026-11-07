@@ -44,6 +44,9 @@ pub(crate) struct Window {
     pub(crate) status: WindowStatus,
     /// Reads waiting for bytes this window has not fetched yet: they let it fetch past the read-ahead budget.
     pub(crate) waiting: usize,
+    /// How far a starvation release of a read begun before the last seek lets this window fetch and serve past the limit: that
+    /// read is served, but it does not move the point.
+    released_to: u64,
     pub(crate) pump: Option<Pump>,
 }
 
@@ -200,7 +203,7 @@ impl State {
     }
 
     fn allowed_end(&self, window: &Window) -> u64 {
-        let limit = self.limit();
+        let limit = self.limit().max(window.released_to);
         if window.index {
             limit.max(window.start.saturating_add(self.limits.index_window))
         } else {
@@ -290,6 +293,7 @@ impl State {
             index,
             status: WindowStatus::Fetching,
             waiting: 0,
+            released_to: 0,
             pump: None,
         });
         id
@@ -348,12 +352,18 @@ impl State {
                     missing: false,
                 };
             }
-            // The starvation guard: the player waits for this byte, so the point is at least here.
-            self.anchor = Some(Anchor {
-                offset,
-                position: self.position,
-            });
-            self.awaiting_anchor = false;
+            // The starvation guard: the player waits for this byte. A read begun since the last seek says the point is at least
+            // here; one begun before it (held at the old limit) is only served, so it cannot pin the point away from the target.
+            if generation == self.generation {
+                self.anchor = Some(Anchor {
+                    offset,
+                    position: self.position,
+                });
+                self.awaiting_anchor = false;
+            } else {
+                let window = &mut self.windows[at];
+                window.released_to = window.released_to.max(offset.saturating_add(max_len));
+            }
             self.releases += 1;
             allowed = self.allowed_end(&self.windows[at]);
         }
