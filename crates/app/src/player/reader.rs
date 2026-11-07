@@ -9,6 +9,7 @@
 //! Which loads get a reader is the routing rule of ADR 0026 ("Which routes use it", R3): direct play on the platform engine's native
 //! route. Server streams, HLS and libmpv keep their URLs.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ use current_relay::{
     Bytes, FileFacts, ReadError, ReaderFacts, ReaderLimits, ReaderRoute, StreamReader,
 };
 use tokio::sync::OnceCell;
+use tokio::time::Instant;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Every critical section leaves the state consistent, so a panic elsewhere does not make it unusable.
@@ -31,11 +33,38 @@ struct Feed {
     duration: Option<Duration>,
     /// From the plan's source, for a file without a duration.
     bitrate: Option<u32>,
-    starving: bool,
+    /// The engine says it buffers.
+    buffering: bool,
+    /// The engine plays (not paused, not ended).
+    playing: bool,
+    /// When the position last moved, or the engine started, sought or resumed: a stall counts from here.
+    moved_at: Option<Instant>,
+    /// The position stood still for [`STALL_AFTER`] while playing.
+    stalled: bool,
     /// A seek the reader has not been told of: it was not open yet.
     seek: Option<Duration>,
     /// The feed changed while the reader was not open (its first request was running): applied once it is.
     pending: bool,
+}
+
+/// How long the position may stand still while the engine plays, after a start, seek or resume too, before the reader counts the
+/// engine as starving (ADR 0026, "The playback point"; R3). A guess: R4 measures it on the owner's PC.
+pub(crate) const STALL_AFTER: Duration = Duration::from_secs(2);
+
+/// How often the reader looks for a stall. A guess like [`STALL_AFTER`], measured in R4.
+pub(crate) const STALL_TICK: Duration = Duration::from_millis(500);
+
+impl Feed {
+    /// Whether the engine waits for bytes: it says it buffers, or its position stood still while it played.
+    fn starving(&self) -> bool {
+        self.buffering || self.stalled
+    }
+
+    /// The position may stand still from now for [`STALL_AFTER`] before it is a stall.
+    fn grace(&mut self) {
+        self.moved_at = Some(Instant::now());
+        self.stalled = false;
+    }
 }
 
 /// One file read for the platform engine. Cheap to share; every call may come from any thread.
@@ -45,6 +74,7 @@ pub struct PlatformReader {
     query: Vec<(String, String)>,
     feed: Mutex<Feed>,
     reader: OnceCell<StreamReader>,
+    cancelled: AtomicBool,
 }
 
 impl std::fmt::Debug for PlatformReader {
@@ -74,6 +104,40 @@ impl PlatformReader {
                 ..Feed::default()
             }),
             reader: OnceCell::new(),
+            cancelled: AtomicBool::new(false),
+        }
+    }
+
+    /// Looks for a stall every [`STALL_TICK`] until the reader ends (a task on the current runtime, holding no strong reference).
+    pub(crate) fn watch_for_stalls(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(STALL_TICK).await;
+                let Some(reader) = weak.upgrade() else {
+                    return;
+                };
+                if reader.cancelled.load(Ordering::Acquire) {
+                    return;
+                }
+                reader.check_stall();
+            }
+        });
+    }
+
+    /// Counts the engine as starving when its position stood still for [`STALL_AFTER`] while it played, not buffering already.
+    fn check_stall(&self) {
+        let stalled = {
+            let feed = lock(&self.feed);
+            feed.playing
+                && !feed.buffering
+                && !feed.stalled
+                && feed
+                    .moved_at
+                    .is_some_and(|moved| moved.elapsed() >= STALL_AFTER)
+        };
+        if stalled {
+            self.update(|feed| feed.stalled = true, apply_starving);
         }
     }
 
@@ -132,7 +196,7 @@ impl PlatformReader {
         if let Some(duration) = feed.duration {
             reader.set_duration(duration);
         }
-        reader.set_starving(feed.starving);
+        reader.set_starving(feed.starving());
     }
 
     /// Up to `max_len` bytes at `offset`, opening the file first if needed; empty at its end.
@@ -150,6 +214,7 @@ impl PlatformReader {
 
     /// Ends the reader: its reads end with [`ReadError::Cancelled`].
     pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
         self.route.cancel();
     }
 
@@ -174,8 +239,12 @@ impl PlatformReader {
             |feed| {
                 feed.position = position;
                 feed.seek = Some(position);
+                feed.grace();
             },
-            |reader, feed| reader.seek_to(feed.position),
+            |reader, feed| {
+                reader.seek_to(feed.position);
+                reader.set_starving(feed.starving());
+            },
         );
     }
 
@@ -183,28 +252,61 @@ impl PlatformReader {
     pub(crate) fn engine_event(&self, event: &EngineEvent) {
         match *event {
             EngineEvent::Position(position) => self.update(
-                |feed| feed.position = position,
-                |reader, feed| reader.set_position(feed.position),
+                |feed| {
+                    if position != feed.position {
+                        feed.position = position;
+                        feed.grace();
+                    }
+                },
+                |reader, feed| {
+                    reader.set_position(feed.position);
+                    reader.set_starving(feed.starving());
+                },
             ),
             EngineEvent::Duration(duration) => self.update(
                 |feed| feed.duration = Some(duration),
                 |reader, _| reader.set_duration(duration),
             ),
-            EngineEvent::Buffering(starving) => self.starving(starving),
-            // Playing, or paused: not waiting for bytes. "Its position stops while playing" is R3's (ADR 0026, "As built (R2)").
-            EngineEvent::Loaded | EngineEvent::Restarted | EngineEvent::Paused(_) => {
-                self.starving(false);
-            }
+            EngineEvent::Buffering(buffering) => self.update(
+                |feed| {
+                    feed.buffering = buffering;
+                    if !buffering {
+                        feed.grace();
+                    }
+                },
+                apply_starving,
+            ),
+            // Opened: not playing yet; playing (again) after the first frame or a resume, with the grace a start needs.
+            EngineEvent::Loaded => self.update(
+                |feed| {
+                    feed.playing = false;
+                    feed.buffering = false;
+                    feed.stalled = false;
+                },
+                apply_starving,
+            ),
+            EngineEvent::Restarted | EngineEvent::Paused(false) => self.update(
+                |feed| {
+                    feed.playing = true;
+                    feed.buffering = false;
+                    feed.grace();
+                },
+                apply_starving,
+            ),
+            EngineEvent::Paused(true) | EngineEvent::Ended(_) => self.update(
+                |feed| {
+                    feed.playing = false;
+                    feed.stalled = false;
+                },
+                apply_starving,
+            ),
             _ => {}
         }
     }
+}
 
-    fn starving(&self, starving: bool) {
-        self.update(
-            |feed| feed.starving = starving,
-            |reader, feed| reader.set_starving(feed.starving),
-        );
-    }
+fn apply_starving(reader: &StreamReader, feed: &Feed) {
+    reader.set_starving(feed.starving());
 }
 
 /// A player's readers: the reader of the stream given last, and the one its platform engine reads now.
@@ -355,7 +457,7 @@ mod tests {
         reader.seek_to(Duration::from_secs(50));
         assert_eq!(reader.facts().unwrap().point, 50 * RATE);
         // Starving while buffering; no longer once playing again or paused.
-        let starving = |reader: &PlatformReader| lock(&reader.feed).starving;
+        let starving = |reader: &PlatformReader| lock(&reader.feed).starving();
         for (event, after) in [
             (EngineEvent::Buffering(true), true),
             (EngineEvent::Restarted, false),
@@ -449,5 +551,99 @@ mod tests {
         gate.add_permits(10);
         opening.await.unwrap().unwrap();
         assert_eq!(reader.facts().unwrap().point, 50 * RATE);
+    }
+
+    /// Starts reading at 10 s into the 2 GB file of 100 s, playing, and returns a read held far past the read-ahead.
+    async fn playing_with_a_held_read(
+        reader: &Arc<PlatformReader>,
+    ) -> tokio::task::JoinHandle<Result<Bytes, ReadError>> {
+        reader.start_at(Duration::from_secs(10));
+        reader.open().await.unwrap();
+        reader.engine_event(&EngineEvent::Restarted);
+        reader.engine_event(&EngineEvent::Position(Duration::from_secs(10)));
+        let held = {
+            let reader = reader.clone();
+            // 400 MB: past 10 s (200 MB) plus 150 MiB.
+            tokio::spawn(async move { reader.read(400_000_000, 10).await })
+        };
+        tokio::task::yield_now().await;
+        held
+    }
+
+    fn timed_reader() -> Arc<PlatformReader> {
+        let reader = Arc::new(reader_with(DirectFile {
+            duration: Some(Duration::from_secs(100)),
+            bitrate: None,
+        }));
+        reader.watch_for_stalls();
+        reader
+    }
+
+    /// Lets the watchdog and the woken read run.
+    async fn settle() {
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_position_that_stands_still_while_playing_counts_as_starving() {
+        let reader = timed_reader();
+        let held = playing_with_a_held_read(&reader).await;
+        // Within the grace after the start: still held.
+        tokio::time::advance(STALL_AFTER - Duration::from_millis(600)).await;
+        settle().await;
+        assert!(!held.is_finished());
+        // Past it, with no position change: a stall, so the held read goes through.
+        tokio::time::advance(Duration::from_millis(1_200)).await;
+        settle().await;
+        assert!(held.is_finished());
+        assert_eq!(held.await.unwrap().unwrap().len(), 10);
+        assert_eq!(reader.facts().unwrap().starvation_releases, 1);
+        assert!(lock(&reader.feed).starving());
+        // The position moves: no longer starving.
+        reader.engine_event(&EngineEvent::Position(Duration::from_secs(11)));
+        assert!(!lock(&reader.feed).starving());
+        reader.cancel();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_paused_or_buffering_engine_or_a_fresh_seek_is_no_stall() {
+        // Paused: the position stands still for good reason.
+        let reader = timed_reader();
+        let held = playing_with_a_held_read(&reader).await;
+        reader.engine_event(&EngineEvent::Paused(true));
+        tokio::time::advance(STALL_AFTER * 3).await;
+        settle().await;
+        assert!(!held.is_finished());
+        assert!(!lock(&reader.feed).stalled);
+        // Resumed: the grace again, then a stall.
+        reader.engine_event(&EngineEvent::Paused(false));
+        tokio::time::advance(STALL_AFTER - Duration::from_millis(600)).await;
+        settle().await;
+        assert!(!held.is_finished());
+        tokio::time::advance(Duration::from_millis(1_200)).await;
+        settle().await;
+        assert!(held.is_finished());
+        reader.cancel();
+
+        // Buffering: starving already, and the watchdog adds no stall of its own.
+        let reader = timed_reader();
+        let _held = playing_with_a_held_read(&reader).await;
+        reader.engine_event(&EngineEvent::Buffering(true));
+        tokio::time::advance(STALL_AFTER * 3).await;
+        settle().await;
+        assert!(!lock(&reader.feed).stalled);
+        reader.cancel();
+
+        // A seek restarts the grace.
+        let reader = timed_reader();
+        let held = playing_with_a_held_read(&reader).await;
+        tokio::time::advance(STALL_AFTER - Duration::from_millis(600)).await;
+        reader.seek_to(Duration::from_secs(10));
+        tokio::time::advance(STALL_AFTER - Duration::from_millis(600)).await;
+        settle().await;
+        assert!(!held.is_finished());
+        reader.cancel();
     }
 }

@@ -139,7 +139,9 @@ impl JellyfinMedia {
                     path,
                     direct,
                 )?;
-                Some(Arc::new(reader))
+                let reader = Arc::new(reader);
+                reader.watch_for_stalls();
+                Some(reader)
             }
             _ => None,
         };
