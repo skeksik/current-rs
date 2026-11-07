@@ -112,12 +112,8 @@ internal static class PlatformEngineTests
             await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.FromSeconds(3));
             Check(engine.Loads.Count == 1, $"one load on the platform engine, not {engine.Loads.Count}");
             var load = engine.Loads.Single();
-            // The relay's URL: 127.0.0.1 on the relay's own port, not the stand-in's, and no session token.
-            var url = new Uri(load.Url);
-            Check(url.Scheme == "http" && url.Host == "127.0.0.1", "a loopback URL");
-            Check(url.Port != new Uri(standIn.Address).Port, "the relay's port, not the server's");
-            Check(!load.Url.Contains("apikey", StringComparison.OrdinalIgnoreCase)
-                && !load.Url.Contains("api_key", StringComparison.OrdinalIgnoreCase), "no session token in the URL");
+            // Direct play on the native route reads through the core (ADR 0026): a reader, and no URL crosses the bridge.
+            Check(load.Reader is not null && load.Url.Length == 0, "a reader and no URL");
             Check(load.Start == TimeSpan.FromSeconds(3) && load.Audio == new PlatformTrack.Stream(1), $"the position and track, not {load}");
             // Neither the adapter's record nor the generated one prints the URL.
             Check(!load.ToString().Contains("127.0.0.1", StringComparison.Ordinal), $"no URL in {load}");
@@ -253,15 +249,14 @@ internal static class PlatformEngineTests
 
     private static byte StreamByte(long offset) => (byte)(offset % 251);
 
-    /// <summary>A player with the fake engine and the stream reader's switch on, playing the direct-play item.</summary>
+    /// <summary>A player with the fake engine playing the direct-play item, which it reads through the core.</summary>
     private static async Task<(FakeEngine Engine, PlayerSession Session, CoreFileReader Reader)> ReadingAsync(CoreHost core)
     {
         var engine = new FakeEngine();
         var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), new ManualDispatcher());
-        session.SetStreamReader(true);
         await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
         var load = engine.Loads.Last();
-        Check(load.Reader is not null, "a reader with the switch on");
+        Check(load.Reader is not null, "a reader for direct play on the native route");
         Check(load.Url.Length == 0, "no URL with a reader");
         return (engine, session, load.Reader!);
     }
@@ -272,14 +267,19 @@ internal static class PlatformEngineTests
         using var core = CoreHost.Create();
         await SignIn(core, standIn);
 
-        // Off by default: the URL as before, and no reader.
+        // A server stream (HLS) stays on the relay: its URL on 127.0.0.1, no session token, and no reader.
         var plain = new FakeEngine();
         var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, plain, Answers(), new ManualDispatcher());
         try
         {
-            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+            await session.PlayAsync(Item(StandIn.TranscodeItem), TimeSpan.Zero);
             var load = plain.Loads.Single();
-            Check(load.Reader is null && load.Url.Length > 0, "a relay URL and no reader by default");
+            var url = new Uri(load.Url);
+            Check(load.Hls && load.Reader is null, "HLS, and no reader");
+            Check(url.Scheme == "http" && url.Host == "127.0.0.1" && url.Port != new Uri(standIn.Address).Port,
+                "the relay's URL, not the server's");
+            Check(!load.Url.Contains("apikey", StringComparison.OrdinalIgnoreCase)
+                && !load.Url.Contains("api_key", StringComparison.OrdinalIgnoreCase), "no session token in the URL");
         }
         finally
         {

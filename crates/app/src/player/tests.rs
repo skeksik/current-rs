@@ -836,7 +836,7 @@ fn loads(control: &TestEngineControl) -> usize {
 }
 
 #[tokio::test]
-async fn a_file_the_platform_engine_plays_goes_there_through_the_relay() {
+async fn a_file_the_platform_engine_plays_directly_is_read_through_the_core() {
     let _engine = ENGINE.lock().await;
     let stand_in = StandIn::start().await.unwrap();
     let app = App::new();
@@ -848,15 +848,13 @@ async fn a_file_the_platform_engine_plays_goes_there_through_the_relay() {
         .play(item(&server, DIRECT_PLAY_ITEM), Duration::from_secs(5))
         .await
         .unwrap();
-    // The stand-in's address has no gateway; the platform engine's stream is relayed all the same, with the route's token only.
+    // Direct play on the native route: the platform engine reads the file through the core (ADR 0026), and no URL crosses.
     let file = platform.last();
-    let url = file.url.expose().to_owned();
-    assert!(url.starts_with("http://127.0.0.1:"), "a relay URL");
-    let token = stand_in.live_token().expect("signed in");
-    assert!(!url.contains(&token), "no session token across the bridge");
+    assert!(file.url.expose().is_empty(), "no URL with a reader");
+    let reader = file.reader.clone().expect("a reader");
     assert_eq!(file.start, Duration::from_secs(5));
     assert_eq!(file.audio, EngineTrack::Stream(1));
-    assert_eq!(relay_status(&url).await, 206);
+    assert_eq!(reader.read(0, 2).await.unwrap().len(), 2);
     assert_eq!(loads(&control), 0, "libmpv has nothing");
 
     // Events from the platform's own thread reach the state.
@@ -878,12 +876,9 @@ async fn a_file_the_platform_engine_plays_goes_there_through_the_relay() {
         lines[..2],
         ["Native", "• Native playback is fully compatible."]
     );
-    // Nothing the player publishes holds the relay URL.
+    // Nothing the player publishes holds an address.
     let shown = format!("{status:?} {info:?}");
-    assert!(
-        !shown.contains(&url) && !shown.contains("127.0.0.1"),
-        "{shown}"
-    );
+    assert!(!shown.contains("127.0.0.1"), "{shown}");
 
     // An event of an older load is dropped.
     platform.send(
@@ -915,12 +910,40 @@ async fn a_file_the_platform_engine_plays_goes_there_through_the_relay() {
         status.route.as_ref().map(|route| route.label()),
         Some(RouteLabel::AppEngine)
     );
-    // The platform engine's route is gone with it (refused, or the relay no longer listens), and its old events open nothing.
-    assert!(matches!(relay_status(&url).await, 0 | 404));
+    // The platform engine's reader is gone with it, and its old events open nothing.
+    assert_eq!(reader.read(0, 2).await, Err(crate::ReadError::Cancelled));
     platform.send(file.generation, EngineEvent::Loaded);
     platform.send(file.generation, EngineEvent::Restarted);
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(platform.loads.lock().unwrap().len(), 1);
+    player.close().await;
+}
+
+#[tokio::test]
+async fn a_server_stream_for_the_platform_engine_goes_through_the_relay() {
+    // HLS stays on the relay (ADR 0026, "Which routes use it"): a URL with the route's token only, and no reader.
+    let _engine = ENGINE.lock().await;
+    let stand_in = StandIn::start().await.unwrap();
+    let app = App::new();
+    let server = signed_in(&stand_in, &app).await;
+    let platform = Arc::new(FakePlatform::default());
+    let (player, _control) = open_with(&app, platform.clone(), true).await;
+    player
+        .play(item(&server, TRANSCODE_ITEM), Duration::ZERO)
+        .await
+        .unwrap();
+    let file = platform.last();
+    assert!(file.hls);
+    assert!(file.reader.is_none());
+    let url = file.url.expose().to_owned();
+    assert!(url.starts_with("http://127.0.0.1:"), "a relay URL");
+    let token = stand_in.live_token().expect("signed in");
+    assert!(!url.contains(&token), "no session token across the bridge");
+    let (status, body) = relay_get(&url, "bytes=0-").await;
+    assert!(matches!(status, 200 | 206), "{status}");
+    assert!(body.starts_with(b"#EXTM3U"));
+    player.send(super::PlayerAction::Stop).unwrap();
+    eventually(|| player.state().borrow().state == PlayerState::Idle).await;
     assert!(matches!(relay_status(&url).await, 0 | 404));
     player.close().await;
 }
@@ -928,7 +951,7 @@ async fn a_file_the_platform_engine_plays_goes_there_through_the_relay() {
 #[tokio::test]
 async fn the_stand_ins_native_file_goes_to_the_platform_engine_with_ranges() {
     // What the Windows smoke run opens in Windows' own player (ADR 0025, W4): H.264 alone in MP4, native without any Store
-    // extension, and the relay answers Media Foundation's range requests with the file's own bytes.
+    // extension, and the core's reader answers Media Foundation's reads with the file's own bytes.
     let _engine = ENGINE.lock().await;
     let stand_in = StandIn::start().await.unwrap();
     let app = App::new();
@@ -940,15 +963,26 @@ async fn the_stand_ins_native_file_goes_to_the_platform_engine_with_ranges() {
         .await
         .unwrap();
     let file = platform.last();
-    let url = file.url.expose().to_owned();
     assert!(!file.hls);
     assert_eq!(loads(&control), 0, "libmpv has nothing");
-    let (status, body) = relay_get(&url, "bytes=0-").await;
-    assert_eq!(status, 206);
-    assert_eq!(body, NATIVE_MEDIA);
-    let (status, body) = relay_get(&url, "bytes=100-199").await;
-    assert_eq!(status, 206);
-    assert_eq!(body, &NATIVE_MEDIA[100..200]);
+    let reader = file.reader.clone().expect("a reader");
+    let (size, _) = reader.open().await.unwrap();
+    assert_eq!(size, NATIVE_MEDIA.len() as u64);
+    let mut whole = Vec::new();
+    while (whole.len() as u64) < size {
+        whole.extend_from_slice(&reader.read(whole.len() as u64, 64 * 1024).await.unwrap());
+    }
+    assert_eq!(whole, NATIVE_MEDIA);
+    let mut part = Vec::new();
+    while part.len() < 100 {
+        part.extend_from_slice(
+            &reader
+                .read(100 + part.len() as u64, 100 - part.len() as u32)
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(part, &NATIVE_MEDIA[100..200]);
     platform.start_from_another_thread();
     let status = until(&player.state(), playing).await;
     assert_eq!(
@@ -1093,7 +1127,7 @@ async fn a_throwing_platform_engine_never_brings_the_core_down() {
 }
 
 #[tokio::test]
-async fn the_platform_engines_relay_route_closes_when_the_item_stops() {
+async fn the_platform_engines_reader_ends_when_the_item_stops() {
     let _engine = ENGINE.lock().await;
     let stand_in = StandIn::start().await.unwrap();
     let app = App::new();
@@ -1107,8 +1141,8 @@ async fn the_platform_engines_relay_route_closes_when_the_item_stops() {
     platform.start_from_another_thread();
     until(&player.state(), playing).await;
     let file = platform.last();
-    let url = file.url.expose().to_owned();
-    assert_eq!(relay_status(&url).await, 206);
+    let reader = file.reader.clone().expect("a reader");
+    assert_eq!(reader.read(0, 2).await.unwrap().len(), 2);
     player.send(super::PlayerAction::Stop).unwrap();
     eventually(|| {
         platform
@@ -1119,7 +1153,7 @@ async fn the_platform_engines_relay_route_closes_when_the_item_stops() {
     })
     .await;
     eventually(|| player.state().borrow().state == PlayerState::Idle).await;
-    assert!(matches!(relay_status(&url).await, 0 | 404));
+    assert_eq!(reader.read(0, 2).await, Err(crate::ReadError::Cancelled));
     // A late event of the stopped load starts nothing.
     platform.send(file.generation, EngineEvent::Restarted);
     tokio::time::sleep(Duration::from_millis(50)).await;

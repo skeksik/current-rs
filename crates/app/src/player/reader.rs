@@ -6,10 +6,9 @@
 //! first use (the size is known only from the server's first answer), and ends with the route: a stop, another item, a re-plan or
 //! the player closing cancels it, and its pending reads end with [`ReadError::Cancelled`].
 //!
-//! Whether a load gets a reader is [`ReaderSlot::set_enabled`]'s, off by default: a temporary switch until R3 decides the routing
-//! rule (ADR 0026, "Which routes use it"). No app turns it on yet.
+//! Which loads get a reader is the routing rule of ADR 0026 ("Which routes use it", R3): direct play on the platform engine's native
+//! route. Server streams, HLS and libmpv keep their URLs.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -208,10 +207,9 @@ impl PlatformReader {
     }
 }
 
-/// A player's readers: whether loads get one, the reader of the stream given last, and the one its platform engine reads now.
+/// A player's readers: the reader of the stream given last, and the one its platform engine reads now.
 #[derive(Debug, Default)]
 pub(crate) struct ReaderSlot {
-    enabled: AtomicBool,
     /// Made by the media server with the stream's relay route; ended with it.
     current: Mutex<Option<Arc<PlatformReader>>>,
     /// The reader of the platform engine's load playing, by the load's generation.
@@ -219,15 +217,6 @@ pub(crate) struct ReaderSlot {
 }
 
 impl ReaderSlot {
-    /// Turns readers on or off for the loads that follow (ADR 0026: until R3 decides the routing rule).
-    pub(crate) fn set_enabled(&self, enabled: bool) {
-        self.enabled.store(enabled, Ordering::SeqCst);
-    }
-
-    pub(crate) fn enabled(&self) -> bool {
-        self.enabled.load(Ordering::SeqCst)
-    }
-
     /// The reader for the stream just given; ends the one before.
     pub(crate) fn set_current(&self, reader: Option<Arc<PlatformReader>>) {
         let old = std::mem::replace(&mut *lock(&self.current), reader);

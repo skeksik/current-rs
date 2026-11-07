@@ -147,10 +147,9 @@ fn a_platform_engine_plays_through_the_bridge_and_hands_over_on_a_failed_track()
 
     block_on(player.play(item(DIRECT_PLAY_ITEM), 3_000, CancelToken::new())).unwrap();
     let file = engine.last();
-    assert!(file.url.starts_with("http://127.0.0.1:"));
-    assert!(!file.url.contains(&stand_in.live_token().unwrap()));
-    // The stream reader's switch is off by default (ADR 0026, until R3).
-    assert!(file.reader.is_none());
+    // Direct play on the native route reads through the core (ADR 0026): no URL crosses the bridge.
+    assert!(file.url.is_empty());
+    assert!(file.reader.is_some());
     assert_eq!(file.start_ms, 3_000);
     assert_eq!(file.audio, PlatformTrack::Stream { index: 1 });
     assert!(!format!("{file:?}").contains("127.0.0.1"));
@@ -248,16 +247,15 @@ fn stream_path() -> String {
     format!("/Videos/{DIRECT_PLAY_ITEM}/stream")
 }
 
-/// A player with the fake platform engine and the stream reader's switch on, playing the direct-play item from `start_ms`.
+/// A player with the fake platform engine, playing the direct-play item from `start_ms`: through the core's reader.
 fn reading(core: &Core, start_ms: u64) -> (Arc<FakeEngine>, Arc<Player>, Arc<StreamReader>) {
     let engine = Arc::new(FakeEngine::default());
     let player =
         block_on(core.open_player_with_platform_engine(SIZE, DISPLAY, engine.clone(), answers()))
             .unwrap();
-    player.set_stream_reader(true);
     block_on(player.play(item(DIRECT_PLAY_ITEM), start_ms, CancelToken::new())).unwrap();
     let file = engine.last();
-    let reader = file.reader.clone().expect("a reader with the switch on");
+    let reader = file.reader.clone().expect("a reader for direct play on the native route");
     (engine, player, reader)
 }
 
@@ -276,7 +274,7 @@ const PENDING: std::time::Duration = std::time::Duration::from_millis(300);
 const DONE: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[test]
-fn with_the_switch_on_a_direct_play_load_reads_its_file_through_the_core() {
+fn a_direct_play_load_on_the_native_route_reads_its_file_through_the_core() {
     let _turn = engine_turn();
     let stand_in = stand_in(Gate::Off);
     let core = Core::new().unwrap();
@@ -447,7 +445,7 @@ fn a_pending_read_ends_cancelled_on_a_stop_a_re_plan_and_a_close() {
 }
 
 #[test]
-fn a_server_stream_gets_its_url_and_no_reader_even_with_the_switch_on() {
+fn a_server_stream_gets_its_relay_url_and_no_reader() {
     let _turn = engine_turn();
     let stand_in = stand_in(Gate::Off);
     let core = Core::new().unwrap();
@@ -456,7 +454,6 @@ fn a_server_stream_gets_its_url_and_no_reader_even_with_the_switch_on() {
     let player =
         block_on(core.open_player_with_platform_engine(SIZE, DISPLAY, engine.clone(), answers()))
             .unwrap();
-    player.set_stream_reader(true);
     block_on(player.play(item(TRANSCODE_ITEM), 0, CancelToken::new())).unwrap();
     let file = engine.last();
     assert!(file.hls);

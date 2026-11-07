@@ -237,16 +237,7 @@ impl std::fmt::Debug for Player {
 }
 
 impl Player {
-    /// Whether the platform engine's direct-play loads that follow read their file through the core's stream reader (ADR 0026)
-    /// instead of a relay URL. Off by default. A temporary switch until R3 replaces it with the routing rule; no app turns it on.
-    /// Does nothing without a platform engine.
-    pub fn set_stream_reader(&self, enabled: bool) {
-        if let Some(readers) = &self.readers {
-            readers.set_enabled(enabled);
-        }
-    }
-
-    /// The facts of the stream reader the platform engine reads now, once it opened (for R3's info panel).
+    /// The facts of the stream reader the platform engine reads now, once it opened.
     pub fn stream_reader_facts(&self) -> Option<current_relay::ReaderFacts> {
         self.readers.as_ref()?.fed()?.facts()
     }

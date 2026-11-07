@@ -5,8 +5,7 @@ namespace Current.Bindings;
 /// <summary>
 /// The core's stream reader for one file (ADR 0026): the platform engine reads a direct-play file through the core instead of a
 /// URL. <see cref="OpenAsync"/> makes the <see cref="Stream"/> to hand Windows' player (<c>MediaSource.CreateFromStream</c> over
-/// <c>AsRandomAccessStream()</c>). Until R3 a load has one only when the player's switch is on
-/// (<see cref="PlayerSession.SetStreamReader"/>).
+/// <c>AsRandomAccessStream()</c>). A load has one for direct play on the native route (ADR 0026).
 /// </summary>
 public sealed class CoreFileReader : IDisposable
 {
