@@ -144,8 +144,17 @@ above, this holds.
   only for a read begun since the last seek and within the read-ahead of the estimate (anywhere without a rate); any other is served
   past the limit without pinning. Released while opening, an MP4's index at the file's end had pinned the point there, so the limit
   lay past the end and Windows' player could read the whole file into memory again. And the player's first frame after the start
-  or a seek (`StreamReader::restarted`, fed from the engine's `Restarted`) pins the point again, as a seek does, when a release or a
-  read without a rate pinned it while the player opened; a point the player's read at the target pinned is kept. Both numbers are guesses (`STALL_AFTER`, `STALL_TICK` in `player/reader.rs`) that R4 measures.
+  or a seek (`StreamReader::restarted`, fed from the engine's `Restarted`) pins the point again, as a seek does, when a release or,
+  without a rate, the file's head pinned it while the player opened; a point the player's read at the target pinned is kept, with a
+  rate or without (fix/reader-first-frame, after review, manager, 2026-11-07: without a rate it had dropped a correct anchor at the
+  seek target, and the next read, past the true position, pinned it). The engine's first frame does not say which seek it ends, so
+  a late one of an earlier seek can arrive after the next seek: while nothing has pinned the point since that seek the check waits
+  for the next first frame rather than being used up. Counting seeks against first frames was not chosen, since an engine that merges
+  seeks into one first frame (not verified for Windows' player) would leave the count behind for good.
+- **Known limits** of the first-frame check: without a rate, a read past the head that is not at the target (an index past the index
+  window read before any other) pins the point and is kept, since nothing tells it from the target's read; a duration from the
+  engine (`set_duration`) checks such an anchor against the estimate and drops it when far. And a late first frame of an earlier seek
+  that arrives after the next seek's first read has pinned the point still uses up that seek's check. Both numbers are guesses (`STALL_AFTER`, `STALL_TICK` in `player/reader.rs`) that R4 measures.
 - **The info panel** shows, while the native player plays a file read through the core, "Read by Current · 31 s (150 MB) ahead ·
   42 Mbit/s · 3 requests" (served ahead in time when the rate is known, else the bytes alone; the read rate over 5 s; requests),
   then "· 1 reconnect" and "· 2 waits released" (the starvation guard's releases) only when not zero. Not on the app engine after a

@@ -1200,16 +1200,26 @@ async fn a_release_far_from_the_estimate_while_opening_serves_without_pinning_th
 
 #[tokio::test]
 async fn the_first_frame_pins_again_a_point_a_release_pinned_and_keeps_one_a_read_pinned() {
-    // Without a rate the first read pins the point wherever it is, the index at the file's end too: the first frame drops it, and
-    // playback's read pins it.
+    // Without a rate the player's first read, the file's head, pins the point; its index at the file's end is held there and let
+    // through by the starvation guard, which pins the point at the index. The first frame drops that, and playback's read pins it.
     let (files, _events) = route(FakeFile::new());
     let no_rate = FileFacts {
         duration: None,
         ..facts()
     };
-    let reader = open(&files, limits(), no_rate).await;
+    let reader = Arc::new(open(&files, limits(), no_rate).await);
+    read_now(&reader, 0, 100).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, 0);
     let index = SIZE - 40 * KIB;
-    read_now(&reader, index, 100).await.unwrap().unwrap();
+    let held = {
+        let reader = reader.clone();
+        tokio::spawn(async move { reader.read(index, 100).await })
+    };
+    sleep(HELD).await;
+    assert!(!held.is_finished());
+    reader.set_starving(true);
+    timeout(WAIT, held).await.unwrap().unwrap().unwrap();
+    reader.set_starving(false);
     assert_eq!(reader.facts().point, index);
     reader.restarted();
     assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
@@ -1227,4 +1237,60 @@ async fn the_first_frame_pins_again_a_point_a_release_pinned_and_keeps_one_a_rea
     assert_eq!(reader.facts().point, target);
     reader.restarted();
     assert_eq!(reader.facts().point, target);
+}
+
+#[tokio::test]
+async fn without_a_rate_the_first_frame_keeps_a_point_the_seek_targets_read_pinned() {
+    let (files, _events) = route(FakeFile::new());
+    let no_rate = FileFacts {
+        duration: None,
+        ..facts()
+    };
+    let reader = open(&files, limits(), no_rate).await;
+    reader.seek_to(Duration::from_secs(50));
+    // The player's read at the seek target pins the point, and it reads on to the limit before its first frame.
+    let target = 500_000;
+    assert_eq!(read_until_held(&reader, target).await, target + 64 * KIB);
+    assert_eq!(reader.facts().point, target);
+    reader.restarted();
+    assert_eq!(reader.facts().point, target);
+    assert!(read_now(&reader, target + 64 * KIB, 1).await.is_none());
+
+    // The file's head pinned without a rate is dropped at the first frame.
+    reader.seek_to(Duration::ZERO);
+    read_now(&reader, 100, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, 100);
+    reader.restarted();
+    read_now(&reader, 300_000, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, 300_000);
+}
+
+#[tokio::test]
+async fn a_late_first_frame_of_an_earlier_seek_leaves_the_check_to_the_next_seeks_frame() {
+    let (files, _events) = route(FakeFile::new());
+    let reader = Arc::new(open(&files, limits(), facts()).await);
+    reader.seek_to(Duration::from_secs(20));
+    reader.seek_to(Duration::from_secs(50));
+    // The first frame of the seek to 20 s arrives after the seek to 50 s, before anything was read there.
+    reader.restarted();
+    let estimate = rate_bytes(50.0);
+    // The player opens at 50 s: its read there pins the point, a read at that point's limit is held and let through, which pins
+    // the point again (by a release).
+    let first = estimate - 10 * KIB;
+    read_now(&reader, first, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, first);
+    let edge = first + 64 * KIB;
+    let held = {
+        let reader = reader.clone();
+        tokio::spawn(async move { reader.read(edge, 100).await })
+    };
+    sleep(HELD).await;
+    assert!(!held.is_finished());
+    reader.set_starving(true);
+    timeout(WAIT, held).await.unwrap().unwrap().unwrap();
+    reader.set_starving(false);
+    assert_eq!(reader.facts().point, edge);
+    // The seek to 50 s's own first frame still pins the point again.
+    reader.restarted();
+    assert_eq!(reader.facts().point, estimate);
 }
