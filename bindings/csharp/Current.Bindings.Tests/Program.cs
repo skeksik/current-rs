@@ -94,6 +94,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a read of the stream reader is cancelled by its token", PlatformEngineTests.AReadIsCancelledByItsToken),
     ("a refused stream fails the reader with an IOException", PlatformEngineTests.ARefusedStreamFailsTheReader),
     ("a pending read ends cancelled when the playback stops or the player closes", PlatformEngineTests.APendingReadEndsWithThePlayback),
+    ("a seek while a read waits keeps the seek's position", PlatformEngineTests.ASeekDuringAReadWins),
+    ("a failed open or an unopened reader frees its handle", PlatformEngineTests.AFailedOpenOrAnUnopenedReaderFreesItsHandle),
 };
 
 var failed = 0;

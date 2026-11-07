@@ -435,5 +435,89 @@ internal static class PlatformEngineTests
         {
         }
     }
+
+    public static async Task ASeekDuringAReadWins()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        // The file comes at 64 KiB/s: a read near its end waits for a few seconds.
+        standIn.Send("pace 65536");
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            await using var stream = await reader.OpenAsync();
+            stream.Seek(200_000, SeekOrigin.Begin);
+            var buffer = new byte[16];
+            var read = stream.ReadAsync(buffer).AsTask();
+            // The control: the read waits for bytes the server has not sent yet.
+            Check(await Task.WhenAny(read, Task.Delay(300)) != read, "the read waits");
+            stream.Seek(10, SeekOrigin.Begin);
+            var done = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(20)));
+            Check(done == read, "the read ended");
+            var count = await read;
+            Check(count > 0 && buffer.Take(count).Select((b, i) => b == StreamByte(200_000 + i)).All(same => same),
+                "the read's bytes are from where it began");
+            Check(stream.Position == 10, $"the seek's position, not {stream.Position}");
+        }
+        finally
+        {
+            standIn.Send("pace 0");
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task AFailedOpenOrAnUnopenedReaderFreesItsHandle()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            standIn.Send($"fail-stream 500 {StreamPath}");
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "the open failed");
+            }
+            catch (IOException)
+            {
+            }
+            // The handle is gone with the failed open: the reader cannot be opened again.
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no second open after a failed one");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            reader.Dispose();
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        // A load whose file is never opened: disposing the reader frees the handle, and it cannot be opened after.
+        (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            reader.Dispose();
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no open after Dispose");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
 }
 

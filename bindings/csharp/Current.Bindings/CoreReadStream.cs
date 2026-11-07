@@ -8,9 +8,10 @@ namespace Current.Bindings;
 /// <c>AsRandomAccessStream()</c>). Until R3 a load has one only when the player's switch is on
 /// (<see cref="PlayerSession.SetStreamReader"/>).
 /// </summary>
-public sealed class CoreFileReader
+public sealed class CoreFileReader : IDisposable
 {
     private readonly Ffi.StreamReader _reader;
+    // 0: not opened; 1: an open is running or a stream owns the handle; 2: disposed or failed, the handle freed.
     private int _opened;
 
     internal CoreFileReader(Ffi.StreamReader reader) => _reader = reader;
@@ -22,9 +23,12 @@ public sealed class CoreFileReader
     /// <exception cref="IOException">The server refused or failed (the player shows why), or the reader was closed.</exception>
     public async Task<CoreReadStream> OpenAsync(CancellationToken ct = default)
     {
-        if (Interlocked.Exchange(ref _opened, 1) != 0)
+        switch (Interlocked.CompareExchange(ref _opened, 1, 0))
         {
-            throw new InvalidOperationException("the stream of this file was opened before");
+            case 1:
+                throw new InvalidOperationException("the stream of this file was opened before");
+            case 2:
+                throw new ObjectDisposedException(nameof(CoreFileReader));
         }
         try
         {
@@ -36,6 +40,23 @@ public sealed class CoreFileReader
             // Cancelled by the caller before a stream owned the reader: it may be opened again.
             Interlocked.Exchange(ref _opened, 0);
             throw;
+        }
+        catch
+        {
+            // Failed for good (refused, the playback moved on, closed): no stream will own the handle, so it is freed now.
+            Interlocked.Exchange(ref _opened, 2);
+            _reader.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Frees the reader's handle when no stream took it (a load whose file was never opened); a stream that took it frees
+    /// it when disposed.</summary>
+    public void Dispose()
+    {
+        if (Interlocked.CompareExchange(ref _opened, 2, 0) == 0)
+        {
+            _reader.Dispose();
         }
     }
 
@@ -52,7 +73,10 @@ public sealed class CoreReadStream : Stream
 {
     private readonly Ffi.StreamReader _reader;
     private readonly SemaphoreSlim _turn = new(1, 1);
+    // The position and how many seeks set it, together: a read that ends after a seek leaves the seek's position.
+    private readonly object _place = new();
     private long _position;
+    private long _seeks;
     private int _disposed;
 
     internal CoreReadStream(Ffi.StreamReader reader, ulong size, string contentType)
@@ -75,7 +99,13 @@ public sealed class CoreReadStream : Stream
 
     public override long Position
     {
-        get => Interlocked.Read(ref _position);
+        get
+        {
+            lock (_place)
+            {
+                return _position;
+            }
+        }
         set => Seek(value, SeekOrigin.Begin);
     }
 
@@ -93,7 +123,11 @@ public sealed class CoreReadStream : Stream
         {
             throw new ArgumentOutOfRangeException(nameof(offset), "a position before the stream's start");
         }
-        Interlocked.Exchange(ref _position, target);
+        lock (_place)
+        {
+            _position = target;
+            _seeks++;
+        }
         return target;
     }
 
@@ -107,7 +141,11 @@ public sealed class CoreReadStream : Stream
         try
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-            var offset = Position;
+            long offset, seeks;
+            lock (_place)
+            {
+                (offset, seeks) = (_position, _seeks);
+            }
             if (buffer.IsEmpty || offset >= Length)
             {
                 return 0;
@@ -116,7 +154,14 @@ public sealed class CoreReadStream : Stream
                 token => _reader.Read((ulong)offset, (uint)buffer.Length, token), cancellationToken).ConfigureAwait(false);
             var count = Math.Min(bytes.Length, buffer.Length);
             bytes.AsSpan(0, count).CopyTo(buffer.Span);
-            Interlocked.Exchange(ref _position, offset + count);
+            lock (_place)
+            {
+                // A seek while the read ran wins: the bytes are still the caller's, the position is the seek's.
+                if (_seeks == seeks)
+                {
+                    _position = offset + count;
+                }
+            }
             return count;
         }
         finally
@@ -145,7 +190,11 @@ public sealed class CoreReadStream : Stream
     {
         if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            // Ends a pending read at once (Closed); the handle is freed after it.
+            // Ends a pending read at once (Closed), then frees the handle. Safe with a call in flight: the generated object counts
+            // the calls that use its pointer and frees it only when the last ends (uniffi-bindgen-cs v0.11.1+v0.31.0,
+            // `templates/ObjectTemplate.cs`: `_callCounter`, `CallWithPointer`, `Destroy`), and an async method holds the pointer
+            // only while it starts the Rust future (`templates/macros.cs`, `async_call`), read 2026-11-07. That the running Rust
+            // future keeps its own reference to the reader is inferred from UniFFI's async methods taking `Arc<Self>`: not verified.
             _reader.Close();
             _reader.Dispose();
         }

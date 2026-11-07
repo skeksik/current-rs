@@ -105,11 +105,14 @@ this holds.
 - **Direct play only, with the plan's rate** (after review, manager, 2026-11-07): `MediaServer::stream_url` takes a `DirectFile`
   (the source's duration and bitrate) for a local route and none for a server stream, so a progressive or HLS server stream never
   gets a reader. The reader starts with the source's duration, so the file's head, which the player reads first, does not pin the
-  point. Without one, a point pinned while no rate was known is dropped when the engine's `Duration` arrives, and the next read that
-  can be the playback position pins it again. What the engine says while the reader's first request runs (a seek, buffering, the
+  point. Without one, a point pinned while no rate was known is checked when the engine's `Duration` arrives, as a read would be:
+  kept when the new estimate accepts it (the player's read after a seek), dropped and pinned again by the next read that can be
+  the playback position when it rejects it (the file's head, or further than the read-ahead from the estimate). What the engine says while the reader's first request runs (a seek, buffering, the
   duration) is applied once it opens.
 - **C#:** the `CoreReadStream` owns the reader's handle (one stream per file; a second `OpenAsync` throws; disposing closes and
-  frees it), takes overlapping reads one after another, and throws `ArgumentOutOfRangeException` for a negative position.
+  frees it), takes overlapping reads one after another, lets a seek during a read keep its position, and throws
+  `ArgumentOutOfRangeException` for a negative position. A failed open frees the handle, and `CoreFileReader.Dispose` frees it
+  when no stream took it.
 - **A temporary switch:** a load gets a reader only when `Player::set_stream_reader(true)` was called (off by default); no app calls
   it. R3 replaces it with the routing rule of "Which routes use it".
 - **The reader's facts** stay reachable for R3's info panel: `current_app::Player::stream_reader_facts()`.

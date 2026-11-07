@@ -6,6 +6,7 @@
 //! - `count <path>`: prints `count <n>`, how many requests to the path arrived;
 //! - `fail <path or page>`, `unfail <path or page>`: requests to the path, or to a page of the generated library (`/Items@<start>`,
 //!   `paging::page_key`), answer 500 until unfailed;
+//! - `pace <bytes per second>`: stream bodies go out at about that rate, `pace 0` at once;
 //! - `fail-stream <status> <path>`: the stream at the path answers with that status;
 //! - `cancelled <path or page>`: prints `cancelled <n>`, how many held requests to it their client gave up;
 //! - `gate off`, `gate basic`, `gate portal`, `gate header`: the gateway in front of it (ADR 0017; credentials in `lib.rs`);
@@ -62,6 +63,11 @@ fn main() -> std::io::Result<()> {
                     controls.release(path);
                 } else if let Some(path) = line.strip_prefix("fail ") {
                     controls.fail(path);
+                } else if let Some(rate) = line.strip_prefix("pace ") {
+                    // `pace <bytes per second>`: stream bodies go out at about that rate; 0 at once.
+                    if let Ok(rate) = rate.parse() {
+                        controls.set_stream_pace(rate);
+                    }
                 } else if let Some(rest) = line.strip_prefix("fail-stream ") {
                     // `fail-stream <status> <path>`: the stream at `path` answers with that status.
                     if let Some((status, path)) = rest.split_once(' ')
