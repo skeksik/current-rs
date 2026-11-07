@@ -520,5 +520,28 @@ internal static class PlatformEngineTests
             await session.CloseAsync();
         }
     }
+
+    public static async Task EachPlayHasTheNextNumber()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var ui = new ManualDispatcher();
+        var engine = new FakeEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), ui);
+        try
+        {
+            Check(session.State.Value.Play == 0, "no play yet");
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+            await Eventually("the first play's number", ui, () => session.State.Value.Play == 1);
+            // The same item again: the next number, so the window tells the earlier play's end from this one's.
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+            await Eventually("the second play's number", ui, () => session.State.Value.Play == 2);
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
 }
 

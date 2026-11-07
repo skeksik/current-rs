@@ -109,6 +109,8 @@ enum Phase {
 #[derive(Debug)]
 struct Session {
     item: ItemRef,
+    /// This play's number ([`PlayerStatus::play`]).
+    play: u64,
     /// The quality limit in use: the preferred quality until the first plan, then the entry of the item's quality menu it snapped to
     /// ([`snap_quality`]), or the user's pick, which only this item keeps.
     quality: Quality,
@@ -172,6 +174,7 @@ impl Session {
     fn new(item: ItemRef, quality: Quality, start: Duration, now: Duration) -> Self {
         Self {
             item,
+            play: 0,
             quality,
             planned: None,
             notes: Vec::new(),
@@ -283,6 +286,8 @@ pub struct Controller<E, S, C> {
     auto_skip: AutoSkip,
     phase: Phase,
     session: Option<Session>,
+    /// How many plays this player started: the last one's number.
+    plays: u64,
     volume: u8,
     muted: bool,
     events: Vec<PlayerEvent>,
@@ -312,6 +317,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             auto_skip,
             phase: Phase::Idle,
             session: None,
+            plays: 0,
             volume: 100,
             muted: false,
             events: Vec::new(),
@@ -545,6 +551,7 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             return status;
         };
         status.item = Some(session.item.clone());
+        status.play = session.play;
         status.position = session.position;
         status.duration = session.duration;
         status.buffered = session.buffered;
@@ -604,6 +611,8 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
             self.clock.now(),
         );
         session.how = self.how;
+        self.plays += 1;
+        session.play = self.plays;
         self.session = Some(session);
         let permissions = self.server.permissions().await.unwrap_or_default();
         if let Some(session) = &mut self.session {

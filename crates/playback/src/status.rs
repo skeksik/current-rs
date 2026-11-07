@@ -95,6 +95,9 @@ pub struct NextEpisode {
 pub struct PlayerStatus {
     pub state: PlayerState,
     pub item: Option<ItemRef>,
+    /// The number of the play this state is about: each play the player starts gets the next one, from 1 (0 while none). A UI tells
+    /// the end of the play it asked for from the end of the one before by it, even for the same item played again.
+    pub play: u64,
     pub position: Duration,
     pub duration: Option<Duration>,
     /// How far ahead of the position the engine holds data.

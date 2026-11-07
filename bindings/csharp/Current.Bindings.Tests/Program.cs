@@ -96,6 +96,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a pending read ends cancelled when the playback stops or the player closes", PlatformEngineTests.APendingReadEndsWithThePlayback),
     ("a seek while a read waits keeps the seek's position", PlatformEngineTests.ASeekDuringAReadWins),
     ("a failed open or an unopened reader frees its handle", PlatformEngineTests.AFailedOpenOrAnUnopenedReaderFreesItsHandle),
+    ("each play has the next number, the same item again too", PlatformEngineTests.EachPlayHasTheNextNumber),
 };
 
 var failed = 0;
