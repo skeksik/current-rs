@@ -468,6 +468,143 @@ internal static class PlatformEngineTests
         }
     }
 
+    /// <summary>Opens each load's reader as Windows' native player does (NativeEngine.OpenAsync) and reports a failed open as
+    /// <c>loading_failed</c>, the way it reports a source that would not open.</summary>
+    private sealed class ReadingEngine : PlatformEngineHost
+    {
+        public ConcurrentQueue<string> Opens { get; } = new();
+
+        protected override void Load(PlatformLoad file)
+        {
+            var generation = file.Generation;
+            if (file.Reader is not { } reader)
+            {
+                return;
+            }
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await using var stream = await reader.OpenAsync();
+                    Opens.Enqueue("opened");
+                }
+                catch (IOException)
+                {
+                    Opens.Enqueue("refused");
+                    Report(generation, new PlatformEngineEvent.Failed("loading_failed"));
+                }
+            });
+        }
+
+        protected override void AddSubtitle(PlatformSubtitle subtitle) { }
+        protected override void SetPaused(bool paused) { }
+        protected override void SeekTo(TimeSpan position) { }
+        protected override void SelectAudio(PlatformTrack track) { }
+        protected override void SelectSubtitle(PlatformTrack track) { }
+        protected override void SetVolume(byte volume) { }
+        protected override void SetMuted(bool muted) { }
+        protected override void SetSpeed(double speed) { }
+        protected override void Stop() { }
+    }
+
+    public static async Task ARefusedStreamOnTheNativeRouteEndsOnTheAppEngineAtThePosition()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        standIn.Send($"fail-stream 500 {StreamPath}");
+        var ui = new ManualDispatcher();
+        var engine = new ReadingEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), ui);
+        try
+        {
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.FromSeconds(42));
+            await Eventually("on the app engine at the position", ui, () => session.State.Value.State == PlayerStateKind.Playing
+                && session.State.Value.Route?.Label == RouteLabel.AppEngine
+                && session.State.Value.Position == TimeSpan.FromSeconds(42));
+            Check(engine.Opens.SequenceEqual(["refused"]), $"one refused open, not {string.Join(", ", engine.Opens)}");
+            var lines = await session.PlaybackInfoLinesAsync(null, Panel);
+            Check(lines[0] == "App engine" && lines[1] == "• The native player could not start the file.",
+                $"the failed route named, not {string.Join(" | ", lines)}");
+            Check(!lines.Any(line => line.StartsWith("Read by Current", StringComparison.Ordinal)), "no reader line on the app engine");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task ADisposeDuringAnOpenFreesTheHandleWhenTheOpenEnds()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        standIn.Send($"hold {StreamPath}");
+
+        // Disposed while the open waits: the open ends at once, and the reader cannot be opened again.
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            var opening = reader.OpenAsync();
+            Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+            reader.Dispose();
+            var done = await Task.WhenAny(opening, Task.Delay(TimeSpan.FromSeconds(10)));
+            Check(done == opening, "the open ended with the Dispose");
+            try
+            {
+                await opening;
+                Check(false, "the open failed");
+            }
+            catch (Exception error) when (error is IOException or ObjectDisposedException)
+            {
+            }
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no open after Dispose");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        // Cancelled by the caller, then disposed: freed, not open again.
+        (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            using var cancel = new CancellationTokenSource();
+            var opening = reader.OpenAsync(cancel.Token);
+            Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+            cancel.Cancel();
+            try
+            {
+                await opening;
+                Check(false, "the open was cancelled");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            reader.Dispose();
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no open after Dispose");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+        finally
+        {
+            standIn.Send($"release {StreamPath}");
+            await session.CloseAsync();
+        }
+    }
+
     public static async Task AFailedOpenOrAnUnopenedReaderFreesItsHandle()
     {
         using var standIn = StandIn.Start();

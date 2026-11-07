@@ -27,6 +27,13 @@ namespace Current.Shell.Player;
 /// not verified (the owner's device check, W7).</item>
 /// <item>Rates: <c>IsSupportedPlaybackRateRange(0.5, 2)</c> after every open and audio track change (W1 §8: false with E-AC-3 Atmos,
 /// whose speed changes are ignored).</item>
+/// <item>Direct play reads through the core (ADR 0026, R3): the load carries the core's <see cref="CoreFileReader"/> and no URL, and
+/// the file opens with <c>MediaSource.CreateFromStream(IRandomAccessStream, String)</c>, "Creates an instance of MediaSource from the
+/// provided IRandomAccessStream" (learn.microsoft.com, ms.date 2017-02-08, updated 2025-11-21, read 2026-11-06), over the play's
+/// <see cref="CoreReadStream"/> wrapped by <c>AsRandomAccessStream()</c> (WindowsRuntimeStreamExtensions, learn.microsoft.com, ms.date
+/// 2025-07-01, read 2026-10-25: "Converts the specified stream to a random access stream"; the spike played through it,
+/// docs/notes/windows-native-own-stream.md). One stream per play, freed with it; an open again for a subtitle file reuses it. A
+/// stream that will not open is a failed open (<c>loading_failed</c>), so ADR 0025's fallback chain moves the file on.</item>
 /// <item>HLS through <c>AdaptiveMediaSource</c> (W1 §7), with a deadline of its own for the first segment (<see
 /// cref="HlsFirstSegmentDeadline"/>).</item>
 /// <item>The system media controls stay ours (MediaControls): <c>CommandManager.IsEnabled = false</c>, as W1 §8 checked.</item>
@@ -216,6 +223,9 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     /// <summary>The HRESULT of the last failure, if Media Foundation gave one (the smoke run's skip rule).</summary>
     internal int? LastFailureCode { get; private set; }
 
+    /// <summary>The last open handed Windows' player the core's stream reader, not a URL (ADR 0026; the smoke run checks it).</summary>
+    internal bool ReadThroughCore { get; private set; }
+
     /// <summary>How the last subtitle file was shown: added while the file played, or with the file opened again (the smoke run
     /// prints it).</summary>
     internal string? SubtitlePath { get; private set; }
@@ -245,6 +255,8 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         public TimedMetadataTrack? Shown { get; set; }
         public TimeSpan? PendingSeek { get; set; }
         public MediaSource? Source { get; set; }
+        /// <summary>The core's reader of this play's file, on direct play (ADR 0026): kept by an open again, freed with the play.</summary>
+        public PlayRead? Play { get; set; } = load.Reader is { } reader ? new PlayRead(reader) : null;
         public MediaPlaybackItem? Item { get; set; }
         public bool Opened { get; set; }
         public bool Started { get; set; }
@@ -271,6 +283,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         var generation = file.Generation;
         if (!_ui.TryEnqueue(() => _ = OpenAsync(file, null)))
         {
+            file.Reader?.Dispose();
             Report(generation, new PlatformEngineEvent.Failed(Kinds.LoadingFailed));
         }
     }
@@ -451,10 +464,24 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
     {
         if (_disposed)
         {
+            if (again is null)
+            {
+                load.Reader?.Dispose();
+            }
             return;
+        }
+        // Opened again, the play keeps its reader and stream: taken from the file before Unload frees what it holds.
+        var kept = again?.Play;
+        if (again is not null)
+        {
+            again.Play = null;
         }
         Unload();
         var file = new NativeFile(load) { Reopened = again is not null };
+        if (again is not null)
+        {
+            file.Play = kept;
+        }
         if (again is not null)
         {
             file.Audio = again.Audio;
@@ -471,10 +498,44 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         _file = file;
         try
         {
-            var uri = new Uri(load.Url);
             MediaSource source;
-            if (load.Hls)
+            if (file.Play is { } play)
             {
+                // Direct play on the native route reads through the core (ADR 0026): the play's one stream, opened once, by the first
+                // open; an open again while that runs waits for the same one.
+                ReadThroughCore = false;
+                CoreReadStream played;
+                try
+                {
+                    played = await play.OpenAsync();
+                }
+                catch (Exception error)
+                {
+                    if (_file != file)
+                    {
+                        // Closed or opened again meanwhile: nothing more is said about this file.
+                        return;
+                    }
+                    // Refused, failed or the playback moved on, before the player had a source: the open failed (ADR 0025's
+                    // fallback chain moves the file on).
+                    Trace.TraceWarning($"Current: the native engine could not open the core's stream: {error.GetType().Name}");
+                    Fail(file, new PlatformEngineEvent.Failed(Kinds.LoadingFailed), null);
+                    return;
+                }
+                if (_file != file)
+                {
+                    // The play's stream is freed with the play (Unload), or kept by the open again.
+                    return;
+                }
+                // A view that never closes the play's stream: whether disposing the source closes the stream it was made from is
+                // not verified, and an open again needs it.
+                var view = new KeptOpenStream(played).AsRandomAccessStream();
+                source = MediaSource.CreateFromStream(view, played.ContentType);
+                ReadThroughCore = true;
+            }
+            else if (load.Hls)
+            {
+                var uri = new Uri(load.Url);
                 // The deadline covers the playlists too: they are the start of the first segment's wait.
                 AwaitSegment(file, load.Start);
                 var created = await AdaptiveMediaSource.CreateFromUriAsync(uri);
@@ -492,7 +553,7 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
             }
             else
             {
-                source = MediaSource.CreateFromUri(uri);
+                source = MediaSource.CreateFromUri(new Uri(load.Url));
             }
             file.Source = source;
             // Subtitle files before the item, as Microsoft's example adds them.
@@ -611,6 +672,8 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         {
             Trace.TraceError($"Current: the native engine could not let go of its file: {error.GetType().Name}");
         }
+        file.Play?.Free();
+        file.Play = null;
         lock (file.Hooked)
         {
             foreach (var detach in file.Detach)
@@ -1397,4 +1460,74 @@ internal sealed class NativeEngine : PlatformEngineHost, IDisposable
         _disposed = true;
         Player.Dispose();
     }
+}
+
+/// <summary>The core's reader of one play's file and its one stream (ADR 0026), shared by the opens of that play (the first, and any
+/// open again for a subtitle file). UI thread only.</summary>
+internal sealed class PlayRead(CoreFileReader reader)
+{
+    private Task<CoreReadStream>? _opening;
+
+    /// <summary>The play's stream: opened by the first call, the same task for every later one.</summary>
+    public Task<CoreReadStream> OpenAsync() => _opening ??= reader.OpenAsync();
+
+    /// <summary>Frees the stream and the reader. During an open, disposing the reader ends it and the open frees the handle; a stream
+    /// that arrives anyway is disposed when it does.</summary>
+    public void Free()
+    {
+        try
+        {
+            reader.Dispose();
+        }
+        catch (Exception error)
+        {
+            Trace.TraceError($"Current: the native engine could not free the core's reader: {error.GetType().Name}");
+        }
+        _opening?.ContinueWith(
+            opened =>
+            {
+                if (opened.IsCompletedSuccessfully)
+                {
+                    opened.Result.Dispose();
+                }
+            },
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+}
+
+/// <summary>A view of the play's <see cref="CoreReadStream"/> for one <c>MediaSource</c>: reads and seeks go to it, disposing the view
+/// leaves it open (the play frees it, <see cref="PlayRead.Free"/>).</summary>
+internal sealed class KeptOpenStream(CoreReadStream stream) : Stream
+{
+    public override bool CanRead => stream.CanRead;
+
+    public override bool CanSeek => stream.CanSeek;
+
+    public override bool CanWrite => false;
+
+    public override long Length => stream.Length;
+
+    public override long Position
+    {
+        get => stream.Position;
+        set => stream.Position = value;
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => stream.Seek(offset, origin);
+
+    public override int Read(byte[] buffer, int offset, int count) => stream.Read(buffer, offset, count);
+
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+        stream.ReadAsync(buffer, offset, count, cancellationToken);
+
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+        stream.ReadAsync(buffer, cancellationToken);
+
+    public override void Flush()
+    {
+    }
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

@@ -96,6 +96,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("a pending read ends cancelled when the playback stops or the player closes", PlatformEngineTests.APendingReadEndsWithThePlayback),
     ("a seek while a read waits keeps the seek's position", PlatformEngineTests.ASeekDuringAReadWins),
     ("a failed open or an unopened reader frees its handle", PlatformEngineTests.AFailedOpenOrAnUnopenedReaderFreesItsHandle),
+    ("a refused stream on the native route ends on the app engine at the position", PlatformEngineTests.ARefusedStreamOnTheNativeRouteEndsOnTheAppEngineAtThePosition),
+    ("a Dispose during an open frees the handle when the open ends", PlatformEngineTests.ADisposeDuringAnOpenFreesTheHandleWhenTheOpenEnds),
     ("each play has the next number, the same item again too", PlatformEngineTests.EachPlayHasTheNextNumber),
 };
 
