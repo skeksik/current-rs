@@ -52,8 +52,8 @@ pub struct PaneLibrary {
     pub hidden_on_server: bool,
 }
 
-/// The pane's groups of one server as the user arranged them, hidden items included (the pane leaves them out, its edit mode and
-/// Settings show them).
+/// The pane's groups of one server as the user arranged them, hidden items included (the pane leaves them out, Settings shows
+/// them).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PaneLayout {
     pub tabs: Vec<PaneEntry>,

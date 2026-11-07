@@ -1,7 +1,8 @@
 # 0024: The pane's and Home's arrangement, kept in Current
 
 Status: Accepted (owner, 2026-10-28), from feat/pane-order. The owner chose the storage, the merge rule, the Settings section, the
-pane's edit mode and the Edit Home dialog on 2026-10-28.
+pane's edit mode and the Edit Home dialog on 2026-10-28. Amended 2026-11-07 (owner): the pane's edit mode and Edit Home are
+removed; Settings is the only place to arrange (below).
 
 ## Context
 The owner wants to reorder or hide the pane's items within their groups (the Movies and Series tabs; Favourites and Recently added;
@@ -57,12 +58,12 @@ AllowDrop and CanReorderItems properties" ("Drag and drop", learn.microsoft.com,
    - Settings → Personalization: two expanders, "Navigation pane" (a list per group, per server) and "Home" (its rows), each a
      ListView reordered by dragging (CanReorderItems, AllowDrop, CanDragItems), with Move up and Move down, Alt+Up and Alt+Down, a
      ToggleSwitch per item, and a Reset button per group.
-   - The pane's edit mode, entered only from an "Edit navigation" item with a pencil in the pane's footer, shown while the pane is
+   - *(Withdrawn 2026-11-07, see the amendment.)* The pane's edit mode, entered only from an "Edit navigation" item with a pencil in the pane's footer, shown while the pane is
      open; left with Done, Escape, choosing a page, or closing the pane. The same lists, an eye toggle button instead of the switch
      (the 300 px pane has no room for one). Home shows above the lists and Settings in the footer, both dimmed and fixed (the
      design's mock): the pane's custom content sits above the menu items (NavigationView.xaml, microsoft-ui-xaml main at b9fa30e,
      read 2026-10-28), so Home there is a dimmed label and the real item is collapsed meanwhile; Settings is disabled.
-   - An "Edit Home" button in Home's title row opens the Home list in a ContentDialog, with Done.
+   - *(Withdrawn 2026-11-07, see the amendment.)* An "Edit Home" button in Home's title row opens the Home list in a ContentDialog, with Done.
    - Every change is saved at once; the pane and Home follow.
 
 ## Consequences
@@ -76,3 +77,10 @@ AllowDrop and CanReorderItems properties" ("Drag and drop", learn.microsoft.com,
   run).
 - macOS and Linux build their own editors on the same core API (`Browse::pane`, `home_layout`, `move_item`, `set_hidden`,
   `reset_group`).
+
+## Amendment (2026-11-07, owner)
+The owner, 2026-11-07: "remove edit buttons from sidebar and home page, leave only in settings". On Windows the arrangement is edited only in Settings → Personalization, its "Navigation pane"
+and "Home" expanders. The pane's edit mode (the "Edit navigation" footer item, its lists in the pane's custom content, the eye toggle
+button of its narrow lists) and the "Edit Home" button with its dialog are removed; ADR 0022's departures 8 and 9 are withdrawn. The
+"Not verified" items about the footer item's place and the edit lists' height no longer apply. The core, the storage and the merge
+rule do not change.

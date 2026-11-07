@@ -268,8 +268,8 @@ Fix and polish:
       the supported formats page shows "Server converts" today, ADR 0021)
 - [x] Reorder or hide the pane's items within their groups (Movies and Series; Favourites, Recently added; the libraries), Home and
       Settings fixed, and reorder and hide Home's rows (owner, 2026-10-26 and 2026-10-28): kept in Current per server and user, with
-      Jellyfin's order and "My media" hiding as the default; Settings → Personalization, the pane's edit mode and Edit Home (ADR 0024;
-      ADR 0022, departures 8 and 9)
+      Jellyfin's order and "My media" hiding as the default; edited only in Settings → Personalization (owner, 2026-11-07: the pane's
+      edit mode and Edit Home removed; ADR 0024, amended; ADR 0022, departures 8 and 9 withdrawn)
 - [x] Per-type pages as pane tabs: Movies and Series, every library's, with a library's Sort, Filter, View and remembered choices,
       under Home (owner, 2026-10-28; ADR 0018 §6, amended; PR #101)
 - [ ] Per-type pages for Episodes and Collections (their Favourites rows' headers open today's page; not wanted for now, owner,

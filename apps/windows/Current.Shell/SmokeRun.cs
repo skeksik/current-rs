@@ -485,11 +485,17 @@ internal static class SmokeRun
             window.FollowBrowsing(hub);
             var listed = await WaitUntilAsync(() => window.LibraryItemCount == 2);
             check(listed, $"the navigation lists the server's libraries ({window.LibraryItemCount})");
-            // The pane's edit mode (ADR 0024) and back: Home shows again, and the libraries' items with it.
-            window.EditNavigation(true);
-            window.EditNavigation(false);
-            check(!window.IsEditingNavigation && window.HomeItemShown && window.LibraryItemCount == 2,
-                $"leaving the pane's edit mode shows Home and the libraries again ({window.HomeItemShown}, {window.LibraryItemCount})");
+            // Settings' arrangement editors (ADR 0024), the only place the arrangement is edited (owner, 2026-11-07): the pane's has
+            // the libraries' list, Home's its rows; the pane keeps showing Home and the libraries meanwhile.
+            using (var paneEditor = new ArrangementEditor(hub, home: false))
+            using (var homeEditor = new ArrangementEditor(hub, home: true))
+            {
+                var libraryRows = paneEditor.Root.Children.OfType<ArrangeList>()
+                    .FirstOrDefault(list => list.ListName == "Libraries")?.Rows.Count ?? 0;
+                check(libraryRows == 2 && homeEditor.HasContent && window.HomeItemShown && window.LibraryItemCount == 2,
+                    $"Settings' editors list the libraries and Home's rows, and the pane shows Home and the libraries "
+                    + $"({libraryRows}, {homeEditor.HasContent}, {window.HomeItemShown}, {window.LibraryItemCount})");
+            }
             if (hub.Servers.FirstOrDefault() is not { } server)
             {
                 check(false, "a browse session for the stand-in");

@@ -6,7 +6,6 @@ using Current.Bindings;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using VirtualKey = Windows.System.VirtualKey;
 
@@ -142,14 +141,6 @@ public sealed partial class ArrangeList : UserControl
         }
     }
 
-    private void OnShowClick(object sender, RoutedEventArgs e)
-    {
-        if (sender is ToggleButton toggle && RowOf(sender) is { } row)
-        {
-            Run(SetHidden?.Invoke(row.Key, toggle.IsChecked != true));
-        }
-    }
-
     // async void, as event handlers are: it catches everything itself. A failed save leaves the group as the core had it, which it
     // publishes again (the pane's groups), or the owner reads again (Home's rows), so a drop shown ahead goes back; a notice says why.
     private static async void Run(Task? change)
@@ -174,7 +165,7 @@ public sealed partial class ArrangeList : UserControl
 }
 
 /// <summary>One row of an <see cref="ArrangeList"/>: an item of a group, keyed as the core keys it.</summary>
-public sealed class ArrangeRow(string key, string name, bool isShown, string glyph = "", string note = "", bool compact = false)
+public sealed class ArrangeRow(string key, string name, bool isShown, string glyph = "", string note = "")
     : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -211,11 +202,6 @@ public sealed class ArrangeRow(string key, string name, bool isShown, string gly
         get => _canMoveDown;
         set => Set(ref _canMoveDown, value);
     }
-
-    /// <summary>The pane's narrow list shows an eye toggle button; Settings and the Home dialog a ToggleSwitch.</summary>
-    public Visibility SwitchVisibility => compact ? Visibility.Collapsed : Visibility.Visible;
-
-    public Visibility ButtonVisibility => compact ? Visibility.Visible : Visibility.Collapsed;
 
     public string MoveUpLabel => $"Move {Name} up";
 

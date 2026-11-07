@@ -3,30 +3,29 @@ using Current.Bindings;
 namespace Current.Shell.Browsing;
 
 /// <summary>
-/// The rows of the arrangement editors (ADR 0024: the pane's edit mode, Settings' "Navigation pane" and "Home", the Edit Home
-/// dialog), made from the core's arrangement, with the names and icons the pane shows.
+/// The rows of the arrangement editors (ADR 0024: Settings' "Navigation pane" and "Home"), made from the core's arrangement, with the
+/// names and icons the pane shows.
 /// </summary>
 internal static class PaneRows
 {
     /// <summary>Why a library starts hidden: the server keeps it out of "My media".</summary>
     public const string HiddenOnServer = "Hidden on the server";
 
-    public static IReadOnlyList<ArrangeRow> Tabs(PaneLayout layout, bool compact = false) =>
+    public static IReadOnlyList<ArrangeRow> Tabs(PaneLayout layout) =>
         [.. layout.Tabs.Select(tab => new ArrangeRow(
-            tab.Key, Views.Title(BrowseView.Everything, tab.Key), !tab.Hidden, KindTabGlyph(tab.Key), compact: compact))];
+            tab.Key, Views.Title(BrowseView.Everything, tab.Key), !tab.Hidden, KindTabGlyph(tab.Key)))];
 
-    public static IReadOnlyList<ArrangeRow> ViewItems(PaneLayout layout, bool compact = false) =>
+    public static IReadOnlyList<ArrangeRow> ViewItems(PaneLayout layout) =>
         [.. layout.Views.Select(view => new ArrangeRow(
-            view.Key, Views.Title(ViewOf(view.Key)), !view.Hidden, ViewGlyph(view.Key), compact: compact))];
+            view.Key, Views.Title(ViewOf(view.Key)), !view.Hidden, ViewGlyph(view.Key)))];
 
-    public static IReadOnlyList<ArrangeRow> Libraries(PaneLayout layout, bool compact = false) =>
+    public static IReadOnlyList<ArrangeRow> Libraries(PaneLayout layout) =>
         [.. layout.Libraries.Select(entry => new ArrangeRow(
             entry.Library.Item.Id,
             entry.Library.Name,
             !entry.Hidden,
             LibraryGlyph(entry.Library.Collection),
-            entry.HiddenOnServer ? HiddenOnServer : "",
-            compact))];
+            entry.HiddenOnServer ? HiddenOnServer : ""))];
 
     public static IReadOnlyList<ArrangeRow> HomeRows(IReadOnlyList<HomeRowSetting> rows) =>
         [.. rows.Select(setting => new ArrangeRow(setting.Row.Key, Views.ForHomeRow(setting.Row).Title, !setting.Hidden))];

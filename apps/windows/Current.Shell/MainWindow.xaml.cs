@@ -186,6 +186,9 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     /// <summary>The navigation's library items now, servers' items left out (the smoke run).</summary>
     internal int LibraryItemCount => _libraryItems.OfType<NavigationViewItem>().Count(item => item.Tag is LibraryArgs);
 
+    /// <summary>Whether Home's item shows (the smoke run).</summary>
+    internal bool HomeItemShown => HomeItem.Visibility == Visibility.Visible;
+
     /// <summary>Opens Settings, as its item in the pane does (the smoke run).</summary>
     internal void ShowSettings() => Navigate(typeof(SettingsPage), new SuppressNavigationTransitionInfo());
 
@@ -303,8 +306,6 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
     {
         NamePaneToggleButton();
         UpdateBackButton();
-        // The pencil shows only while the pane is open, and closing the pane leaves edit mode.
-        ShowEditNavigation();
     });
 
     /// <summary>
@@ -580,13 +581,6 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     private void OnItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)
     {
-        if (ReferenceEquals(args.InvokedItemContainer, EditNavItem))
-        {
-            EnterEditMode();
-            return;
-        }
-        // Choosing a page leaves edit mode (MainWindow.Arrange.cs).
-        LeaveEditMode();
         if (args.IsSettingsInvoked)
         {
             Navigate(typeof(SettingsPage), args.RecommendedNavigationTransitionInfo);
@@ -783,7 +777,6 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
         LibrariesSeparator.Visibility = top.Count > 0 || ViewItems.Any(view => view.Item.Visibility == Visibility.Visible)
             ? Visibility.Visible
             : Visibility.Collapsed;
-        ShowEditNavigation();
     }
 
     /// <summary>The Favourites and Recently added items above Libraries, by the key the core's Views group gives each.</summary>
@@ -1177,7 +1170,6 @@ public sealed partial class MainWindow : Window, Player.IPlayerHost
 
     private void OnNavigated(object sender, NavigationEventArgs e)
     {
-        LeaveEditMode();
         _shownParameter = e.Parameter;
         PruneKeptDetails();
         DropSignInHistory();
