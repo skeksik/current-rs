@@ -522,7 +522,7 @@ internal static class PlatformEngineTests
             await Eventually("on the app engine at the position", ui, () => session.State.Value.State == PlayerStateKind.Playing
                 && session.State.Value.Route?.Label == RouteLabel.AppEngine
                 && session.State.Value.Position == TimeSpan.FromSeconds(42));
-            Check(engine.Opens.SequenceEqual(["refused"]), $"one refused open, not {string.Join(", ", engine.Opens)}");
+            Check(engine.Opens.SequenceEqual(new[] { "refused" }), $"one refused open, not {string.Join(", ", engine.Opens)}");
             var lines = await session.PlaybackInfoLinesAsync(null, Panel);
             Check(lines[0] == "App engine" && lines[1] == "• The native player could not start the file.",
                 $"the failed route named, not {string.Join(" | ", lines)}");

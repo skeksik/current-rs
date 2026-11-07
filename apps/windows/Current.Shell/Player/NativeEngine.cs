@@ -1483,7 +1483,7 @@ internal sealed class PlayRead(CoreFileReader reader)
         {
             Trace.TraceError($"Current: the native engine could not free the core's reader: {error.GetType().Name}");
         }
-        _opening?.ContinueWith(
+        _ = _opening?.ContinueWith(
             opened =>
             {
                 if (opened.IsCompletedSuccessfully)
