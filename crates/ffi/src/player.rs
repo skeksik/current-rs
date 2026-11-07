@@ -250,6 +250,13 @@ impl Player {
         self.quick(PlayerAction::DismissNext)
     }
 
+    /// Whether the platform engine's direct-play loads that follow read their file through the core's stream reader
+    /// ([`crate::PlatformFile::reader`], ADR 0026) instead of a relay URL. Off by default. A temporary switch until R3 replaces it
+    /// with the routing rule: no app calls it yet. Does nothing without a platform engine.
+    pub fn set_stream_reader(&self, enabled: bool) {
+        self.player.set_stream_reader(enabled);
+    }
+
     /// 0 to 100.
     pub fn set_volume(&self, volume: u8) -> Result<(), CoreError> {
         self.quick(PlayerAction::SetVolume(volume.min(100)))
