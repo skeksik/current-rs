@@ -22,6 +22,7 @@ use crate::quality::{Quality, QualityPreference, snap_quality};
 use crate::route::{self, RouteContext};
 use crate::server::{MediaServer, ProgressReport, StopReport, TranscodePermissions};
 use crate::status::{AutoSkip, NextEpisode, PlaybackDetails, PlayerEvent, PlayerStatus, Track};
+use crate::stream::DirectFile;
 
 /// Progress reports while a file plays, paused or not (ADR 0019, choice 7); well under the server's 60 s HLS kill timer.
 pub const PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
@@ -1539,9 +1540,13 @@ impl<E: Engine, S: MediaServer, C: Clock> Controller<E, S, C> {
         );
         // A stream for the native engine always goes through the relay (ADR 0025, "URLs across the bridge").
         let always_relay = planned.plan.route.engine() == EngineRole::Native;
+        let direct = planned.plan.route.is_local().then_some(DirectFile {
+            duration: planned.plan.source.duration,
+            bitrate: planned.plan.source.bitrate,
+        });
         let stream = match self
             .server
-            .stream_url(&item, &planned.url, hls, always_relay)
+            .stream_url(&item, &planned.url, hls, always_relay, direct)
         {
             Ok(stream) => stream,
             // The relay could not start for the native engine, which may only get relayed streams: a failed route, so libmpv (which

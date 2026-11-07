@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use current_app::test_engine::{self, TestCommand};
-use jellyfin_stand_in::{DIRECT_PLAY_ITEM, Gate, STREAM_LENGTH, stream_byte};
+use jellyfin_stand_in::{DIRECT_PLAY_ITEM, Gate, STREAM_LENGTH, TRANSCODE_ITEM, stream_byte};
 
 use super::*;
 use crate::player_tests::{DISPLAY, SIZE, engine_turn, item, recorder, signed_in, stand_in, until};
@@ -444,4 +444,23 @@ fn a_pending_read_ends_cancelled_on_a_stop_a_re_plan_and_a_close() {
         Err(StreamReadError::Cancelled)
     );
     stand_in.release(&stream_path());
+}
+
+#[test]
+fn a_server_stream_gets_its_url_and_no_reader_even_with_the_switch_on() {
+    let _turn = engine_turn();
+    let stand_in = stand_in(Gate::Off);
+    let core = Core::new().unwrap();
+    signed_in(&core, &stand_in, false);
+    let engine = Arc::new(FakeEngine::default());
+    let player =
+        block_on(core.open_player_with_platform_engine(SIZE, DISPLAY, engine.clone(), answers()))
+            .unwrap();
+    player.set_stream_reader(true);
+    block_on(player.play(item(TRANSCODE_ITEM), 0, CancelToken::new())).unwrap();
+    let file = engine.last();
+    assert!(file.hls);
+    assert!(file.url.starts_with("http://127.0.0.1:"));
+    assert!(file.reader.is_none(), "a server stream stays on the relay");
+    block_on(player.close());
 }

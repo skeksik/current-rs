@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use current_playback::EngineEvent;
+use current_playback::{DirectFile, EngineEvent};
 use current_relay::{
     Bytes, FileFacts, ReadError, ReaderFacts, ReaderLimits, ReaderRoute, StreamReader,
 };
@@ -24,12 +24,19 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// What the engine said before the reader opened, applied when it does, and kept up to date after.
+/// What the plan and the engine said before the reader opened, applied when it does, and kept up to date after.
 #[derive(Debug, Default)]
 struct Feed {
     position: Duration,
+    /// From the plan's source at first, then the engine's.
     duration: Option<Duration>,
+    /// From the plan's source, for a file without a duration.
+    bitrate: Option<u32>,
     starving: bool,
+    /// A seek the reader has not been told of: it was not open yet.
+    seek: Option<Duration>,
+    /// The feed changed while the reader was not open (its first request was running): applied once it is.
+    pending: bool,
 }
 
 /// One file read for the platform engine. Cheap to share; every call may come from any thread.
@@ -50,13 +57,23 @@ impl std::fmt::Debug for PlatformReader {
 }
 
 impl PlatformReader {
-    /// A reader of `path` with `query` (relative to the server's address, without `ApiKey`) on `route`.
-    pub(crate) fn new(route: ReaderRoute, path: String, query: Vec<(String, String)>) -> Self {
+    /// A reader of `path` with `query` (relative to the server's address, without `ApiKey`) on `route`, for a file with the plan's
+    /// `direct` facts: its duration paces the reader from the first read, before the engine can report one.
+    pub(crate) fn new(
+        route: ReaderRoute,
+        path: String,
+        query: Vec<(String, String)>,
+        direct: DirectFile,
+    ) -> Self {
         Self {
             route,
             path,
             query,
-            feed: Mutex::default(),
+            feed: Mutex::new(Feed {
+                duration: direct.duration,
+                bitrate: direct.bitrate,
+                ..Feed::default()
+            }),
             reader: OnceCell::new(),
         }
     }
@@ -72,36 +89,51 @@ impl PlatformReader {
     }
 
     async fn opened(&self) -> Result<&StreamReader, ReadError> {
-        self.reader
+        let reader = self
+            .reader
             .get_or_try_init(|| async {
                 let facts = {
-                    let feed = lock(&self.feed);
+                    let mut feed = lock(&self.feed);
+                    // The open takes all of the feed as it is now: what changes while it runs is applied after.
+                    feed.seek = None;
+                    feed.pending = false;
                     FileFacts {
                         start: feed.position,
                         duration: feed.duration,
-                        bitrate: None,
+                        bitrate: feed.bitrate.map(u64::from),
                         content_type: None,
                     }
                 };
-                let reader = self
-                    .route
+                self.route
                     .open(
                         &self.path,
                         self.query.clone(),
                         facts,
                         ReaderLimits::default(),
                     )
-                    .await?;
-                // What the engine said while the first request ran.
-                let feed = lock(&self.feed);
-                reader.set_position(feed.position);
-                if let Some(duration) = feed.duration {
-                    reader.set_duration(duration);
-                }
-                reader.set_starving(feed.starving);
-                Ok(reader)
+                    .await
             })
-            .await
+            .await?;
+        self.catch_up(reader);
+        Ok(reader)
+    }
+
+    /// Applies what the feed got while the reader was not open yet: a change between the open's start and the reader being
+    /// stored reached only the feed.
+    fn catch_up(&self, reader: &StreamReader) {
+        let mut feed = lock(&self.feed);
+        if !feed.pending {
+            return;
+        }
+        feed.pending = false;
+        if let Some(position) = feed.seek.take() {
+            reader.seek_to(position);
+        }
+        reader.set_position(feed.position);
+        if let Some(duration) = feed.duration {
+            reader.set_duration(duration);
+        }
+        reader.set_starving(feed.starving);
     }
 
     /// Up to `max_len` bytes at `offset`, opening the file first if needed; empty at its end.
@@ -122,27 +154,28 @@ impl PlatformReader {
         self.route.cancel();
     }
 
-    /// Updates the feed and, once open, the reader.
+    /// Updates the feed and, once open, the reader; before, the change waits for [`PlatformReader::catch_up`].
     fn update(&self, change: impl FnOnce(&mut Feed), apply: impl FnOnce(&StreamReader, &Feed)) {
         let mut feed = lock(&self.feed);
         change(&mut feed);
-        if let Some(reader) = self.reader.get() {
-            apply(reader, &feed);
+        match self.reader.get() {
+            Some(reader) => apply(reader, &feed),
+            None => feed.pending = true,
         }
     }
 
     /// Where the load starts.
     pub(crate) fn start_at(&self, start: Duration) {
-        self.update(
-            |feed| feed.position = start,
-            |reader, feed| reader.seek_to(feed.position),
-        );
+        self.seek_to(start);
     }
 
     /// A seek the core sends the engine, before the engine reads there.
     pub(crate) fn seek_to(&self, position: Duration) {
         self.update(
-            |feed| feed.position = position,
+            |feed| {
+                feed.position = position;
+                feed.seek = Some(position);
+            },
             |reader, feed| reader.seek_to(feed.position),
         );
     }
@@ -245,7 +278,10 @@ mod tests {
         UpstreamRequest, UpstreamResponse,
     };
 
-    const SIZE: u64 = 1_000_000;
+    /// 2 GB, generated as it is read: a resume far into it is past the read-ahead and the file's head, as in a real film.
+    const SIZE: u64 = 2_000_000_000;
+    /// Bytes per second over 100 s.
+    const RATE: u64 = SIZE / 100;
 
     /// A server with one file of [`SIZE`] zero bytes, in 64 KiB chunks.
     struct File;
@@ -297,6 +333,10 @@ mod tests {
     }
 
     fn reader() -> PlatformReader {
+        reader_with(DirectFile::default())
+    }
+
+    fn reader_with(direct: DirectFile) -> PlatformReader {
         let route = ReaderRoute::new(
             &tokio::runtime::Handle::current(),
             ReaderRouteConfig {
@@ -306,7 +346,7 @@ mod tests {
             },
         )
         .unwrap();
-        PlatformReader::new(route, "/Videos/e1/stream".into(), Vec::new())
+        PlatformReader::new(route, "/Videos/e1/stream".into(), Vec::new(), direct)
     }
 
     #[tokio::test]
@@ -319,12 +359,12 @@ mod tests {
         assert_eq!(reader.open().await.unwrap(), (SIZE, "video/mp4".to_owned()));
         let facts = reader.facts().unwrap();
         assert!(facts.rate_known);
-        assert_eq!(facts.point, 100_000);
+        assert_eq!(facts.point, 10 * RATE);
         // After: positions and seeks move the point.
         reader.engine_event(&EngineEvent::Position(Duration::from_secs(20)));
-        assert_eq!(reader.facts().unwrap().point, 200_000);
+        assert_eq!(reader.facts().unwrap().point, 20 * RATE);
         reader.seek_to(Duration::from_secs(50));
-        assert_eq!(reader.facts().unwrap().point, 500_000);
+        assert_eq!(reader.facts().unwrap().point, 50 * RATE);
         // Starving while buffering; no longer once playing again or paused.
         let starving = |reader: &PlatformReader| lock(&reader.feed).starving;
         for (event, after) in [
@@ -340,5 +380,85 @@ mod tests {
         }
         reader.cancel();
         assert_eq!(reader.read(0, 10).await, Err(ReadError::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn the_plans_duration_paces_the_reader_from_the_first_read() {
+        let reader = reader_with(DirectFile {
+            duration: Some(Duration::from_secs(100)),
+            bitrate: None,
+        });
+        reader.start_at(Duration::from_secs(50));
+        // The player reads the file's head first: it does not pin the point, which is where 50 s is.
+        assert!(!reader.read(0, 10).await.unwrap().is_empty());
+        let facts = reader.facts().unwrap();
+        assert!(facts.rate_known);
+        assert_eq!(facts.point, 50 * RATE);
+    }
+
+    #[tokio::test]
+    async fn a_duration_the_engine_reports_after_the_head_read_still_finds_the_point() {
+        // No duration in the plan: the engine can report one only after it read the head through the reader.
+        let reader = reader();
+        reader.start_at(Duration::from_secs(50));
+        assert!(!reader.read(0, 10).await.unwrap().is_empty());
+        assert_eq!(
+            reader.facts().unwrap().point,
+            0,
+            "without a rate the head read pins it"
+        );
+        reader.engine_event(&EngineEvent::Duration(Duration::from_secs(100)));
+        assert_eq!(reader.facts().unwrap().point, 50 * RATE);
+        // The player's read at the target pins it there.
+        let target = 50 * RATE + 4096;
+        assert!(!reader.read(target, 10).await.unwrap().is_empty());
+        assert_eq!(reader.facts().unwrap().point, target);
+    }
+
+    /// [`File`], whose answers wait for a permit.
+    struct Held(Arc<tokio::sync::Semaphore>);
+
+    impl Upstream for Held {
+        fn send(&self, request: UpstreamRequest) -> UpstreamFuture<'_, UpstreamResponse> {
+            let gate = self.0.clone();
+            Box::pin(async move {
+                gate.acquire().await.unwrap().forget();
+                File.send(request).await
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_seek_while_the_first_request_runs_reaches_the_reader() {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let route = ReaderRoute::new(
+            &tokio::runtime::Handle::current(),
+            ReaderRouteConfig {
+                upstream: Arc::new(Held(gate.clone())),
+                prefixes: vec!["/Videos/e1/".into()],
+                events: Arc::new(NoEvents),
+            },
+        )
+        .unwrap();
+        let reader = Arc::new(PlatformReader::new(
+            route,
+            "/Videos/e1/stream".into(),
+            Vec::new(),
+            DirectFile {
+                duration: Some(Duration::from_secs(100)),
+                bitrate: None,
+            },
+        ));
+        let opening = {
+            let reader = reader.clone();
+            tokio::spawn(async move { reader.open().await })
+        };
+        // The open took the feed (start 0) and waits for the server; the seek reaches only the feed.
+        tokio::task::yield_now().await;
+        assert!(!opening.is_finished());
+        reader.seek_to(Duration::from_secs(50));
+        gate.add_permits(10);
+        opening.await.unwrap().unwrap();
+        assert_eq!(reader.facts().unwrap().point, 50 * RATE);
     }
 }

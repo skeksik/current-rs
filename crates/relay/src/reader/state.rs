@@ -101,6 +101,9 @@ impl Window {
 struct Anchor {
     offset: u64,
     position: Duration,
+    /// Pinned while no rate was known: without one, any first read pins the point (the file's head included), so such an anchor
+    /// is dropped once the rate becomes known ([`State::set_duration`]).
+    without_rate: bool,
 }
 
 /// What a read does next.
@@ -319,6 +322,7 @@ impl State {
         self.anchor = Some(Anchor {
             offset,
             position: self.position,
+            without_rate: self.rate.is_none(),
         });
         self.awaiting_anchor = false;
     }
@@ -358,6 +362,7 @@ impl State {
                 self.anchor = Some(Anchor {
                     offset,
                     position: self.position,
+                    without_rate: self.rate.is_none(),
                 });
                 self.awaiting_anchor = false;
             } else {
@@ -469,12 +474,21 @@ impl State {
     }
 
     /// The file's duration, once known: the point then follows the position at size / duration (it replaces a bitrate's rate).
+    /// An anchor pinned while no rate was known is dropped, and the next read that can be the playback position pins the point
+    /// again (a platform player reads the file's head before it can report the duration).
     pub(crate) fn set_duration(&mut self, duration: Duration) {
-        if !duration.is_zero() {
-            let rate = self.size as f64 / duration.as_secs_f64();
-            if rate.is_finite() && rate > 0.0 {
-                self.rate = Some(rate);
-            }
+        if duration.is_zero() {
+            return;
+        }
+        let rate = self.size as f64 / duration.as_secs_f64();
+        if !rate.is_finite() || rate <= 0.0 {
+            return;
+        }
+        let was_known = self.rate.is_some();
+        self.rate = Some(rate);
+        if !was_known && self.anchor.is_some_and(|anchor| anchor.without_rate) {
+            self.anchor = None;
+            self.awaiting_anchor = true;
         }
     }
 

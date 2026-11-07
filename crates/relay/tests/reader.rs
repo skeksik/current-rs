@@ -1101,3 +1101,34 @@ async fn cancelling_the_route_ends_an_open_waiting_for_the_server() {
     );
     gate.add_permits(10);
 }
+
+#[tokio::test]
+async fn the_head_read_before_the_duration_does_not_pin_the_point_once_it_is_known() {
+    // A resume at 50 s by a player that reads the file's head before it can report the duration.
+    let (route, _events) = route(FakeFile::new());
+    let unknown = FileFacts {
+        start: Duration::from_secs(50),
+        duration: None,
+        bitrate: None,
+        ..facts()
+    };
+    let reader = open(&route, limits(), unknown).await;
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    assert_eq!(
+        reader.facts().point,
+        0,
+        "without a rate the head read pins it"
+    );
+    reader.set_duration(DURATION);
+    reader.set_position(Duration::from_secs(50));
+    let estimate = rate_bytes(50.0);
+    assert_eq!(reader.facts().point, estimate);
+    // The player's read at the target is served and pins the point there.
+    let target = estimate + 1_000;
+    read_now(&reader, target, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, target);
+    assert_eq!(
+        read_until_held(&reader, target + 1).await,
+        target + 64 * KIB
+    );
+}

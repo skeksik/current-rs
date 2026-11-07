@@ -810,6 +810,32 @@ fn a_stream_for_the_native_engine_always_goes_through_the_relay() {
 }
 
 #[test]
+fn only_a_local_route_tells_the_server_it_is_direct_play_with_the_sources_duration() {
+    let mut two = Two::playing(movie());
+    let source = movie();
+    assert_eq!(
+        two.server.state().directs,
+        vec![Some(crate::DirectFile {
+            duration: source.duration,
+            bitrate: source.bitrate,
+        })]
+    );
+    // A server stream is not direct play, whichever engine plays it (ADR 0026: no stream reader for it).
+    let mut stream = answer(
+        hls(StreamAction::Copy, StreamAction::Transcode),
+        vec![RouteReason::AUDIO_CODEC_NOT_SUPPORTED],
+    );
+    stream.source = movie();
+    two.server.answer(Ok(stream));
+    block_on(
+        two.player
+            .set_quality(crate::quality::Quality::Bitrate(4_000_000)),
+    );
+    assert!(!two.plan().route.is_local());
+    assert_eq!(two.server.state().directs.last(), Some(&None));
+}
+
+#[test]
 fn a_relay_that_cannot_start_for_the_native_engine_is_a_failed_route() {
     let mut two = Two::new(movie());
     two.server.state().relay_problem = Some(current_model::PlaybackProblem::LocalRelay);

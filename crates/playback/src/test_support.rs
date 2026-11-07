@@ -21,7 +21,7 @@ use crate::engine::{Engine, EngineFile, EngineTrack, ExternalSubtitle};
 use crate::server::{
     MediaServer, PlanRequest, ProgressReport, ServerAnswer, StopReport, TranscodePermissions,
 };
-use crate::stream::{EngineStream, StreamAuth, StreamUrl};
+use crate::stream::{DirectFile, EngineStream, StreamAuth, StreamUrl};
 
 /// The token, cookie and header values the fake server hands out; no Debug output may show them.
 /// The session token in the server's URLs and the route token in relayed ones.
@@ -239,6 +239,8 @@ pub struct ServerState {
     pub hls_streams: Vec<bool>,
     /// Whether each of `streams` was asked to go through the relay whatever the address (a stream for the native engine).
     pub always_relayed: Vec<bool>,
+    /// What each stream URL was asked with as `direct`.
+    pub directs: Vec<Option<DirectFile>>,
     /// Whether `stream_url` relays (an address with gateway credentials).
     pub relay: bool,
     /// What `stream_url` fails with; `None` gives a URL.
@@ -290,6 +292,7 @@ impl FakeServer {
                 streams: Vec::new(),
                 hls_streams: Vec::new(),
                 always_relayed: Vec::new(),
+                directs: Vec::new(),
                 relay: false,
                 stream_problem: None,
                 relay_problem: None,
@@ -406,8 +409,10 @@ impl MediaServer for FakeServer {
         url: &StreamUrl,
         hls: bool,
         always_relay: bool,
+        direct: Option<DirectFile>,
     ) -> Result<EngineStream, PlaybackProblem> {
         let mut state = self.state();
+        state.directs.push(direct);
         state.streams.push(url.expose().to_owned());
         state.hls_streams.push(hls);
         state.always_relayed.push(always_relay);
