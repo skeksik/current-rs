@@ -6,6 +6,8 @@
 //! - `count <path>`: prints `count <n>`, how many requests to the path arrived;
 //! - `fail <path or page>`, `unfail <path or page>`: requests to the path, or to a page of the generated library (`/Items@<start>`,
 //!   `paging::page_key`), answer 500 until unfailed;
+//! - `stall <bytes> <path>`: stream answers to the path send that many bytes of their body, then wait until `release <path>`;
+//! - `fail-stream <status> <path>`: the stream at the path answers with that status;
 //! - `cancelled <path or page>`: prints `cancelled <n>`, how many held requests to it their client gave up;
 //! - `gate off`, `gate basic`, `gate portal`, `gate header`: the gateway in front of it (ADR 0017; credentials in `lib.rs`);
 //! - `gate-cookie <value>`: the portal takes this cookie value from now on;
@@ -61,6 +63,20 @@ fn main() -> std::io::Result<()> {
                     controls.release(path);
                 } else if let Some(path) = line.strip_prefix("fail ") {
                     controls.fail(path);
+                } else if let Some(rest) = line.strip_prefix("stall ") {
+                    // `stall <bytes> <path>`: stream answers to the path send that many bytes, then wait until `release <path>`.
+                    if let Some((after, path)) = rest.split_once(' ')
+                        && let Ok(after) = after.parse()
+                    {
+                        controls.stall_stream(path, after);
+                    }
+                } else if let Some(rest) = line.strip_prefix("fail-stream ") {
+                    // `fail-stream <status> <path>`: the stream at `path` answers with that status.
+                    if let Some((status, path)) = rest.split_once(' ')
+                        && let Ok(status) = status.parse()
+                    {
+                        controls.fail_stream(path, status);
+                    }
                 } else if let Some(path) = line.strip_prefix("unfail ") {
                     controls.unfail(path);
                 } else if let Some(path) = line.strip_prefix("cancelled ") {

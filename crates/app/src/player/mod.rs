@@ -36,6 +36,7 @@ mod platform;
 mod platform_caps;
 mod prefs;
 mod problem;
+mod reader;
 mod relay;
 mod server;
 #[cfg(any(test, feature = "test-engine"))]
@@ -77,6 +78,7 @@ pub use platform_caps::{
     CodecAnswer, CodecKind, CodecQuery, windows_codec_queries, windows_engine,
 };
 pub(crate) use prefs::PlaybackPrefs;
+pub use reader::PlatformReader;
 pub(crate) use relay::RelaySlot;
 
 /// Which engine [`App::open_player`](crate::App::open_player) uses in this build.
@@ -222,6 +224,8 @@ pub struct Player {
     state: watch::Receiver<PlayerStatus>,
     now_playing: watch::Receiver<NowPlaying>,
     swap_chain: watch::Receiver<Option<Arc<SwapChain>>>,
+    /// The platform engine's stream readers (ADR 0026); `None` without a platform engine.
+    readers: Option<Arc<reader::ReaderSlot>>,
 }
 
 impl std::fmt::Debug for Player {
@@ -233,6 +237,20 @@ impl std::fmt::Debug for Player {
 }
 
 impl Player {
+    /// Whether the platform engine's direct-play loads that follow read their file through the core's stream reader (ADR 0026)
+    /// instead of a relay URL. Off by default. A temporary switch until R3 replaces it with the routing rule; no app turns it on.
+    /// Does nothing without a platform engine.
+    pub fn set_stream_reader(&self, enabled: bool) {
+        if let Some(readers) = &self.readers {
+            readers.set_enabled(enabled);
+        }
+    }
+
+    /// The facts of the stream reader the platform engine reads now, once it opened (for R3's info panel).
+    pub fn stream_reader_facts(&self) -> Option<current_relay::ReaderFacts> {
+        self.readers.as_ref()?.fed()?.facts()
+    }
+
     /// The state, published at most 4 times a second for the position and at once on any other change.
     pub fn state(&self) -> watch::Receiver<PlayerStatus> {
         self.state.clone()

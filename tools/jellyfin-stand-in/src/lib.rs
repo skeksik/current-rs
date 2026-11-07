@@ -270,6 +270,8 @@ struct State {
     failing: Mutex<HashMap<String, u16>>,
     /// Stream paths (lowercase) whose next answer breaks off after this many body bytes.
     cuts: Mutex<HashMap<String, usize>>,
+    /// Stream answers to these paths (lower case) send this many bytes of their body, then wait until [`Controls::release`].
+    stalls: Mutex<HashMap<String, usize>>,
     /// Stream bodies go out in pieces of at most this many bytes, one per [`PACE_TICK`]; 0 sends them at once.
     pace: AtomicUsize,
     /// How long every JSON answer waits, in milliseconds, after it was read from the state on arrival: a slow server.
@@ -459,7 +461,14 @@ impl Controls {
     pub fn release(&self, path: &str) {
         lock(&self.state.held).remove(path);
         lock(&self.state.held_answers).remove(path);
+        lock(&self.state.stalls).remove(&path.to_ascii_lowercase());
         self.state.released.notify_waiters();
+    }
+
+    /// Stream answers to `path` (any case) send `after` bytes of their body and then wait, the connection open, until
+    /// [`Controls::release`]: a server that stops sending mid-body, for as long as a test needs, whatever the network's speed.
+    pub fn stall_stream(&self, path: &str, after: usize) {
+        lock(&self.state.stalls).insert(path.to_ascii_lowercase(), after);
     }
 
     /// The paths of the requests received so far, oldest first.
@@ -802,9 +811,24 @@ async fn serve(mut socket: TcpStream, state: Arc<State>, door: usize) {
             } else {
                 None
             };
+            let stall = if (200..300).contains(&status) {
+                let path = received.path.to_ascii_lowercase();
+                lock(&state.stalls).get(&path).map(|after| (path, *after))
+            } else {
+                None
+            };
             let _ = socket.write_all(head.as_bytes()).await;
             if received.method != "HEAD" {
-                send_body(&state, &mut socket, &body, cut).await;
+                let body = match stall {
+                    Some((path, after)) if after < body.len() => {
+                        if !stall_body(&state, &mut socket, &body[..after], &path).await {
+                            return;
+                        }
+                        &body[after..]
+                    }
+                    _ => &body[..],
+                };
+                send_body(&state, &mut socket, body, cut).await;
             }
             let _ = socket.shutdown().await;
             return;
@@ -1052,6 +1076,30 @@ impl<'a> OpenStream<'a> {
 impl Drop for OpenStream<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Sends `head` of a stalled body, then waits until the stall on `path` is released ([`Controls::release`]); false when the client
+/// closed the connection meanwhile.
+async fn stall_body(state: &State, socket: &mut TcpStream, head: &[u8], path: &str) -> bool {
+    if socket.write_all(head).await.is_err() {
+        return false;
+    }
+    loop {
+        // Registered before the check, so a release between the two is not missed.
+        let released = state.released.notified();
+        if !lock(&state.stalls).contains_key(path) {
+            return true;
+        }
+        let mut probe = [0u8; 1];
+        tokio::select! {
+            () = released => {}
+            read = socket.read(&mut probe) => {
+                if matches!(read, Ok(0) | Err(_)) {
+                    return false;
+                }
+            }
+        }
     }
 }
 

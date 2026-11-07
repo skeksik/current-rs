@@ -21,12 +21,13 @@ use current_model::{
 };
 use current_net::{GatewayShape, NetError};
 use current_playback::{
-    EngineStream, MediaServer, PlanRequest, ProgressReport, Quality, ServerAnswer, StopReport,
-    StreamAuth, StreamUrl, TranscodePermissions,
+    DirectFile, EngineStream, MediaServer, PlanRequest, ProgressReport, Quality, ServerAnswer,
+    StopReport, StreamAuth, StreamUrl, TranscodePermissions,
 };
-use current_relay::{RelayEvent, Route, RouteConfig};
+use current_relay::{ReaderRoute, ReaderRouteConfig, RelayEvent, Route, RouteConfig};
 use tokio::sync::mpsc;
 
+use super::reader::{PlatformReader, ReaderSlot};
 use super::relay::{RelaySlot, RouteEvents, SessionUpstream};
 use crate::browse::Hub;
 use crate::session::Shared;
@@ -43,6 +44,8 @@ pub(crate) struct JellyfinMedia {
     events: mpsc::UnboundedSender<(u64, RelayEvent)>,
     /// Browse, for the workaround a start report waits for ([`Hub::before_play`]).
     browse: Arc<Hub>,
+    /// The stream reader for a platform engine's direct play (ADR 0026), with a platform engine only.
+    readers: Option<Arc<ReaderSlot>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -56,6 +59,7 @@ impl JellyfinMedia {
         relay: Arc<RelaySlot>,
         browse: Arc<Hub>,
         events: mpsc::UnboundedSender<(u64, RelayEvent)>,
+        readers: Option<Arc<ReaderSlot>>,
     ) -> Self {
         Self {
             client: Mutex::new(None),
@@ -65,6 +69,7 @@ impl JellyfinMedia {
             last_route: AtomicU64::new(0),
             events,
             browse,
+            readers,
         }
     }
 
@@ -90,6 +95,9 @@ impl JellyfinMedia {
 
     /// Removes the relay route, if any. The route is dropped outside the lock: dropping aborts its connections.
     fn remove_route(&self) {
+        if let Some(readers) = &self.readers {
+            readers.set_current(None);
+        }
         let route = lock(&self.route).take();
         drop(route);
     }
@@ -101,22 +109,44 @@ impl JellyfinMedia {
         item: &ItemRef,
         path: &str,
         hls: bool,
+        direct: Option<DirectFile>,
     ) -> Result<EngineStream, PlaybackProblem> {
         let relay = self.relay.relay().ok_or(PlaybackProblem::LocalRelay)?;
         let number = self.last_route.fetch_add(1, Ordering::Relaxed) + 1;
+        // Only the item's own streams: Jellyfin's stream, HLS and segment endpoints are under these (ADR 0020), with the id in
+        // either spelling.
+        let prefixes: Vec<String> = path_ids(item.id.as_str())
+            .iter()
+            .flat_map(|id| [format!("/Videos/{id}/"), format!("/Audio/{id}/")])
+            .collect();
+        let upstream = Arc::new(SessionUpstream(client));
+        let events = Arc::new(RouteEvents {
+            route: number,
+            sender: self.events.clone(),
+        });
+        // A direct-play file for a platform engine may be read through the core instead (ADR 0026): the same server, prefixes and
+        // events as the relay route, ended with it.
+        // Direct play only: a server stream (progressive or HLS) stays on the relay (ADR 0026, "Which routes use it").
+        let reader = match (&self.readers, direct) {
+            (Some(readers), Some(direct)) if !hls && readers.enabled() => {
+                let reader = reader_for(
+                    ReaderRouteConfig {
+                        upstream: upstream.clone(),
+                        prefixes: prefixes.clone(),
+                        events: events.clone(),
+                    },
+                    path,
+                    direct,
+                )?;
+                Some(Arc::new(reader))
+            }
+            _ => None,
+        };
         let route = relay
             .add_route(RouteConfig {
-                upstream: Arc::new(SessionUpstream(client)),
-                // Only the item's own streams: Jellyfin's stream, HLS and segment endpoints are under these (ADR 0020), with the id
-                // in either spelling.
-                prefixes: path_ids(item.id.as_str())
-                    .iter()
-                    .flat_map(|id| [format!("/Videos/{id}/"), format!("/Audio/{id}/")])
-                    .collect(),
-                events: Arc::new(RouteEvents {
-                    route: number,
-                    sender: self.events.clone(),
-                }),
+                upstream,
+                prefixes,
+                events,
                 // An HLS plan's URL must answer with an HLS playlist (ADR 0020 task 4).
                 hls_entry: hls.then(|| path.split('?').next().unwrap_or(path).to_owned()),
             })
@@ -134,8 +164,39 @@ impl JellyfinMedia {
             relayed: true,
         };
         *lock(&self.route) = Some((number, route));
+        if let Some(readers) = &self.readers {
+            readers.set_current(reader);
+        }
         Ok(stream)
     }
+}
+
+/// A reader of `path_and_query` (on the address in use, without the token) on a new reader route.
+fn reader_for(
+    config: ReaderRouteConfig,
+    path_and_query: &str,
+    direct: DirectFile,
+) -> Result<PlatformReader, PlaybackProblem> {
+    let runtime =
+        current_net::RuntimeHandle::try_current().map_err(|_| PlaybackProblem::LocalRelay)?;
+    let route = ReaderRoute::new(&runtime, config).map_err(|_| PlaybackProblem::LocalRelay)?;
+    // Parsed against a placeholder origin only to split and decode it; the session token is never in it (the relay's routes drop
+    // `ApiKey` too, and the reader's requests carry the token in the header, ADR 0020 choice 4).
+    let parsed = current_net::Url::parse(&format!("http://127.0.0.1{path_and_query}"))
+        .map_err(|_| PlaybackProblem::LocalRelay)?;
+    let query = parsed
+        .query_pairs()
+        .filter(|(name, _)| {
+            !name.eq_ignore_ascii_case("apikey") && !name.eq_ignore_ascii_case("api_key")
+        })
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect();
+    Ok(PlatformReader::new(
+        route,
+        parsed.path().to_owned(),
+        query,
+        direct,
+    ))
 }
 
 /// The spellings of item `id` in Jellyfin's stream paths: as the core holds it (32 hex digits), and as a GUID with dashes, which a
@@ -375,6 +436,7 @@ impl MediaServer for JellyfinMedia {
         url: &StreamUrl,
         hls: bool,
         always_relay: bool,
+        direct: Option<DirectFile>,
     ) -> Result<EngineStream, PlaybackProblem> {
         self.remove_route();
         let client = self.session()?;
@@ -396,7 +458,7 @@ impl MediaServer for JellyfinMedia {
                 relayed: false,
             });
         }
-        self.relay(client, item, &target.path, hls)
+        self.relay(client, item, &target.path, hls, direct)
     }
 
     fn end_stream(&self) {

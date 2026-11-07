@@ -22,6 +22,7 @@ mod problems;
 mod records;
 mod runtime;
 mod saved;
+mod stream_reader;
 mod subscribe;
 mod task_handle;
 
@@ -106,6 +107,8 @@ pub use records::{
 };
 pub use runtime::WORKER_THREAD_NAME;
 pub use saved::SavedServerDiff;
+// The core's stream reader for a platform engine's direct play (ADR 0026).
+pub use stream_reader::{StreamFileInfo, StreamReadError, StreamReader};
 pub use task_handle::TaskHandle;
 
 use subscribe::LiveListeners;

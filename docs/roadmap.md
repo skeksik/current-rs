@@ -323,10 +323,11 @@ then libmpv, then the server; no device remux on Windows (MF reads MKV; departur
       HLS and server streams unchanged; libmpv stays on HTTP (C1). In this order, one PR each:
   - [x] R1 (feat/stream-reader, #146): the reader with its windows, limits, playback point and starvation guard, reconnects, the
         relay's events and route lifetime; tests with a fake upstream
-  - [ ] R2 (feat/stream-reader-ffi): the `StreamReader` UniFFI object and `PlatformFile.reader`; the C# `Stream` adapter; bindings
-        tests against the stand-in
+  - [x] R2 (feat/stream-reader-ffi): the `StreamReader` UniFFI object and `PlatformFile.reader`; the C# `Stream` adapter; bindings
+        tests against the stand-in; behind a temporary switch (`Player::set_stream_reader`, off by default)
   - [ ] R3 (feat/windows-native-reader): Windows' engine reads direct play through it (`MediaSource.CreateFromStream`), reports
-        `Buffering` for the guard; the info panel's reader facts
+        `Buffering` for the guard and a position that stops while playing; the info panel's reader facts; the routing rule replaces
+        R2's switch
   - [ ] R4 (device check on the owner's PC): memory on a feature-length file, over Tailscale, a connection dropped mid-file, seeks,
         an audio track switch, cues with the subtitle scan held (ADR 0026 B1), how often the starvation guard fired, and the
         stutter cases again

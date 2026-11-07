@@ -246,6 +246,281 @@ internal static class PlatformEngineTests
         }
     }
 
+    /// <summary>The stand-in's direct-play stream (tools/jellyfin-stand-in/src/lib.rs): 256 KiB, its byte at <c>i</c> is <c>i % 251</c>.</summary>
+    private const long StreamLength = 256 * 1024;
+
+    private static string StreamPath => $"/Videos/{StandIn.DirectPlayItem}/stream";
+
+    private static byte StreamByte(long offset) => (byte)(offset % 251);
+
+    /// <summary>A player with the fake engine and the stream reader's switch on, playing the direct-play item.</summary>
+    private static async Task<(FakeEngine Engine, PlayerSession Session, CoreFileReader Reader)> ReadingAsync(CoreHost core)
+    {
+        var engine = new FakeEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, engine, Answers(), new ManualDispatcher());
+        session.SetStreamReader(true);
+        await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+        var load = engine.Loads.Last();
+        Check(load.Reader is not null, "a reader with the switch on");
+        Check(load.Url.Length == 0, "no URL with a reader");
+        return (engine, session, load.Reader!);
+    }
+
+    public static async Task ReadsTheFileThroughTheCore()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+
+        // Off by default: the URL as before, and no reader.
+        var plain = new FakeEngine();
+        var session = await PlayerSession.OpenWithPlatformEngineAsync(core, Size, Display, plain, Answers(), new ManualDispatcher());
+        try
+        {
+            await session.PlayAsync(Item(StandIn.DirectPlayItem), TimeSpan.Zero);
+            var load = plain.Loads.Single();
+            Check(load.Reader is null && load.Url.Length > 0, "a relay URL and no reader by default");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        var (engine, reading, reader) = await ReadingAsync(core);
+        try
+        {
+            Check(!engine.Loads.Last().ToString().Contains("127.0.0.1", StringComparison.Ordinal), "no URL in the load's text");
+            await using var stream = await reader.OpenAsync();
+            Check(stream.Length == StreamLength, $"the file's length, not {stream.Length}");
+            Check(stream.ContentType == "video/mp4", $"the file's type, not {stream.ContentType}");
+            Check(stream.CanRead && stream.CanSeek && !stream.CanWrite, "readable and seekable, not writable");
+
+            var start = new byte[100];
+            var read = await stream.ReadAsync(start);
+            Check(read > 0 && start.Take(read).Select((b, i) => b == StreamByte(i)).All(same => same), "the file's first bytes");
+            Check(stream.Position == read, $"the position moved on, to {stream.Position}");
+
+            stream.Seek(100_000, SeekOrigin.Begin);
+            var middle = new byte[64];
+            read = await stream.ReadAsync(middle);
+            Check(read > 0 && middle.Take(read).Select((b, i) => b == StreamByte(100_000 + i)).All(same => same), "the bytes at 100 000");
+
+            stream.Seek(0, SeekOrigin.End);
+            Check(await stream.ReadAsync(new byte[10]) == 0, "nothing at the end");
+
+            // A position before the start is the caller's error.
+            try
+            {
+                stream.Seek(-1, SeekOrigin.Begin);
+                Check(false, "a negative position refused");
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+            }
+
+            // Overlapping reads are taken one after another, each from where the last left the position.
+            stream.Seek(0, SeekOrigin.Begin);
+            var first = new byte[32];
+            var second = new byte[32];
+            var reads = await Task.WhenAll(stream.ReadAsync(first).AsTask(), stream.ReadAsync(second).AsTask());
+            Check(reads[0] > 0 && reads[1] > 0, "both overlapping reads got bytes");
+            Check(stream.Position == reads[0] + reads[1], $"the position after both, not {stream.Position}");
+
+            // The stream owns the reader: there is one per file.
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "a second open refused");
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+        finally
+        {
+            await reading.CloseAsync();
+        }
+    }
+
+    public static async Task AReadIsCancelledByItsToken()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            standIn.Send($"hold {StreamPath}");
+            using var cancel = new CancellationTokenSource();
+            var opening = reader.OpenAsync(cancel.Token);
+            // The control: the open waits for the held answer.
+            Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+            cancel.Cancel();
+            try
+            {
+                await opening;
+                Check(false, "the open was cancelled");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            standIn.Send($"release {StreamPath}");
+            await using var stream = await reader.OpenAsync();
+            Check(await stream.ReadAsync(new byte[10]) > 0, "a new read goes through");
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task ARefusedStreamFailsTheReader()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            standIn.Send($"fail-stream 500 {StreamPath}");
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "the open failed");
+            }
+            catch (IOException)
+            {
+            }
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task APendingReadEndsWithThePlayback()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        standIn.Send($"hold {StreamPath}");
+
+        // A stop.
+        var (_, session, reader) = await ReadingAsync(core);
+        var opening = reader.OpenAsync();
+        Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+        session.Stop();
+        await ExpectCancelled(opening, "a stop");
+        await session.CloseAsync();
+
+        // A close.
+        (_, session, reader) = await ReadingAsync(core);
+        opening = reader.OpenAsync();
+        Check(await Task.WhenAny(opening, Task.Delay(300)) != opening, "the open waits");
+        await session.CloseAsync();
+        await ExpectCancelled(opening, "a close");
+        standIn.Send($"release {StreamPath}");
+    }
+
+    private static async Task ExpectCancelled(Task task, string what)
+    {
+        var done = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Check(done == task, $"the read ended after {what}");
+        try
+        {
+            await task;
+            Check(false, $"the read was cancelled by {what}");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    public static async Task ASeekDuringAReadWins()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        // The server sends the file's first 100 000 bytes and waits until released, whatever the network's speed.
+        standIn.Send($"stall 100000 {StreamPath}");
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            await using var stream = await reader.OpenAsync();
+            stream.Seek(200_000, SeekOrigin.Begin);
+            var buffer = new byte[16];
+            var read = stream.ReadAsync(buffer).AsTask();
+            // The control: the read waits for bytes the server has not sent yet.
+            Check(await Task.WhenAny(read, Task.Delay(300)) != read, "the read waits");
+            stream.Seek(10, SeekOrigin.Begin);
+            standIn.Send($"release {StreamPath}");
+            var done = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(10)));
+            Check(done == read, $"the read ended once the server sent on ({standIn.Count(StreamPath)} requests to the stream)");
+            var count = await read;
+            Check(count > 0 && buffer.Take(count).Select((b, i) => b == StreamByte(200_000 + i)).All(same => same),
+                "the read's bytes are from where it began");
+            Check(stream.Position == 10, $"the seek's position, not {stream.Position}");
+        }
+        finally
+        {
+            standIn.Send($"release {StreamPath}");
+            await session.CloseAsync();
+        }
+    }
+
+    public static async Task AFailedOpenOrAnUnopenedReaderFreesItsHandle()
+    {
+        using var standIn = StandIn.Start();
+        using var core = CoreHost.Create();
+        await SignIn(core, standIn);
+        var (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            standIn.Send($"fail-stream 500 {StreamPath}");
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "the open failed");
+            }
+            catch (IOException)
+            {
+            }
+            // The handle is gone with the failed open: the reader cannot be opened again.
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no second open after a failed one");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            reader.Dispose();
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+
+        // A load whose file is never opened: disposing the reader frees the handle, and it cannot be opened after.
+        (_, session, reader) = await ReadingAsync(core);
+        try
+        {
+            reader.Dispose();
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "no open after Dispose");
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+        finally
+        {
+            await session.CloseAsync();
+        }
+    }
+
     public static async Task EachPlayHasTheNextNumber()
     {
         using var standIn = StandIn.Start();

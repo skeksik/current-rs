@@ -83,6 +83,8 @@ struct Behaviour {
     later_total: Option<u64>,
     /// Every request after the first gets a 416.
     later_416: bool,
+    /// Every answer waits for a permit before its headers come.
+    answer_gate: Option<Arc<Semaphore>>,
 }
 
 /// A server holding one file: answers `Range: bytes=<from>-` with a 206 in chunks of [`CHUNK`].
@@ -205,8 +207,14 @@ impl FakeFile {
 
 impl Upstream for FakeFile {
     fn send(&self, request: UpstreamRequest) -> UpstreamFuture<'_, UpstreamResponse> {
+        let gate = self.behaviour.lock().unwrap().answer_gate.clone();
         let answer = self.answer(&request);
-        Box::pin(async move { answer })
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                gate.acquire().await.unwrap().forget();
+            }
+            answer
+        })
     }
 }
 
@@ -1033,4 +1041,125 @@ async fn a_read_held_before_a_seek_is_served_by_starvation_but_pins_nothing() {
     let target = rate_bytes(20.0);
     assert_eq!(read_until_held(&reader, target).await, target + 64 * KIB);
     assert_eq!(reader.facts().point, target);
+}
+
+#[tokio::test]
+async fn a_duration_known_after_opening_paces_the_point() {
+    let (route, _events) = route(FakeFile::new());
+    let unknown = FileFacts {
+        duration: None,
+        bitrate: None,
+        ..facts()
+    };
+    let reader = open(&route, limits(), unknown).await;
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    reader.set_position(Duration::from_secs(2));
+    assert_eq!(reader.facts().point, 0);
+    reader.set_duration(DURATION);
+    let facts = reader.facts();
+    assert!(facts.rate_known);
+    assert_eq!(facts.point, rate_bytes(2.0));
+}
+
+#[tokio::test]
+async fn cancelling_a_shared_route_ends_its_reads_and_refuses_new_ones() {
+    let upstream = FakeFile::new();
+    let (route, reader, _events) = setup(upstream.clone()).await;
+    assert_eq!(read_until_held(&reader, 0).await, 64 * KIB);
+    route.cancel();
+    assert_eq!(reader.read(0, 10).await, Err(ReadError::Cancelled));
+    let opened = route.open(PATH, Vec::new(), facts(), limits()).await;
+    assert_eq!(opened.unwrap_err(), ReadError::Cancelled);
+    until(|| upstream.live.load(Ordering::SeqCst) == 0).await;
+}
+
+#[tokio::test]
+async fn cancelling_the_route_ends_an_open_waiting_for_the_server() {
+    let gate = Arc::new(Semaphore::new(0));
+    let upstream = FakeFile::with(Behaviour {
+        answer_gate: Some(gate.clone()),
+        ..Behaviour::default()
+    });
+    let (route, _events) = route(upstream);
+    let route = Arc::new(route);
+    let opening = {
+        let route = route.clone();
+        tokio::spawn(async move {
+            route
+                .open(PATH, Vec::new(), facts(), limits())
+                .await
+                .map(|_| ())
+        })
+    };
+    // The control: the open waits for the server's answer.
+    sleep(HELD).await;
+    assert!(!opening.is_finished());
+    route.cancel();
+    assert_eq!(
+        timeout(WAIT, opening).await.unwrap().unwrap(),
+        Err(ReadError::Cancelled)
+    );
+    gate.add_permits(10);
+}
+
+#[tokio::test]
+async fn the_head_read_before_the_duration_does_not_pin_the_point_once_it_is_known() {
+    // A resume at 50 s by a player that reads the file's head before it can report the duration.
+    let (route, _events) = route(FakeFile::new());
+    let unknown = FileFacts {
+        start: Duration::from_secs(50),
+        duration: None,
+        bitrate: None,
+        ..facts()
+    };
+    let reader = open(&route, limits(), unknown).await;
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    assert_eq!(
+        reader.facts().point,
+        0,
+        "without a rate the head read pins it"
+    );
+    reader.set_duration(DURATION);
+    reader.set_position(Duration::from_secs(50));
+    let estimate = rate_bytes(50.0);
+    assert_eq!(reader.facts().point, estimate);
+    // The player's read at the target is served and pins the point there.
+    let target = estimate + 1_000;
+    read_now(&reader, target, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, target);
+    assert_eq!(
+        read_until_held(&reader, target + 1).await,
+        target + 64 * KIB
+    );
+}
+
+#[tokio::test]
+async fn a_right_anchor_pinned_without_a_rate_is_kept_when_the_duration_arrives() {
+    let (route, _events) = route(FakeFile::new());
+    let unknown = FileFacts {
+        duration: None,
+        bitrate: None,
+        ..facts()
+    };
+    let reader = Arc::new(open(&route, limits(), unknown).await);
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    // A seek to 50 s; the player's read at the target pins the point, a little before where the duration will put 50 s.
+    reader.seek_to(Duration::from_secs(50));
+    let target = rate_bytes(50.0) - 1_000;
+    read_now(&reader, target, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, target);
+    // The read-ahead runs to its front and a read waits there.
+    assert_eq!(
+        read_until_held(&reader, target + 1).await,
+        target + 64 * KIB
+    );
+    let front = held_read(&reader, target + 64 * KIB).await;
+    // The duration arrives: the anchor is right by the estimate, so it stays, and the held read does not pin the point.
+    reader.set_duration(DURATION);
+    settle().await;
+    let facts = reader.facts();
+    assert!(facts.rate_known);
+    assert_eq!(facts.point, target);
+    assert!(!front.is_finished(), "still held at the read-ahead's front");
+    front.abort();
 }

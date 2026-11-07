@@ -49,6 +49,16 @@ impl fmt::Debug for StreamAuth {
     }
 }
 
+/// A file the engine plays directly (a local route, not a server stream), as [`crate::MediaServer::stream_url`] may need it: a
+/// platform engine may read it through the core's stream reader, which paces itself by the file's rate (ADR 0026).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DirectFile {
+    /// The source's duration, from the plan.
+    pub duration: Option<std::time::Duration>,
+    /// The source's bitrate in bits per second, from the plan.
+    pub bitrate: Option<u32>,
+}
+
 /// What [`MediaServer::stream_url`](crate::MediaServer::stream_url) gives the engine for a plan's stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EngineStream {

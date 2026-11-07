@@ -151,6 +151,8 @@ struct RouteCore {
     prefixes: Prefixes,
     events: Arc<RouteEvents>,
     closed: AtomicBool,
+    /// Wakes an open still waiting for the server's first answer when the route is cancelled.
+    cancelled: Notify,
     readers: Mutex<Vec<Weak<Inner>>>,
 }
 
@@ -190,6 +192,7 @@ impl ReaderRoute {
                 prefixes: Prefixes::new(config.prefixes)?,
                 events: Arc::new(RouteEvents::new(config.events)),
                 closed: AtomicBool::new(false),
+                cancelled: Notify::new(),
                 readers: Mutex::new(Vec::new()),
             }),
         })
@@ -215,14 +218,21 @@ impl ReaderRoute {
         if !core.prefixes.allow(path) {
             return Err(ReadError::NotAllowed);
         }
-        let response = pump::request(core, path, &query, 0, None, None)
-            .await
-            .map_err(|failure| {
-                if let Some(event) = failure.event() {
-                    core.events.report(event);
-                }
-                ReadError::Failed
-            })?;
+        let mut cancelled = pin!(core.cancelled.notified());
+        cancelled.as_mut().enable();
+        if core.closed.load(Ordering::Acquire) {
+            return Err(ReadError::Cancelled);
+        }
+        let response = tokio::select! {
+            response = pump::request(core, path, &query, 0, None, None) => response,
+            () = cancelled => return Err(ReadError::Cancelled),
+        };
+        let response = response.map_err(|failure| {
+            if let Some(event) = failure.event() {
+                core.events.report(event);
+            }
+            ReadError::Failed
+        })?;
         let Some(size) = size_of(&response) else {
             core.events.report(RelayEvent::BadRange);
             return Err(ReadError::Failed);
@@ -278,15 +288,22 @@ impl ReaderRoute {
 
     /// Removes the route; the same as dropping it.
     pub fn remove(self) {}
-}
 
-impl Drop for ReaderRoute {
-    fn drop(&mut self) {
+    /// Cancels the route where it is shared and cannot be dropped: its readers end with [`ReadError::Cancelled`] and no reader opens
+    /// on it any more. Dropping it later does nothing more.
+    pub fn cancel(&self) {
         self.core.closed.store(true, Ordering::Release);
+        self.core.cancelled.notify_waiters();
         let readers = std::mem::take(&mut *lock(&self.core.readers));
         for reader in readers.iter().filter_map(Weak::upgrade) {
             reader.close(ReadError::Cancelled);
         }
+    }
+}
+
+impl Drop for ReaderRoute {
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 
@@ -456,6 +473,13 @@ impl StreamReader {
     /// next read that can be the playback position.
     pub fn seek_to(&self, position: Duration) {
         lock(&self.inner.state).seek_to(position);
+        self.inner.changed.notify_waiters();
+    }
+
+    /// The file's duration, when it is known only after opening (the engine reports it): the point follows the position from then
+    /// on, at size / duration.
+    pub fn set_duration(&self, duration: Duration) {
+        lock(&self.inner.state).set_duration(duration);
         self.inner.changed.notify_waiters();
     }
 

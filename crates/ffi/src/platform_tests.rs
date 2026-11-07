@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use current_app::test_engine::{self, TestCommand};
-use jellyfin_stand_in::{DIRECT_PLAY_ITEM, Gate};
+use jellyfin_stand_in::{DIRECT_PLAY_ITEM, Gate, STREAM_LENGTH, TRANSCODE_ITEM, stream_byte};
 
 use super::*;
 use crate::player_tests::{DISPLAY, SIZE, engine_turn, item, recorder, signed_in, stand_in, until};
@@ -149,6 +149,8 @@ fn a_platform_engine_plays_through_the_bridge_and_hands_over_on_a_failed_track()
     let file = engine.last();
     assert!(file.url.starts_with("http://127.0.0.1:"));
     assert!(!file.url.contains(&stand_in.live_token().unwrap()));
+    // The stream reader's switch is off by default (ADR 0026, until R3).
+    assert!(file.reader.is_none());
     assert_eq!(file.start_ms, 3_000);
     assert_eq!(file.audio, PlatformTrack::Stream { index: 1 });
     assert!(!format!("{file:?}").contains("127.0.0.1"));
@@ -238,5 +240,253 @@ fn an_engine_that_throws_never_brings_the_core_down() {
     });
     let state = player.state();
     assert_ne!(state.state, PlayerStateKind::Failed);
+    block_on(player.close());
+}
+
+/// The direct-play item's stream path, as the core asks for it.
+fn stream_path() -> String {
+    format!("/Videos/{DIRECT_PLAY_ITEM}/stream")
+}
+
+/// A player with the fake platform engine and the stream reader's switch on, playing the direct-play item from `start_ms`.
+fn reading(core: &Core, start_ms: u64) -> (Arc<FakeEngine>, Arc<Player>, Arc<StreamReader>) {
+    let engine = Arc::new(FakeEngine::default());
+    let player =
+        block_on(core.open_player_with_platform_engine(SIZE, DISPLAY, engine.clone(), answers()))
+            .unwrap();
+    player.set_stream_reader(true);
+    block_on(player.play(item(DIRECT_PLAY_ITEM), start_ms, CancelToken::new())).unwrap();
+    let file = engine.last();
+    let reader = file.reader.clone().expect("a reader with the switch on");
+    (engine, player, reader)
+}
+
+/// Starts `call` on another thread, returning its result's receiver.
+fn in_background<T: Send + 'static>(
+    call: impl FnOnce() -> T + Send + 'static,
+) -> std::sync::mpsc::Receiver<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(call());
+    });
+    rx
+}
+
+const PENDING: std::time::Duration = std::time::Duration::from_millis(300);
+const DONE: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[test]
+fn with_the_switch_on_a_direct_play_load_reads_its_file_through_the_core() {
+    let _turn = engine_turn();
+    let stand_in = stand_in(Gate::Off);
+    let core = Core::new().unwrap();
+    signed_in(&core, &stand_in, false);
+    let (engine, player, reader) = reading(&core, 2_000);
+    let file = engine.last();
+    assert!(file.url.is_empty(), "no URL with a reader");
+    assert_eq!(file.start_ms, 2_000);
+    assert!(format!("{file:?}").contains("reader: true"));
+
+    let info = block_on(reader.open(CancelToken::new())).unwrap();
+    assert_eq!(info.size, STREAM_LENGTH as u64);
+    assert_eq!(info.content_type, "video/mp4");
+    // The same answer again, without another request.
+    let requests = stand_in.streams().len();
+    assert_eq!(block_on(reader.open(CancelToken::new())).unwrap(), info);
+    assert_eq!(stand_in.streams().len(), requests);
+
+    let expected =
+        |from: usize, len: usize| (from..from + len).map(stream_byte).collect::<Vec<_>>();
+    let start = block_on(reader.read(0, 100, CancelToken::new())).unwrap();
+    assert_eq!(start, expected(0, 100));
+    let middle = block_on(reader.read(100_000, 64, CancelToken::new())).unwrap();
+    assert!(!middle.is_empty());
+    assert_eq!(middle, expected(100_000, middle.len()));
+    let end = STREAM_LENGTH as u64;
+    assert!(
+        block_on(reader.read(end, 10, CancelToken::new()))
+            .unwrap()
+            .is_empty()
+    );
+    // The reader's requests carry no session token in their query, as the relay's.
+    assert!(
+        stand_in
+            .streams()
+            .iter()
+            .all(|seen| !seen.target.to_ascii_lowercase().contains("apikey"))
+    );
+
+    // Closing it ends its calls; the playback goes on.
+    reader.close();
+    assert_eq!(
+        block_on(reader.read(0, 10, CancelToken::new())),
+        Err(StreamReadError::Closed)
+    );
+    block_on(player.close());
+}
+
+#[test]
+fn a_read_waiting_for_the_server_ends_when_its_token_is_cancelled() {
+    let _turn = engine_turn();
+    let stand_in = stand_in(Gate::Off);
+    let core = Core::new().unwrap();
+    signed_in(&core, &stand_in, false);
+    let (_engine, player, reader) = reading(&core, 0);
+    stand_in.hold(&stream_path());
+    let token = CancelToken::new();
+    let pending = {
+        let (reader, token) = (reader.clone(), token.clone());
+        in_background(move || block_on(reader.read(0, 10, token)))
+    };
+    // The control: the read waits for the held answer.
+    assert!(pending.recv_timeout(PENDING).is_err());
+    token.cancel();
+    assert_eq!(
+        pending.recv_timeout(DONE).unwrap(),
+        Err(StreamReadError::Cancelled)
+    );
+    stand_in.release(&stream_path());
+    // A new read goes through.
+    assert!(
+        !block_on(reader.read(0, 10, CancelToken::new()))
+            .unwrap()
+            .is_empty()
+    );
+    block_on(player.close());
+}
+
+#[test]
+fn a_refused_stream_fails_the_read_and_the_player_says_why() {
+    let _turn = engine_turn();
+    let stand_in = stand_in(Gate::Off);
+    let core = Core::new().unwrap();
+    signed_in(&core, &stand_in, false);
+    let (_engine, player, reader) = reading(&core, 0);
+    let (states, state_rx) = recorder();
+    let _handle = player.subscribe_state(states);
+    stand_in.fail_stream(&stream_path(), 500);
+    assert_eq!(
+        block_on(reader.open(CancelToken::new())),
+        Err(StreamReadError::Failed)
+    );
+    until(&state_rx, "the server's problem shown", |state| {
+        state.problem.is_some()
+    });
+    block_on(player.close());
+}
+
+/// A read of the held stream that waits, checked to wait.
+fn pending_read(
+    reader: &Arc<StreamReader>,
+) -> std::sync::mpsc::Receiver<Result<Vec<u8>, StreamReadError>> {
+    let reader = reader.clone();
+    let pending = in_background(move || block_on(reader.read(0, 10, CancelToken::new())));
+    assert!(pending.recv_timeout(PENDING).is_err(), "the read waits");
+    pending
+}
+
+#[test]
+fn a_pending_read_ends_cancelled_on_a_stop_a_re_plan_and_a_close() {
+    let _turn = engine_turn();
+    let stand_in = stand_in(Gate::Off);
+    let core = Core::new().unwrap();
+    signed_in(&core, &stand_in, false);
+    stand_in.hold(&stream_path());
+
+    // A stop.
+    let (_engine, player, reader) = reading(&core, 0);
+    let pending = pending_read(&reader);
+    player.stop().unwrap();
+    assert_eq!(
+        pending.recv_timeout(DONE).unwrap(),
+        Err(StreamReadError::Cancelled)
+    );
+    block_on(player.close());
+
+    // A re-plan: a quality below the file's bitrate moves it to a server stream at the position.
+    let (engine, player, reader) = reading(&core, 0);
+    let (states, state_rx) = recorder();
+    let _handle = player.subscribe_state(states);
+    let generation = engine.last().generation;
+    for event in [
+        PlatformEvent::Loaded,
+        PlatformEvent::Duration { ms: 600_000 },
+        PlatformEvent::Restarted,
+    ] {
+        engine.events().send(generation, event);
+    }
+    until(&state_rx, "playing natively", |state| {
+        state.state == PlayerStateKind::Playing
+    });
+    let pending = pending_read(&reader);
+    block_on(player.set_quality(
+        QualityChoice::Bitrate {
+            bits_per_second: 500_000,
+        },
+        CancelToken::new(),
+    ))
+    .unwrap();
+    assert_eq!(
+        pending.recv_timeout(DONE).unwrap(),
+        Err(StreamReadError::Cancelled)
+    );
+    eventually("the file given again", || {
+        engine.files.lock().unwrap().len() >= 2
+    });
+    block_on(player.close());
+
+    // A close.
+    let (_engine, player, reader) = reading(&core, 0);
+    let pending = pending_read(&reader);
+    block_on(player.close());
+    assert_eq!(
+        pending.recv_timeout(DONE).unwrap(),
+        Err(StreamReadError::Cancelled)
+    );
+    stand_in.release(&stream_path());
+}
+
+#[test]
+fn a_server_stream_gets_its_url_and_no_reader_even_with_the_switch_on() {
+    let _turn = engine_turn();
+    let stand_in = stand_in(Gate::Off);
+    let core = Core::new().unwrap();
+    signed_in(&core, &stand_in, false);
+    let engine = Arc::new(FakeEngine::default());
+    let player =
+        block_on(core.open_player_with_platform_engine(SIZE, DISPLAY, engine.clone(), answers()))
+            .unwrap();
+    player.set_stream_reader(true);
+    block_on(player.play(item(TRANSCODE_ITEM), 0, CancelToken::new())).unwrap();
+    let file = engine.last();
+    assert!(file.hls);
+    assert!(file.url.starts_with("http://127.0.0.1:"));
+    assert!(file.reader.is_none(), "a server stream stays on the relay");
+    block_on(player.close());
+}
+
+#[test]
+fn a_read_waiting_for_bytes_the_server_has_not_sent_ends_when_they_come() {
+    let _turn = engine_turn();
+    let stand_in = stand_in(Gate::Off);
+    let core = Core::new().unwrap();
+    signed_in(&core, &stand_in, false);
+    // The server sends the first 100 000 bytes and waits.
+    stand_in.stall_stream(&stream_path(), 100_000);
+    let (_engine, player, reader) = reading(&core, 0);
+    block_on(reader.open(CancelToken::new())).unwrap();
+    let pending = {
+        let reader = reader.clone();
+        in_background(move || block_on(reader.read(200_000, 16, CancelToken::new())))
+    };
+    assert!(pending.recv_timeout(PENDING).is_err(), "the read waits");
+    stand_in.release(&stream_path());
+    let bytes = pending.recv_timeout(DONE).unwrap().unwrap();
+    assert_eq!(
+        bytes,
+        (200_000..200_016).map(stream_byte).collect::<Vec<_>>()
+    );
+    // One request: the body went on where it stopped.
+    assert_eq!(stand_in.streams().len(), 1);
     block_on(player.close());
 }
