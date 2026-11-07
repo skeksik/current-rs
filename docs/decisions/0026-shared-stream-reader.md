@@ -125,14 +125,21 @@ above, this holds.
   libmpv's loads never get one (C1).
 - **Windows** (`NativeEngine`): one `CoreReadStream` per play, opened by the first open and shared by an open again for a subtitle
   file (one that starts while the first still waits shares its open), freed with the play. Each `MediaSource` reads it through a view
-  that does not close it (whether disposing a `MediaSource` closes its stream is not verified). An open that fails before Windows'
+  of its own: its own position, reads by offset (`CoreReadStream.ReadAtAsync`), so a source opened again starts at 0 and never waits
+  behind the old one's reads; the view never closes the play's stream and is disposed with its source, which cancels its read in
+  flight (whether disposing a `MediaSource` closes or cancels its stream is not verified). An open that fails before Windows'
   player has a source is reported as `loading_failed`. What follows is the core's: a server that refused or failed the stream
   (the reader's route reports it as the relay's does) has failed the play already with its problem and no fallback
   (`Controller::stream_failed`: another route would meet the same server), and the engine's report is dropped; any other failed
   open moves the file on through ADR 0025's fallback chain, at the position. Rust and bindings tests cover both.
 - **"Its position stops while `Playing`" is starving** beside `Buffering(true)`: the reader checks every 500 ms whether the engine
   plays, does not buffer and its position has not moved for 2 s, counting from the last position change, start, seek or resume;
-  pause and the end stop it. Both numbers are guesses (`STALL_AFTER`, `STALL_TICK` in `player/reader.rs`) that R4 measures.
+  pause and the end stop it. **Opening counts too** (after review, manager, 2026-11-07): from a load or a seek until the engine's
+  first frame (`Restarted`), paused or not, since Windows' player reports neither a position nor `Buffering` before its first
+  frame, and a read it needs to open (an MP4 whose index sits past the index window and the read-ahead) would otherwise be held
+  until the core's stall rule ends the open as a failed route after 60 s (`STALL_TIMEOUT`, the only deadline on a non-HLS open).
+  Kept over dropping the forward limit before the first frame: Windows' player reads ahead as fast as it is given (the spike), so
+  the limit is what bounds its memory from the start. Both numbers are guesses (`STALL_AFTER`, `STALL_TICK` in `player/reader.rs`) that R4 measures.
 - **The info panel** shows, while the native player plays a file read through the core, "Read by Current · 31 s (150 MB) ahead ·
   42 Mbit/s · 3 requests" (served ahead in time when the rate is known, else the bytes alone; the read rate over 5 s; requests),
   then "· 1 reconnect" and "· 2 waits released" (the starvation guard's releases) only when not zero. Not on the app engine after a

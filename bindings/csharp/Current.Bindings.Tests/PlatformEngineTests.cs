@@ -308,6 +308,12 @@ internal static class PlatformEngineTests
             stream.Seek(0, SeekOrigin.End);
             Check(await stream.ReadAsync(new byte[10]) == 0, "nothing at the end");
 
+            // A read by offset leaves the stream's position alone (one view per player source keeps its own).
+            var at = new byte[32];
+            read = await stream.ReadAtAsync(200_000, at);
+            Check(read > 0 && at.Take(read).Select((b, i) => b == StreamByte(200_000 + i)).All(same => same), "the bytes at 200 000");
+            Check(stream.Position == StreamLength, $"the position stays at the end, not {stream.Position}");
+
             // A position before the start is the caller's error.
             try
             {

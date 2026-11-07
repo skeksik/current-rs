@@ -37,9 +37,12 @@ struct Feed {
     buffering: bool,
     /// The engine plays (not paused, not ended).
     playing: bool,
+    /// The engine opens the file or seeks: no first frame since the load or the last seek (its `Restarted`). A read it waits for
+    /// then holds up the open itself, paused or not, so a stall counts here too.
+    opening: bool,
     /// When the position last moved, or the engine started, sought or resumed: a stall counts from here.
     moved_at: Option<Instant>,
-    /// The position stood still for [`STALL_AFTER`] while playing.
+    /// The position stood still for [`STALL_AFTER`] while playing or opening.
     stalled: bool,
     /// A seek the reader has not been told of: it was not open yet.
     seek: Option<Duration>,
@@ -58,6 +61,17 @@ impl Feed {
     /// Whether the engine waits for bytes: it says it buffers, or its position stood still while it played.
     fn starving(&self) -> bool {
         self.buffering || self.stalled
+    }
+
+    /// Whether the position has stood still for [`STALL_AFTER`] while the engine plays or opens, not buffering (starving then
+    /// already), and that was not counted yet.
+    fn stalls(&self) -> bool {
+        (self.playing || self.opening)
+            && !self.buffering
+            && !self.stalled
+            && self
+                .moved_at
+                .is_some_and(|moved| moved.elapsed() >= STALL_AFTER)
     }
 
     /// The position may stand still from now for [`STALL_AFTER`] before it is a stall.
@@ -125,19 +139,17 @@ impl PlatformReader {
         });
     }
 
-    /// Counts the engine as starving when its position stood still for [`STALL_AFTER`] while it played, not buffering already.
+    /// Counts the engine as starving when its position stood still for [`STALL_AFTER`] while it played or opened, not buffering
+    /// already: decided and applied under the feed's one lock, so an event between the two cannot be overwritten.
     fn check_stall(&self) {
-        let stalled = {
-            let feed = lock(&self.feed);
-            feed.playing
-                && !feed.buffering
-                && !feed.stalled
-                && feed
-                    .moved_at
-                    .is_some_and(|moved| moved.elapsed() >= STALL_AFTER)
-        };
-        if stalled {
-            self.update(|feed| feed.stalled = true, apply_starving);
+        let mut feed = lock(&self.feed);
+        if !feed.stalls() {
+            return;
+        }
+        feed.stalled = true;
+        match self.reader.get() {
+            Some(reader) => apply_starving(reader, &feed),
+            None => feed.pending = true,
         }
     }
 
@@ -239,6 +251,7 @@ impl PlatformReader {
             |feed| {
                 feed.position = position;
                 feed.seek = Some(position);
+                feed.opening = true;
                 feed.grace();
             },
             |reader, feed| {
@@ -276,16 +289,27 @@ impl PlatformReader {
                 },
                 apply_starving,
             ),
-            // Opened: not playing yet; playing (again) after the first frame or a resume, with the grace a start needs.
+            // Opened, no first frame yet: still opening, with a new grace.
             EngineEvent::Loaded => self.update(
                 |feed| {
                     feed.playing = false;
                     feed.buffering = false;
-                    feed.stalled = false;
+                    feed.opening = true;
+                    feed.grace();
                 },
                 apply_starving,
             ),
-            EngineEvent::Restarted | EngineEvent::Paused(false) => self.update(
+            // The first frame after the load or a seek: playing, with the grace a start needs.
+            EngineEvent::Restarted => self.update(
+                |feed| {
+                    feed.playing = true;
+                    feed.opening = false;
+                    feed.buffering = false;
+                    feed.grace();
+                },
+                apply_starving,
+            ),
+            EngineEvent::Paused(false) => self.update(
                 |feed| {
                     feed.playing = true;
                     feed.buffering = false;
@@ -293,9 +317,20 @@ impl PlatformReader {
                 },
                 apply_starving,
             ),
-            EngineEvent::Paused(true) | EngineEvent::Ended(_) => self.update(
+            // Paused: the position stands still for good reason, unless the engine still opens (then the grace goes on).
+            EngineEvent::Paused(true) => self.update(
                 |feed| {
                     feed.playing = false;
+                    if !feed.opening {
+                        feed.stalled = false;
+                    }
+                },
+                apply_starving,
+            ),
+            EngineEvent::Ended(_) => self.update(
+                |feed| {
+                    feed.playing = false;
+                    feed.opening = false;
                     feed.stalled = false;
                 },
                 apply_starving,
@@ -644,6 +679,46 @@ mod tests {
         tokio::time::advance(STALL_AFTER - Duration::from_millis(600)).await;
         settle().await;
         assert!(!held.is_finished());
+        // Once that grace ends with no position change, the stall fires.
+        tokio::time::advance(Duration::from_millis(1_200)).await;
+        settle().await;
+        assert!(held.is_finished());
         reader.cancel();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_read_that_holds_up_the_open_is_let_through_after_the_grace() {
+        // An MP4 whose index sits at its end, past the index window and the read-ahead: Windows' player reads there before its first
+        // frame, so no position moves and no Buffering comes. Paused too (the core sends the session's pause after the load).
+        for paused in [false, true] {
+            let reader = timed_reader();
+            reader.start_at(Duration::from_secs(10));
+            reader.open().await.unwrap();
+            reader.engine_event(&EngineEvent::Loaded);
+            if paused {
+                reader.engine_event(&EngineEvent::Paused(true));
+            }
+            let held = {
+                let reader = reader.clone();
+                tokio::spawn(async move { reader.read(400_000_000, 10).await })
+            };
+            tokio::time::advance(STALL_AFTER - Duration::from_millis(600)).await;
+            settle().await;
+            assert!(
+                !held.is_finished(),
+                "held within the grace (paused: {paused})"
+            );
+            tokio::time::advance(Duration::from_millis(1_200)).await;
+            settle().await;
+            assert!(
+                held.is_finished(),
+                "let through after it (paused: {paused})"
+            );
+            assert_eq!(held.await.unwrap().unwrap().len(), 10);
+            // The first frame: playing, no longer starving.
+            reader.engine_event(&EngineEvent::Restarted);
+            assert!(!lock(&reader.feed).starving());
+            reader.cancel();
+        }
     }
 }

@@ -185,14 +185,7 @@ public sealed class CoreReadStream : Stream
             {
                 (offset, seeks) = (_position, _seeks);
             }
-            if (buffer.IsEmpty || offset >= Length)
-            {
-                return 0;
-            }
-            var bytes = await StreamCall.RunAsync(
-                token => _reader.Read((ulong)offset, (uint)buffer.Length, token), cancellationToken).ConfigureAwait(false);
-            var count = Math.Min(bytes.Length, buffer.Length);
-            bytes.AsSpan(0, count).CopyTo(buffer.Span);
+            var count = await ReadAtAsync(offset, buffer, cancellationToken).ConfigureAwait(false);
             lock (_place)
             {
                 // A seek while the read ran wins: the bytes are still the caller's, the position is the seek's.
@@ -207,6 +200,25 @@ public sealed class CoreReadStream : Stream
         {
             _turn.Release();
         }
+    }
+
+    /// <summary>Up to <c>buffer.Length</c> bytes at <paramref name="offset"/>, without this stream's position or its turn: for readers
+    /// that keep a position of their own (one view per player source). Reads at different offsets run side by side in the core.</summary>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled, or the playback moved on.</exception>
+    /// <exception cref="IOException">The server refused or failed, or the stream was closed.</exception>
+    public async ValueTask<int> ReadAtAsync(long offset, Memory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        if (buffer.IsEmpty || offset >= Length)
+        {
+            return 0;
+        }
+        var bytes = await StreamCall.RunAsync(
+            token => _reader.Read((ulong)offset, (uint)buffer.Length, token), cancellationToken).ConfigureAwait(false);
+        var count = Math.Min(bytes.Length, buffer.Length);
+        bytes.AsSpan(0, count).CopyTo(buffer.Span);
+        return count;
     }
 
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
