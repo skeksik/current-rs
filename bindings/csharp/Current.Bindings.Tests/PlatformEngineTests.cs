@@ -307,6 +307,34 @@ internal static class PlatformEngineTests
 
             stream.Seek(0, SeekOrigin.End);
             Check(await stream.ReadAsync(new byte[10]) == 0, "nothing at the end");
+
+            // A position before the start is the caller's error.
+            try
+            {
+                stream.Seek(-1, SeekOrigin.Begin);
+                Check(false, "a negative position refused");
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+            }
+
+            // Overlapping reads are taken one after another, each from where the last left the position.
+            stream.Seek(0, SeekOrigin.Begin);
+            var first = new byte[32];
+            var second = new byte[32];
+            var reads = await Task.WhenAll(stream.ReadAsync(first).AsTask(), stream.ReadAsync(second).AsTask());
+            Check(reads[0] > 0 && reads[1] > 0, "both overlapping reads got bytes");
+            Check(stream.Position == reads[0] + reads[1], $"the position after both, not {stream.Position}");
+
+            // The stream owns the reader: there is one per file.
+            try
+            {
+                await reader.OpenAsync();
+                Check(false, "a second open refused");
+            }
+            catch (InvalidOperationException)
+            {
+            }
         }
         finally
         {
