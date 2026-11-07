@@ -474,8 +474,9 @@ impl State {
     }
 
     /// The file's duration, once known: the point then follows the position at size / duration (it replaces a bitrate's rate).
-    /// An anchor pinned while no rate was known is dropped, and the next read that can be the playback position pins the point
-    /// again (a platform player reads the file's head before it can report the duration).
+    /// An anchor pinned while no rate was known is checked against the new estimate as a read would be: kept if it passes, else
+    /// dropped and pinned again by the next read that can be the playback position (a platform player reads the file's head before
+    /// it can report the duration).
     pub(crate) fn set_duration(&mut self, duration: Duration) {
         if duration.is_zero() {
             return;
@@ -486,9 +487,26 @@ impl State {
         }
         let was_known = self.rate.is_some();
         self.rate = Some(rate);
-        if !was_known && self.anchor.is_some_and(|anchor| anchor.without_rate) {
+        let Some(anchor) = self
+            .anchor
+            .filter(|anchor| anchor.without_rate && !was_known)
+        else {
+            return;
+        };
+        // Kept when the estimate accepts it (the player's read at the position, pinned after a seek); dropped, and pinned again by
+        // the next read that can be the playback position, when it rejects it as it would a read: the file's head while the
+        // estimate is past it, or further than the read-ahead from it.
+        let estimate = self.bytes_for(anchor.position).unwrap_or(0).min(self.size);
+        let head = anchor.offset < self.limits.gap && estimate >= self.limits.gap;
+        let far = anchor.offset.abs_diff(estimate) > self.limits.ahead;
+        if head || far {
             self.anchor = None;
             self.awaiting_anchor = true;
+        } else {
+            self.anchor = Some(Anchor {
+                without_rate: false,
+                ..anchor
+            });
         }
     }
 

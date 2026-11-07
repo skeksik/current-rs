@@ -1132,3 +1132,34 @@ async fn the_head_read_before_the_duration_does_not_pin_the_point_once_it_is_kno
         target + 64 * KIB
     );
 }
+
+#[tokio::test]
+async fn a_right_anchor_pinned_without_a_rate_is_kept_when_the_duration_arrives() {
+    let (route, _events) = route(FakeFile::new());
+    let unknown = FileFacts {
+        duration: None,
+        bitrate: None,
+        ..facts()
+    };
+    let reader = Arc::new(open(&route, limits(), unknown).await);
+    read_now(&reader, 0, 1).await.unwrap().unwrap();
+    // A seek to 50 s; the player's read at the target pins the point, a little before where the duration will put 50 s.
+    reader.seek_to(Duration::from_secs(50));
+    let target = rate_bytes(50.0) - 1_000;
+    read_now(&reader, target, 1).await.unwrap().unwrap();
+    assert_eq!(reader.facts().point, target);
+    // The read-ahead runs to its front and a read waits there.
+    assert_eq!(
+        read_until_held(&reader, target + 1).await,
+        target + 64 * KIB
+    );
+    let front = held_read(&reader, target + 64 * KIB).await;
+    // The duration arrives: the anchor is right by the estimate, so it stays, and the held read does not pin the point.
+    reader.set_duration(DURATION);
+    settle().await;
+    let facts = reader.facts();
+    assert!(facts.rate_known);
+    assert_eq!(facts.point, target);
+    assert!(!front.is_finished(), "still held at the read-ahead's front");
+    front.abort();
+}
